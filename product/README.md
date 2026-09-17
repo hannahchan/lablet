@@ -9,4 +9,6 @@ What lablet is and why it exists. Read in this order:
 5. [acceptance.md](acceptance.md) — the scenarios and checklist that define done.
 6. [decisions.md](decisions.md) — a dated log of decisions and the reasoning behind them.
 
+Background reading lives in [research/](research/).
+
 Change a decision by appending to `decisions.md` and updating the spec, not by editing history.

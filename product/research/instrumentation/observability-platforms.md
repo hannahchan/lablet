@@ -1,0 +1,236 @@
+# Observability platforms
+
+Researched: 2026-09-18. Sources are linked inline. Everything here is an inventory of what the source emits or expects; recommendations for lablet are confined to the final section and marked as opinion.
+
+## Sources covered
+
+- Langfuse (docs checked 2026-09-18; references server v3.22.0+ and ingestion v4): [OpenTelemetry integration](https://langfuse.com/integrations/native/opentelemetry), [data model](https://langfuse.com/docs/observability/data-model), [observation types](https://langfuse.com/docs/observability/features/observation-types), [model usage and cost](https://langfuse.com/docs/model-usage-and-cost), [masking](https://langfuse.com/docs/observability/features/masking).
+- Arize Phoenix / OpenInference (spec undated, checked 2026-09-18): [OpenInference semantic conventions](https://arize-ai.github.io/openinference/spec/semantic_conventions.html), [Phoenix cost tracking](https://arize.com/docs/phoenix/tracing/how-to-tracing/cost-tracking).
+- Braintrust (docs checked 2026-09-18; OTel mapping requires Python SDK v0.26.0+, `@braintrust/otel` v0.1.0+): [OpenTelemetry integration](https://www.braintrust.dev/docs/integrations/sdk-integrations/opentelemetry), [customize traces](https://www.braintrust.dev/docs/guides/traces/customize).
+- Weights & Biases Weave (docs checked 2026-09-18): [OTel tracing](https://docs.wandb.ai/weave/guides/tracking/otel), [tracing/calls](https://docs.wandb.ai/weave/guides/tracking/tracing), [costs](https://docs.wandb.ai/weave/guides/tracking/costs).
+- Honeycomb (Agent Observability launched 2026-05-12; docs reference GenAI semconv v1.40.0): [Instrumenting AI Agents](https://docs.honeycomb.io/send-data/use-cases/agents), [launch post](https://www.honeycomb.io/blog/honeycomb-launches-agent-observability-full-visibility-agentic-workflows), [agent observability guide](https://www.honeycomb.io/resources/getting-started/agent-observability).
+- Datadog LLM Observability, now branded "Agent Observability" (OTel GenAI support announced 2025-12-01; requires semconv 1.37+): [OTel instrumentation](https://docs.datadoghq.com/llm_observability/instrumentation/otel_instrumentation/), [spans API](https://docs.datadoghq.com/llm_observability/instrumentation/api/), [terms](https://docs.datadoghq.com/llm_observability/terms/), [submit evaluations](https://docs.datadoghq.com/llm_observability/evaluations/submit_evaluations/), [blog](https://www.datadoghq.com/blog/llm-otel-semantic-convention/).
+- Traceloop OpenLLMetry (main branch, checked 2026-09-18): [semconv constants](https://github.com/traceloop/openllmetry/blob/main/packages/opentelemetry-semantic-conventions-ai/opentelemetry/semconv_ai/__init__.py), [decorators](https://github.com/traceloop/openllmetry/blob/main/packages/traceloop-sdk/traceloop/sdk/decorators/base.py), [span processor](https://github.com/traceloop/openllmetry/blob/main/packages/traceloop-sdk/traceloop/sdk/tracing/tracing.py), [association properties](https://www.traceloop.com/docs/openllmetry/tracing/association).
+- Opik (main branch, checked 2026-09-18): [OTel overview](https://www.comet.com/docs/opik/tracing/opentelemetry/overview), [GenAIMappingRules.java](https://github.com/comet-ml/opik/blob/main/apps/opik-backend/src/main/java/com/comet/opik/domain/mapping/otel/GenAIMappingRules.java).
+- Portkey (docs checked 2026-09-18): [OpenTelemetry](https://portkey.ai/docs/product/observability/opentelemetry).
+- Helicone: in maintenance mode since acquisition by Mintlify on 2026-03-03, signups closed ([source](https://openobserve.ai/blog/migrate-from-helicone-to-openobserve/)); proxy-based, no OTLP ingestion documented. Not covered further.
+
+## Span structure
+
+| Platform | Root / grouping | Node types | Notes |
+|---|---|---|---|
+| Langfuse | Trace (from OTel trace id) > nested observations. Trace name = `langfuse.trace.name` or root span name. Traces optionally grouped into sessions. | Observation types: `span`, `generation`, `event`, `embedding`, `agent`, `tool`, `chain`, `retriever`, `guardrail`, `evaluator`. Type from `langfuse.observation.type`; else other conventions; else "model attribute present → generation"; else `span`. | OTLP HTTP/JSON or HTTP/protobuf only, no gRPC. Missing start/end timestamps both become ingest time. |
+| Phoenix / OpenInference | Trace > spans. Sessions via `session.id`; projects via resource attr. | `openinference.span.kind` (required): `LLM`, `EMBEDDING`, `CHAIN`, `RETRIEVER`, `RERANKER`, `TOOL`, `AGENT`, `GUARDRAIL`, `EVALUATOR`, `PROMPT`. | Lists are flattened as `attr.<index>.<suffix>`. |
+| Braintrust | Only traces with a root span (empty `span_parents`) appear in the logs table. `x-bt-parent` header selects project/experiment. | `span_attributes.type`: `llm`, `task`, `tool`, `eval`, `score`/`scorer`, `function`, `review`. From `gen_ai.operation.name` (`chat`→`llm`, `execute_tool`→`tool`) or presence of `gen_ai.tool.name`. | Every span carries `input`, `output`, `expected`, `metadata`, `metrics`, `scores`, `tags`. |
+| Weave | Call tree (`trace_id`, `parent_id`); threads via `wandb.thread_id`; turns via `wandb.is_turn`. | Kind from `weave.span.kind`, `traceloop.span.kind`, or `openinference.span.kind` (e.g. `llm`, `agent`). | Protobuf only. OTel tool calls render as raw JSON, not chat view. |
+| Honeycomb | Wide events; one span per operation. Agent Timeline keys on `gen_ai.agent.name`; AI Conversations keys on `gen_ai.conversation.id`. | `gen_ai.operation.name`: `chat`, `create_agent`, `embeddings`, `execute_tool`, `generate_content`, `invoke_agent`, `invoke_workflow`, `retrieval`, `text_completion`. | Span names `chat {model}`, `execute_tool {tool_name}`, `invoke_agent {agent_name}`, `retrieval {data_source}`. Calling agent emits `invoke_agent`, not callee. Avoid sampling GenAI telemetry. |
+| Datadog | Trace > spans; `ml_app` from `service.name`; sessions from `gen_ai.conversation.id`. Root may be `llm`, `workflow`, or `agent`; `tool`, `task`, `embedding`, `retrieval` cannot be root. | `span.kind`: `llm`, `workflow`, `agent`, `tool`, `task`, `embedding`, `retrieval`. From `gen_ai.operation.name`: `chat`/`text_completion`/`completion`→`llm`; `embeddings`/`embedding`→`embedding`; `execute_tool`→`tool`; `invoke_agent`/`create_agent`→`agent`. | Requires `dd-otlp-source=llmobs` header; 3-5 min ingest delay; set `dd_llmobs_enabled=false` to skip a trace. |
+| Traceloop | Workflow > task/agent/tool. Span name `{entity_name}.{kind}`. | `traceloop.span.kind`: `workflow`, `task`, `agent`, `tool`, `unknown`. | Workflow name and entity path propagated via OTel context. |
+| Opik | Trace > spans; `thread_id` for conversations. | Span type inferred per rule (`llm`, `tool`, general). | Headers `Authorization`, `projectName`, `Comet-Workspace`. |
+
+## Attributes
+
+Grouped by which platform reads them. "Set on" reflects the platform's mapping, not the OTel semconv itself.
+
+### Trace and session grouping (read by multiple platforms)
+
+| name | type | set on | required or optional | description | source(s) |
+|---|---|---|---|---|---|
+| `session.id` | string | root or any span | optional | Session id (Langfuse `sessionId`; Phoenix session) | Langfuse OTel, OpenInference |
+| `user.id` | string | span | optional | End-user id (Langfuse `userId`; Phoenix user) | Langfuse OTel, OpenInference |
+| `gen_ai.conversation.id` | string | span | optional (required for Honeycomb conversation view, Datadog session) | Conversation/session id; Datadog `session_id`; Opik `thread_id` | Honeycomb docs, Datadog OTel, Opik rules |
+| `gen_ai.agent.name` | string | span | required for Honeycomb Agent Timeline | Agent emitting the span; must be unique per agent | Honeycomb docs |
+| `gen_ai.operation.name` | string | span | required for kind inference in Datadog, Braintrust, Honeycomb | Operation type; see span structure table for value→kind mapping | Datadog OTel, Braintrust OTel, Honeycomb docs |
+| `service.name` | string | resource | required by Datadog | Datadog `ml_app` | Datadog OTel |
+| `deployment.environment*` | string | resource/span | optional | Langfuse `environment` | Langfuse OTel |
+| `wandb.entity`, `wandb.project` | string | resource | required by Weave | Target entity/project | Weave OTel |
+| `wandb.thread_id`, `wandb.is_turn` | string, bool | span | optional | Weave thread grouping and turn rows | Weave OTel |
+| `openinference.span.kind` | string | span | required by Phoenix; read by Weave | Span kind enum | OpenInference, Weave OTel |
+| `traceloop.span.kind` | string | span | optional | Read by Weave and Traceloop | Traceloop semconv, Weave OTel |
+| `weave.span.kind` | string | span | optional | Weave-native kind | Weave OTel |
+
+### Model, usage, cost (gen_ai.* as read by platforms)
+
+| name | type | set on | required or optional | description | source(s) |
+|---|---|---|---|---|---|
+| `gen_ai.request.model` | string | LLM span | recommended | Model requested. Langfuse `model`; Datadog `model_name` fallback; Braintrust `metadata`; Opik `model`; Portkey; Weave via `gen_ai.response.model` primarily | all |
+| `gen_ai.response.model` | string | LLM span | recommended | Model that responded; Datadog primary `model_name`; Weave `Model` | Datadog, Weave, Langfuse, Opik |
+| `gen_ai.provider.name` | string | LLM span | recommended | Datadog `model_provider` (defaults `custom`); Opik `provider` | Datadog, Opik |
+| `gen_ai.system` | string | LLM span | legacy | Older provider attr; Opik `provider`, Portkey provider, Weave "system prompt" bucket (sic) | Opik, Portkey, Weave |
+| `gen_ai.usage.input_tokens` | int | LLM span | recommended | Datadog `input_tokens`; Weave input tokens; Braintrust `metrics.prompt_tokens`; Opik `usage.prompt_tokens`; Langfuse usage | all |
+| `gen_ai.usage.output_tokens` | int | LLM span | recommended | Datadog `output_tokens`; Braintrust `metrics.completion_tokens`; Opik `usage.completion_tokens` | all |
+| `gen_ai.usage.total_tokens` | int | LLM span | optional | Braintrust `metrics.tokens` (auto-computed if absent); Opik `usage.total_tokens` | Braintrust, Opik |
+| `gen_ai.usage.prompt_tokens`, `gen_ai.usage.completion_tokens` | int | LLM span | legacy | Older names; Braintrust, Weave and Opik still accept | Braintrust, Weave, Opik, Traceloop semconv |
+| `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens` | int | LLM span | optional | Cache buckets; Portkey parses; Opik prefix rule stores under `usage` | Portkey, Opik |
+| `gen_ai.usage.cache_read_input_tokens`, `gen_ai.usage.cache_creation_input_tokens` | int | LLM span | legacy | Traceloop-emitted spelling | Traceloop semconv |
+| `gen_ai.usage.cost` | double | LLM span | optional | Langfuse `cost`; Opik `total_estimated_cost` | Langfuse OTel, Opik rules |
+| `gen_ai.request.temperature`, `gen_ai.request.max_tokens`, `gen_ai.request.top_p`, `gen_ai.request.*` | mixed | LLM span | optional | Langfuse `modelParameters`; Braintrust `metadata.*`; Opik metadata/input | Langfuse, Braintrust, Opik |
+| `gen_ai.response.finish_reasons` | string[] | LLM span | optional | Honeycomb; Opik metadata | Honeycomb, Opik |
+| `gen_ai.response.id` | string | LLM span | optional | Opik metadata; Portkey | Opik, Portkey |
+
+### Content (input/output)
+
+| name | type | set on | required or optional | description | source(s) |
+|---|---|---|---|---|---|
+| `gen_ai.input.messages` | JSON string | LLM span (attr or event) | optional | Datadog `input.messages` (primary); Weave input; Braintrust `input`; Opik input (prefix); Honeycomb recommends event | Datadog, Weave, Braintrust, Opik, Honeycomb |
+| `gen_ai.output.messages` | JSON string | LLM span | optional | Datadog `output.messages`; Weave output; Braintrust `output`; Opik output | same |
+| `gen_ai.system_instructions` | JSON string | LLM span | optional | Datadog prepends as system messages; Opik input; Weave | Datadog, Opik, Weave |
+| `gen_ai.prompt`, `gen_ai.completion` | string | LLM span | legacy | Langfuse `input`/`output`; Weave; Braintrust; Opik | Langfuse, Weave, Braintrust, Opik |
+| `gen_ai.prompt_json`, `gen_ai.completion_json` | JSON string | LLM span | optional | Braintrust structured input/output | Braintrust |
+| `gen_ai.tool.name` | string | tool span | recommended | Datadog overrides span `name`; Braintrust `metadata.tools` and kind=`tool`; Honeycomb; Traceloop sets on tool spans | Datadog, Braintrust, Honeycomb, Traceloop |
+| `gen_ai.tool.call.id` | string | tool span | optional | Datadog `metadata.tool_id` | Datadog, Honeycomb |
+| `gen_ai.tool.call.arguments` | JSON string | tool span | optional | Datadog `input.value`; Opik input | Datadog, Opik, Honeycomb |
+| `gen_ai.tool.call.result` | JSON string | tool span | optional | Datadog `output.value`; Opik output | Datadog, Opik, Honeycomb |
+| `gen_ai.agent.tools` | JSON | agent span | optional | Braintrust `metadata.tools` | Braintrust |
+| `input.value`, `input.mime_type`, `output.value`, `output.mime_type` | string | any span | required for Phoenix content | OpenInference I/O; Langfuse and Weave also read `input.value`/`output.value` | OpenInference, Langfuse, Weave |
+| `error.type`, `error.message`, `error.stacktrace` | string | span | optional | Honeycomb error guidance; Datadog `meta.error.*` | Honeycomb, Datadog API |
+
+### OpenInference (Phoenix-native; also read by Langfuse, Weave)
+
+| name | type | set on | required or optional | description | source(s) |
+|---|---|---|---|---|---|
+| `llm.model_name` | string | LLM | required for Phoenix cost | Model; Langfuse `model`; Weave model | OpenInference, Phoenix cost |
+| `llm.provider` | string | LLM | required for Phoenix cost | Hosting provider (`anthropic`, `openai`, ...) | OpenInference, Phoenix cost |
+| `llm.system` | string | LLM | optional | Vendor (`anthropic`, ...) | OpenInference |
+| `llm.invocation_parameters` | JSON string | LLM | optional | Langfuse `modelParameters` | OpenInference, Langfuse |
+| `llm.token_count.prompt`, `.completion`, `.total` | int | LLM | recommended | Langfuse usage; Weave tokens | OpenInference |
+| `llm.token_count.prompt_details.cache_read`, `.cache_write`, `.audio`; `llm.token_count.completion_details.reasoning`, `.audio` | int | LLM | optional | Cost buckets | OpenInference, Phoenix cost |
+| `llm.cost.prompt`, `.completion`, `.total`, `llm.cost.prompt_details.*`, `llm.cost.completion_details.*` | double (USD) | LLM | optional | Pre-computed cost | OpenInference |
+| `llm.input_messages.<i>.message.role`, `.message.content`, `.message.tool_calls.<j>.tool_call.id`, `.tool_call.function.name`, `.tool_call.function.arguments` | flattened | LLM | optional | Chat messages | OpenInference |
+| `llm.output_messages.<i>.*` | flattened | LLM | optional | Responses | OpenInference |
+| `llm.tools.<i>.tool.name`, `.tool.description`, `.tool.json_schema` | flattened | LLM | optional | Tool definitions | OpenInference |
+| `tool.name`, `tool.description`, `tool.parameters`, `tool.id` | string | TOOL | `tool.name` recommended | Tool span | OpenInference |
+| `agent.name`, `graph.node.id`, `graph.node.name`, `graph.node.parent_id` | string | AGENT | optional | Agent and graph identity | OpenInference |
+| `metadata` | JSON string | any | optional | Span metadata | OpenInference |
+| `tag.tags` | string[] | any | optional | Labels | OpenInference |
+| `openinference.project.name` | string | resource | optional | Phoenix project | Phoenix docs (search summary) |
+
+### Langfuse-native (`langfuse.*`, highest priority in Langfuse)
+
+| name | type | set on | required or optional | description | source(s) |
+|---|---|---|---|---|---|
+| `langfuse.trace.name` | string | root span | optional | Trace name | Langfuse OTel |
+| `langfuse.session.id`, `langfuse.user.id` | string | span | optional | Session / user | Langfuse OTel |
+| `langfuse.trace.tags` | string[] | root | optional | Tags | Langfuse OTel |
+| `langfuse.trace.metadata.*` | any | root | optional | Trace metadata | Langfuse OTel |
+| `langfuse.trace.public` | bool | root | optional | Public flag | Langfuse OTel |
+| `langfuse.release`, `langfuse.version`, `langfuse.environment` | string | span | optional | Release / version / environment | Langfuse OTel |
+| `langfuse.observation.type` | string | span | recommended | One of the 10 types; always wins | Langfuse OTel |
+| `langfuse.observation.level`, `langfuse.observation.status_message` | string | span | optional | Level (else from span status); message | Langfuse OTel |
+| `langfuse.observation.input`, `langfuse.observation.output` | string | span | optional | Content | Langfuse OTel |
+| `langfuse.observation.metadata.*` | any | span | optional | Observation metadata | Langfuse OTel |
+| `langfuse.observation.model.name`, `langfuse.observation.model.parameters` | string, JSON | generation | optional | Model, params | Langfuse OTel |
+| `langfuse.observation.usage_details`, `langfuse.observation.cost_details` | JSON | generation | optional | Keys `input`, `output`, `total`, `cache_read_input_tokens`, `input_cached_tokens`, ... USD in cost | Langfuse OTel, cost docs |
+| `langfuse.observation.prompt.name`, `.prompt.version` | string | generation | optional | Prompt link | Langfuse OTel |
+| `langfuse.observation.completion_start_time` | ISO 8601 | generation | optional | For time-to-first-token | Langfuse OTel |
+
+### Braintrust-native (`braintrust.*`, bypass OTel mapping)
+
+| name | type | set on | required or optional | description | source(s) |
+|---|---|---|---|---|---|
+| `braintrust.input`, `braintrust.input_json`, `braintrust.output`, `braintrust.output_json`, `braintrust.expected`, `braintrust.expected_json` | string / JSON | span | optional | Direct field set | Braintrust OTel |
+| `braintrust.metadata`, `braintrust.metrics`, `braintrust.scores`, `braintrust.span_attributes`, `braintrust.tags`, `braintrust.context_json` | JSON | span | optional | Metrics keys: `prompt_tokens`, `completion_tokens`, `tokens`, `prompt_cached_tokens`, `prompt_cache_creation_tokens`, `time_to_first_token`, `estimated_cost`, `start`, `end`. `prompt_tokens` must include cached and cache-creation tokens. Scores are 0-1 floats. | Braintrust OTel, customize |
+| `braintrust.otel.preserve_attributes` | bool | span | optional | Keep source attrs in metadata after mapping | Braintrust OTel |
+
+### Traceloop-native (`traceloop.*`)
+
+| name | type | set on | required or optional | description | source(s) |
+|---|---|---|---|---|---|
+| `traceloop.span.kind` | string | span | set by decorators | `workflow`/`task`/`agent`/`tool` | semconv, decorators |
+| `traceloop.workflow.name` | string | all spans in workflow | set by context | Workflow name | span processor |
+| `traceloop.entity.name`, `traceloop.entity.path`, `traceloop.entity.version` | string | span | set by decorators | Entity id, dotted path, version | decorators, span processor |
+| `traceloop.entity.input`, `traceloop.entity.output` | JSON string | span | set by decorators | Serialized args / return | decorators |
+| `traceloop.association.properties.<key>` | string | all spans | optional | e.g. `user_id`, `chat_id`, `org_id`, `team_id`; also gates content tracing allow-list | span processor, association docs |
+| `gen_ai.task.id`, `.task.name`, `.task.parent.id`, `.task.input`, `.task.output`, `.task.status` (`success`/`failure`), `.task.kind`; `gen_ai.workflow.nodes`, `.workflow.edges` | mixed | task/workflow spans | optional | Traceloop's non-standard agent-task extension | semconv |
+| `llm.request.type` (`chat`/`completion`/`embedding`/`rerank`), `llm.usage.total_tokens`, `llm.is_streaming`, `llm.response.finish_reason`, `llm.response.stop_reason`, `llm.usage.reasoning_tokens` | mixed | LLM | legacy | Older `llm.*` names still emitted alongside `gen_ai.*` | semconv |
+
+### Opik-native and Portkey
+
+| name | type | set on | required or optional | description | source(s) |
+|---|---|---|---|---|---|
+| `opik.tags`, `opik.metadata.<key>`, `thread_id`, `opik.trace_id`, `opik.parent_span_id`, `opik.span_id` | mixed | span | optional | Tagging, metadata, thread and id override | Opik OTel overview |
+| `gen_ai.cost.*` (prefix) | double | LLM | optional | Opik stores under metadata (not cost) | Opik rules |
+| `gen_ai.framework` | string | span | optional | Opik metadata | Opik rules |
+| Portkey: `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.request.model`/`gen_ai.response.model`, `gen_ai.system`; experimental parsing of operation name, request params, `gen_ai.response.id`, finish reasons, cache metrics, messages, tool definitions | mixed | LLM | required for Portkey cost | No `portkey.*` namespace documented | Portkey OTel |
+
+## Metrics
+
+None of the platforms above ingest OTel metrics for their LLM views; all derive metrics from spans. Only Traceloop emits metrics.
+
+| name | instrument | unit | dimensions | description | source(s) |
+|---|---|---|---|---|---|
+| `gen_ai.client.token.usage` | histogram | tokens | `gen_ai.system`, `gen_ai.request.model`, `gen_ai.token.type` (`input`/`output`) | Tokens per request | Traceloop semconv |
+| `gen_ai.client.operation.duration` | histogram | s | system, model | Request duration | Traceloop semconv |
+| `gen_ai.client.generation.choices` | counter | choices | system, model | Choices generated | Traceloop semconv |
+| `llm.chat_completions.streaming_time_to_generate` | histogram | s | system, model | Stream duration | Traceloop semconv |
+| `llm.openai.chat_completions.exceptions`, `llm.anthropic.completion.exceptions` | counter | 1 | system, model | Failures | Traceloop semconv |
+
+Platform-derived (not emitted): Langfuse computes cost from `usage_details` x model price table; Phoenix from `llm.token_count.*` x pricing regex match; Braintrust from tokens via model registry or `estimated_cost`; Weave applies built-in pricing for OpenAI/Anthropic/Cohere/Mistral, else `add_cost()`; Datadog computes cost, latency, token ratios; Portkey computes cost from tokens and model pricing.
+
+## Events and log records
+
+| name | carried on | fields | when emitted | source(s) |
+|---|---|---|---|---|
+| `gen_ai.input.messages`, `gen_ai.output.messages` | span event (Honeycomb recommendation) or attribute | message array | Per LLM call; Honeycomb says put in events so collectors can filter PII before ingest | Honeycomb docs |
+| `gen_ai.evaluation.result` | span event | evaluation data | After eval | Honeycomb docs |
+| `gen_ai.user.message`, `gen_ai.choice` (legacy GenAI events) | span event | message content | Per LLM call; Braintrust maps to `input`/`output` | Braintrust OTel |
+| `db.query.embeddings`, `db.query.result`, `db.search.embeddings`, `db.search.result` | span event | `db.query.result.id`, `.score`, `.distance`, `.document`, `.metadata`, `.vector`, `db.search.result.entity` | Vector DB calls | Traceloop semconv |
+| Langfuse `event` observation | span (zero-duration) | any observation fields | Discrete events in a trace | Langfuse types |
+| Datadog evaluation record | API object (not span) | `span_id`, `trace_id` (decimal strings for OTel), `label`, `metric_type` (`score`/`categorical`), `score_value`/`categorical_value`, `ml_app`, `timestamp_ms`, `tags` (must include `source:otel`), `assessment` (`pass`/`fail`), `reasoning` | Post hoc, joined by ids or `feedback_join_key`/custom tag | Datadog evaluations |
+
+Content opt-in: Traceloop gates content attributes with `enable_content_tracing` (env `TRACELOOP_TRACE_CONTENT`) plus a per-association-property allow-list that sets `override_enable_content_tracing` in context. Langfuse has no server-side masking; use `mask_otel_spans` (Python) / `LangfuseSpanProcessor` `mask` (JS) or a collector processor. Datadog stores remote media URLs as text and never fetches them; APM linkage of sensitive data requires Restricted Datasets. Phoenix/OpenInference and Braintrust document no server-side redaction.
+
+## Per-run summary fields
+
+| Platform | Summary unit | Fields shown / stored | Exposure |
+|---|---|---|---|
+| Langfuse | Trace | name, `userId`, `sessionId`, `tags`, `metadata`, `release`, `version`, `environment`, aggregated latency, total tokens and cost across generations; scores attached to trace/observation/session | Trace object via API/UI; `langfuse.trace.*` attrs on root span |
+| Phoenix | Trace, session, project | Cost total with prompt/completion split rolled up span → trace → session → project; token totals; latency; `trace.annotations`, `trace.evaluations`, `session.annotations`, `session.evaluations` | UI columns and REST API; annotation attrs |
+| Braintrust | Root span (log row) | `input`, `output`, `expected`, `scores` (0-1), `metrics` incl. `tokens`, `estimated_cost`, `time_to_first_token`, `metadata`, `tags` | Only traces with a root span appear as rows; `braintrust.scores` attr |
+| Weave | Call | `summary` with `usage` (`prompt_tokens`, `completion_tokens`, `total_tokens`, `requests`), `summary["weave"]["costs"]` (`prompt_tokens_total_cost`, `completion_tokens_total_cost`, model, requests), latency, `exception`, `thread_id` | Calls table and API |
+| Honeycomb | Span/trace queries | Nothing pre-aggregated; users query over `gen_ai.*` and any custom fields; Agent Timeline stitches multi-trace conversations by `gen_ai.conversation.id` | Query engine |
+| Datadog | Trace (`ml_app`, `session_id`) | Aggregated `input_tokens`, `output_tokens`, `total_tokens`, `input_cost`/`output_cost`/`total_cost`, `time_to_first_token`, `time_per_output_token`, `cache_read_input_tokens`, `cache_write_input_tokens`, `reasoning_output_tokens`; evaluations joined by span/trace id | UI, spans API `metrics` block, evaluations API |
+| Traceloop | Workflow span | `traceloop.entity.input`/`output` on the workflow root; `gen_ai.task.status` per task | Attributes |
+| Opik | Trace | `total_estimated_cost`, `usage`, `thread_id`, tags, metadata; feedback scores | UI/API |
+
+## Execution environment
+
+| Platform | What it captures |
+|---|---|
+| Langfuse | All resource attributes → `metadata.resourceAttributes`; `deployment.environment*` → `environment`; `langfuse.release`/`langfuse.version` |
+| Phoenix | `openinference.project.name` resource attr; nothing else documented |
+| Braintrust | Unmapped attributes → `metadata` (source attrs stripped unless `braintrust.otel.preserve_attributes`); `x-bt-parent` experiment id links a run to an experiment |
+| Weave | `wandb.entity`, `wandb.project` resource attrs; `attributes` on call |
+| Honeycomb | Whatever fields are on the wide event; no prescribed environment set beyond OTel resource conventions |
+| Datadog | `service.name` → `ml_app`; `service`, `apm_trace_id` per span; `model_version`; `tags` as `key:value` |
+| Traceloop | `traceloop.entity.version`, `traceloop.prompt.version`/`version_hash`; `traceloop.association.properties.*` for org/user context |
+
+None document git commit, working directory, CPU/memory, seeds, or sandbox ids; those would land in generic metadata.
+
+## Notable design choices
+
+- Attribute priority: Langfuse gives `langfuse.*` precedence, then `gen_ai.*`/`llm.*`/`input.value`; Braintrust gives `braintrust.*` precedence and strips mapped source attributes. Emitting both standard and native attributes is safe on both.
+- Kind inference diverges: Datadog, Braintrust and Honeycomb key on `gen_ai.operation.name`; Phoenix requires `openinference.span.kind`; Langfuse infers `generation` only if a model attribute is present and otherwise defaults to `span`. A tool span with no explicit kind attribute renders as a generic span in Langfuse and Phoenix.
+- Token bucket semantics differ: Langfuse requires mutually exclusive buckets (`input` excludes `input_*`); Braintrust requires `prompt_tokens` to include cached tokens; OpenInference has `prompt_details.cache_read`/`cache_write` as sub-buckets. Cache token spellings differ (`gen_ai.usage.cache_read.input_tokens` vs `cache_read_input_tokens` vs `llm.token_count.prompt_details.cache_read`).
+- Cost: every platform computes cost from model name + tokens using a regex-matched pricing table, and every one accepts a pre-computed override (`gen_ai.usage.cost`, `llm.cost.*`, `estimated_cost`, `langfuse.observation.cost_details`). Datadog's blog claims cost derived from span duration and provider metadata; treat as marketing.
+- Session key is fragmented: `session.id` (Langfuse, Phoenix), `gen_ai.conversation.id` (Honeycomb, Datadog, Opik), `wandb.thread_id`, `traceloop.association.properties.*`.
+- Root span matters: Braintrust drops traces with no root; Datadog rejects `tool`/`task`/`embedding`/`retrieval` as roots; Langfuse names the trace after the root span.
+- Content in events vs attributes: Honeycomb pushes content into span events for collector-side filtering; Datadog, Weave and Braintrust read the same names as attributes. Braintrust also reads legacy `gen_ai.user.message`/`gen_ai.choice` events.
+- Honeycomb explicitly says not to sample GenAI telemetry and to make the caller emit `invoke_agent`.
+- Legacy names persist: `gen_ai.prompt`/`gen_ai.completion`, `gen_ai.usage.prompt_tokens`/`completion_tokens`, `gen_ai.system` are still accepted by Langfuse, Braintrust, Weave, Opik and Portkey; Datadog requires semconv 1.37+ names only.
+- Weave cannot render OTel tool calls in its chat view; Honeycomb's docs state semconv v1.40.0.
+
+## Recommendation for lablet (opinion)
+
+Minimum set that renders correctly in the most platforms (all on the LLM span unless noted):
+
+- `gen_ai.operation.name` (`chat`, `execute_tool`, `invoke_agent`) plus span names `chat {model}`, `execute_tool {tool}`, `invoke_agent {agent}`: adopt; drives kind in Datadog, Braintrust, Honeycomb and matches semconv.
+- `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.provider.name`: adopt; every platform reads at least one of these for model and cost lookup.
+- `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`: adopt; universal token source. Do not also emit `total_tokens` unless it equals the sum.
+- `gen_ai.conversation.id` and `session.id` with the same value on every span, plus `gen_ai.agent.name` on all spans: adopt; covers Honeycomb/Datadog/Opik and Langfuse/Phoenix session grouping in one shot.
+- `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` on tool spans: adopt; Datadog and Opik map these to name/input/output.
+- `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions` as attributes, behind a content opt-in flag: adopt; Datadog, Weave, Braintrust, Opik read them as attributes. Emit as span events only if targeting Honeycomb specifically (Honeycomb reads both).
+- `openinference.span.kind` (`LLM`/`TOOL`/`AGENT`) and `input.value`/`output.value`: adapt; a small duplicated set that makes Phoenix and Langfuse render kinds and content without a collector transform. Skip the flattened `llm.input_messages.<i>.*` form.
+- `langfuse.observation.type` (`generation`/`tool`/`agent`) on each span: adapt; one attribute makes Langfuse pick the right observation type instead of defaulting to `span`. Cheap, no conflicts elsewhere.
+- Pre-computed cost as `gen_ai.usage.cost` (USD, LLM span): adopt; Langfuse and Opik read it directly and it makes lablet's own cost authoritative when model names do not match a platform's pricing regex.
+- `service.name` and `deployment.environment.name` resource attributes: adopt; Datadog `ml_app`, Langfuse `environment`. Skip `wandb.*`, `braintrust.*`, `traceloop.*` unless a user targets that backend; these are headers or config, not instrumentation.
