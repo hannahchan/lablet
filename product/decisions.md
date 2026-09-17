@@ -49,3 +49,15 @@ Truncated output, context exhaustion, and token budget are their own stop reason
 ## 2026-09-18 Observers never fail or slow the run
 
 Telemetry export is buffered and its failures go to the diagnostic log. Measured latency must reflect the agent, not the exporter.
+
+## 2026-09-18 Contract-first telemetry with OpenTelemetry Weaver
+
+Every attribute, span, event, and the wide event is declared in a Weaver registry before it is emitted. Rust constants and builders and the telemetry docs are generated from it, and emitted telemetry is validated against it in CI. The telemetry surface is a product contract, so it needs a source of truth that is not the code. This is an experiment with Weaver; if the tooling does not hold up, the registry stays and the codegen is replaced.
+
+## 2026-09-18 The fake provider is a product feature
+
+`provider-fake` ships as a supported adapter so users can test frameworks built on lablet without spending tokens. It is also what lablet's own smoke tests and docs run on, so it cannot rot.
+
+## 2026-09-18 Quality bar is a document with gates behind it
+
+`product/quality-bar.md` lists commitments that are either user-verifiable or enforced by `cargo xtask`. Anything that cannot be one or the other does not go on the page.

@@ -20,6 +20,7 @@ Explicit architecture. Inside `lablet/`, directory `foo/bar/` is package `lablet
 | Domain | `crates/domain/*` | domain | tokio, serde (derive), reqwest, tracing, opentelemetry, rmcp |
 | Application | `crates/application/*` | domain | tokio, serde (derive), reqwest, opentelemetry, rmcp |
 | Secondary adapters | `crates/adapters/secondary/*` | application, domain | none |
+| Adapter shared kernel | `crates/adapters/secondary/shared/*` | application, domain | none; may be used by sibling adapters, implements no port |
 | Composition root | `apps/*` | everything | none |
 | Test support | `tests/*` | anything, dev-only | none |
 
@@ -42,15 +43,27 @@ Explicit architecture. Inside `lablet/`, directory `foo/bar/` is package `lablet
 - One integration test target per crate: `tests/it/main.rs` declaring modules.
 - Test doubles are hand-written fakes in the consuming crate. No mocking framework.
 
+## Telemetry is contract-first
+
+Every span, event, and attribute is declared in the Weaver registry under `lablet/telemetry/registry/` before it is emitted. The `telemetry-registry` crate and `lablet/docs/telemetry.md` are generated from it and checked in. Do not hand-edit generated files and do not write attribute names as string literals in adapters; add to the registry, regenerate, then use the generated constants and builders.
+
+```bash
+cargo xtask weaver generate    # regenerate the crate and docs after editing the registry
+```
+
 ## Gates
 
+Every rule on this page is enforced by a gate. If it is not enforced, it is a suggestion, not a rule.
+
 ```bash
-cargo xtask pre-commit    # fmt, clippy, lint-layers
+cargo xtask pre-commit    # fmt, clippy, lint-layers, weaver check, generated files up to date
 ```
 
 ```bash
-cargo xtask pre-push      # pre-commit plus tests and rustdoc
+cargo xtask pre-push      # pre-commit plus tests, rustdoc without warnings, cargo deny
 ```
+
+CI additionally runs coverage and mutation floors on the domain and application crates, the Weaver live-check against a fake-provider run, and the release builds.
 
 Install the hooks once with `scripts/install-hooks.sh`. Plain cargo commands run from `lablet/`.
 

@@ -1,6 +1,6 @@
 # Lablet specification
 
-Status: draft for build. Companion to [brief.md](brief.md) and [build-plan.md](build-plan.md).
+Status: draft for build. Companion to [brief.md](brief.md), [quality-bar.md](quality-bar.md), and [build-plan.md](build-plan.md).
 
 ## 1. What a run is
 
@@ -93,11 +93,14 @@ lablet/
   crates/adapters/secondary/
     provider-anthropic           ModelProvider over the Anthropic Messages API
     provider-openai              ModelProvider over OpenAI-compatible chat completions (Ollama, vLLM, gateways)
+    provider-fake                ModelProvider that plays scripted responses; a product feature, not test scaffolding
     tools-builtin                ToolExecutor for task_complete, bash, read_file, write_file
     tools-mcp                    ToolExecutor over rmcp (stdio and streamable HTTP clients)
     telemetry-otel               RunObserver emitting OTLP traces and logs
     telemetry-jsonl              RunObserver writing one JSON event per line to a file or stderr
+    shared/telemetry-registry    generated from the Weaver registry: attribute names, span and event builders
   apps/lablet                    composition root: config, build(), CLI. Library and binary.
+  telemetry/                     Weaver registry (YAML), policies, and codegen templates
   tests/conformance              shared ToolExecutor and RunObserver conformance cases
   xtask/                         (repo root, not a member) lint-layers, gates
 ```
@@ -229,8 +232,21 @@ Each tool is a small struct; the executor holds only those enabled in config. In
 ### `tools-mcp`
 One `rmcp` client per configured server. `specs()` lists tools from every server, prefixing names with `<server>__` only when two servers collide. `execute` forwards the call and maps `isError` results to `is_error: true`. Servers are started at build time with `tools.mcp[].startup_timeout` and shut down when the run ends. A stdio server's stderr is forwarded line by line to the diagnostic log at `debug`. If a server exits or its transport breaks mid-run, every call to its tools returns a tool error naming the server, so the consecutive error cap ends the run; its tools stay listed so the model's behaviour is observable.
 
+### `provider-fake`
+Plays a scripted sequence of `Completion`s from a YAML or JSON file, with optional per-call latency and injected errors of each `ProviderError` class. Selected with `model.provider: fake` and `model.script: path`. Reports usage from the script so token accounting is exercised end to end. Used by lablet's smoke tests, doctests, and examples, and by users testing their own frameworks.
+
+### Telemetry contract (`lablet/telemetry/`)
+Telemetry is contract-first. An OpenTelemetry Weaver semantic-convention registry under `lablet/telemetry/registry/` declares every attribute, span, event, and the wide event lablet emits. It imports the upstream semantic-conventions registry for `gen_ai.*` and defines `lablet.*`. From that registry:
+
+- `weaver registry check` with the policies under `lablet/telemetry/policies/` runs as a gate (naming, stability, required fields).
+- `weaver registry generate` with the Jinja templates under `lablet/telemetry/templates/rust/` produces the `lablet-telemetry-registry` crate: attribute name constants, typed attribute values, and span and event builders. The generated code is checked in and a gate fails if regeneration produces a diff.
+- The same templates produce `lablet/docs/telemetry.md`.
+- `weaver registry live-check` receives OTLP from a fake-provider run in CI and fails on any attribute, span, or event not in the registry, or with the wrong type.
+
+The tables in this document are the human summary; the registry is the source of truth. When they disagree, the registry wins and this document is corrected.
+
 ### `telemetry-otel`
-Spans and logs via `opentelemetry` and `opentelemetry-otlp` (gRPC or HTTP/protobuf), using the batch span and log processors so export never sits on the loop's path. Follows the GenAI semantic conventions; anything the conventions lack uses the `lablet.` namespace.
+Spans and logs via `opentelemetry` and `opentelemetry-otlp` (gRPC or HTTP/protobuf), using the batch span and log processors so export never sits on the loop's path. Every attribute name and builder comes from `lablet-telemetry-registry`; string literals for attribute names are a lint failure in this crate. Follows the GenAI semantic conventions; anything the conventions lack uses the `lablet.` namespace.
 
 | Event | Span | Key attributes |
 | --- | --- | --- |
@@ -260,10 +276,13 @@ impl Lablet { pub async fn run(&self, prompt: &str) -> RunOutcome; pub async fn 
 `main.rs` only does effects: parse args with `clap` derive, install a `tracing` subscriber on stderr filtered by `RUST_LOG` (default `warn`) for lablet's own diagnostics, load config, install Ctrl-C handling into the `Cancellation` port, `build`, `run`, print outcome, write the transcript, flush telemetry, exit. Diagnostics and telemetry are separate: the diagnostic log is about lablet, the telemetry is about the run.
 
 ```
+lablet init [--provider anthropic|openai|fake] [path]   # write a working starter config
 lablet run --config lablet.yaml [--prompt "..." | --prompt-file f | stdin] [--set key=value ...]
-lablet check --config lablet.yaml        # validate config, list resolved tools, exit
-lablet schema                            # print the config JSON schema
+lablet check --config lablet.yaml [--resolved]          # validate, start MCP servers, list tools; --resolved prints the full config
+lablet schema                                           # print the config JSON schema
 ```
+
+Error messages from `check` and startup name the config key, line, offending value, and accepted values, and distinguish config errors, MCP server startup failures, and provider rejections.
 
 `--set` applies dotted overrides (`--set run.max_turns=5`). Environment variable substitution `${VAR}` is applied to string values. No provenance tracking, retired-key roster, or inert-key warnings: unknown keys are errors and that is the whole config policy.
 
@@ -282,7 +301,8 @@ run:
   transcript_path: null          # write the full conversation as JSON at run end
 
 model:
-  provider: anthropic            # anthropic | openai
+  provider: anthropic            # anthropic | openai | fake
+  script: null                   # fake only: path to the scripted responses
   name: claude-sonnet-5
   api_key_env: ANTHROPIC_API_KEY # never the key itself
   base_url: null                 # override for gateways, Ollama, vLLM
