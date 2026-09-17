@@ -28,7 +28,7 @@ A lablet is one loop in one process. A grader is another lablet. The larger fram
 
 ## 2026-09-17 `serde_json::Value` allowed in domain
 
-Tool inputs and outputs are JSON by definition, so the domain needs a JSON value type. serde derives stay out of domain and application; wire forms belong to adapters and the composition root.
+Tool inputs and outputs are JSON by definition, so the domain needs a JSON value type. serde derives stay out of domain and application; wire forms belong to adapters and the composition root. Superseded on 2026-09-18 by "serde derives allowed in the domain".
 
 ## 2026-09-17 Documentation is three areas, four product files
 
@@ -61,3 +61,27 @@ Every attribute, span, event, and the wide event is declared in a Weaver registr
 ## 2026-09-18 Quality bar is a document with gates behind it
 
 `product/quality-bar.md` lists commitments that are either user-verifiable or enforced by `cargo xtask`. Anything that cannot be one or the other does not go on the page.
+
+## 2026-09-18 serde derives allowed in the domain
+
+Supersedes the 2026-09-17 entry. The conversation model is serialised by JSONL telemetry, the transcript writer, and the fake provider's scripts; banning derives would mean three hand-written mirrors of the same types. The domain derives once and every JSON surface reuses it. Provider wire formats stay as separate types in their adapters. The layer lint no longer lists `serde`.
+
+## 2026-09-18 Retry budget is per provider call
+
+`run.max_retries` counts attempts for one call and resets on success. A per-run budget made a long run lose to a few spread-out rate limits, which measures the provider's weather rather than the agent.
+
+## 2026-09-18 MCP tool names are never prefixed by default
+
+Tools keep the names their server reports so measurements reflect the server as-is and allow and deny lists stay stable when servers are added. A collision is a build error; `prefix_tools: true` on a server is the escape hatch.
+
+## 2026-09-18 Stop policy has two evaluation points
+
+Before each provider call and after each tool phase. One evaluation per iteration let the tool-error cap, timeout, and cancellation fire one provider call late.
+
+## 2026-09-18 Weaver generates constants, not builders
+
+There are no upstream Rust builder templates for Weaver. Phase 0 generates attribute name constants and enums only; adapters compose spans and records from them. Builders can be added later if the constants prove insufficient.
+
+## 2026-09-18 GenAI conventions are vendored at a pinned commit
+
+The GenAI semantic conventions moved to their own repository with no tagged release and Development stability throughout. The registry vendors core and GenAI at pinned commits, the policy accepts Development for imported `gen_ai.*`, and upstream renames are treated as breaking changes to lablet's contract.
