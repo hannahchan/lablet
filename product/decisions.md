@@ -37,3 +37,15 @@ Tool inputs and outputs are JSON by definition, so the domain needs a JSON value
 ## 2026-09-18 One wide event per run
 
 Every run ends with a single wide event carrying the whole run summary, emitted by every observer from one `RunSummary` the loop accumulates. Analysis over many runs should work from one row per run; spans are for drilling into a single run.
+
+## 2026-09-18 Failure modes are distinct stop reasons
+
+Truncated output, context exhaustion, and token budget are their own stop reasons rather than folded into `provider_error` or `completed`. They are the findings a benchmark exists to surface.
+
+## 2026-09-18 Transcript is separate from telemetry
+
+`run.transcript_path` writes the conversation as JSON independently of `capture_content`. A grader lablet needs the conversation; telemetry content capture is a separate, usually off, concern.
+
+## 2026-09-18 Observers never fail or slow the run
+
+Telemetry export is buffered and its failures go to the diagnostic log. Measured latency must reflect the agent, not the exporter.

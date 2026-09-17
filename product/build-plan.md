@@ -16,7 +16,7 @@ Acceptance: `cargo xtask pre-push` passes on an empty workspace.
 - `lablet-model`: every type in spec §3, with `Usage: Add`, display impls for `StopReason` and `FinishReason`, and constructors that validate (non-empty tool names, unique block ids).
 - `lablet-policy`: `StopPolicy::evaluate`, `RetryPolicy::delay`, `Pricing::cost`.
 
-Acceptance: unit tests cover each stop reason, each completion mode, backoff growth and cap, and cost arithmetic.
+Acceptance: unit tests cover each stop reason (including token budget, truncated output, and context exhaustion), each completion mode, backoff growth and cap, and cost arithmetic.
 
 ## Phase 2: the loop
 
@@ -27,17 +27,17 @@ Acceptance: end-to-end tests with fakes prove natural and explicit completion, e
 
 ## Phase 3: first real run
 
-- `provider-anthropic` with wiremock tests for happy path, tool use, thinking round trip, cache token mapping, and error classification.
+- `provider-anthropic` with wiremock tests for happy path, tool use, thinking round trip, cache token mapping, per-call timeout, and error classification including context exhaustion.
 - `tools-builtin` with `bash`, `read_file`, `write_file`, `task_complete`, and root escape rejection.
 - `telemetry-jsonl`, including the wide event as the final line.
-- `apps/lablet`: config types, `build`, `Lablet`, CLI with `run`, `check`, `schema`, `--set`, env substitution, config digest.
+- `apps/lablet`: config types, `build`, `Lablet`, CLI with `run`, `check`, `schema`, `--set`, env substitution, config digest, transcript output, diagnostic logging on stderr.
 - Smoke test: fake provider plus JSONL observer through `build` and `run`.
 
 Acceptance: `lablet run --config examples/anthropic.yaml --prompt "..."` completes a real task against the Anthropic API, writes a JSONL trace, and prints a `RunOutcome`. `lablet check` lists the resolved tools.
 
 ## Phase 4: MCP
 
-- `tools-mcp` over `rmcp`, stdio and streamable HTTP, name collision prefixing, shutdown on run end.
+- `tools-mcp` over `rmcp`, stdio and streamable HTTP, name collision prefixing, startup timeout, stderr forwarding, dead-server behaviour, shutdown on run end.
 - Conformance crate `tests/conformance` with the `ToolExecutor` cases, run against both `tools-builtin` and `tools-mcp` (the latter against a tiny in-repo test MCP server).
 
 Acceptance: a run using a public MCP server over stdio completes, and removing a tool via `tools.deny` is visible in the `RunStarted` event.
@@ -46,7 +46,7 @@ Acceptance: a run using a public MCP server over stdio completes, and removing a
 
 - `telemetry-otel` with the span and attribute table from spec §6, the `lablet.run` wide-event log record, content log records behind `capture_content`, resource attributes, flush on exit.
 - Fan-out observer in the composition root so JSONL and OTLP can run together.
-- `RunObserver` conformance cases added to `tests/conformance`, including that exactly one wide event is emitted per run and that its numbers equal the sum of the per-step events.
+- `RunObserver` conformance cases added to `tests/conformance`, including that exactly one wide event is emitted per run, that its numbers equal the sum of the per-step events, and that an unreachable endpoint does not change the run outcome.
 
 Acceptance: a run against a local OTel collector (docker compose file under `lablet/examples/`) shows the root, chat, and tool spans with the documented attributes in Jaeger or the collector debug exporter, and one `lablet.run` log record per run.
 

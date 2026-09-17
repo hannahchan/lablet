@@ -29,14 +29,23 @@ Every provider call, tool call, retry, and stop decision is reported to an obser
 
 ### Stop reasons
 
-`completed`, `ended_without_completion`, `max_turns`, `timeout`, `retries_exhausted`, `tool_errors_exhausted`, `cancelled`, `provider_error` (a non-retryable error).
+`completed`, `ended_without_completion`, `max_turns`, `timeout`, `max_total_tokens`, `output_truncated` (the model hit `max_tokens` without a tool call), `context_exhausted` (the provider rejected the request as too long), `retries_exhausted`, `tool_errors_exhausted`, `cancelled`, `provider_error` (any other non-retryable error).
 
 ### Retries
 
-- **Provider errors** are classified by the adapter as retryable (transport failure, rate limit, 5xx, overloaded) or fatal (auth, bad request, unknown model). Retryable errors are retried with exponential backoff up to `run.max_retries` per run, then the run stops with `retries_exhausted`.
+- **Provider errors** are classified by the adapter as retryable (transport failure, rate limit, 5xx, overloaded), context exhausted (the provider's context-length error), or fatal (auth, bad request, unknown model). Retryable errors are retried with exponential backoff up to `run.max_retries` per run, then the run stops with `retries_exhausted`.
 - **Malformed provider responses** (the adapter cannot map the payload to the domain model) count as retryable.
 - **Tool errors** are not retried by lablet. The error is returned to the model as an error tool result. After `run.max_consecutive_tool_errors` consecutive error results the run stops with `tool_errors_exhausted`. A successful tool call resets the counter.
-- **Tool timeouts** are tool errors.
+- **Tool timeouts** (`run.tool_timeout`) are tool errors.
+- **Provider timeouts** (`run.provider_timeout`) are retryable errors, enforced per call by the adapter's HTTP client via the deadline on the request. The run-level `run.timeout` is checked between steps only, so a run may overrun it by at most one provider or tool call.
+
+### Timeouts and cancellation
+
+Cancellation (Ctrl-C in the CLI) is polled between steps. A run in the middle of a long tool call stops after that call returns or times out. Interrupting a call in flight is an open question.
+
+### Transcript
+
+When `run.transcript_path` is set, the full message list (system prompt, every message, every tool result) is written there as JSON when the run ends, whatever the stop reason. This is independent of telemetry and `capture_content`; it is how a grader lablet or an outer framework gets the conversation.
 
 ### Outcome
 
@@ -65,7 +74,7 @@ When a run ends, every observer emits exactly one wide event: a single record ca
 | --- | --- |
 | identity | `run.id`, `config.digest`, `lablet.version`, every `telemetry.resource` attribute |
 | setup | `model.provider`, `model.name`, `run.completion_mode`, `run.max_turns`, `run.timeout_ms`, `tools.names` (list), `tools.count`, `tools.mcp_servers` (list), `prompt.system_bytes`, `prompt.user_bytes`, `skills.count` |
-| outcome | `stop_reason`, `error`, `duration_ms`, `turns`, `result.text_bytes`, `result.has_structured` |
+| outcome | `stop_reason`, `error`, `duration_ms`, `turns`, `result.text_bytes`, `result.has_structured`, `transcript_path` |
 | provider | `provider.calls`, `provider.retries`, `provider.latency_ms.total`, `provider.latency_ms.max`, `usage.input_tokens`, `usage.output_tokens`, `usage.cache_read_tokens`, `usage.cache_write_tokens`, `usage.total_tokens`, `cost_usd` (when pricing configured), `finish_reasons` (counts by reason) |
 | tools | `tool_calls.total`, `tool_calls.errors`, `tool_calls.latency_ms.total`, `tool_calls.input_bytes.total`, `tool_calls.output_bytes.total`, and per tool `tool.<name>.calls`, `tool.<name>.errors`, `tool.<name>.latency_ms.total` |
 | content | `result.text` and `result.structured` only when `telemetry.capture_content` is on |
@@ -128,7 +137,7 @@ pub enum ToolSource { Builtin, Mcp { server: String } }
 pub struct Usage { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens }   // u64, Add impl
 pub struct Completion { pub message: Message, pub usage: Usage, pub finish: FinishReason }
 pub enum FinishReason { EndTurn, ToolUse, MaxTokens, Other(String) }
-pub enum StopReason { Completed, EndedWithoutCompletion, MaxTurns, Timeout, RetriesExhausted, ToolErrorsExhausted, Cancelled, ProviderError }
+pub enum StopReason { Completed, EndedWithoutCompletion, MaxTurns, Timeout, MaxTotalTokens, OutputTruncated, ContextExhausted, RetriesExhausted, ToolErrorsExhausted, Cancelled, ProviderError }
 pub struct RunOutcome { ... as in §1 }
 pub struct RunSummary { ... every field in the §1 wide-event table, typed; per-tool aggregates as a map keyed by ToolName }
 ```
@@ -142,8 +151,8 @@ Cache-related fields are zero for providers that do not report them. `Opaque` ex
 Pure functions over plain state, fully unit-testable without async:
 
 ```rust
-pub struct StopPolicy { pub completion: CompletionMode, pub max_turns: u32, pub timeout: Duration, pub max_retries: u32, pub max_consecutive_tool_errors: u32 }
-pub struct RunState { pub turn: u32, pub elapsed: Duration, pub retries: u32, pub consecutive_tool_errors: u32, pub last_finish: Option<FinishReason>, pub task_complete_called: bool }
+pub struct StopPolicy { pub completion: CompletionMode, pub max_turns: u32, pub timeout: Duration, pub max_total_tokens: Option<u64>, pub max_retries: u32, pub max_consecutive_tool_errors: u32 }
+pub struct RunState { pub turn: u32, pub elapsed: Duration, pub total_tokens: u64, pub retries: u32, pub consecutive_tool_errors: u32, pub last_finish: Option<FinishReason>, pub last_had_tool_use: bool, pub task_complete_called: bool }
 impl StopPolicy { pub fn evaluate(&self, state: &RunState) -> Option<StopReason> }
 pub struct RetryPolicy { pub base: Duration, pub max: Duration, pub factor: f64 }
 impl RetryPolicy { pub fn delay(&self, attempt: u32) -> Duration }
@@ -160,8 +169,8 @@ impl Pricing { pub fn cost(&self, usage: &Usage) -> Cost }
     fn model(&self) -> &ModelRef;
     async fn complete(&self, req: CompletionRequest) -> Result<Completion, ProviderError>;
 }
-pub struct CompletionRequest<'a> { system: &'a str, messages: &'a [Message], tools: &'a [ToolSpec], max_tokens: u32, temperature: Option<f32>, thinking_budget: Option<u32> }
-pub enum ProviderError { Retryable(String), Fatal(String), Malformed(String) }
+pub struct CompletionRequest<'a> { system: &'a str, messages: &'a [Message], tools: &'a [ToolSpec], max_tokens: u32, temperature: Option<f32>, thinking_budget: Option<u32>, seed: Option<u64>, deadline: Duration }
+pub enum ProviderError { Retryable(String), ContextExhausted(String), Fatal(String), Malformed(String) }
 
 #[async_trait] pub trait ToolExecutor: Send + Sync {
     async fn specs(&self) -> Result<Vec<ToolSpec>, ToolError>;
@@ -191,6 +200,8 @@ pub trait Cancellation: Send + Sync { fn is_cancelled(&self) -> bool; }
 
 Content-bearing fields on events (`system_prompt`, `prompt`, `response`, `input`, `output`) are `None` unless `telemetry.capture_content` is on. The loop decides, so observers never see content they should not.
 
+Observers never fail the run and never block it: `on` must return promptly, exporters buffer and batch, and export failures (an unreachable OTLP endpoint, an unwritable file) go to lablet's diagnostic log. The composition root flushes every observer before exit and reports flush failures on stderr without changing the exit code.
+
 ### Use case
 
 ```rust
@@ -207,19 +218,19 @@ Tool calls within one turn are executed sequentially. Parallel execution is a la
 ## 6. Adapters
 
 ### `provider-anthropic`
-Messages API via `reqwest`. Maps `ContentBlock` both ways, including `thinking` and cache-control (applied to the system prompt and tool specs when `model.cache: true`). Reads `cache_read_input_tokens` and `cache_creation_input_tokens` into `Usage`. Classifies 429, 529, 5xx, and transport errors as retryable.
+Messages API via `reqwest`. Maps `ContentBlock` both ways, including `thinking` and cache-control (applied to the system prompt and tool specs when `model.cache: true`). Reads `cache_read_input_tokens` and `cache_creation_input_tokens` into `Usage`. Classifies 429, 529, 5xx, transport errors, and per-call timeouts as retryable, and the `prompt is too long` invalid-request error as context exhausted. Ignores `seed`.
 
 ### `provider-openai`
-`/v1/chat/completions` with function calling. Covers OpenAI, Ollama, vLLM, and gateways via `base_url`. `Thinking` blocks are dropped on the way out and reasoning content, when present, is mapped on the way in. Unknown fields go to `Opaque`.
+`/v1/chat/completions` with function calling. Covers OpenAI, Ollama, vLLM, and gateways via `base_url`. `Thinking` blocks are dropped on the way out and reasoning content, when present, is mapped on the way in. Unknown fields go to `Opaque`. Passes `seed` when set. Classifies `context_length_exceeded` and equivalents as context exhausted.
 
 ### `tools-builtin`
 Each tool is a small struct; the executor holds only those enabled in config. Initial set: `task_complete` (JSON schema from config or free-form object), `bash` (working directory and timeout from config, captures stdout, stderr, exit code), `read_file`, `write_file`. All paths are resolved under `tools.builtin.root` and rejected if they escape it.
 
 ### `tools-mcp`
-One `rmcp` client per configured server. `specs()` lists tools from every server, prefixing names with `<server>__` only when two servers collide. `execute` forwards the call and maps `isError` results to `is_error: true`. Servers are started at build time and shut down when the run ends.
+One `rmcp` client per configured server. `specs()` lists tools from every server, prefixing names with `<server>__` only when two servers collide. `execute` forwards the call and maps `isError` results to `is_error: true`. Servers are started at build time with `tools.mcp[].startup_timeout` and shut down when the run ends. A stdio server's stderr is forwarded line by line to the diagnostic log at `debug`. If a server exits or its transport breaks mid-run, every call to its tools returns a tool error naming the server, so the consecutive error cap ends the run; its tools stay listed so the model's behaviour is observable.
 
 ### `telemetry-otel`
-Spans and logs via `opentelemetry` and `opentelemetry-otlp` (gRPC or HTTP/protobuf). Follows the GenAI semantic conventions; anything the conventions lack uses the `lablet.` namespace.
+Spans and logs via `opentelemetry` and `opentelemetry-otlp` (gRPC or HTTP/protobuf), using the batch span and log processors so export never sits on the loop's path. Follows the GenAI semantic conventions; anything the conventions lack uses the `lablet.` namespace.
 
 | Event | Span | Key attributes |
 | --- | --- | --- |
@@ -246,7 +257,7 @@ pub async fn build(config: Config) -> Result<Lablet, BuildError>;
 impl Lablet { pub async fn run(&self, prompt: &str) -> RunOutcome; pub async fn shutdown(self); }
 ```
 
-`main.rs` only does effects: parse args with `clap` derive, load config, install Ctrl-C handling into the `Cancellation` port, `build`, `run`, print outcome, flush telemetry, exit.
+`main.rs` only does effects: parse args with `clap` derive, install a `tracing` subscriber on stderr filtered by `RUST_LOG` (default `warn`) for lablet's own diagnostics, load config, install Ctrl-C handling into the `Cancellation` port, `build`, `run`, print outcome, write the transcript, flush telemetry, exit. Diagnostics and telemetry are separate: the diagnostic log is about lablet, the telemetry is about the run.
 
 ```
 lablet run --config lablet.yaml [--prompt "..." | --prompt-file f | stdin] [--set key=value ...]
@@ -263,9 +274,12 @@ run:
   completion: natural            # natural | explicit
   max_turns: 30
   timeout: 10m
+  max_total_tokens: null         # input + output across the run; null means unlimited
   max_retries: 3
   max_consecutive_tool_errors: 3
   tool_timeout: 60s
+  provider_timeout: 120s
+  transcript_path: null          # write the full conversation as JSON at run end
 
 model:
   provider: anthropic            # anthropic | openai
@@ -275,6 +289,7 @@ model:
   max_tokens: 4096
   temperature: null
   thinking_budget: null
+  seed: null                     # passed through when the provider supports it
   cache: true                    # anthropic only
   pricing: null                  # { input, output, cache_read, cache_write } USD per million tokens
 
@@ -292,6 +307,7 @@ tools:
       command: npx
       args: ["-y", "@example/docs-mcp"]
       env: { }
+      startup_timeout: 30s
     - name: search
       transport: http
       url: http://localhost:8080/mcp
@@ -310,7 +326,7 @@ telemetry:
   resource: { }                  # extra resource attributes, e.g. experiment ids
 ```
 
-Config digest (`lablet.config.digest`) is a SHA-256 of the canonical JSON form of the resolved config with secrets excluded, so runs can be grouped by configuration in analysis.
+Config digest (`lablet.config.digest`) is a SHA-256 of the canonical JSON form of the config after `--set` overrides but before `${VAR}` substitution, so any value injected from the environment (API keys, auth headers) never enters the digest and runs can be grouped by configuration in analysis.
 
 ## 8. Testing
 
@@ -326,6 +342,7 @@ Config digest (`lablet.config.digest`) is a SHA-256 of the canonical JSON form o
 Recorded here so they are not lost; none block the first build.
 
 - Parallel tool execution within a turn.
+- Interrupting a provider or tool call in flight on cancellation, rather than waiting for it.
 - Loading skills through a tool rather than inlining.
 - Streaming responses (not needed for measurement, may be needed for very long outputs).
 - A `lablet.run` metric set alongside traces, once there is a consumer for it.
