@@ -279,10 +279,18 @@ Lablet's spec emits traces and logs only. These are what a metric set would cont
 9. **Metrics.** Not for the first build. If added, only the semconv set with bounded dimensions.
 10. **Platform duplicates.** Offer `openinference.span.kind` and `langfuse.observation.type` as an opt-in `telemetry.compat` list rather than always emitting them.
 
-## 10. Decisions this raises for the product owner
+## 10. Decisions taken (2026-09-18)
 
-- Whether root-span totals reuse `gen_ai.usage.*` (platform-friendly, double counts in naive sums) or a `lablet.usage.*` namespace.
-- Whether `input_tokens` in the **outcome JSON** is inclusive of cache (semconv, Harbor) or exclusive (Inspect). The wide event follows semconv either way.
-- Whether to add a turn span or keep turns as an index attribute on chat and tool spans.
-- Whether redacted content is omitted or written as a placeholder.
-- Whether ATIF export is a first-build feature or phase 7.
+Rule applied throughout: follow the semantic conventions where they speak, then whatever is idiomatic, and start lean.
+
+- Root-span totals reuse `gen_ai.usage.*`; the double-count caveat is documented.
+- `input_tokens` in the outcome JSON includes cached tokens, matching semconv.
+- No turn span; `lablet.turn` index on chat and tool spans. A turn span can be added later.
+- Redacted content is omitted, not written as a placeholder; byte counts are always present.
+- ATIF export lands in phase 7; the transcript model is designed for it in phase 1.
+
+## 11. Extensions deferred
+
+Kept here so they are not lost. None is in the spec or the registry yet; each needs a justification when added.
+
+`lablet.usage.failed_attempt_tokens`, `lablet.run.working_ms` and per-event working time, `lablet.run.provider_ms` / `tool_ms` / `overhead_ms`, `lablet.run.cache_hit_ratio`, `lablet.run.context_fill_ratio`, `lablet.model.context_window`, `lablet.run.limit.*` split from error, `lablet.run.interrupted_during`, `lablet.run.messages`, `lablet.event.sequence`, `lablet.response.id` on tool spans, `lablet.tool.output.lines`, `lablet.tool.output.truncated`, `lablet.bash.*`, `lablet.mcp.server.version.<name>`, `lablet.vcs.dirty`, `lablet.pricing.version`, `gen_ai.usage.cost`, `openinference.span.kind` and `langfuse.observation.type` compat, metrics.

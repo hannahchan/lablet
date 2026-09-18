@@ -14,7 +14,7 @@ Acceptance: `cargo xtask pre-push` passes on an empty workspace, and `cargo xtas
 
 ## Phase 1: domain
 
-- `lablet-model`: every type in spec §3 with serde derives, `Usage: Add` and `total()`, display impls for `StopReason` and `FinishReason`, constructors that validate (non-empty tool names, unique block ids).
+- `lablet-model`: every type in spec §3 with serde derives, `Usage: Add` and `total()`, display impls for `StopReason` and `FinishReason`, constructors that validate (non-empty tool names, unique block ids). The transcript shape must map losslessly onto an ATIF v1.8 trajectory (one turn is one step, tool results joined by call id) so the phase 7 export needs no model change.
 - `lablet-policy`: `StopPolicy::evaluate` at both stop points, `RetryPolicy::delay`, `Pricing::cost`.
 
 Acceptance: unit tests cover each stop reason at the stop point that owns it (including token budget, truncated output, and context exhaustion), each completion mode, backoff growth, cap, and exhaustion, and cost arithmetic. No acceptance scenarios yet.
@@ -72,6 +72,7 @@ Acceptance: the same config with only the `model` section changed completes the 
 ## Phase 7: polish and release
 
 - Skills inlining, pricing and cost on the root span and wide event, `task_complete` schema from config.
+- `lablet run --transcript-format atif` exporting the transcript as an ATIF v1.8 trajectory for Harbor and Terminal-bench.
 - User docs in `lablet/docs/`: getting started, config reference generated from the schema, telemetry reference generated from the registry, a page on using `provider-fake` to test a framework.
 - Example configs for each provider and for the MCP optimisation use case.
 - Criterion benchmarks for loop overhead per turn and per tool call with a regression threshold.

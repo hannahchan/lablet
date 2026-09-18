@@ -85,3 +85,31 @@ There are no upstream Rust builder templates for Weaver. Phase 0 generates attri
 ## 2026-09-18 GenAI conventions are vendored at a pinned commit
 
 The GenAI semantic conventions moved to their own repository with no tagged release and Development stability throughout. The registry vendors core and GenAI at pinned commits, the policy accepts Development for imported `gen_ai.*`, and upstream renames are treated as breaking changes to lablet's contract.
+
+## 2026-09-18 Semantic conventions first, extensions last
+
+A GenAI or core semantic-convention attribute is used wherever one exists. A `lablet.*` attribute is added only when the run cannot be described without it, with a one-line justification in the registry. Extensions considered and deferred live in the research catalogue. This keeps the registry small and every extension a visible decision.
+
+## 2026-09-18 Root-span usage totals reuse `gen_ai.usage.*`
+
+The conventions allow the aggregate on `invoke_agent`, and Honeycomb and Datadog read it there. A query that sums `gen_ai.usage.*` over every span in a trace double counts; the docs say to filter on `gen_ai.operation.name`, and the wide event is the intended per-run source.
+
+## 2026-09-18 `input_tokens` includes cached tokens
+
+Matches the conventions and Harbor. Inspect-style consumers subtract `cache_read_tokens` and `cache_write_tokens`, which are reported beside it.
+
+## 2026-09-18 Turn index, not turn span
+
+The conventions define no turn span and the idiomatic tree is `invoke_agent` with `chat` and `execute_tool` directly beneath. `lablet.turn` on each child recovers per-turn analysis. A turn span is trivial to add later and is listed as an open question.
+
+## 2026-09-18 Redacted content is omitted
+
+Idiomatic OpenTelemetry omits an attribute it is not populating. Byte-count attributes are always present so dashboards keep a stable column.
+
+## 2026-09-18 ATIF export in phase 7
+
+Harbor's Agent Trajectory Interchange Format is the idiomatic trajectory format for eval frameworks, but it is not an OpenTelemetry concern and would grow phase 3a. The phase 1 transcript model is designed to map to it losslessly.
+
+## 2026-09-18 Spec corrected to current semantic conventions
+
+From the instrumentation research: `gen_ai.usage.cache_write.input_tokens` replaces the `cache_creation` spelling; provider failures are `gen_ai.client.operation.exception` log records rather than the deprecated `exception` span event; `mcp.*`, `jsonrpc.*`, and `network.transport` go on the `execute_tool` span with trace context injected into `params._meta`; `gen_ai.request.seed` and `gen_ai.request.reasoning.level` replace lablet-named equivalents; `gen_ai.tool.type` uses `function` and `extension`; `session.id` is emitted beside `gen_ai.conversation.id`.
