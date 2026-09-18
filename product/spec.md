@@ -77,7 +77,7 @@ Exit codes: `0` completed, `2` ended with any other stop reason, `1` the run nev
 
 ### Wide event
 
-When a run ends, every observer emits exactly one wide event: a single record carrying everything worth knowing about the run, so an analyst can answer most questions from one row without joining spans. It is emitted after `RunFinished`, whatever the stop reason, and is the last thing the run produces. Its content is `RunContext` plus `RunSummary` (§3), flattened to the attribute names below. JSONL and OTel use the identical key set.
+When a run ends, every observer emits exactly one wide event: a single record carrying everything worth knowing about the run, so an analyst can answer most questions from one row without joining spans. It is emitted after `RunFinished`, whatever the stop reason, and is the last thing the run produces. Its content is `RunContext` plus `RunSummary` (§3), flattened to the attribute names below.
 
 | Group | Attributes |
 | --- | --- |
