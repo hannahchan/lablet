@@ -1,6 +1,6 @@
 # Acceptance
 
-Lablet is done when every scenario below is green in CI and the release checklist is signed off. Scenarios run with `provider-fake` and `lablet-test-mcp-server` unless stated. Each names the phase that must make it pass. Scenarios in phase 3 run against the port fakes in `lablet-run`; from phase 4 they run through the library or the CLI.
+Lablet is done when every scenario below is green in CI and the release checklist is signed off. Scenarios run with `provider-fake` and `lablet-test-mcp-server` unless stated. Each names the phase that must make it pass. Scenarios in phase 3 run against the port fakes in `lablet-run`; from phase 4 they run through the library or the CLI, with telemetry assertions made on the OTLP/JSON file read back by the conformance reader until the network exporter lands in phase 6.
 
 ## Scenarios
 
@@ -48,14 +48,14 @@ Lablet is done when every scenario below is green in CI and the release checklis
 
 | # | Given | When | Then | Phase |
 | --- | --- | --- | --- | --- |
-| O1 | JSONL observer | any run | one line per `RunEvent` keyed by registry attribute names, every line carries the run id, config digest, resource attributes, and `schema_url`; last line is the wide event and its totals equal the sum of the per-step events | 4 |
-| O9 | JSONL and OTLP both on | any run | for every span there is one JSONL line with the same attribute keys and values | 6 |
-| O2 | OTLP to the in-process receiver in `lablet-conformance` | any run | root, chat, and tool spans with the registry's attributes; one `lablet.run` log record whose trace id matches the root span | 6 |
+| O1 | OTLP/JSON file exporter | any run | every line parses as an OTLP `ExportTraceServiceRequest` or `ExportLogsServiceRequest` with the full resource; the run id, config digest, and resource attributes are on every span; exactly one `lablet.run` record whose totals equal the sum of the chat and tool spans | 4 |
+| O2 | OTLP/JSON file read back by the conformance reader | any run | root, chat, and tool spans with the registry's attributes; one `lablet.run` log record whose trace id matches the root span | 4 |
+| O9 | file and OTLP network both on, same run | run | the in-process receiver and the file contain the same spans and records (equal after removing export timestamps) | 6 |
 | O3 | OTLP to a closed port | run | outcome unchanged, exit code unchanged, export failure in the diagnostic log, process exits within 5s of the run ending | 6 |
 | O4 | `capture_content: false` | run | no prompt, response, or tool content in any observer output | 4 |
-| O5 | `capture_content: true` | run | content present in the JSONL events and in the OTel log records | 6 |
+| O5 | `capture_content: true` | run | content log records present in both the file and the network export | 6 |
 | O6 | a fake-provider run | `cargo xtask weaver live-check` | no undeclared or mistyped attributes | 6 |
-| O7 | JSONL and OTLP both configured | run | both receive every event and the same wide event key set and numbers | 6 |
+| O7 | OTLP to the in-process receiver | run | root, chat, tool spans and one `lablet.run` record arrive, matching O2 | 6 |
 | O8 | `transcript_path` set, any stop reason | run | the file contains the system prompt and every message including tool results | 4 |
 
 ### Config and CLI

@@ -90,9 +90,9 @@ When a run ends, every observer emits exactly one wide event: a single record ca
 
 Naming rule: a GenAI or core semantic-convention attribute is used wherever one exists. A `lablet.*` attribute is added only when the run cannot be described without it, and every one carries a one-line justification in the registry. Per-tool values use Weaver `template[int]` attributes, which allow a dynamic suffix only; there are no map-typed attributes. `gen_ai.usage.input_tokens` includes cached tokens; `run.max_total_tokens` counts `input + output`. Extensions considered and deferred are listed in the research catalogue, not here.
 
-The same record goes to every configured observer: an OTel log record for OTLP, the final line for JSONL. Spans remain the per-step detail; the wide event is the per-run row.
+The wide event is an OTel log record and reaches every configured exporter (OTLP over the network, the OTLP/JSON file) identically. Spans remain the per-step detail; the wide event is the per-run row.
 
-Aggregatability rules: the wide event has a fixed flat shape (no nested maps; template attributes with a bounded key set for per-tool values); `gen_ai.conversation.id`, `lablet.config.digest`, and every `telemetry.resource` attribute appear on the wide event, on every span, and on every JSONL line so any consumer can group by them without a join; only raw counts, bytes, tokens, and durations are emitted, never ratios or averages, since those belong to the aggregation.
+Aggregatability rules: the wide event has a fixed flat shape (no nested maps; template attributes with a bounded key set for per-tool values); `gen_ai.conversation.id`, `lablet.config.digest`, and every `telemetry.resource` attribute appear on the wide event and on every span so any consumer can group by them without a join, and the full resource travels with every export batch as OTLP defines; only raw counts, bytes, tokens, and durations are emitted, never ratios or averages, since those belong to the aggregation.
 
 ## 2. Architecture
 
@@ -109,8 +109,7 @@ lablet/
     provider-fake                ModelProvider that plays scripted responses; a product feature, not test scaffolding
     tools-builtin                ToolExecutor for bash, read_file, write_file (task_complete lives in the loop)
     tools-mcp                    ToolExecutor over rmcp (stdio and streamable HTTP clients)
-    telemetry-otel               RunObserver emitting OTLP traces and logs
-    telemetry-jsonl              RunObserver writing one JSON event per line to a file or stderr
+    telemetry-otel               RunObserver mapping events to OTel spans and logs once, with pluggable exporters: OTLP network, OTLP/JSON file
     shared/telemetry-registry    generated from the Weaver registry: attribute name constants and enums
   apps/lablet                    composition root: config, build(), CLI. Library and binary.
   telemetry/                     Weaver registry (YAML), vendored upstream registries, policies, templates
@@ -128,7 +127,7 @@ Dependency direction, enforced by `cargo xtask lint-layers` (crates are matched 
 | adapters and adapter shared kernels | application, domain | (no restriction) |
 | composition root | everything | (no restriction) |
 
-`serde` and `serde_json` are allowed in every ring: the domain model derives `Serialize` and `Deserialize` once, and every JSON surface (JSONL, transcript, fake-provider scripts) reuses it. Provider wire formats are still separate types in their adapters.
+`serde` and `serde_json` are allowed in every ring: the domain model derives `Serialize` and `Deserialize` once, and every JSON surface (transcript, fake-provider scripts) reuses it. Provider wire formats are still separate types in their adapters.
 
 There are no primary adapters. The composition root calls `RunService` directly, which is also the library surface.
 
@@ -235,7 +234,7 @@ pub enum RunEvent {                       // every variant carries run_id
 pub trait Cancellation: Send + Sync { fn is_cancelled(&self) -> bool; }
 ```
 
-The loop emits `ToolCallStarted`, then asks the observer for a `TraceContext` for that call id and places it on the `ToolCall`, so the MCP adapter can inject it into `params._meta`. The fan-out observer returns the first `Some`; JSONL returns `None`. `error.type` is defined per span: on the root it is the stop reason when the run did not complete, on a chat span the `ProviderError` variant name (`retryable`, `context_exhausted`, `fatal`, `malformed`), on a tool span the `ToolErrorKind` name.
+The loop emits `ToolCallStarted`, then asks the observer for a `TraceContext` for that call id and places it on the `ToolCall`, so the MCP adapter can inject it into `params._meta`. The fan-out observer returns the first `Some`; observers without spans return `None`. `error.type` is defined per span: on the root it is the stop reason when the run did not complete, on a chat span the `ProviderError` variant name (`retryable`, `context_exhausted`, `fatal`, `malformed`), on a tool span the `ToolErrorKind` name.
 
 Every per-step event carries `turn`, which observers emit as `lablet.turn` on the corresponding span. There is no turn span; the trace is `invoke_agent` with `chat` and `execute_tool` children directly beneath it, as the conventions describe, and turns are recovered by filtering on the index. A turn span can be added under the root later without changing anything else.
 
@@ -288,7 +287,7 @@ Telemetry is contract-first. An OpenTelemetry Weaver registry under `lablet/tele
 The tables in this document are the human summary; the registry is the source of truth. When they disagree, the registry wins and this document is corrected. Renames upstream in `gen_ai.*` are tracked as breaking changes to lablet's telemetry contract. Fallback if Weaver becomes unusable: the registry YAML and policies stay, codegen becomes a small xtask step over the committed resolved JSON, and live-check becomes an in-process observer test against the generated key lists.
 
 ### `telemetry-otel`
-Spans and logs via `opentelemetry`, `opentelemetry_sdk`, and `opentelemetry-otlp` (gRPC via tonic or HTTP/protobuf, both on `rustls`), using the batch span and log processors so export never sits on the loop's path. Every attribute name comes from `lablet-telemetry-registry`; string literals for attribute names are a lint failure in this crate. Unit tests assert each span's name and required attribute set against the generated per-signal key lists, since live-check does not. Follows the GenAI semantic conventions; anything the conventions lack uses the `lablet.` namespace. The wide event is a log record emitted through the logs API with the root span's trace context set on it. Shutdown runs from a blocking task with the export timeout lowered so an unreachable endpoint costs seconds, not the default ten.
+The only telemetry observer. It maps `RunEvent`s to OTel spans and log records exactly once, through `opentelemetry` and `opentelemetry_sdk`, and hands them to the SDK's pluggable `SpanExporter` and `LogExporter` implementations selected by config; there is no second rendering of the contract anywhere. Exporters: **OTLP network** via `opentelemetry-otlp` (gRPC via tonic or HTTP/protobuf, both on `rustls`), and the **OTLP/JSON file** exporter below. Both may be active at once. Batch span and log processors keep export off the loop's path. Every attribute name comes from `lablet-telemetry-registry`; string literals for attribute names are a lint failure in this crate. Unit tests assert each span's name and required attribute set against the generated per-signal key lists, since live-check does not. Follows the GenAI semantic conventions; anything the conventions lack uses the `lablet.` namespace. The wide event is a log record emitted through the logs API with the root span's trace context set on it. Shutdown runs from a blocking task with the export timeout lowered so an unreachable endpoint costs seconds, not the default ten.
 
 | Event | Span | Key attributes |
 | --- | --- | --- |
@@ -300,8 +299,8 @@ Spans and logs via `opentelemetry`, `opentelemetry_sdk`, and `opentelemetry-otlp
 
 Content, when captured, is emitted as `gen_ai.client.inference.operation.details` log records carrying `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions`, and tool inputs and outputs. Resource attributes: `service.name=lablet`, `service.version`, plus `telemetry.resource` from config. The exporter is flushed before the process exits.
 
-### `telemetry-jsonl`
-A flat rendering of the trace, not a second schema. One JSON object per `RunEvent`, keyed by the same registry attribute names the OTel spans use (`gen_ai.usage.input_tokens`, `lablet.turn`, and so on) plus `event` (the span or event name), `time`, `duration_ms`, the join keys, and `schema_url` (the registry's), to a file path or stderr, with the wide event as the final line (`event: lablet.run`). Content-bearing attributes appear only when captured. The line shapes are declared in the registry, so `lablet-telemetry-registry` provides their keys and the changelog gate covers them. Always available, no endpoint needed. The default observer, to a file named `lablet-<run_id>.jsonl` in the working directory, when nothing else is configured. When `path: "-"`, JSONL lines interleave with the diagnostic log on stderr. Both observers can run at once through a fan-out observer in the composition root.
+### OTLP/JSON file exporter (in `telemetry-otel`)
+A `SpanExporter` and `LogExporter` pair that writes each export batch as one line of OTLP/JSON, the protobuf JSON mapping of `ExportTraceServiceRequest` and `ExportLogsServiceRequest`, to `lablet-<run_id>.otlp.jsonl` in the working directory by default, any path, or stderr with `-`. This is the format the OpenTelemetry Collector's file exporter writes and its OTLP JSON file receiver reads, so a file written without a collector can be replayed into one later, or into any tool that speaks OTLP. Each line carries the full resource and instrumentation scope, so a file is byte-for-byte the data a collector would have received: spans with start and end times, status, events, and attributes; log records including the wide event and, when captured, the content records. No lablet-specific envelope exists; the registry describes the attributes and OTLP describes the structure. Always available, no endpoint needed, and the default when no OTLP endpoint is configured. Flattening is the consumer's first step, which DuckDB, DataFusion, jq, and the collector all do directly.
 
 ## 7. Composition root (`apps/lablet`, package `lablet`)
 
@@ -396,8 +395,8 @@ telemetry:
     endpoint: null               # e.g. http://localhost:4317; null disables the OTel observer
     protocol: grpc               # grpc | http
     headers: { }
-  jsonl:
-    path: null                   # file path, "-" for stderr; null means lablet-<run_id>.jsonl when otlp is also off
+  file:
+    path: null                   # OTLP/JSON lines; file path, "-" for stderr; null means lablet-<run_id>.otlp.jsonl when otlp.endpoint is also null
   resource: { }                  # extra resource attributes, e.g. experiment ids
 ```
 
@@ -418,7 +417,7 @@ Config digest (`lablet.config.digest`) is a SHA-256 of the canonical JSON form o
 - `lablet-conformance` holds case sets for `ToolExecutor` and `RunObserver`, pulled in as dev-dependencies by each adapter.
 - `lablet-test-mcp-server` is an rmcp stdio binary with tools that echo, sleep for N seconds, and make the server exit after N calls; tests locate it via `CARGO_BIN_EXE_lablet-test-mcp-server`. A `--hang-startup` flag never completes initialisation.
 - One integration test target per crate (`tests/it/main.rs`).
-- A smoke test in `apps/lablet` runs a full loop with `provider-fake` and the JSONL observer and asserts on the event stream. Cancellation scenarios drive the `Cancellation` port directly.
+- A smoke test in `apps/lablet` runs a full loop with `provider-fake` and the OTLP/JSON file exporter and asserts on the spans and log records read back from the file. Cancellation scenarios drive the `Cancellation` port directly.
 
 ## 10. Open questions
 
@@ -434,4 +433,4 @@ Recorded here so they are not lost; none block the first build.
 - A `turn` span under `invoke_agent`, if per-turn grouping in trace viewers proves worth an extra span level.
 - The deferred `lablet.*` extensions in the research catalogue (working time, failed-attempt tokens, cache hit ratio, time split, event sequence).
 - Exporting the transcript as an ATIF v1.8 trajectory, planned for phase 10.
-- A Parquet exporter for developers without a collector: a `SpanExporter` and `LogExporter` pair inside `telemetry-otel`, selected by config, probably in the OTel-Arrow (OTAP) layout. Deferred because choosing the file layout is a contract decision; the JSONL file covers the lightweight case today.
+- A Parquet exporter for developers without a collector: a third `SpanExporter` and `LogExporter` pair beside OTLP and the OTLP/JSON file, probably in the OTel-Arrow (OTAP) layout. Deferred because choosing the file layout is a contract decision; the OTLP/JSON file covers the lightweight case today.

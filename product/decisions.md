@@ -145,3 +145,7 @@ A lablet's telemetry is valuable in aggregate, so every record is shaped for agg
 ## 2026-09-19 Parquet exporter considered, deferred
 
 A Parquet or Arrow writer would help developers without a collector and fits as a pluggable exporter inside the OTel adapter, likely in the OTel-Arrow layout. Deferred because the file layout is a contract decision and the JSONL file already covers the lightweight case. Recorded as an open question in the spec.
+
+## 2026-09-19 One telemetry observer, pluggable exporters, OTLP/JSON file
+
+Supersedes the JSONL observer. `telemetry-otel` maps events to OTel spans and log records once; exporters below it are the SDK's pluggable traits. The file output is OTLP/JSON, the Collector's own file format, so the file and the network carry identical data including the full resource, the file can be replayed into a collector, and lablet maintains no envelope of its own. A flat lablet line format was rejected as a second rendering of the same contract. The Parquet exporter, if added, is a third exporter in the same slot.
