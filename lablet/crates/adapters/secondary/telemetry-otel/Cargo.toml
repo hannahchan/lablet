@@ -1,0 +1,11 @@
+[package]
+name = "lablet-telemetry-otel"
+description = "RunObserver mapping run events to OpenTelemetry spans and logs, with OTLP network and OTLP/JSON file exporters"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true

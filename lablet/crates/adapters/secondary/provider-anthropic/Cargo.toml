@@ -1,0 +1,11 @@
+[package]
+name = "lablet-provider-anthropic"
+description = "ModelProvider over the Anthropic Messages API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true

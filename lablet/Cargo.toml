@@ -1,0 +1,195 @@
+[workspace]
+resolver = "3"
+members = [
+  # Apps (composition root: config, build(), CLI; library and binary)
+  "apps/lablet",
+  # Domain (types and pure functions only)
+  "crates/domain/model",
+  "crates/domain/policy",
+  # Application (the loop and the ports it consumes)
+  "crates/application/run",
+  # Adapters: secondary (driven; each implements one port)
+  "crates/adapters/secondary/provider-anthropic",
+  "crates/adapters/secondary/provider-openai",
+  "crates/adapters/secondary/provider-fake",
+  "crates/adapters/secondary/tools-builtin",
+  "crates/adapters/secondary/tools-mcp",
+  "crates/adapters/secondary/telemetry-otel",
+  # Adapters: secondary shared kernel (used by sibling adapters, implements no port)
+  "crates/adapters/secondary/shared/telemetry-registry",
+  # Test support (dev-dependencies of the crates above; never published)
+  "tests/conformance",
+  "tests/mcp-server",
+]
+
+# One workspace version (spec §8). Every member inherits these keys with
+# `<key>.workspace = true`. rust-version is the MSRV: the toolchain pinned in
+# ../rust-toolchain.toml (1.98) minus two minor versions.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hannahchan/lablet"
+
+# Every third-party version below is an exact pin ("=x.y.z"), checked against
+# crates.io on 2026-09-19. A bump is its own dedicated commit, never mixed with
+# feature work (spec §8). Members take an entry with `<name>.workspace = true`
+# and cannot narrow its features or re-enable defaults turned off here, so the
+# feature lists are the union of what the build plan's phases need. Every entry
+# carries a one-line comment saying why it is there (`cargo xtask
+# lint-manifests`).
+[workspace.dependencies]
+# Internal
+
+# Domain: conversation, tools, usage, stop reasons, run identity, summary
+lablet-model = { path = "crates/domain/model", version = "0.1.0" }
+# Domain: pure stop and retry decisions, pricing
+lablet-policy = { path = "crates/domain/policy", version = "0.1.0" }
+# Application: RunService (the loop) and its secondary ports
+lablet-run = { path = "crates/application/run", version = "0.1.0" }
+# Adapter: ModelProvider over the Anthropic Messages API
+lablet-provider-anthropic = { path = "crates/adapters/secondary/provider-anthropic", version = "0.1.0" }
+# Adapter: ModelProvider over OpenAI-compatible chat completions
+lablet-provider-openai = { path = "crates/adapters/secondary/provider-openai", version = "0.1.0" }
+# Adapter: ModelProvider that plays scripted responses
+lablet-provider-fake = { path = "crates/adapters/secondary/provider-fake", version = "0.1.0" }
+# Adapter: ToolExecutor for bash, read_file, write_file
+lablet-tools-builtin = { path = "crates/adapters/secondary/tools-builtin", version = "0.1.0" }
+# Adapter: ToolExecutor over rmcp
+lablet-tools-mcp = { path = "crates/adapters/secondary/tools-mcp", version = "0.1.0" }
+# Adapter: RunObserver mapping events to OTel spans and logs
+lablet-telemetry-otel = { path = "crates/adapters/secondary/telemetry-otel", version = "0.1.0" }
+# Adapter shared kernel: generated attribute name constants and enums
+lablet-telemetry-registry = { path = "crates/adapters/secondary/shared/telemetry-registry", version = "0.1.0" }
+# Composition root: config, build(), and the library surface
+lablet = { path = "apps/lablet", version = "0.1.0" }
+# Test support: shared ToolExecutor and RunObserver case sets (dev-dependency only)
+lablet-conformance = { path = "tests/conformance", version = "0.1.0" }
+
+# Ports and errors
+
+# async fn in the port traits (ModelProvider, ToolExecutor, RunObserver) so they stay dyn-compatible; phase 3 onward
+async-trait = "=0.1.92"
+# One error enum per port or boundary, as contributing requires; every phase from 2
+thiserror = "=2.0.20"
+
+# Serialisation
+
+# Serialize/Deserialize derives on the domain model and config types; phase 2 onward
+serde = { version = "=1.0.229", features = ["derive"] }
+# Transcript, tool inputs, OTLP/JSON file lines, and the raw config tree that --set edits; phase 2 onward
+serde_json = "=1.0.151"
+# YAML config and fake-provider scripts; replaces the deprecated serde_yaml the build plan names; phases 4 and 5
+serde-saphyr = "=1.3.0"
+
+# Async runtime
+
+# Runtime for the loop, child-process MCP servers, the bash tool, Ctrl-C, and test receivers; union of phases 3 to 6 (tokio has no default features)
+tokio = { version = "=1.53.1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util", "io-std", "fs", "signal", "net"] }
+
+# HTTP and MCP
+
+# HTTP client for the Anthropic and OpenAI-compatible provider adapters on rustls; shared with rmcp and the OTLP HTTP exporter
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "json", "http2"] }
+# Official MCP SDK: client role, stdio child-process transport, streamable HTTP client on reqwest with rustls; phase 8
+rmcp = { version = "=3.4.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest"] }
+
+# OpenTelemetry (one 0.33 line; tonic and prost are the lines it requires)
+
+# OTel API for spans and log records in telemetry-otel; phase 4
+opentelemetry = { version = "=0.33.0", default-features = false, features = ["trace", "logs"] }
+# Tracer and logger providers, batch processors, and the exporter traits the file exporter implements; phase 4
+opentelemetry_sdk = { version = "=0.33.0", default-features = false, features = ["trace", "logs"] }
+# OTLP message types with serde for the OTLP/JSON file exporter and its reader; phase 4 (not the default `full`)
+opentelemetry-proto = { version = "=0.33.0", default-features = false, features = ["gen-tonic-messages", "trace", "logs", "with-serde"] }
+# OTLP network exporter over gRPC and HTTP/protobuf on rustls with the aws-lc provider; phase 6
+opentelemetry-otlp = { version = "=0.33.0", default-features = false, features = ["grpc-tonic", "http-proto", "reqwest-blocking-client", "reqwest-rustls", "tls-aws-lc", "tls-roots", "trace", "logs"] }
+# Decodes and encodes OTLP protobuf bodies in the in-process HTTP receiver; phase 6 (opentelemetry-proto 0.33 needs ^0.14)
+prost = "=0.14.4"
+# In-process OTLP gRPC receiver in lablet-conformance; phase 6 (opentelemetry-otlp 0.33 needs ^0.14.1)
+tonic = { version = "=0.14.6", default-features = false, features = ["server", "router"] }
+# In-process OTLP HTTP/protobuf receiver in lablet-conformance; phase 6 (the axum 0.8 line tonic's router uses, so one copy)
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
+
+# Diagnostics (not the telemetry contract)
+
+# Diagnostic logging inside adapters and the app; phase 4 onward
+tracing = "=0.1.44"
+# stderr diagnostic log with level filtering in the CLI; phase 5
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
+
+# CLI and config
+
+# Derive CLI for init, run, check, schema; phase 5
+clap = { version = "=4.6.7", features = ["derive"] }
+# Parses and prints config durations in humantime syntax; phases 4 and 5
+humantime = "=2.4.0"
+# RunId generation in the composition root; phase 4
+ulid = "=3.0.0"
+# SHA-256 config digest over the resolved config; phase 4
+sha2 = "=0.11.0"
+# JSON Schema for the config (`lablet schema`, schema.json); phase 5 (the 1.x line rmcp and opentelemetry-proto accept)
+schemars = "=1.2.2"
+
+# Dev-only
+
+# Provider adapters tested against recorded HTTP payloads; phases 7 and 9
+wiremock = "=0.6.5"
+# Benchmarks behind `cargo xtask bench`; defaults dropped to avoid plotters and rayon; phase 11
+criterion = { version = "=0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+# Gates
+
+# xtask reads Cargo manifests with it (xtask is its own workspace; recorded here so the pin has one home); phase 0
+toml = "=1.1.6"
+
+# The lint set from contributing/README.md "Code conventions". Every level is
+# "warn": `cargo xtask clippy` denies warnings, so each is a gate failure there
+# while a plain `cargo check` stays usable mid-edit. Nursery is not enabled.
+# xtask/Cargo.toml carries a copy; `cargo xtask lint-manifests` holds the two
+# in step.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
+redundant_explicit_links = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+# Production hygiene: no debug artefacts. The outcome print in main.rs is the
+# one print_stdout, marked with #[expect].
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+todo = "warn"
+unimplemented = "warn"
+
+# Error handling discipline
+unwrap_used = "warn"
+expect_used = "warn"
+
+# Suppress with #[expect(..., reason = "...")]; #[allow] is itself a failure
+allow_attributes = "warn"
+
+# Workspace members keep file and line info, so backtraces into our own code
+# stay intact, without the variable- and type-level DWARF a debugger needs.
+[profile.dev]
+debug = "line-tables-only"
+
+# Dependencies carry no debug info: DWARF is most of a dependency rlib and
+# every worktree keeps its own target/. opt-level 1 runs LLVM's cheap passes
+# over code we never edit, which shrinks test binaries and their link time.
+# The "*" glob matches dependencies only, not workspace members.
+[profile.dev.package."*"]
+opt-level = 1
+debug = false
+debug-assertions = false
+strip = "debuginfo"
+incremental = false
