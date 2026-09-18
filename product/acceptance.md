@@ -29,16 +29,16 @@ Lablet is done when every scenario below is green in CI and the release checklis
 | E6 | a script injecting a malformed payload then success | run | treated as retryable, `completed` | 3 |
 | E7 | a tool that always errors, `max_consecutive_tool_errors: 3` | run | `tool_errors_exhausted` after the 3rd error result with no further provider call; a success between them resets the count | 3 |
 | E8 | a script calling a tool name that is not listed | run | the model receives an error result; it counts toward the cap | 3 |
-| E9 | a script calling `bash` with `sleep` past `tool_timeout` | run | the model receives an error result with kind `timeout`; the run continues | 5 |
+| E9 | a script calling `bash` with `sleep` past `tool_timeout` | run | the model receives an error result with kind `timeout`; the run continues | 4 |
 
 ### Tools
 
 | # | Given | When | Then | Phase |
 | --- | --- | --- | --- | --- |
 | T1 | a built-in and an MCP tool, `deny: [read_file]` | run | the provider request never lists `read_file`; the wide event's `lablet.tools.names` excludes it | 8 |
-| T2 | `allow: [bash]` | run | only `bash` is listed | 5 |
+| T2 | `allow: [bash]` | run | only `bash` is listed | 4 |
 | T3 | two MCP servers exposing the same tool name, no `prefix_tools` | build | build error naming both servers and the tool | 8 |
-| T4 | `read_file` called with a path outside `tools.builtin.root` | run | error result, file not read | 5 |
+| T4 | `read_file` called with a path outside `tools.builtin.root` | run | error result, file not read | 4 |
 | T5 | an MCP server that exits after its first call | run | subsequent calls to its tools return errors naming the server; `tool_errors_exhausted` follows | 8 |
 | T6 | an MCP server with `--hang-startup`, `startup_timeout: 1s` | check | exit 1 with an `mcp:` message naming the server | 8 |
 | T7 | two MCP servers exposing the same tool name, one with `prefix_tools: true` | check | both listed, one as `<server>__<tool>` | 8 |
@@ -48,15 +48,15 @@ Lablet is done when every scenario below is green in CI and the release checklis
 
 | # | Given | When | Then | Phase |
 | --- | --- | --- | --- | --- |
-| O1 | OTLP/JSON file exporter | any run | every line parses as an OTLP `ExportTraceServiceRequest` or `ExportLogsServiceRequest` with the full resource; the run id, config digest, and resource attributes are on every span; exactly one `lablet.run` record whose totals equal the sum of the chat and tool spans | 4 |
+| O1 | OTLP/JSON file exporter | any run | every line parses as an OTLP `ExportTraceServiceRequest` or `ExportLogsServiceRequest` with the full resource including the composer's `telemetry.resource` attributes; `gen_ai.conversation.id`, `session.id`, and `lablet.config.digest` are on every span; exactly one `lablet.run` record whose counts, tokens, bytes, and per-tool counts equal the sums over chat and tool spans, whose chat span count equals `calls + retries`, and whose latency totals are within 5 ms of the summed span durations; the file is complete when `run` returns | 4 |
 | O2 | OTLP/JSON file read back by the conformance reader | any run | root, chat, and tool spans with the registry's attributes; one `lablet.run` log record whose trace id matches the root span | 4 |
-| O9 | file and OTLP network both on, same run | run | the in-process receiver and the file contain the same spans and records (equal after removing export timestamps) | 6 |
 | O3 | OTLP to a closed port | run | outcome unchanged, exit code unchanged, export failure in the diagnostic log, process exits within 5s of the run ending | 6 |
 | O4 | `capture_content: false` | run | no prompt, response, or tool content in any observer output | 4 |
 | O5 | `capture_content: true` | run | content log records present in both the file and the network export | 6 |
 | O6 | a fake-provider run | `cargo xtask weaver live-check` | no undeclared or mistyped attributes | 6 |
 | O7 | OTLP to the in-process receiver | run | root, chat, tool spans and one `lablet.run` record arrive, matching O2 | 6 |
 | O8 | `transcript_path` set, any stop reason | run | the file contains the system prompt and every message including tool results | 4 |
+| O9 | file and OTLP network both on, same run | run | the in-process receiver and the file contain the same multiset of spans and log records after ungrouping them from their export requests | 6 |
 
 ### Config and CLI
 

@@ -45,7 +45,7 @@ Explicit architecture. Inside `lablet/`, directory `foo/bar/` is package `lablet
 
 ## Telemetry is contract-first
 
-Every span, event, and attribute is declared in the Weaver registry under `lablet/telemetry/registry/` before it is emitted. The `telemetry-registry` crate and `lablet/docs/telemetry.md` are generated from it and checked in. Do not hand-edit generated files and do not write attribute names as string literals in adapters; add to the registry, regenerate, then use the generated constants and builders.
+Every span, event, and attribute is declared in the Weaver registry under `lablet/telemetry/registry/` before it is emitted. The `telemetry-registry` crate (attribute name constants, enums, per-signal key lists) and `lablet/docs/telemetry/` are generated from it and checked in. Do not hand-edit generated files and do not write attribute names as string literals in adapters; add to the registry, regenerate, then use the generated constants.
 
 ```bash
 cargo xtask weaver generate    # regenerate the crate and docs after editing the registry

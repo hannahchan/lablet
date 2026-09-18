@@ -8,7 +8,7 @@ Sequencing rationale: the loop is proven against fakes before any real adapter e
 
 - The `lablet/` Cargo workspace (edition 2024, resolver 3, `rust-version`, `license = "MIT OR Apache-2.0"` in workspace package metadata) with every crate from spec §2 as an empty library or binary with a one-line doc comment. Root `.cargo/config.toml` with the `xtask` alias.
 - `xtask/` at the repo root with `lint-layers`, `lint-manifests`, `fmt`, `clippy`, `deny`, `doc`, `test`, `coverage` and `mutants` (floors and crate list held as data in xtask), `changelog`, `pre-commit`, `pre-push`.
-- `[workspace.dependencies]` with every third-party crate pinned to an exact version checked against crates.io that day: at least `async-trait`, `thiserror`, `serde`, `serde_json`, `serde_yaml`, `tokio`, `reqwest`, `rmcp`, `opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`, `opentelemetry-semantic-conventions`, `tracing`, `tracing-subscriber`, `clap`, `humantime`, `ulid`, `sha2`, `schemars`, `wiremock`, `criterion`. Port `lint_layers.rs` from UsefulBytes, reducing the ring set and forbidden-dependency table to spec §2.
+- `[workspace.dependencies]` with every third-party crate pinned to an exact version checked against crates.io that day: at least `async-trait`, `thiserror`, `serde`, `serde_json`, `serde_yaml`, `tokio`, `reqwest`, `rmcp`, `opentelemetry`, `opentelemetry_sdk`, `opentelemetry-proto` (features `gen-tonic-messages`, `trace`, `logs`, `with-serde`; not the default `full`), `opentelemetry-otlp`, `prost`, `tonic`, `axum` (phase 6 receiver), `tracing`, `tracing-subscriber`, `clap`, `humantime`, `ulid`, `sha2`, `schemars`, `wiremock`, `criterion`. Port `lint_layers.rs` from UsefulBytes, reducing the ring set and forbidden-dependency table to spec §2.
 - `rust-toolchain.toml`, `mise.toml` pinning weaver, cargo-deny, cargo-llvm-cov, cargo-mutants; `scripts/install-hooks.sh`; workspace lints from contributing; `CHANGELOG.md`; GitHub Actions running `cargo xtask pre-push`.
 - `lablet/README.md` placeholder and `lablet/docs/` directory.
 
@@ -44,26 +44,28 @@ Acceptance: end-to-end tests with fakes prove natural and explicit completion, e
 
 - `provider-fake` with scripted completions, latency, and injected errors.
 - `tools-builtin` with `bash`, `read_file`, `write_file`, and root escape rejection.
-- `telemetry-otel`: the observer mapping events to spans and log records built only on `telemetry-registry` constants, with unit tests asserting each span's name and required attributes against the generated key lists; root, chat, and tool spans with the spec §6 attributes, `lablet.turn` on children, the `gen_ai.client.operation.exception` log record and retry span event, the `lablet.run` wide-event log record with the root span's trace context, content records behind `capture_content`, resource attributes, bounded shutdown. Only the **OTLP/JSON file exporter** in this phase, with a reader in `lablet-conformance` that parses the file back into spans and records for assertions.
+- `telemetry-otel`: the observer mapping events to spans and log records built only on `telemetry-registry` constants (open spans in a map keyed by call id, explicit parent contexts, always-on sampler, per-run file path set on `RunStarted`, `force_flush` after the wide event), with unit tests asserting each span's name and required attributes against the generated key lists; root, chat, and tool spans with the spec §6 attributes, `lablet.turn` on children, the `gen_ai.client.operation.exception` log record and retry span event, the `lablet.run` wide-event log record with the root span's trace context, content records behind `capture_content`, resource attributes, bounded shutdown. Only the **OTLP/JSON file exporter** in this phase, serialised through `opentelemetry-proto`'s `with-serde` types and the `group_*_by_resource_and_scope` transforms, compact one request per line; with a reader in `lablet-conformance` that dispatches on `resourceSpans` or `resourceLogs` and parses the file back into spans and records for assertions.
 - `lablet-conformance` with the `RunObserver` cases (exactly one wide event per run, its numbers equal the sum of the per-step events, an unwritable destination does not change the outcome) and the `ToolExecutor` cases run against `tools-builtin`.
 - `apps/lablet` as a library only: config types with defaults, `build` with `BuildError::Unsupported` for adapters from later phases, `Lablet` with multi-run and shutdown, `RunContext` construction, config digest over the resolved config, transcript output, the fan-out observer.
 - Smoke test: `provider-fake` plus `tools-builtin` plus the file exporter through `build` and `run`, asserting the spans and records read back.
 
-Acceptance: a doctest builds a `Lablet` from a config string, runs twice, and asserts both outcomes and the file. Scenarios O1, O2, O4, O8, and C9 pass.
+PR order, riskiest first: `provider-fake`; observer plus file exporter plus reader (O1, O2, O4); library (C9, O8); built-in tools (E9, T2, T4).
+
+Acceptance: a doctest builds a `Lablet` from a config string, runs twice, and asserts both outcomes and the file. Scenarios O1, O2, O4, O8, C9, E9, T2, and T4 pass.
 
 ## Phase 5: CLI and config surface
 
 - `main.rs` and the `clap` derive CLI: `init`, `run`, `check` (including `--resolved`), `schema`, `--set`, `${VAR}` substitution, prompt sources, diagnostic logging on stderr, the end-of-run summary line and `--quiet`, Ctrl-C into the `Cancellation` port, exit codes, and the error message contract from spec §7.
 - `lablet/schema.json` checked in and covered by the changelog gate.
 
-Acceptance: `lablet init --provider fake && lablet run --config lablet.yaml --prompt "..."` completes with no edits, writes an OTLP/JSON file, and prints a `RunOutcome`. The CLI and the phase 4 doctest produce identical outcomes for the same config. Scenarios E9, T2, T4, C1 to C7, C10, and C11 pass.
+Acceptance: `lablet init --provider fake && lablet run --config lablet.yaml --prompt "..."` completes with no edits, writes an OTLP/JSON file, and prints a `RunOutcome`. The CLI and the phase 4 doctest produce identical outcomes for the same config. Scenarios C1 to C7, C10, and C11 pass.
 
 ## Phase 6: OTLP network export and live-check
 
 - The OTLP network exporter (gRPC and HTTP/protobuf on `rustls`) added to `telemetry-otel`, selected by `telemetry.otlp.endpoint`, active alongside the file exporter when both are set.
 - An in-process OTLP receiver in `lablet-conformance` (gRPC and HTTP) so network scenarios run in CI without Docker; `telemetry-otel` over the network added to the `RunObserver` conformance matrix, including that an unreachable endpoint does not change the run outcome.
-- `cargo xtask weaver live-check`: starts `weaver registry live-check` without `--v2` on a random free port pair, runs the fake-provider config over OTLP gRPC, stops it through the admin endpoint, saves the report, fails on violations. Its CI job runs on Linux against the vendored registry.
-- `lablet/examples/docker-compose.yaml` with a collector (debug exporter, plus the OTLP JSON file receiver pointed at a lablet file) and Jaeger, for the manual checks.
+- `cargo xtask weaver live-check`: starts `weaver registry live-check` without `--v2` on a random free port pair, runs the fake-provider config with `--set telemetry.otlp.endpoint=<port>` over OTLP gRPC, stops it through the admin endpoint, saves the report, fails on violations. Its CI job runs on Linux against the vendored registry.
+- `lablet/examples/docker-compose.yaml` with a collector (debug exporter, plus the `otlpjsonfile` receiver with `start_at: beginning` and the same `include` path wired into both a traces and a logs pipeline, since the receiver is instantiated per signal and defaults to tailing from the end) and Jaeger, for the manual checks.
 
 Acceptance: a fake-provider run against the in-process receiver yields the same spans and log records as the file exporter wrote for the same run. `cargo xtask weaver live-check` passes with zero undeclared attributes. Scenarios O3, O5, O6, O7, and O9 pass. Manual: a reviewer runs the docker compose example, finds turn 2's spans in Jaeger with one filter, and replays a lablet file through the collector's OTLP JSON file receiver into Jaeger.
 
