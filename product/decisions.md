@@ -117,3 +117,7 @@ From the instrumentation research: `gen_ai.usage.cache_write.input_tokens` repla
 ## 2026-09-18 Dual licensed MIT OR Apache-2.0
 
 The Rust ecosystem convention. Apache-2.0 brings the patent grant and contribution terms; MIT keeps GPLv2 compatibility and simplicity. Users pick either. Contributions are accepted under both without a separate agreement.
+
+## 2026-09-18 Build plan restructured to twelve phases
+
+The telemetry contract is its own phase so the Weaver templates cannot stall the scaffold; the composition root is split into library and CLI; OpenTelemetry moves before the first real provider because a wrong span shape costs more to fix late than a wrong provider mapping; features and hardening are separate phases so "done" is unambiguous. Phase numbers in earlier entries refer to the previous numbering.

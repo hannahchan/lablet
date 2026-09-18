@@ -287,7 +287,7 @@ Rule applied throughout: follow the semantic conventions where they speak, then 
 - `input_tokens` in the outcome JSON includes cached tokens, matching semconv.
 - No turn span; `lablet.turn` index on chat and tool spans. A turn span can be added later.
 - Redacted content is omitted, not written as a placeholder; byte counts are always present.
-- ATIF export lands in phase 7; the transcript model is designed for it in phase 1.
+- ATIF export lands in the features phase; the transcript model is designed for it in the domain phase.
 
 ## 11. Extensions deferred
 

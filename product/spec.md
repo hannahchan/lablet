@@ -415,4 +415,4 @@ Recorded here so they are not lost; none block the first build.
 - A `check --probe` flag that makes one minimal provider call.
 - A `turn` span under `invoke_agent`, if per-turn grouping in trace viewers proves worth an extra span level.
 - The deferred `lablet.*` extensions in the research catalogue (working time, failed-attempt tokens, cache hit ratio, time split, event sequence).
-- Exporting the transcript as an ATIF v1.8 trajectory, planned for phase 7.
+- Exporting the transcript as an ATIF v1.8 trajectory, planned for phase 10.
