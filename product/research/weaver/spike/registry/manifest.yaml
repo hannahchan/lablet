@@ -1,0 +1,15 @@
+name: lablet
+description: Telemetry contract for lablet, the agent-loop harness.
+schema_url: https://lablet.dev/schemas/0.1.0
+stability: development
+# registry_path is resolved relative to the working directory weaver is invoked from
+# (not relative to this file). The git form, which weaver clones on every run
+# (no persistent cache, ~6-7 s, network required), is:
+#   registry_path: https://github.com/open-telemetry/semantic-conventions.git@v1.44.0[model]
+#   registry_path: https://github.com/open-telemetry/semantic-conventions-genai.git@c88d504ab3d9879f8e50d3cc87e69775e11db234[model]
+# schema_url must match the dependency's own manifest and end in a semver segment.
+dependencies:
+  - schema_url: https://opentelemetry.io/schemas/1.44.0
+    registry_path: deps/semantic-conventions/model
+  - schema_url: https://opentelemetry.io/schemas/gen-ai-dev/1.42.0-dev
+    registry_path: deps/semantic-conventions-genai/model

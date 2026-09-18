@@ -1,0 +1,8 @@
+[package]
+name = "lablet-telemetry-registry"
+version = "0.1.0"
+edition = "2021"
+description = "Generated telemetry contract constants for lablet (do not edit src/)."
+license = "MIT OR Apache-2.0"
+
+[dependencies]

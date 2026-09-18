@@ -1,0 +1,11 @@
+[live_check]
+fail_on = "violation"
+
+# lablet attributes are `development` until 1.0; do not report that on every sample.
+[[live-check.finding_filters]]
+exclude = ["not_stable"]
+
+# An enum value outside the registry is a bug in lablet, not information.
+[[live-check.finding_level_overrides]]
+ids = ["undefined_enum_variant"]
+level = "violation"

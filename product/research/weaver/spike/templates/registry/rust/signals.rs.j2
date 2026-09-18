@@ -1,0 +1,23 @@
+//! Signal inventory: which attribute keys each lablet span and log record carries.
+//!
+//! DO NOT EDIT. Generated from the registry by `weaver registry generate`.
+//! Used by tests to assert that an emitted signal carries no undeclared key.
+
+{% for s in ctx.spans %}
+/// Attribute keys declared on span `{{ s.id }}`{% if s.base and s.base != s.id %} (refines `{{ s.base }}`){% endif %}.
+pub const SPAN_{{ s.id | screaming_snake_case }}_ATTRIBUTES: &[&str] = &[
+{% for k in s.attributes %}
+    "{{ k }}",
+{% endfor %}
+];
+
+{% endfor %}
+{% for e in ctx.events %}
+/// Attribute keys declared on event (log record) `{{ e.name }}`.
+pub const EVENT_{{ e.name | screaming_snake_case }}_ATTRIBUTES: &[&str] = &[
+{% for k in e.attributes %}
+    "{{ k }}",
+{% endfor %}
+];
+
+{% endfor %}

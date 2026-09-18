@@ -16,11 +16,15 @@ Acceptance: `cargo xtask pre-push` passes on the empty workspace. A crate given 
 
 ## Phase 1: telemetry contract
 
-- Follow the approach in `product/research/weaver/` (syntax version, vendoring, template starting point). `lablet/telemetry/` with `registry_manifest.yaml`, the core and GenAI semantic-convention registries vendored at pinned commits under `deps/` by `cargo xtask weaver vendor`, and the lablet registry drafted from the research catalogue: every span, attribute, template attribute, log record, and the wide event from spec §1 and §6. Every attribute must have a source field in spec §3 or §5; if one does not, the spec is fixed first.
-- Rego policies (naming, stability, a justification note on every `lablet.*` attribute) and `cargo xtask weaver check`.
-- `weaver.yaml` and MiniJinja templates under `templates/registry/rust/` generating the `telemetry-registry` crate: attribute name constants and enums only. Markdown templates generating `lablet/docs/telemetry.md`. `cargo xtask weaver generate` with a generated-files-up-to-date gate.
+Follow `product/research/weaver/README.md` and start from its `spike/` files; it verified everything below against Weaver v0.26.1.
 
-Acceptance: `weaver registry check` passes. Regeneration is a no-op on a clean tree. Every attribute in spec §1 and §6 has a constant in the generated crate, and the generated docs list them. Adding an undeclared attribute to the registry without a justification fails the policy.
+- `mise.toml` pins weaver `v0.26.1` (`ubi:open-telemetry/weaver`). `cargo xtask weaver vendor` copies the `model/` trees of core semconv `v1.44.0` and `semantic-conventions-genai` at the pinned commit, plus the policies and markdown templates from `opentelemetry-weaver-packages`, under `lablet/telemetry/deps/` with `SOURCES` files.
+- `lablet/telemetry/registry/` in v2 syntax with `manifest.yaml` using relative dependency paths; `lablet.*` attributes with justification notes; lablet-owned spans `lablet.invoke_agent`, `lablet.chat`, `lablet.execute_tool` and events `lablet.run` and the content record, referencing the `gen_ai.*`, `mcp.*`, and `error.type` keys from spec §1 and §6 with requirement levels; entity imports for the resource. Every attribute must have a source field in spec §3 or §5; if one does not, the spec is fixed first.
+- `lablet/telemetry/policies/justification.rego` and `cargo xtask weaver check` running the lablet and vendored policies.
+- Rust templates under `lablet/telemetry/templates/registry/rust/` (constants, enums, per-signal key lists; no builders) and `cargo xtask weaver generate` producing the `lablet-telemetry-registry` crate, `cargo fmt`, and `lablet/docs/telemetry/` from the vendored markdown templates, with a `--check` mode used as the generated-files gate.
+- `lablet/telemetry/.weaver.toml` with the live-check finding filters from the spike; the `live-check` xtask command itself lands in phase 6.
+
+Acceptance: `cargo xtask weaver check` passes. Regeneration is a no-op on a clean tree. Every attribute in spec §1 and §6 has a constant in the generated crate and the generated docs list it. A `lablet.*` attribute added without a justification note fails the policy. A weekly CI job runs `check` against the git URLs at the pinned refs to catch vendoring drift.
 
 ## Phase 2: domain
 
@@ -56,8 +60,8 @@ Acceptance: `lablet init --provider fake && lablet run --config lablet.yaml --pr
 
 ## Phase 6: OpenTelemetry
 
-- `telemetry-otel` built only on `telemetry-registry` constants: root, chat, and tool spans with the spec §6 attributes, `lablet.turn` on children, the `gen_ai.client.operation.exception` log record and retry span event, the `lablet.run` wide-event log record carrying the root span's trace context, content log records behind `capture_content`, resource attributes, bounded shutdown.
-- `cargo xtask weaver live-check` and its CI job.
+- `telemetry-otel` built only on `telemetry-registry` constants, with unit tests asserting each span's name and required attributes against the generated key lists: root, chat, and tool spans with the spec §6 attributes, `lablet.turn` on children, the `gen_ai.client.operation.exception` log record and retry span event, the `lablet.run` wide-event log record carrying the root span's trace context, content log records behind `capture_content`, resource attributes, bounded shutdown.
+- `cargo xtask weaver live-check`: starts `weaver registry live-check` without `--v2` on a random free port pair, runs the fake-provider config over OTLP gRPC, stops it through the admin endpoint, saves the report, fails on violations. Its CI job runs on Linux against the vendored registry.
 - An in-process OTLP receiver in `lablet-conformance` (gRPC and HTTP) so O2 and O7 run in CI without Docker; `telemetry-otel` added to the `RunObserver` conformance matrix, including that an unreachable endpoint does not change the run outcome.
 - `lablet/examples/docker-compose.yaml` with a collector (debug exporter) and Jaeger, for the manual check.
 

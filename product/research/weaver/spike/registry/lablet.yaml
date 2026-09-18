@@ -1,0 +1,91 @@
+file_format: definition/2
+attributes:
+  - key: lablet.run.stop_reason
+    type:
+      members:
+        - id: completed
+          value: completed
+          brief: The model called `task_complete` or produced a final answer.
+          stability: development
+        - id: max_turns
+          value: max_turns
+          brief: The run hit `run.max_turns`.
+          stability: development
+        - id: timeout
+          value: timeout
+          brief: The run hit `run.timeout_ms`.
+          stability: development
+        - id: error
+          value: error
+          brief: A fatal provider or tool error ended the run.
+          stability: development
+    stability: development
+    brief: Why the run ended.
+    note: >
+      Justification: the GenAI conventions have no per-run outcome; `gen_ai.response.finish_reasons`
+      is per inference call and cannot express budget or timeout stops.
+    examples: [completed, max_turns]
+  - key: lablet.run.turns
+    type: int
+    stability: development
+    brief: Number of loop turns the run took.
+    note: >
+      Justification: the conventions count inference calls (`gen_ai.invoke_agent.inference_calls`
+      metric) but a lablet turn may hold several tool calls; the turn count is the loop's own unit.
+    examples: [7]
+  - key: lablet.tool.calls
+    type: template[int]
+    stability: development
+    brief: Number of calls to a tool during the run, `<key>` being the tool name.
+    note: >
+      Justification: per-tool counts on the wide event so an analyst can answer "which tool
+      dominated" from one row. Weaver template attributes allow a dynamic suffix and nothing else.
+    examples: [[3], [12]]
+
+spans:
+  - type: lablet.invoke_agent
+    kind: internal
+    stability: development
+    brief: The root span of a lablet run. Follows the GenAI `invoke_agent` span conventions.
+    name:
+      note: "`invoke_agent {gen_ai.agent.name}`"
+    attributes:
+      - ref: gen_ai.operation.name
+        requirement_level: required
+      - ref: gen_ai.agent.name
+        requirement_level: required
+      - ref: gen_ai.usage.input_tokens
+        requirement_level: recommended
+      - ref: gen_ai.usage.output_tokens
+        requirement_level: recommended
+      - ref: error.type
+        requirement_level:
+          conditionally_required: If the run ended in an error.
+      - ref: lablet.run.stop_reason
+        requirement_level: required
+      - ref: lablet.run.turns
+        requirement_level: required
+      - ref: lablet.tool.calls
+        requirement_level: opt_in
+
+events:
+  - name: lablet.run
+    requirement_level: recommended
+    stability: development
+    brief: "The wide event: one log record per run carrying the run summary."
+    attributes:
+      - ref: gen_ai.agent.name
+        requirement_level: required
+      - ref: gen_ai.usage.input_tokens
+        requirement_level: required
+      - ref: lablet.run.stop_reason
+        requirement_level: required
+      - ref: lablet.run.turns
+        requirement_level: required
+      - ref: lablet.tool.calls
+        requirement_level: recommended
+
+imports:
+  entities:
+    - service
+    - telemetry.sdk

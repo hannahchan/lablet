@@ -1,0 +1,38 @@
+//! Closed value sets: one Rust enum per enum-typed attribute in the contract.
+//!
+//! DO NOT EDIT. Generated from the registry by `weaver registry generate`.
+//! Semantic-convention enums are open by definition, so every enum carries an
+//! `Unlisted(String)` escape hatch and `as_str()` returns the wire value.
+
+{% for attr in ctx %}
+{{ ["Values of `" ~ attr.key ~ "`.", attr.brief] | comment }}
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum {{ attr.key | pascal_case }} {
+{% for m in attr.type.members %}
+    {{ [m.brief | default("`" ~ m.value ~ "`")] | comment(indent=4) }}
+    {{ m.id | pascal_case }},
+{% endfor %}
+    /// A value not (yet) in the registry (semantic-convention enums are open).
+    Unlisted(String),
+}
+
+impl {{ attr.key | pascal_case }} {
+    /// The attribute value as it appears on the wire.
+    pub fn as_str(&self) -> &str {
+        match self {
+{% for m in attr.type.members %}
+            Self::{{ m.id | pascal_case }} => "{{ m.value }}",
+{% endfor %}
+            Self::Unlisted(v) => v.as_str(),
+        }
+    }
+}
+
+impl core::fmt::Display for {{ attr.key | pascal_case }} {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+{% endfor %}

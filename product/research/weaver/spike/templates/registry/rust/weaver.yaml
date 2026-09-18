@@ -1,0 +1,56 @@
+# Weaver Forge config for the `lablet-telemetry-registry` crate.
+# Run with:  weaver registry generate --v2 -r <registry> -t templates rust generated/lablet-telemetry-registry
+# Context shape (materialized v2 schema): .registry.attributes holds only the
+# attributes this registry defines; imported gen_ai.*/error.* attributes are
+# inlined on the signals that reference them, so we union both.
+whitespace_control:
+  trim_blocks: true
+  lstrip_blocks: true
+
+comment_formats:
+  rust:
+    format: markdown
+    prefix: "/// "
+    trim: true
+    remove_trailing_dots: true
+    escape_square_brackets: true
+default_comment_format: rust
+
+params:
+  schema_url: "https://lablet.dev/schemas/0.1.0"
+
+templates:
+  - template: lib.rs.j2
+    filter: .
+    application_mode: single
+    file_name: src/lib.rs
+  - template: attribute.rs.j2
+    # Every attribute the registry defines or references on any signal or refinement,
+    # deduplicated by key and grouped by root namespace.
+    filter: >
+      [ .registry.attributes[],
+        ( (.registry.spans[]?, .registry.events[]?, .registry.metrics[]?,
+           .refinements.spans[]?, .refinements.events[]?, .refinements.metrics[]?)
+          | .attributes[]? ) ]
+      | unique_by(.key) | sort_by(.key)
+      | map(. + {root_namespace: (.key | split(".")[0])})
+      | group_by(.root_namespace)
+      | map({root_namespace: .[0].root_namespace, attributes: .})
+    application_mode: single
+    file_name: src/attribute.rs
+  - template: enums.rs.j2
+    filter: >
+      [ .registry.attributes[],
+        ( (.registry.spans[]?, .registry.events[]?, .registry.metrics[]?,
+           .refinements.spans[]?, .refinements.events[]?, .refinements.metrics[]?)
+          | .attributes[]? ) ]
+      | unique_by(.key) | sort_by(.key)
+      | map(select(.type | type == "object"))
+    application_mode: single
+    file_name: src/enums.rs
+  - template: signals.rs.j2
+    filter: >
+      { spans: ([.registry.spans[]?, .refinements.spans[]?] | unique_by(.id // .type) | map({id: (.id // .type), base: .type, name_note: .name.note, attributes: [.attributes[]?.key]})),
+        events: ([.registry.events[]?, .refinements.events[]?] | unique_by(.name) | map({name: .name, attributes: [.attributes[]?.key]})) }
+    application_mode: single
+    file_name: src/signals.rs

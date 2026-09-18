@@ -1,0 +1,16 @@
+# weaver registry live-check findings, spike session J (v1 mode, registry with lablet-owned spans + entity imports)
+# Input: otlp-client (2 spans, 3 log records). Filters: .weaver.toml excludes not_stable, promotes undefined_enum_variant to violation.
+statistics: {"total_entities_by_type": {"resource": 5, "log": 3, "attribute": 37, "instrumentation_scope": 5, "span": 2}, "advice_level_counts": {"improvement": 1, "information": 4, "violation": 9}, "advice_type_counts": {"missing_event": 1, "required_attribute_not_present": 3, "extends_namespace": 1, "undefined_enum_variant": 1, "recommended_attribute_not_present": 1, "type_mismatch": 3, "missing_attribute": 1, "template_attribute": 3}, "registry_coverage": 0.73333335, "seen_registry_events": {"lablet.run": 2}, "seen_non_registry_events": {"lablet.unknown_event": 1}}
+[span:invoke_agent lablet] 'lablet.tool.calls.bash': information/template_attribute: Attribute 'lablet.tool.calls.bash' is a template
+[span:invoke_agent lablet] 'lablet.run.stop_reason': violation/undefined_enum_variant: Enum attribute 'lablet.run.stop_reason' has value 'gave_up' which is not documented.
+[span:invoke_agent lablet] 'lablet.run.turns': violation/type_mismatch: Attribute 'lablet.run.turns' has type 'string'. Type should be 'int'.
+[span:invoke_agent lablet] 'lablet.undeclared': violation/missing_attribute: Attribute 'lablet.undeclared' does not exist in the registry.
+[span:invoke_agent lablet] 'lablet.undeclared': information/extends_namespace: Attribute key 'lablet.undeclared' collides with existing namespace 'lablet'
+[span:invoke_agent lablet] 'lablet.tool.calls.bash': violation/type_mismatch: Attribute 'lablet.tool.calls.bash' has type 'string'. Type should be 'int'.
+[log:lablet.run] 'lablet.tool.calls.bash': information/template_attribute: Attribute 'lablet.tool.calls.bash' is a template
+[log:lablet.run] 'lablet.run': violation/required_attribute_not_present: Required attribute 'gen_ai.agent.name' is not present.
+[log:lablet.run] 'lablet.run': violation/required_attribute_not_present: Required attribute 'gen_ai.usage.input_tokens' is not present.
+[log:lablet.run] 'lablet.run': violation/required_attribute_not_present: Required attribute 'lablet.run.stop_reason' is not present.
+[log:lablet.run] 'lablet.run': improvement/recommended_attribute_not_present: Recommended attribute 'lablet.tool.calls' is not present.
+[log:lablet.run] 'lablet.run.turns': violation/type_mismatch: Attribute 'lablet.run.turns' has type 'string'. Type should be 'int'.
+[log:lablet.unknown_event] 'lablet.unknown_event': violation/missing_event: Event 'lablet.unknown_event' does not exist in the registry.

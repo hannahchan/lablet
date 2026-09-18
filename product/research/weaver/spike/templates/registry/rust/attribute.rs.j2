@@ -1,0 +1,26 @@
+//! Attribute key constants: every attribute the lablet registry defines or references.
+//!
+//! DO NOT EDIT. Generated from the registry by `weaver registry generate`.
+
+{% for ns in ctx %}
+// ---- namespace `{{ ns.root_namespace }}` ----
+
+{% for attr in ns.attributes %}
+{% if attr.type is string and attr.type is startingwith("template[") %}
+{{ [attr.brief, concat_if("\n\n## Notes\n\n", attr.note), "Template attribute (`" ~ attr.type ~ "`): use `" ~ (attr.key | snake_case) ~ "(suffix)` to build the full key."] | comment }}
+pub const {{ attr.key | screaming_snake_case }}: &str = "{{ attr.key }}";
+
+/// Builds the full key `{{ attr.key }}.<suffix>` for the template attribute `{{ attr.key }}`.
+pub fn {{ attr.key | snake_case }}(suffix: &str) -> String {
+    format!("{}.{}", {{ attr.key | screaming_snake_case }}, suffix)
+}
+{% else %}
+{{ [attr.brief, concat_if("\n\n## Notes\n\n", attr.note)] | comment }}
+{% if attr.deprecated %}
+#[deprecated(note = "{{ attr.deprecated.note | default(attr.deprecated.reason) | replace('\n', ' ') | replace('"', '') | trim }}")]
+{% endif %}
+pub const {{ attr.key | screaming_snake_case }}: &str = "{{ attr.key }}";
+{% endif %}
+
+{% endfor %}
+{% endfor %}

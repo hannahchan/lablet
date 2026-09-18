@@ -133,3 +133,7 @@ Work lands in small, reviewable PRs, each one logical unit with CI green, merged
 ## 2026-09-18 Weaver approach is researched before phase 1
 
 Weaver is experimental. A dedicated research document and spike under `product/research/weaver/` settles the registry syntax, vendoring, template starting point, and live-check usage before the telemetry contract phase begins; phase 1 follows it.
+
+## 2026-09-19 Weaver approach fixed by the spike
+
+Registry in v2 syntax with lablet-owned spans and events that reference `gen_ai.*` keys, dependencies and weaver-packages vendored under `deps/` with relative paths (Weaver has no dependency cache), constants-only Rust codegen from the spike templates, docs from the vendored markdown templates, and live-check run without `--v2` because the v2 index ignores dependency attributes. Weaver is pinned at v0.26.1 and upgraded only in a dedicated PR. Span names and required span attributes are held by unit tests because live-check does not match spans to definitions. The fallback keeps the registry and replaces codegen with an xtask step over the resolved JSON.

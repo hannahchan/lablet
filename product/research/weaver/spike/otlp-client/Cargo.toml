@@ -1,0 +1,11 @@
+[package]
+name = "otlp-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+opentelemetry = "0.31"
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio", "logs", "trace"] }
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "logs", "trace"] }
+opentelemetry-appender-tracing = "0.31"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
