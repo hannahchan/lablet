@@ -291,6 +291,8 @@ Rule applied throughout: follow the semantic conventions where they speak, then 
 
 ## 11. Extensions deferred
 
+Rejected on 2026-09-19 under the raw-data principle: `lablet.run.cache_hit_ratio` and `lablet.run.context_fill_ratio`. The raw inputs (`gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.input_tokens`, and a future `lablet.model.context_window`) are enough; ratios belong to the aggregation.
+
 Kept here so they are not lost. None is in the spec or the registry yet; each needs a justification when added.
 
 `lablet.usage.failed_attempt_tokens`, `lablet.run.working_ms` and per-event working time, `lablet.run.provider_ms` / `tool_ms` / `overhead_ms`, `lablet.run.cache_hit_ratio`, `lablet.run.context_fill_ratio`, `lablet.model.context_window`, `lablet.run.limit.*` split from error, `lablet.run.interrupted_during`, `lablet.run.messages`, `lablet.event.sequence`, `lablet.response.id` on tool spans, `lablet.tool.output.lines`, `lablet.tool.output.truncated`, `lablet.bash.*`, `lablet.mcp.server.version.<name>`, `lablet.vcs.dirty`, `lablet.pricing.version`, `gen_ai.usage.cost`, `openinference.span.kind` and `langfuse.observation.type` compat, metrics.

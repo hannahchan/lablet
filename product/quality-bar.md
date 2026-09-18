@@ -4,7 +4,7 @@ What lablet commits to as a product for developers and AI engineers, and what th
 
 ## Commitments to users
 
-1. **Three stable contracts.** The config schema, the outcome JSON, and the telemetry registry are the product surface. Each is versioned, every change has a changelog entry, and a breaking change to any of them is a major version bump. The config JSON schema and the telemetry registry are checked in so changes are reviewable diffs.
+1. **Four stable contracts.** The config schema, the outcome JSON, the telemetry registry, and the JSONL file (a flat rendering of the trace using the registry's attribute names) are the product surface. Each is versioned, every change has a changelog entry, and a breaking change to any of them is a major version bump. The config JSON schema and the telemetry registry are checked in so changes are reviewable diffs.
 2. **First traced run in under five minutes.** One binary via GitHub releases or `cargo install`. `lablet init` writes a working config. `lablet/examples/` has a docker compose for a local collector and Jaeger. The getting-started page is walked end to end before each release by someone who did not write it.
 3. **Errors that say what to do.** Config errors name the key, the line, the value, and the accepted values. Startup errors distinguish a bad config from an MCP server that did not start from a provider that rejected the key. `lablet check` catches everything that can be caught without a model call, including starting MCP servers and listing their tools. `lablet check --resolved` prints the fully resolved config with no hidden defaults.
 4. **Determinism where possible.** The same config and prompt give the same digest, tool list, and telemetry key set. The seed, when one was used, and the finish reasons are in the wide event so variance can be seen.
@@ -23,7 +23,11 @@ What lablet commits to as a product for developers and AI engineers, and what th
 14. **Lablet's own overhead is measured.** Criterion benchmarks for loop overhead per turn and per tool call, with a 20% regression threshold in CI.
 15. **A small, boring dependency tree.** Every dependency justified in `Cargo.toml`, `cargo deny` for licences and advisories, a documented MSRV policy.
 
+16. **Aggregatable by construction.** One wide event per run with a fixed flat shape; run id, config digest, and every composer-supplied resource attribute on every record; the same attribute names and types on OTLP and JSONL; the registry schema URL on every JSONL line; one file per run and no state across runs; raw counts, bytes, tokens, and durations rather than derived ratios.
+
 ## Deliberately not committed
 
+- Aggregation, reporting, or export across runs: no `report` command, no CSV, no cross-run state. The composing system owns that.
+- A dashboard, trace viewer, or UI. Lablet emits into the tools people already run.
 - A runtime plugin system for providers or tools. The port traits and the library are the extension point.
-- A dashboard or UI. Lablet emits into the tools people already run.
+- A Parquet or Arrow writer, for now. The OTel adapter's exporter is pluggable, so one can be added later as a `SpanExporter` and `LogExporter` pair without touching the loop or the registry; see the open question in the spec.

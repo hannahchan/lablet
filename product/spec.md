@@ -92,6 +92,8 @@ Naming rule: a GenAI or core semantic-convention attribute is used wherever one 
 
 The same record goes to every configured observer: an OTel log record for OTLP, the final line for JSONL. Spans remain the per-step detail; the wide event is the per-run row.
 
+Aggregatability rules: the wide event has a fixed flat shape (no nested maps; template attributes with a bounded key set for per-tool values); `gen_ai.conversation.id`, `lablet.config.digest`, and every `telemetry.resource` attribute appear on the wide event, on every span, and on every JSONL line so any consumer can group by them without a join; only raw counts, bytes, tokens, and durations are emitted, never ratios or averages, since those belong to the aggregation.
+
 ## 2. Architecture
 
 Explicit architecture, in the shape of the UsefulBytes repository, sized down. Rings are directory prefixes inside the `lablet/` workspace; directory `foo/bar/` is package `lablet-bar`.
@@ -299,7 +301,7 @@ Spans and logs via `opentelemetry`, `opentelemetry_sdk`, and `opentelemetry-otlp
 Content, when captured, is emitted as `gen_ai.client.inference.operation.details` log records carrying `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions`, and tool inputs and outputs. Resource attributes: `service.name=lablet`, `service.version`, plus `telemetry.resource` from config. The exporter is flushed before the process exits.
 
 ### `telemetry-jsonl`
-One JSON object per `RunEvent` using the domain model's serde form, to a file path or stderr, with the wide event as the final line (`{"event": "run_summary", ...}` using the §1 attribute names). Always available, no endpoint needed. The default observer, to a file named `lablet-<run_id>.jsonl` in the working directory, when nothing else is configured. When `path: "-"`, JSONL lines interleave with the diagnostic log on stderr. Both observers can run at once through a fan-out observer in the composition root.
+A flat rendering of the trace, not a second schema. One JSON object per `RunEvent`, keyed by the same registry attribute names the OTel spans use (`gen_ai.usage.input_tokens`, `lablet.turn`, and so on) plus `event` (the span or event name), `time`, `duration_ms`, the join keys, and `schema_url` (the registry's), to a file path or stderr, with the wide event as the final line (`event: lablet.run`). Content-bearing attributes appear only when captured. The line shapes are declared in the registry, so `lablet-telemetry-registry` provides their keys and the changelog gate covers them. Always available, no endpoint needed. The default observer, to a file named `lablet-<run_id>.jsonl` in the working directory, when nothing else is configured. When `path: "-"`, JSONL lines interleave with the diagnostic log on stderr. Both observers can run at once through a fan-out observer in the composition root.
 
 ## 7. Composition root (`apps/lablet`, package `lablet`)
 
@@ -317,7 +319,7 @@ A `Lablet` may run many times; each `run` gets a fresh `RunId` and `RunContext`,
 
 While the build is in progress, a config that selects an adapter whose crate does not exist yet makes `build` return `BuildError::Unsupported { kind, phase }` naming the build-plan phase that delivers it; config validation, including the `api_key_env` check, runs before adapter selection and does not depend on the adapter. Two outcomes are "identical" when they are equal after removing `run_id` and `duration_ms`.
 
-`main.rs` only does effects: parse args with `clap` derive, install a `tracing` subscriber on stderr filtered by `RUST_LOG` (default `warn`) for lablet's own diagnostics, load config, install Ctrl-C handling into the `Cancellation` port, `build`, `run`, print outcome, write the transcript, flush telemetry, exit. Diagnostics and telemetry are separate: the diagnostic log is about lablet, the telemetry is about the run. The outcome print is the one permitted `print_stdout`, marked with `#[expect]`.
+`main.rs` only does effects: parse args with `clap` derive, install a `tracing` subscriber on stderr filtered by `RUST_LOG` (default `warn`) for lablet's own diagnostics, load config, install Ctrl-C handling into the `Cancellation` port, `build`, `run`, print outcome, write the transcript, flush telemetry, print one human-readable summary line on stderr (stop reason, turns, tokens, tool calls, duration; suppressed by `--quiet`), exit. Diagnostics and telemetry are separate: the diagnostic log is about lablet, the telemetry is about the run. The outcome print is the one permitted `print_stdout`, marked with `#[expect]`.
 
 ```
 lablet init [--provider anthropic|openai|fake] [path]   # write a working starter config (and a script for fake)
@@ -432,3 +434,4 @@ Recorded here so they are not lost; none block the first build.
 - A `turn` span under `invoke_agent`, if per-turn grouping in trace viewers proves worth an extra span level.
 - The deferred `lablet.*` extensions in the research catalogue (working time, failed-attempt tokens, cache hit ratio, time split, event sequence).
 - Exporting the transcript as an ATIF v1.8 trajectory, planned for phase 10.
+- A Parquet exporter for developers without a collector: a `SpanExporter` and `LogExporter` pair inside `telemetry-otel`, selected by config, probably in the OTel-Arrow (OTAP) layout. Deferred because choosing the file layout is a contract decision; the JSONL file covers the lightweight case today.

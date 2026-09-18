@@ -38,3 +38,4 @@ Optimise an MCP server: run the same task suite against versions of the server, 
 - **Explicit architecture**: domain, application, adapters, composition root, with the layer rules enforced by a lint.
 - **Own loop, not a wrapped SDK**, so every step is instrumented on our terms.
 - **CLI and library** from the same composition root.
+- **Raw data, never reports.** One lablet's telemetry matters because it joins with ten thousand others. Every record is shaped for aggregation by the composing system; lablet itself never aggregates, reports, or visualises.

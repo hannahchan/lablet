@@ -48,7 +48,8 @@ Lablet is done when every scenario below is green in CI and the release checklis
 
 | # | Given | When | Then | Phase |
 | --- | --- | --- | --- | --- |
-| O1 | JSONL observer | any run | one line per `RunEvent`, last line is the wide event, its totals equal the sum of the per-step events | 4 |
+| O1 | JSONL observer | any run | one line per `RunEvent` keyed by registry attribute names, every line carries the run id, config digest, resource attributes, and `schema_url`; last line is the wide event and its totals equal the sum of the per-step events | 4 |
+| O9 | JSONL and OTLP both on | any run | for every span there is one JSONL line with the same attribute keys and values | 6 |
 | O2 | OTLP to the in-process receiver in `lablet-conformance` | any run | root, chat, and tool spans with the registry's attributes; one `lablet.run` log record whose trace id matches the root span | 6 |
 | O3 | OTLP to a closed port | run | outcome unchanged, exit code unchanged, export failure in the diagnostic log, process exits within 5s of the run ending | 6 |
 | O4 | `capture_content: false` | run | no prompt, response, or tool content in any observer output | 4 |
@@ -71,6 +72,7 @@ Lablet is done when every scenario below is green in CI and the release checklis
 | C8 | the `Cancellation` port flips during a tool call | run | `cancelled` after the call returns, transcript and wide event written, no further provider call | 3 |
 | C9 | the library | `build`, `run` twice, `shutdown` in a doctest | both runs complete with distinct run ids and one `RunStarted` each; outcomes are identical after removing `run_id` and `duration_ms` | 4 |
 | C10 | `lablet schema`, `--prompt-file`, stdin prompt, `system_file`, `${VAR}` unset | each | schema is valid JSON Schema; each prompt source yields the same run; unset variable is a `config:` error | 5 |
+| C11 | any CLI run | run | one summary line on stderr naming stop reason, turns, tokens, tool calls, duration; absent with `--quiet` | 5 |
 
 ### Providers (recorded HTTP, wiremock)
 
@@ -103,7 +105,7 @@ Every normative statement in the spec is held by a scenario above, a gate, or a 
 | §1 completion modes, stop reasons | L1 to L8, E2, E4, E5, E7 |
 | §1 retries | E1 to E3, E6, E8, E9, `lablet-policy` unit tests |
 | §1 outcome and exit codes | L1, L3, C1, T6 |
-| §1 wide event | O1, O2, O7, S2, S3 |
+| §1 wide event and aggregatability | O1, O2, O7, O9, S2, S3 |
 | §1 transcript | O8, C8 |
 | §2 layer rules | `cargo xtask lint-layers` |
 | §3, §4 domain | `lablet-model` and `lablet-policy` unit tests, coverage and mutation floors |
@@ -111,7 +113,7 @@ Every normative statement in the spec is held by a scenario above, a gate, or a 
 | §6 providers | P1 to P7, S4 |
 | §6 tools | T1 to T8, E9, conformance suite |
 | §6 telemetry contract | O6, `weaver registry check`, generated-files-up-to-date gate |
-| §7 config, CLI, digest | C1 to C10 |
+| §7 config, CLI, digest | C1 to C11 |
 | §8 versioning | `cargo xtask changelog`, `rust-version` in the workspace manifest |
 | Quality bar 1 | schema and registry checked in, changelog gate |
 | Quality bar 2, 5 | release checklist |

@@ -44,7 +44,7 @@ Acceptance: end-to-end tests with fakes prove natural and explicit completion, e
 
 - `provider-fake` with scripted completions, latency, and injected errors.
 - `tools-builtin` with `bash`, `read_file`, `write_file`, and root escape rejection.
-- `telemetry-jsonl`, including the wide event as the final line.
+- `telemetry-jsonl` as a flat rendering of the trace with registry attribute names, join keys, and `schema_url` on every line, the wide event as the final line.
 - `lablet-conformance` with the `RunObserver` cases (exactly one wide event per run, its numbers equal the sum of the per-step events, an unwritable destination does not change the outcome) run against `telemetry-jsonl`, and the `ToolExecutor` cases run against `tools-builtin`.
 - `apps/lablet` as a library only: config types with defaults, `build` with `BuildError::Unsupported` for adapters from later phases, `Lablet` with multi-run and shutdown, `RunContext` construction, config digest over the resolved config, transcript output, the fan-out observer.
 - Smoke test: `provider-fake` plus `tools-builtin` plus JSONL observer through `build` and `run`, asserting the event stream.
@@ -53,10 +53,10 @@ Acceptance: a doctest builds a `Lablet` from a config string, runs twice, and as
 
 ## Phase 5: CLI and config surface
 
-- `main.rs` and the `clap` derive CLI: `init`, `run`, `check` (including `--resolved`), `schema`, `--set`, `${VAR}` substitution, prompt sources, diagnostic logging on stderr, Ctrl-C into the `Cancellation` port, exit codes, and the error message contract from spec §7.
+- `main.rs` and the `clap` derive CLI: `init`, `run`, `check` (including `--resolved`), `schema`, `--set`, `${VAR}` substitution, prompt sources, diagnostic logging on stderr, the end-of-run summary line and `--quiet`, Ctrl-C into the `Cancellation` port, exit codes, and the error message contract from spec §7.
 - `lablet/schema.json` checked in and covered by the changelog gate.
 
-Acceptance: `lablet init --provider fake && lablet run --config lablet.yaml --prompt "..."` completes with no edits, writes a JSONL trace, and prints a `RunOutcome`. The CLI and the phase 4 doctest produce identical outcomes for the same config. Scenarios E9, T2, T4, C1 to C7, and C10 pass.
+Acceptance: `lablet init --provider fake && lablet run --config lablet.yaml --prompt "..."` completes with no edits, writes a JSONL trace, and prints a `RunOutcome`. The CLI and the phase 4 doctest produce identical outcomes for the same config. Scenarios E9, T2, T4, C1 to C7, C10, and C11 pass.
 
 ## Phase 6: OpenTelemetry
 
@@ -65,7 +65,7 @@ Acceptance: `lablet init --provider fake && lablet run --config lablet.yaml --pr
 - An in-process OTLP receiver in `lablet-conformance` (gRPC and HTTP) so O2 and O7 run in CI without Docker; `telemetry-otel` added to the `RunObserver` conformance matrix, including that an unreachable endpoint does not change the run outcome.
 - `lablet/examples/docker-compose.yaml` with a collector (debug exporter) and Jaeger, for the manual check.
 
-Acceptance: a fake-provider run against the in-process receiver yields the root, chat, and tool spans with the documented attributes and one `lablet.run` log record per run. `cargo xtask weaver live-check` passes with zero undeclared attributes. Scenarios O2, O3, O5, O6, and O7 pass. Manual: a reviewer runs the docker compose example and finds turn 2's spans in Jaeger with one filter.
+Acceptance: a fake-provider run against the in-process receiver yields the root, chat, and tool spans with the documented attributes and one `lablet.run` log record per run. `cargo xtask weaver live-check` passes with zero undeclared attributes. Scenarios O2, O3, O5, O6, O7, and O9 pass. Manual: a reviewer runs the docker compose example and finds turn 2's spans in Jaeger with one filter.
 
 ## Phase 7: Anthropic and built-in tools
 
