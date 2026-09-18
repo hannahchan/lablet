@@ -77,7 +77,9 @@ Lablet is dual licensed under MIT OR Apache-2.0. Every crate's `Cargo.toml` sets
 
 ## Git and pull requests
 
-- Branch off `main`; `main` is protected. A human merges every pull request.
-- Work lands in small, reviewable pull requests, each one logical unit with CI green. A build phase is many PRs, not one.
+- Work on a branch off `main`. When a logical piece is complete and `cargo xtask pre-push` passes locally, fast-forward `main` and push. No pull requests for now; this will be revisited as the process is learned.
+- CI runs after the push. Check it; a red `main` is fixed forward before anything else lands.
 - One logical change per commit. Moves and content edits in separate commits.
-- A spec clarification (filling a gap, fixing an inconsistency, adding a missing test) goes in the same PR with a note in the description. Changing anything recorded in `product/decisions.md` needs a human decision first: stop, present options, wait.
+- A spec clarification (filling a gap, fixing an inconsistency, adding a missing test) goes in the same commit series with a note in the message.
+- Architectural decisions may be made by whoever is building. Each gets an entry in `product/decisions.md` when it is made and is listed in the end-of-phase report for human review.
+- Each build phase ends with a multi-agent code review of its diff, then a stop for human review. The next phase starts only on an explicit go-ahead.

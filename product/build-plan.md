@@ -49,7 +49,7 @@ Acceptance: end-to-end tests with fakes prove natural and explicit completion, e
 - `apps/lablet` as a library only: config types with defaults, `build` with `BuildError::Unsupported` for adapters from later phases, `Lablet` with multi-run and shutdown, `RunContext` construction, config digest over the resolved config, transcript output, the fan-out observer.
 - Smoke test: `provider-fake` plus `tools-builtin` plus the file exporter through `build` and `run`, asserting the spans and records read back.
 
-PR order, riskiest first: `provider-fake`; observer plus file exporter plus reader (O1, O2, O4); library (C9, O8); built-in tools (E9, T2, T4).
+Landing order, riskiest first: `provider-fake`; observer plus file exporter plus reader (O1, O2, O4); library (C9, O8); built-in tools (E9, T2, T4).
 
 Acceptance: a doctest builds a `Lablet` from a config string, runs twice, and asserts both outcomes and the file. Scenarios O1, O2, O4, O8, C9, E9, T2, and T4 pass.
 
@@ -109,24 +109,25 @@ Acceptance: a new user can follow `lablet/docs/getting-started.md` from clone to
 
 A phase is closed when all of these hold, in addition to its acceptance line:
 
-1. Every automated scenario assigned to the phase is green in CI, not only locally. Manual items (below) are recorded by a human in the closing PR.
+1. Every automated scenario assigned to the phase is green in CI, not only locally. Manual items (below) are recorded by a human at the phase review.
 2. `cargo xtask pre-push` passes, and no new `#[expect]` suppression lacks a reason tied to the phase.
 3. The spec and the code agree. A deviation is a spec edit in the same phase, with a `decisions.md` entry if it changes a decision.
 4. The traceability table in `acceptance.md` has no phase-assigned statement without a test or gate.
-5. The closing commit message contains one demo command a reviewer can run in under a minute.
+5. The phase report contains one demo command a reviewer can run in under a minute.
 6. Every new dependency has a justification comment and `cargo deny` is clean.
 7. No scenario has been moved to a later phase to close this one.
 
 Human sign-off, which the building agent cannot do itself: phase 6 the Jaeger check and the file replay via docker compose; phase 7 the real Anthropic run; phase 8 the public MCP server run; phase 9 the Ollama run (P5); phase 11 the timed getting-started walk and the release checklist.
 
-Delivery: work lands in small, reviewable pull requests, each one logical unit with CI green, merged by a human. The bullet list of a phase is its PR plan; a phase closes when its last PR merges and the human sign-off items are recorded.
+Delivery: work lands on `main` in small logical units, each fast-forwarded from a branch after `cargo xtask pre-push` passes locally, with the Actions run checked after the push. No pull requests for now. The bullet list of a phase is its landing plan. The building agent goes as far as it can in a phase and stops where a human is needed. A phase closes with a multi-agent code review of its diff, a phase report (what landed, scenarios green, gate results, architectural decisions, spec clarifications, human sign-off items, open risks, one demo command), and a stop for human review; the next phase starts only on an explicit go-ahead.
 
 Signals of drift, any of which means stop and fix before continuing: the `lablet.*` attribute count grows without decisions entries; an adapter crate imports another adapter; tests exercise only the CLI rather than the ports; a port gains a method that only one fake needs.
 
 ## Working rules for the building agent
 
 - Never move to the next phase with failing gates.
-- Clarify the spec freely when it has a gap or an inconsistency: edit it in the same PR and say so in the description. Never change anything recorded in `product/decisions.md` unilaterally: stop, present options, and wait for a human.
+- Clarify the spec freely when it has a gap or an inconsistency: edit it alongside the code and say so in the commit message. Architectural decisions may be made without asking; record each in `product/decisions.md` when made and list it in the phase report.
+- If commit signing fails, stop and wait. Never handle secrets; prepare the command for the human.
 - Keep dependencies minimal and justify each new one with a comment in `Cargo.toml`.
 - Prefer a small change to the spec, made explicitly, over a workaround that makes the code disagree with it.
 - When a normative sentence in the spec has no test or gate, add a row to the traceability table in `acceptance.md` before implementing it.

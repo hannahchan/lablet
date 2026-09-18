@@ -157,3 +157,7 @@ Supersedes the JSONL observer. `telemetry-otel` maps events to OTel spans and lo
 ## 2026-09-19 `opentelemetry-semantic-conventions` is not a dependency
 
 The generated `telemetry-registry` crate already holds every `gen_ai.*` and core name at the vendored versions. A second semconv version in the workspace is the drift the registry exists to prevent.
+
+## 2026-09-19 Delivery process for the build
+
+Supersedes "Small pull requests, human merges". Branches, fast-forward to `main` and push when a logical piece lands, no pull requests for now. `cargo xtask pre-push` passes locally before every merge and CI is checked after. One phase per explicit go-ahead; the builder goes as far as it can and stops where a human is needed. Each phase ends with a multi-agent code review, a phase report, and a stop. The builder may make architectural decisions, recording each here and reporting them at the phase end. Expected to be adjusted as the process is learned.
