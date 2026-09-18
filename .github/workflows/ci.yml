@@ -1,0 +1,110 @@
+# CI is the gate on a clean runner: the pinned toolchain from
+# rust-toolchain.toml, the pinned tools from mise.toml, then `cargo xtask ci`
+# and, as jobs of their own, the two floors contributing/README.md names:
+# `cargo xtask coverage` and `cargo xtask mutants`. Green here means the gates
+# pass against exactly what is committed, not against whatever a developer
+# machine happens to have installed.
+#
+# What the gate checks lives in xtask, so this file is a provider-specific
+# shim: checkout, toolchain, tools, cache, one command. Porting to another CI
+# provider is a rewrite of this file and nothing else.
+name: CI
+
+# There are no pull requests in this project's process: work is pushed to a
+# branch, and `main` is fast-forwarded once the branch is green. So the gate
+# runs on every pushed branch, `main` included. Tags are left out; a release
+# workflow will own them. workflow_dispatch is for re-running by hand.
+on:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+
+# The gate only reads the repository.
+permissions:
+  contents: read
+
+# A newer push to the same ref supersedes the run in progress: the newer commit
+# contains the older one, so the older result is no longer of interest.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    # One job per xtask task, all set up the same way. `ci` is the pre-push
+    # list; the floors run beside it so a slow mutation run never delays the
+    # gate's answer, and one failing does not cancel the others. Later phases
+    # add their CI-only tasks (weaver live-check, bench) to this list.
+    name: ${{ matrix.task }}
+    strategy:
+      fail-fast: false
+      matrix:
+        task: [ci, coverage, mutants]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Incremental artefacts are useless on a fresh runner and bloat the
+      # cache; this also matches what rust-cache expects.
+      CARGO_INCREMENTAL: "0"
+      # The log viewer renders colour, and cargo does not detect that.
+      CARGO_TERM_COLOR: always
+    steps:
+      # Full history: the changelog gate diffs the contract files against a
+      # base commit, which a shallow clone does not have.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # The changelog gate compares against `main` (spec §8): xtask's default
+      # base is the merge-base with origin/main, so a branch stays red until
+      # its contract change has an entry, however many pushes it takes. On
+      # `main` itself that merge-base is the pushed commit, which compares
+      # nothing, so there the base is the commit `main` pointed at before the
+      # push. A force push can leave a `before` that is no longer in the
+      # repository, and the first push has an all-zero one; then the variable
+      # stays unset and xtask says which base it used. The value goes through
+      # `env` so the script never interpolates event data.
+      - name: Select the changelog base
+        if: matrix.task == 'ci' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [[ ! "$BEFORE" =~ ^0+$ ]] && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "LABLET_CHANGELOG_BASE=$BEFORE" >> "$GITHUB_ENV"
+          fi
+
+      # rustup is preinstalled on the runner and reads rust-toolchain.toml, so
+      # the pin has one home. `show active-toolchain` installs it when absent;
+      # the fallback covers a runner image with RUSTUP_AUTO_INSTALL=0. This
+      # comes before mise because mise's cargo backend needs a working cargo.
+      - name: Install the pinned Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      # After the toolchain, because the cache key includes the rustc version.
+      # Only `main` writes the cache. Branches restore it read-only, so
+      # per-branch target/ caches cannot fill the 10 GB quota and evict main's.
+      # The key names the task: the three jobs build different artefacts
+      # (coverage instruments, mutants builds in its own directories) and the
+      # automatic key does not tell matrix legs apart.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            lablet
+            xtask
+          key: ${{ matrix.task }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # Installs the mise.toml tools and puts them on PATH for later steps,
+      # with its own cache keyed on mise.toml and mise.lock. Because mise.lock
+      # is committed, the action installs with --locked and verifies checksums.
+      # The mise version is pinned like everything else; it is the version the
+      # lockfile was written with. Bump it together with mise.toml.
+      - uses: jdx/mise-action@v4
+        with:
+          version: 2026.9.7
+          cache: true
+
+      # The task name comes from the matrix above, not from event data.
+      - name: cargo xtask ${{ matrix.task }}
+        run: cargo xtask ${{ matrix.task }}

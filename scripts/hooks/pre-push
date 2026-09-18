@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Git pre-push hook: the full local gate. Enabled by scripts/install-hooks.sh.
+set -euo pipefail
+
+# Git runs hooks from whatever started it (an IDE, an agent), and that shell's
+# PATH may lack cargo and mise, so add the usual install locations. HOME may be
+# unset there as well, hence the empty defaults.
+for dir in /opt/homebrew/bin "${HOME:-}/.local/bin" "${CARGO_HOME:-${HOME:-}/.cargo}/bin"; do
+  if [[ -d "$dir" ]]; then
+    PATH="$dir:$PATH"
+  fi
+done
+export PATH
+
+# The `xtask` alias lives in the root .cargo/config.toml, which cargo only
+# finds from the repository root or below.
+cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+
+# Git feeds one "<local-ref> <local-sha> <remote-ref> <remote-sha>" line per ref
+# on stdin, with an all-zero local sha for a ref being deleted. A push made up
+# purely of deletions ships no code, so it skips the gate. Everything else runs
+# it, including a hook run by hand with no ref lines on stdin.
+refs=0
+deletions=0
+if [[ ! -t 0 ]]; then
+  # The `||` guard keeps a final line that has no trailing newline.
+  while read -r _ sha _ _ || [[ -n "${sha:-}" ]]; do
+    refs=$((refs + 1))
+    # Match the shape rather than 40 zeros so SHA-256 repositories work too.
+    if [[ "$sha" =~ ^0+$ ]]; then
+      deletions=$((deletions + 1))
+    fi
+  done
+fi
+if ((refs > 0 && refs == deletions)); then
+  echo "pre-push: deletion-only push, skipping cargo xtask pre-push"
+  exit 0
+fi
+
+# `mise exec` puts the versions pinned in mise.toml on PATH without needing
+# shell activation. Without mise the gate still runs and names any tool it
+# cannot find.
+if command -v mise >/dev/null 2>&1; then
+  exec mise exec -- cargo xtask pre-push
+fi
+exec cargo xtask pre-push

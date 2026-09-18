@@ -1,0 +1,8 @@
+# The one Rust toolchain for the workspace, xtask, and CI. rustup reads this
+# file from any directory below it and installs the pin on first use. MSRV
+# policy (spec §8) is this version minus two minor versions.
+#
+# llvm-tools-preview is what cargo-llvm-cov drives for `cargo xtask coverage`.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]

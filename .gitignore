@@ -1,0 +1,41 @@
+# Rust / Cargo. `**/` because there are two target directories: lablet/target
+# and xtask/target. Cargo.lock is committed in both (binary workspace,
+# reproducible gates).
+**/target/
+**/*.pdb
+
+# IDE / Editor
+*~
+*.swo
+*.swp
+.DS_Store
+.idea/
+.zed/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Environment. Provider API keys live here; never commit one. A checked-in
+# template is the one exception.
+.env
+.env.*
+!.env.example
+
+# Test & quality output: cargo-llvm-cov and cargo-mutants.
+*.profdata
+*.profraw
+lcov.info
+coverage/
+mutants.out*/
+
+# Run output. The OTLP/JSON file exporter writes one file per run into the
+# working directory by default, wherever `lablet run` was started. A fixture in
+# this format that must be committed needs a different name.
+lablet-*.otlp.jsonl
+
+# Local configuration
+*.local.toml
+
+# Claude Code
+.claude/settings.local.json
+.claude/worktrees/
