@@ -96,7 +96,7 @@ Aggregatability rules: the wide event has a fixed flat shape (no nested maps; te
 
 ## 2. Architecture
 
-Explicit architecture, in the shape of the UsefulBytes repository, sized down. Rings are directory prefixes inside the `lablet/` workspace; directory `foo/bar/` is package `lablet-bar`.
+Explicit architecture, in the shape of the UsefulBytes repository, sized down. Rings are directory prefixes inside the `lablet/` workspace; directory `foo/bar/` is package `lablet-bar`, with three exceptions: `apps/lablet` is `lablet`, `tests/conformance` is `lablet-conformance`, and `tests/mcp-server` is `lablet-test-mcp-server`.
 
 ```
 lablet/
@@ -122,10 +122,13 @@ Dependency direction, enforced by `cargo xtask lint-layers` (crates are matched 
 
 | Ring | May depend on | May not use |
 | --- | --- | --- |
-| domain | domain | tokio, reqwest, tracing, opentelemetry, rmcp |
-| application | domain | tokio, reqwest, opentelemetry, rmcp (`tracing` allowed) |
-| adapters and adapter shared kernels | application, domain | (no restriction) |
-| composition root | everything | (no restriction) |
+| domain | domain | tokio, reqwest, tracing, opentelemetry, rmcp, tonic, axum, hyper |
+| application | domain | tokio, reqwest, opentelemetry, rmcp, tonic, axum, hyper (`tracing` allowed) |
+| adapters and adapter shared kernels | application, domain, and the shared kernels of their own ring; never a sibling adapter | (no restriction) |
+| composition root | everything except test support | (no restriction) |
+| test support (`tests/*`) | anything | (no restriction) |
+
+A listed name forbids its whole family: a crate matches when any `-` or `_` separated part of its name equals the listed name, so `opentelemetry` also forbids `opentelemetry_sdk` and `opentelemetry-otlp`. Renamed dependencies and workspace-inherited ones are resolved to the real crate name, and target-specific tables are walked. No crate outside `tests/` may list a `tests/` crate in `[dependencies]` or `[build-dependencies]`. A workspace member that falls in no ring is an error.
 
 `serde` and `serde_json` are allowed in every ring: the domain model derives `Serialize` and `Deserialize` once, and every JSON surface (transcript, fake-provider scripts) reuses it. Provider wire formats are still separate types in their adapters.
 
@@ -407,8 +410,8 @@ Config digest (`lablet.config.digest`) is a SHA-256 of the canonical JSON form o
 ## 8. Versioning
 
 - One workspace version, semver. The config schema, the outcome JSON, and the telemetry registry are the public contract; a breaking change to any of them is a major bump.
-- `CHANGELOG.md` in keep-a-changelog format with an `Unreleased` section. `cargo xtask changelog` fails when `lablet/schema.json`, `lablet/telemetry/registry/`, or `lablet/tests/fixtures/outcome.json` differ from `main` and `Unreleased` has no entry. CI checks out full history so the comparison works.
-- Every third-party crate is pinned to an exact version in `[workspace.dependencies]`; a version bump is its own commit and PR, never mixed with feature work.
+- `CHANGELOG.md` in keep-a-changelog format with an `Unreleased` section. `cargo xtask changelog` fails when `lablet/schema.json`, `lablet/telemetry/registry/`, or `lablet/tests/fixtures/outcome.json` differ from `main` and `Unreleased` has no entry. The base is the merge-base with `origin/main`; on `main` itself CI sets `LABLET_CHANGELOG_BASE` to the commit before the push. Uncommitted and untracked files count. "No entry" means the body of `## [Unreleased]` is unchanged since the base or has no list item. An unresolvable base warns and passes. CI checks out full history so the comparison works.
+- Every third-party crate is pinned to an exact version in `[workspace.dependencies]`; a version bump is its own commit, never mixed with feature work. `xtask` is its own workspace and pins its own dependencies exactly; `lint-manifests` requires a crate pinned in both places to carry the same version.
 - `rust-version` in the workspace `Cargo.toml` is the MSRV; policy is the pinned toolchain minus two minor versions, raised only in a minor release.
 
 ## 9. Testing
@@ -432,6 +435,7 @@ Recorded here so they are not lost; none block the first build.
 - A `lablet.run` metric set alongside traces, once there is a consumer for it.
 - Validating the `task_complete` argument against `run.completion_schema` rather than only advertising it.
 - A `check --probe` flag that makes one minimal provider call.
+- How `lablet-tools-mcp`'s tests locate the `lablet-test-mcp-server` binary: cargo sets `CARGO_BIN_EXE_<name>` only for tests of the package that defines the binary, so a cross-package mechanism (an artifact dependency, a build through `escargot`, or hosting the MCP scenarios in the server's own package) must be chosen in phase 8.
 - A `turn` span under `invoke_agent`, if per-turn grouping in trace viewers proves worth an extra span level.
 - The deferred `lablet.*` extensions in the research catalogue (working time, failed-attempt tokens, cache hit ratio, time split, event sequence).
 - Exporting the transcript as an ATIF v1.8 trajectory, planned for phase 10.
