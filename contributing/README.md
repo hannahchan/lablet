@@ -71,6 +71,10 @@ One workspace version. Keep-a-changelog format in `CHANGELOG.md`. A change to `l
 
 Install the hooks once with `scripts/install-hooks.sh`. Plain cargo commands run from `lablet/`.
 
+## License
+
+Lablet is dual licensed under MIT OR Apache-2.0. Every crate's `Cargo.toml` sets `license = "MIT OR Apache-2.0"`. Contributions are accepted under the same terms, as stated in the root README; no contributor agreement is needed. `cargo deny` checks that dependencies are compatible with both.
+
 ## Git
 
 - Branch off `main`; `main` is protected.

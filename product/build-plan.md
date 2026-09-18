@@ -4,7 +4,7 @@ Phased so that every phase ends with something runnable and tested. [acceptance.
 
 ## Phase 0: scaffold
 
-- Create the `lablet/` Cargo workspace (edition 2024, resolver 3, `rust-version` set) with every crate from spec §2 as an empty library or binary with a one-line doc comment. Root `.cargo/config.toml` with the `xtask` alias.
+- Create the `lablet/` Cargo workspace (edition 2024, resolver 3, `rust-version` set, `license = "MIT OR Apache-2.0"` in workspace package metadata) with every crate from spec §2 as an empty library or binary with a one-line doc comment. Root `.cargo/config.toml` with the `xtask` alias.
 - `xtask/` at the repo root with `lint-layers`, `fmt`, `clippy`, `deny`, `doc`, `test`, `changelog`, `weaver check`, `weaver generate`, `pre-commit`, `pre-push`. Port `lint_layers.rs` from UsefulBytes, reducing the ring set and forbidden-dependency table to spec §2.
 - `rust-toolchain.toml`, `mise.toml` pinning weaver, cargo-deny, cargo-llvm-cov, cargo-mutants; `scripts/install-hooks.sh`; workspace lints from contributing; `CHANGELOG.md`; GitHub Actions running `cargo xtask pre-push`.
 - `lablet/telemetry/` with `registry_manifest.yaml`, the core and GenAI semantic-convention registries vendored at pinned commits under `deps/`, a policy file, `weaver.yaml`, and Rust templates that generate **attribute name constants and enums only**. The generated `telemetry-registry` crate is checked in.
