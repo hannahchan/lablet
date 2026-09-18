@@ -29,26 +29,27 @@ Lablet is done when every scenario below is green in CI and the release checklis
 | E6 | a script injecting a malformed payload then success | run | treated as retryable, `completed` | 3 |
 | E7 | a tool that always errors, `max_consecutive_tool_errors: 3` | run | `tool_errors_exhausted` after the 3rd error result with no further provider call; a success between them resets the count | 3 |
 | E8 | a script calling a tool name that is not listed | run | the model receives an error result; it counts toward the cap | 3 |
-| E9 | the test MCP server's `sleep` tool called past `tool_timeout` | run | the model receives an error result; the run continues | 7 |
+| E9 | a script calling `bash` with `sleep` past `tool_timeout` | run | the model receives an error result with kind `timeout`; the run continues | 5 |
 
 ### Tools
 
 | # | Given | When | Then | Phase |
 | --- | --- | --- | --- | --- |
 | T1 | a built-in and an MCP tool, `deny: [read_file]` | run | the provider request never lists `read_file`; the wide event's `lablet.tools.names` excludes it | 8 |
-| T2 | `allow: [bash]` | run | only `bash` is listed | 7 |
+| T2 | `allow: [bash]` | run | only `bash` is listed | 5 |
 | T3 | two MCP servers exposing the same tool name, no `prefix_tools` | build | build error naming both servers and the tool | 8 |
-| T4 | `read_file` called with a path outside `tools.builtin.root` | run | error result, file not read | 7 |
+| T4 | `read_file` called with a path outside `tools.builtin.root` | run | error result, file not read | 5 |
 | T5 | an MCP server that exits after its first call | run | subsequent calls to its tools return errors naming the server; `tool_errors_exhausted` follows | 8 |
 | T6 | an MCP server with `--hang-startup`, `startup_timeout: 1s` | check | exit 1 with an `mcp:` message naming the server | 8 |
 | T7 | two MCP servers exposing the same tool name, one with `prefix_tools: true` | check | both listed, one as `<server>__<tool>` | 8 |
+| T8 | one `Lablet`, two runs, one MCP server | run twice | the server process starts once; the second run's tool calls succeed; `traceparent` is present in `params._meta` of each call | 8 |
 
 ### Telemetry
 
 | # | Given | When | Then | Phase |
 | --- | --- | --- | --- | --- |
 | O1 | JSONL observer | any run | one line per `RunEvent`, last line is the wide event, its totals equal the sum of the per-step events | 4 |
-| O2 | OTLP to the example collector with the debug exporter | any run | root, chat, and tool spans with the registry's attributes; one `lablet.run` log record whose trace id matches the root span | 6 |
+| O2 | OTLP to the in-process receiver in `lablet-conformance` | any run | root, chat, and tool spans with the registry's attributes; one `lablet.run` log record whose trace id matches the root span | 6 |
 | O3 | OTLP to a closed port | run | outcome unchanged, exit code unchanged, export failure in the diagnostic log, process exits within 5s of the run ending | 6 |
 | O4 | `capture_content: false` | run | no prompt, response, or tool content in any observer output | 4 |
 | O5 | `capture_content: true` | run | content present in the JSONL events and in the OTel log records | 6 |
@@ -68,7 +69,7 @@ Lablet is done when every scenario below is green in CI and the release checklis
 | C6 | two configs differing in `max_turns`, and one config with a default spelled out versus omitted | run | different digests for the first pair, identical for the second | 5 |
 | C7 | `lablet init --provider fake` | init then run | a traced run completes with no edits | 5 |
 | C8 | the `Cancellation` port flips during a tool call | run | `cancelled` after the call returns, transcript and wide event written, no further provider call | 3 |
-| C9 | the library | `build`, `run` twice, `shutdown` in a doctest | both runs complete with distinct run ids; the MCP server was started once | 4 |
+| C9 | the library | `build`, `run` twice, `shutdown` in a doctest | both runs complete with distinct run ids and one `RunStarted` each; outcomes are identical after removing `run_id` and `duration_ms` | 4 |
 | C10 | `lablet schema`, `--prompt-file`, stdin prompt, `system_file`, `${VAR}` unset | each | schema is valid JSON Schema; each prompt source yields the same run; unset variable is a `config:` error | 5 |
 
 ### Providers (recorded HTTP, wiremock)
@@ -106,9 +107,9 @@ Every normative statement in the spec is held by a scenario above, a gate, or a 
 | §1 transcript | O8, C8 |
 | §2 layer rules | `cargo xtask lint-layers` |
 | §3, §4 domain | `lablet-model` and `lablet-policy` unit tests, coverage and mutation floors |
-| §5 ports and observer rules | O3, O4, C9, `lablet-run` tests with fakes |
+| §5 ports and observer rules | O3, O4, C9, T8 (trace context handoff), `lablet-run` tests with fakes |
 | §6 providers | P1 to P7, S4 |
-| §6 tools | T1 to T7, E9, conformance suite |
+| §6 tools | T1 to T8, E9, conformance suite |
 | §6 telemetry contract | O6, `weaver registry check`, generated-files-up-to-date gate |
 | §7 config, CLI, digest | C1 to C10 |
 | §8 versioning | `cargo xtask changelog`, `rust-version` in the workspace manifest |

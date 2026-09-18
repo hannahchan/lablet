@@ -67,7 +67,7 @@ CI additionally runs `cargo xtask coverage` (floor: 90% lines on `lablet-model`,
 
 ## Versioning
 
-One workspace version. Keep-a-changelog format in `CHANGELOG.md`. A change to `lablet/schema.json`, `lablet/telemetry/registry/`, or the outcome fixture without an `Unreleased` entry fails `cargo xtask changelog`. MSRV is `rust-version` in the workspace manifest: the pinned toolchain minus two minor versions, raised only in a minor release. Windows is not supported.
+One workspace version. Keep-a-changelog format in `CHANGELOG.md`. A change to `lablet/schema.json`, `lablet/telemetry/registry/`, or `lablet/tests/fixtures/outcome.json` without an `Unreleased` entry fails `cargo xtask changelog`; CI checks out full history for it. Third-party crates are pinned to exact versions in `[workspace.dependencies]` and bumped only in dedicated commits. MSRV is `rust-version` in the workspace manifest: the pinned toolchain minus two minor versions, raised only in a minor release. Windows is not supported.
 
 Install the hooks once with `scripts/install-hooks.sh`. Plain cargo commands run from `lablet/`.
 
@@ -75,8 +75,9 @@ Install the hooks once with `scripts/install-hooks.sh`. Plain cargo commands run
 
 Lablet is dual licensed under MIT OR Apache-2.0. Every crate's `Cargo.toml` sets `license = "MIT OR Apache-2.0"`. Contributions are accepted under the same terms, as stated in the root README; no contributor agreement is needed. `cargo deny` checks that dependencies are compatible with both.
 
-## Git
+## Git and pull requests
 
-- Branch off `main`; `main` is protected.
+- Branch off `main`; `main` is protected. A human merges every pull request.
+- Work lands in small, reviewable pull requests, each one logical unit with CI green. A build phase is many PRs, not one.
 - One logical change per commit. Moves and content edits in separate commits.
-- Changing a decision means a new entry in `product/decisions.md` and a spec update in the same pull request.
+- A spec clarification (filling a gap, fixing an inconsistency, adding a missing test) goes in the same PR with a note in the description. Changing anything recorded in `product/decisions.md` needs a human decision first: stop, present options, wait.

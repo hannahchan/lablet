@@ -105,7 +105,7 @@ lablet/
     provider-anthropic           ModelProvider over the Anthropic Messages API
     provider-openai              ModelProvider over OpenAI-compatible chat completions (Ollama, vLLM, gateways)
     provider-fake                ModelProvider that plays scripted responses; a product feature, not test scaffolding
-    tools-builtin                ToolExecutor for task_complete, bash, read_file, write_file
+    tools-builtin                ToolExecutor for bash, read_file, write_file (task_complete lives in the loop)
     tools-mcp                    ToolExecutor over rmcp (stdio and streamable HTTP clients)
     telemetry-otel               RunObserver emitting OTLP traces and logs
     telemetry-jsonl              RunObserver writing one JSON event per line to a file or stderr
@@ -156,13 +156,17 @@ pub enum ToolResultContent { Text(String), Json(serde_json::Value) }
 pub struct ToolSpec { pub name: ToolName, pub description: String, pub input_schema: serde_json::Value, pub source: ToolSource }
 pub enum ToolSource { Builtin, Mcp { server: String } }
 pub struct Usage { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens }   // u64, Add impl, total()
-pub struct Completion { pub message: Message, pub usage: Usage, pub finish: FinishReason }
+pub struct Completion { pub message: Message, pub usage: Usage, pub finish: FinishReason, pub response_id: Option<String>, pub response_model: Option<String> }
 pub enum FinishReason { EndTurn, ToolUse, MaxTokens, Other(String) }
 pub enum StopReason { Completed, EndedWithoutCompletion, MaxTurns, Timeout, MaxTotalTokens, OutputTruncated, ContextExhausted, RetriesExhausted, ToolErrorsExhausted, Cancelled, ProviderError }
 pub struct Cost(f64);                     // USD
 pub struct RunOutcome { run_id, stop_reason, turns, usage, tool_calls, duration, result: RunResult, error: Option<String> }
 pub struct RunResult { text: String, structured: Option<serde_json::Value> }
-pub struct RunContext { run_id, config_digest, lablet_version, resource: Vec<(String, String)>, transcript_path: Option<PathBuf>, skills_count: u32, mcp_servers: Vec<String>, completion: CompletionMode, max_turns: u32, timeout: Duration, seed: Option<u64> }
+pub struct RunContext { run_id, config_digest, agent_version, resource: Vec<(String, String)>, transcript_path: Option<PathBuf>, skills_count: u32, mcp_servers: Vec<String>, completion: CompletionMode, max_turns: u32, timeout: Duration, request: RequestDefaults }
+pub struct RequestDefaults { max_tokens: u32, temperature: Option<f32>, thinking: Thinking, seed: Option<u64> }
+pub struct Endpoint { host: String, port: u16 }
+pub struct TraceContext { traceparent: String, tracestate: Option<String> }   // W3C strings; no OpenTelemetry types in the domain
+pub struct McpCallMeta { method: String, session_id: Option<String>, protocol_version: Option<String>, jsonrpc_request_id: Option<String>, rpc_status_code: Option<String>, transport: NetworkTransport }
 pub struct RunSummary { model, tools: Vec<ToolName>, prompt_system_bytes, prompt_user_bytes, provider_calls, provider_retries, provider_latency_total, provider_latency_max, usage, finish_reasons: Vec<FinishReason>, tool_calls_total, tool_calls_errors, tool_latency_total, tool_input_bytes, tool_output_bytes, per_tool: BTreeMap<ToolName, ToolStats>, cost: Option<Cost>, outcome: RunOutcome }
 ```
 
@@ -192,6 +196,7 @@ impl Pricing { pub fn cost(&self, usage: &Usage) -> Cost }
 ```rust
 #[async_trait] pub trait ModelProvider: Send + Sync {
     fn model(&self) -> &ModelRef;
+    fn endpoint(&self) -> Option<Endpoint>;                     // server.address and server.port; None for fake
     async fn complete(&self, req: CompletionRequest<'_>) -> Result<Completion, ProviderError>;
 }
 pub struct CompletionRequest<'a> { system: &'a str, messages: &'a [Message], tools: &'a [ToolSpec], max_tokens: u32, temperature: Option<f32>, thinking: Thinking, seed: Option<u64>, deadline: Duration }
@@ -204,27 +209,31 @@ pub enum ProviderError { Retryable(String), ContextExhausted(String), Fatal(Stri
     async fn specs(&self) -> Result<Vec<ToolSpec>, ToolError>;
     async fn execute(&self, call: ToolCall) -> Result<ToolOutput, ToolError>;
 }
-pub struct ToolCall { id: ToolCallId, name: ToolName, input: serde_json::Value, deadline: Duration }
-pub struct ToolOutput { content: Vec<ToolResultContent>, is_error: bool }
-pub enum ToolError { Unknown(ToolName), Timeout, Failed(String) }   // all three become error results for the model
+pub struct ToolCall { id: ToolCallId, name: ToolName, input: serde_json::Value, deadline: Duration, trace_context: Option<TraceContext> }
+pub struct ToolOutput { content: Vec<ToolResultContent>, is_error: bool, mcp: Option<McpCallMeta> }
+pub struct ToolError { kind: ToolErrorKind, message: String, mcp: Option<McpCallMeta> }   // every kind becomes an error result for the model
+pub enum ToolErrorKind { Unknown, Timeout, Failed }
 
 #[async_trait] pub trait RunObserver: Send + Sync {
     async fn on(&self, event: RunEvent);
+    fn trace_context(&self, call_id: &ToolCallId) -> Option<TraceContext> { None }   // the OTel observer answers with the tool span it opened on ToolCallStarted
 }
 pub enum RunEvent {                       // every variant carries run_id
-    RunStarted { context: RunContext, model, tools: Vec<ToolSpec>, system_prompt: Option<String>, prompt: Option<String> },
+    RunStarted { context: RunContext, model, endpoint: Option<Endpoint>, tools: Vec<ToolSpec>, system_prompt: Option<String>, prompt: Option<String> },
     TurnStarted { turn },
     ProviderCallStarted { turn, attempt, request_bytes },
-    ProviderCallFinished { turn, attempt, usage, finish, latency, response: Option<Message> },
+    ProviderCallFinished { turn, attempt, usage, finish, latency, response_id, response_model, response: Option<Message> },
     ProviderCallFailed { turn, attempt, error, will_retry, backoff },
     ToolCallStarted { turn, call_id, name, source, input_bytes, input: Option<Value> },
-    ToolCallFinished { turn, call_id, is_error, output_bytes, latency, output: Option<ToolOutput> },
+    ToolCallFinished { turn, call_id, is_error, error_kind: Option<ToolErrorKind>, output_bytes, latency, mcp: Option<McpCallMeta>, output: Option<ToolOutput> },
     RunFinished { context: RunContext, summary: RunSummary },
 }
 
 #[async_trait] pub trait Clock: Send + Sync { fn now(&self) -> Instant; async fn sleep(&self, d: Duration); }
 pub trait Cancellation: Send + Sync { fn is_cancelled(&self) -> bool; }
 ```
+
+The loop emits `ToolCallStarted`, then asks the observer for a `TraceContext` for that call id and places it on the `ToolCall`, so the MCP adapter can inject it into `params._meta`. The fan-out observer returns the first `Some`; JSONL returns `None`. `error.type` is defined per span: on the root it is the stop reason when the run did not complete, on a chat span the `ProviderError` variant name (`retryable`, `context_exhausted`, `fatal`, `malformed`), on a tool span the `ToolErrorKind` name.
 
 Every per-step event carries `turn`, which observers emit as `lablet.turn` on the corresponding span. There is no turn span; the trace is `invoke_agent` with `chat` and `execute_tool` children directly beneath it, as the conventions describe, and turns are recovered by filtering on the index. A turn span can be added under the root later without changing anything else.
 
@@ -243,7 +252,7 @@ impl RunService { pub async fn run(&self, context: RunContext, system: String, p
 
 `run` never returns `Err`: every failure is a `RunOutcome` with a stop reason, so the caller always gets telemetry-consistent output. One `RunService` executes one run at a time; concurrent calls are a programming error and are rejected.
 
-`ToolSet` is a composite `ToolExecutor` in this crate that routes by name across several executors, applies the config allow and deny lists, and rejects duplicate names at build time. Built-in `task_complete` is only registered in `explicit` mode and is always present there regardless of `tools.builtin.enabled`. `ToolSet` is where "what happens when a tool is missing" is expressed: the tool is simply absent from `specs()`.
+`ToolSet` is a composite `ToolExecutor` in this crate that routes by name across several executors, applies the config allow and deny lists, and rejects duplicate names at build time. The `task_complete` tool spec is defined in this crate, registered by `ToolSet` only in `explicit` mode regardless of `tools.builtin.enabled`, and never executed: the loop intercepts it. Its input schema is `run.completion_schema` when set, otherwise a free-form object. `ToolSet` is where "what happens when a tool is missing" is expressed: the tool is simply absent from `specs()`.
 
 Tool calls within one turn are executed sequentially. Parallel execution is a later option; the observer events already carry enough to distinguish it.
 
@@ -259,10 +268,10 @@ Messages API via `reqwest` with `rustls`. Maps `ContentBlock` both ways, includi
 Plays a scripted sequence of `Completion`s from a YAML or JSON file (the domain model's serde form), with optional per-call latency (real time) and injected errors of each `ProviderError` class. Selected with `model.provider: fake` and `model.script: path`. Reports usage from the script so token accounting is exercised end to end. Used by lablet's smoke tests, doctests, and examples, and by users testing their own frameworks. `lablet init --provider fake` writes both a config and a script.
 
 ### `tools-builtin`
-Each tool is a small struct; the executor holds only those enabled in config. Initial set: `task_complete` (JSON schema from config or free-form object), `bash` (working directory and timeout from config, captures stdout, stderr, exit code), `read_file`, `write_file`. All paths are resolved under `tools.builtin.root` and rejected if they escape it.
+Each tool is a small struct; the executor holds only those enabled in config. Initial set: `bash` (working directory and timeout from config, captures stdout, stderr, exit code), `read_file`, `write_file`. All paths are resolved under `tools.builtin.root` and rejected if they escape it. `task_complete` is not here; see §5.
 
 ### `tools-mcp`
-One `rmcp` client per configured server (version pinned in the workspace `Cargo.toml`). Tool names are exposed exactly as the server reports them, so measurements reflect the server as-is. A name collision across servers is a build error; a server with `prefix_tools: true` has its tools renamed `<server>__<tool>`, which is the escape hatch. `execute` forwards the call and maps `isError` results to `is_error: true`. It injects the current trace context into the request's `params._meta` as unprefixed `traceparent` and `tracestate`, per MCP SEP-414, and reports `mcp.method.name`, `mcp.session.id`, `mcp.protocol.version`, `jsonrpc.request.id`, `rpc.response.status_code` on error, and `network.transport` (`pipe` for stdio, `tcp` for HTTP) so the OTel observer can put them on the `execute_tool` span; the conventions want one span carrying both `gen_ai.tool.*` and `mcp.*`, not a nested MCP span. Servers are started when the `Lablet` is built, with `tools.mcp[].startup_timeout`, live for the lifetime of the `Lablet` across runs, and are shut down by `Lablet::shutdown`. A stdio server's stderr is forwarded line by line to the diagnostic log at `debug`. HTTP servers receive `headers` verbatim. If a server exits or its transport breaks mid-run, every call to its tools returns a tool error naming the server, so the consecutive error cap ends the run; its tools stay listed so the model's behaviour is observable.
+One `rmcp` client per configured server (version pinned in the workspace `Cargo.toml`). Tool names are exposed exactly as the server reports them, so measurements reflect the server as-is. A name collision across servers is a build error; a server with `prefix_tools: true` has its tools renamed `<server>__<tool>`, which is the escape hatch. `execute` forwards the call and maps `isError` results to `is_error: true`. It injects the `ToolCall`'s `trace_context` into the request's `params._meta` as unprefixed `traceparent` and `tracestate`, per MCP SEP-414, and fills `McpCallMeta` (method, session id, protocol version, JSON-RPC request id, RPC status code on error, transport `pipe` for stdio or `tcp` for HTTP) on the output or error so the OTel observer can put `mcp.*`, `jsonrpc.*`, `rpc.*`, and `network.transport` on the `execute_tool` span; the conventions want one span carrying both `gen_ai.tool.*` and `mcp.*`, not a nested MCP span. Servers are started when the `Lablet` is built, with `tools.mcp[].startup_timeout`, live for the lifetime of the `Lablet` across runs, and are shut down by `Lablet::shutdown`. A stdio server's stderr is forwarded line by line to the diagnostic log at `debug`. HTTP servers receive `headers` verbatim. If a server exits or its transport breaks mid-run, every call to its tools returns a tool error naming the server, so the consecutive error cap ends the run; its tools stay listed so the model's behaviour is observable.
 
 ### Telemetry contract (`lablet/telemetry/`)
 Telemetry is contract-first. An OpenTelemetry Weaver semantic-convention registry under `lablet/telemetry/registry/` declares every attribute, span, event, and the wide event lablet emits. `registry_manifest.yaml` depends on the upstream core semantic conventions and on `open-telemetry/semantic-conventions-genai`, both pinned to a commit and vendored under `lablet/telemetry/deps/`, because the GenAI conventions have no tagged release and every `gen_ai.*` attribute is Development stability. The policy allows Development stability for imported `gen_ai.*` and requires it to be declared for `lablet.*`. From that registry:
@@ -304,6 +313,8 @@ impl Lablet { pub async fn run(&self, prompt: &str) -> RunOutcome; pub async fn 
 
 A `Lablet` may run many times; each `run` gets a fresh `RunId` and `RunContext`, MCP servers persist across runs, and `shutdown` is the only teardown. Runs on one `Lablet` are sequential.
 
+While the build is in progress, a config that selects an adapter whose crate does not exist yet makes `build` return `BuildError::Unsupported { kind, phase }` naming the build-plan phase that delivers it; config validation, including the `api_key_env` check, runs before adapter selection and does not depend on the adapter. Two outcomes are "identical" when they are equal after removing `run_id` and `duration_ms`.
+
 `main.rs` only does effects: parse args with `clap` derive, install a `tracing` subscriber on stderr filtered by `RUST_LOG` (default `warn`) for lablet's own diagnostics, load config, install Ctrl-C handling into the `Cancellation` port, `build`, `run`, print outcome, write the transcript, flush telemetry, exit. Diagnostics and telemetry are separate: the diagnostic log is about lablet, the telemetry is about the run. The outcome print is the one permitted `print_stdout`, marked with `#[expect]`.
 
 ```
@@ -326,12 +337,14 @@ run:
   completion: natural            # natural | explicit
   max_turns: 30
   timeout: 10m
-  max_total_tokens: null         # input + output + cache read + cache write across the run; null means unlimited
+  max_total_tokens: null         # input + output across the run (input already includes cached tokens); null means unlimited
   max_retries: 3                 # per provider call
   max_consecutive_tool_errors: 3
   tool_timeout: 60s
   provider_timeout: 120s
-  transcript_path: null          # write the full conversation as JSON at run end
+  transcript_path: null          # write the full conversation at run end
+  transcript_format: json        # json | atif (ATIF v1.8, phase 10)
+  completion_schema: null        # explicit mode: JSON schema for the task_complete argument; null means any object
 
 model:
   provider: anthropic            # anthropic | openai | fake
@@ -384,12 +397,13 @@ telemetry:
   resource: { }                  # extra resource attributes, e.g. experiment ids
 ```
 
-Config digest (`lablet.config.digest`) is a SHA-256 of the canonical JSON form of the **resolved** config (defaults filled in) after `--set` overrides but before `${VAR}` substitution. Any value injected from the environment never enters the digest, two configs with the same effect share a digest, and a default change in a new lablet version changes the digest, which is why `lablet.version` sits beside it in the wide event.
+Config digest (`lablet.config.digest`) is a SHA-256 of the canonical JSON form of the **resolved** config (defaults filled in) after `--set` overrides but before `${VAR}` substitution. Any value injected from the environment never enters the digest, two configs with the same effect share a digest, and a default change in a new lablet version changes the digest, which is why `gen_ai.agent.version` sits beside it in the wide event.
 
 ## 8. Versioning
 
 - One workspace version, semver. The config schema, the outcome JSON, and the telemetry registry are the public contract; a breaking change to any of them is a major bump.
-- `CHANGELOG.md` in keep-a-changelog format with an `Unreleased` section. `cargo xtask changelog` fails when `lablet/schema.json`, `lablet/telemetry/registry/`, or the outcome fixture differ from `main` and `Unreleased` has no entry.
+- `CHANGELOG.md` in keep-a-changelog format with an `Unreleased` section. `cargo xtask changelog` fails when `lablet/schema.json`, `lablet/telemetry/registry/`, or `lablet/tests/fixtures/outcome.json` differ from `main` and `Unreleased` has no entry. CI checks out full history so the comparison works.
+- Every third-party crate is pinned to an exact version in `[workspace.dependencies]`; a version bump is its own commit and PR, never mixed with feature work.
 - `rust-version` in the workspace `Cargo.toml` is the MSRV; policy is the pinned toolchain minus two minor versions, raised only in a minor release.
 
 ## 9. Testing
@@ -411,7 +425,7 @@ Recorded here so they are not lost; none block the first build.
 - Loading skills through a tool rather than inlining.
 - Streaming responses (not needed for measurement, may be needed for very long outputs).
 - A `lablet.run` metric set alongside traces, once there is a consumer for it.
-- Structured `task_complete` schema validation.
+- Validating the `task_complete` argument against `run.completion_schema` rather than only advertising it.
 - A `check --probe` flag that makes one minimal provider call.
 - A `turn` span under `invoke_agent`, if per-turn grouping in trace viewers proves worth an extra span level.
 - The deferred `lablet.*` extensions in the research catalogue (working time, failed-attempt tokens, cache hit ratio, time split, event sequence).

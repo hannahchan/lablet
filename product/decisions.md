@@ -121,3 +121,15 @@ The Rust ecosystem convention. Apache-2.0 brings the patent grant and contributi
 ## 2026-09-18 Build plan restructured to twelve phases
 
 The telemetry contract is its own phase so the Weaver templates cannot stall the scaffold; the composition root is split into library and CLI; OpenTelemetry moves before the first real provider because a wrong span shape costs more to fix late than a wrong provider mapping; features and hardening are separate phases so "done" is unambiguous. Phase numbers in earlier entries refer to the previous numbering.
+
+## 2026-09-18 Trace context reaches MCP through the observer
+
+The OTel observer opens the tool span on `ToolCallStarted`; the loop then asks the observer for that span's W3C trace context and places it on the `ToolCall`, and the MCP adapter injects it into `params._meta`. This keeps OpenTelemetry types out of the application layer and lets JSONL-only runs answer `None`.
+
+## 2026-09-18 Small pull requests, human merges
+
+Work lands in small, reviewable PRs, each one logical unit with CI green, merged by a human. A phase is many PRs. The building agent may clarify the spec in a PR but must stop and ask before changing a recorded decision. Manual acceptance items are signed off by a human in the closing PR of the phase.
+
+## 2026-09-18 Weaver approach is researched before phase 1
+
+Weaver is experimental. A dedicated research document and spike under `product/research/weaver/` settles the registry syntax, vendoring, template starting point, and live-check usage before the telemetry contract phase begins; phase 1 follows it.

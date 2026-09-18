@@ -7,7 +7,8 @@ Sequencing rationale: the loop is proven against fakes before any real adapter e
 ## Phase 0: scaffold
 
 - The `lablet/` Cargo workspace (edition 2024, resolver 3, `rust-version`, `license = "MIT OR Apache-2.0"` in workspace package metadata) with every crate from spec §2 as an empty library or binary with a one-line doc comment. Root `.cargo/config.toml` with the `xtask` alias.
-- `xtask/` at the repo root with `lint-layers`, `lint-manifests`, `fmt`, `clippy`, `deny`, `doc`, `test`, `changelog`, `pre-commit`, `pre-push`. Port `lint_layers.rs` from UsefulBytes, reducing the ring set and forbidden-dependency table to spec §2.
+- `xtask/` at the repo root with `lint-layers`, `lint-manifests`, `fmt`, `clippy`, `deny`, `doc`, `test`, `coverage` and `mutants` (floors and crate list held as data in xtask), `changelog`, `pre-commit`, `pre-push`.
+- `[workspace.dependencies]` with every third-party crate pinned to an exact version checked against crates.io that day: at least `async-trait`, `thiserror`, `serde`, `serde_json`, `serde_yaml`, `tokio`, `reqwest`, `rmcp`, `opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`, `opentelemetry-semantic-conventions`, `tracing`, `tracing-subscriber`, `clap`, `humantime`, `ulid`, `sha2`, `schemars`, `wiremock`, `criterion`. Port `lint_layers.rs` from UsefulBytes, reducing the ring set and forbidden-dependency table to spec §2.
 - `rust-toolchain.toml`, `mise.toml` pinning weaver, cargo-deny, cargo-llvm-cov, cargo-mutants; `scripts/install-hooks.sh`; workspace lints from contributing; `CHANGELOG.md`; GitHub Actions running `cargo xtask pre-push`.
 - `lablet/README.md` placeholder and `lablet/docs/` directory.
 
@@ -15,7 +16,7 @@ Acceptance: `cargo xtask pre-push` passes on the empty workspace. A crate given 
 
 ## Phase 1: telemetry contract
 
-- `lablet/telemetry/` with `registry_manifest.yaml`, the core and GenAI semantic-convention registries vendored at pinned commits under `deps/`, and the lablet registry drafted from the research catalogue: every span, attribute, template attribute, log record, and the wide event from spec §1 and §6.
+- Follow the approach in `product/research/weaver/` (syntax version, vendoring, template starting point). `lablet/telemetry/` with `registry_manifest.yaml`, the core and GenAI semantic-convention registries vendored at pinned commits under `deps/` by `cargo xtask weaver vendor`, and the lablet registry drafted from the research catalogue: every span, attribute, template attribute, log record, and the wide event from spec §1 and §6. Every attribute must have a source field in spec §3 or §5; if one does not, the spec is fixed first.
 - Rego policies (naming, stability, a justification note on every `lablet.*` attribute) and `cargo xtask weaver check`.
 - `weaver.yaml` and MiniJinja templates under `templates/registry/rust/` generating the `telemetry-registry` crate: attribute name constants and enums only. Markdown templates generating `lablet/docs/telemetry.md`. `cargo xtask weaver generate` with a generated-files-up-to-date gate.
 
@@ -23,14 +24,14 @@ Acceptance: `weaver registry check` passes. Regeneration is a no-op on a clean t
 
 ## Phase 2: domain
 
-- `lablet-model`: every type in spec §3 with serde derives, `Usage: Add` and `total()`, display impls for `StopReason` and `FinishReason`, constructors that validate (non-empty tool names, unique block ids). The transcript shape must map losslessly onto an ATIF v1.8 trajectory (one turn is one step, tool results joined by call id) so the phase 10 export needs no model change.
+- `lablet-model`: every type in spec §3 with serde derives (including `RequestDefaults`, `Endpoint`, `TraceContext`, `McpCallMeta`), `Usage: Add` and `total()`, display impls for `StopReason` and `FinishReason`, constructors that validate (non-empty tool names, unique block ids). The transcript shape must map losslessly onto an ATIF v1.8 trajectory (one turn is one step, tool results joined by call id) so the phase 10 export needs no model change.
 - `lablet-policy`: `StopPolicy::evaluate` at both stop points, `RetryPolicy::delay`, `Pricing::cost`.
 
 Acceptance: unit tests cover each stop reason at the stop point that owns it (including token budget, truncated output, and context exhaustion), each completion mode, backoff growth, cap, and exhaustion, and cost arithmetic. Coverage and mutation floors met. No async code and no serde beyond derives in either crate.
 
 ## Phase 3: the loop
 
-- `lablet-run`: ports, errors, `RunEvent`, `RunSummary` accumulation, `ToolSet`, `RunService` with the two-point stop evaluation and `task_complete` interception.
+- `lablet-run`: ports, errors, `RunEvent`, `RunSummary` accumulation, `ToolSet` with the `task_complete` spec, `RunService` with the two-point stop evaluation, `task_complete` interception, and the trace-context handoff from observer to `ToolCall`.
 - Hand-written fakes for every port, including a fake clock, in the crate's tests.
 
 Acceptance: end-to-end tests with fakes prove natural and explicit completion, every stop reason, retry with backoff via the fake clock, consecutive tool error counting and reset, allow and deny filtering, duplicate tool name rejection, and that content fields are `None` when capture is off. The event stream for a scripted run is asserted exactly, and the `RunSummary` on `RunFinished` matches the per-step events it summarises. Scenarios L1 to L8, E1 to E8, and C8 pass.
@@ -38,9 +39,11 @@ Acceptance: end-to-end tests with fakes prove natural and explicit completion, e
 ## Phase 4: library and first traced run
 
 - `provider-fake` with scripted completions, latency, and injected errors.
+- `tools-builtin` with `bash`, `read_file`, `write_file`, and root escape rejection.
 - `telemetry-jsonl`, including the wide event as the final line.
-- `apps/lablet` as a library only: config types with defaults, `build`, `Lablet` with multi-run and shutdown, `RunContext` construction, config digest over the resolved config, transcript output, the fan-out observer.
-- Smoke test: `provider-fake` plus JSONL observer through `build` and `run`, asserting the event stream.
+- `lablet-conformance` with the `RunObserver` cases (exactly one wide event per run, its numbers equal the sum of the per-step events, an unwritable destination does not change the outcome) run against `telemetry-jsonl`, and the `ToolExecutor` cases run against `tools-builtin`.
+- `apps/lablet` as a library only: config types with defaults, `build` with `BuildError::Unsupported` for adapters from later phases, `Lablet` with multi-run and shutdown, `RunContext` construction, config digest over the resolved config, transcript output, the fan-out observer.
+- Smoke test: `provider-fake` plus `tools-builtin` plus JSONL observer through `build` and `run`, asserting the event stream.
 
 Acceptance: a doctest builds a `Lablet` from a config string, runs twice, and asserts both outcomes and the JSONL file. Scenarios O1, O4, O8, and C9 pass.
 
@@ -49,32 +52,31 @@ Acceptance: a doctest builds a `Lablet` from a config string, runs twice, and as
 - `main.rs` and the `clap` derive CLI: `init`, `run`, `check` (including `--resolved`), `schema`, `--set`, `${VAR}` substitution, prompt sources, diagnostic logging on stderr, Ctrl-C into the `Cancellation` port, exit codes, and the error message contract from spec §7.
 - `lablet/schema.json` checked in and covered by the changelog gate.
 
-Acceptance: `lablet init --provider fake && lablet run --config lablet.yaml --prompt "..."` completes with no edits, writes a JSONL trace, and prints a `RunOutcome`. The CLI and the phase 4 doctest produce identical outcomes for the same config. Scenarios C1 to C7 and C10 pass.
+Acceptance: `lablet init --provider fake && lablet run --config lablet.yaml --prompt "..."` completes with no edits, writes a JSONL trace, and prints a `RunOutcome`. The CLI and the phase 4 doctest produce identical outcomes for the same config. Scenarios E9, T2, T4, C1 to C7, and C10 pass.
 
 ## Phase 6: OpenTelemetry
 
 - `telemetry-otel` built only on `telemetry-registry` constants: root, chat, and tool spans with the spec §6 attributes, `lablet.turn` on children, the `gen_ai.client.operation.exception` log record and retry span event, the `lablet.run` wide-event log record carrying the root span's trace context, content log records behind `capture_content`, resource attributes, bounded shutdown.
 - `cargo xtask weaver live-check` and its CI job.
-- `RunObserver` conformance cases in `lablet-conformance`, including that exactly one wide event is emitted per run, that its numbers equal the sum of the per-step events, and that an unreachable endpoint does not change the run outcome.
-- `lablet/examples/docker-compose.yaml` with a collector (debug exporter) and Jaeger.
+- An in-process OTLP receiver in `lablet-conformance` (gRPC and HTTP) so O2 and O7 run in CI without Docker; `telemetry-otel` added to the `RunObserver` conformance matrix, including that an unreachable endpoint does not change the run outcome.
+- `lablet/examples/docker-compose.yaml` with a collector (debug exporter) and Jaeger, for the manual check.
 
-Acceptance: a fake-provider run against the example collector prints the root, chat, and tool spans with the documented attributes on the debug exporter, and one `lablet.run` log record per run. `cargo xtask weaver live-check` passes with zero undeclared attributes. A reviewer can find turn 2's spans in Jaeger with one filter. Scenarios O2, O3, O5, O6, and O7 pass.
+Acceptance: a fake-provider run against the in-process receiver yields the root, chat, and tool spans with the documented attributes and one `lablet.run` log record per run. `cargo xtask weaver live-check` passes with zero undeclared attributes. Scenarios O2, O3, O5, O6, and O7 pass. Manual: a reviewer runs the docker compose example and finds turn 2's spans in Jaeger with one filter.
 
 ## Phase 7: Anthropic and built-in tools
 
 - `provider-anthropic` with wiremock tests for happy path, tool use, thinking and redacted thinking round trip, cache-control presence, cache token mapping to `cache_write`, per-call timeout, and error classification including context exhaustion.
-- `tools-builtin` with `bash`, `read_file`, `write_file`, `task_complete`, and root escape rejection.
 - `lablet/examples/anthropic.yaml`.
 
-Acceptance: `lablet run --config examples/anthropic.yaml --prompt "..."` completes a real task against the Anthropic API and its trace passes live-check with no attribute added for it. Scenarios E9, T2, T4, P1, P2, and P6 pass.
+Acceptance: scenarios P1, P2, and P6 pass in CI against wiremock. Manual: `lablet run --config examples/anthropic.yaml --prompt "..."` completes a real task against the Anthropic API and its trace passes live-check with no attribute added for it.
 
 ## Phase 8: MCP
 
 - `lablet-test-mcp-server` (echo, sleep, exit-after-N, `--hang-startup`).
 - `tools-mcp` over `rmcp`, stdio and streamable HTTP, collision rejection and `prefix_tools`, startup timeout, stderr forwarding, dead-server behaviour, lifetime tied to the `Lablet`, trace context in `params._meta`, and the `mcp.*` attributes reported to the observer.
-- `ToolExecutor` conformance cases in `lablet-conformance`, run against `tools-builtin` and `tools-mcp`.
+- `tools-mcp` added to the `ToolExecutor` conformance matrix.
 
-Acceptance: a run using a public MCP server over stdio completes, its tool spans carry the `mcp.*` attributes, and removing a tool via `tools.deny` changes the `RunStarted` tool list and nothing else. Scenarios T1, T3, T5, T6, and T7 pass.
+Acceptance: scenarios T1, T3, T5, T6, T7, and T8 pass in CI against the test server. Manual: a run using a public MCP server over stdio completes, its tool spans carry the `mcp.*` attributes, and removing a tool via `tools.deny` changes the `RunStarted` tool list and nothing else.
 
 ## Phase 9: second provider
 
@@ -85,14 +87,14 @@ Acceptance: the same config with only the `model` section changed completes the 
 ## Phase 10: features
 
 - Skills inlining, pricing and cost on the root span and wide event, `task_complete` schema from config.
-- `lablet run --transcript-format atif` exporting the transcript as an ATIF v1.8 trajectory for Harbor and Terminal-bench.
+- `run.transcript_format: atif` exporting the transcript as an ATIF v1.8 trajectory for Harbor and Terminal-bench, available to the library and the CLI alike.
 
 Acceptance: scenarios S1 to S4 pass. An ATIF export of a fake run validates against Harbor's Pydantic models.
 
 ## Phase 11: hardening and release
 
 - User docs in `lablet/docs/`: getting started, config reference generated from the schema, telemetry reference generated from the registry, a page on using `provider-fake` to test a framework, example configs for each provider and for the MCP optimisation use case.
-- Criterion benchmarks for loop overhead per turn and per tool call with the regression threshold in CI.
+- `cargo xtask bench`: criterion benchmarks for loop overhead per turn and per tool call with the regression threshold in CI.
 - Release workflow publishing static Linux (musl, rustls) and macOS binaries; `cargo install` works from the repo. First `CHANGELOG.md` release section.
 
 Acceptance: a new user can follow `lablet/docs/getting-started.md` from clone to a traced run in under five minutes without reading the spec, verified and timed by someone who did not write it. The release checklist in `acceptance.md` is signed off once.
@@ -101,7 +103,7 @@ Acceptance: a new user can follow `lablet/docs/getting-started.md` from clone to
 
 A phase is closed when all of these hold, in addition to its acceptance line:
 
-1. Every scenario assigned to the phase is green in CI, not only locally.
+1. Every automated scenario assigned to the phase is green in CI, not only locally. Manual items (below) are recorded by a human in the closing PR.
 2. `cargo xtask pre-push` passes, and no new `#[expect]` suppression lacks a reason tied to the phase.
 3. The spec and the code agree. A deviation is a spec edit in the same phase, with a `decisions.md` entry if it changes a decision.
 4. The traceability table in `acceptance.md` has no phase-assigned statement without a test or gate.
@@ -109,12 +111,16 @@ A phase is closed when all of these hold, in addition to its acceptance line:
 6. Every new dependency has a justification comment and `cargo deny` is clean.
 7. No scenario has been moved to a later phase to close this one.
 
+Human sign-off, which the building agent cannot do itself: phase 6 the Jaeger check via docker compose; phase 7 the real Anthropic run; phase 8 the public MCP server run; phase 9 the Ollama run (P5); phase 11 the timed getting-started walk and the release checklist.
+
+Delivery: work lands in small, reviewable pull requests, each one logical unit with CI green, merged by a human. The bullet list of a phase is its PR plan; a phase closes when its last PR merges and the human sign-off items are recorded.
+
 Signals of drift, any of which means stop and fix before continuing: the `lablet.*` attribute count grows without decisions entries; an adapter crate imports another adapter; tests exercise only the CLI rather than the ports; a port gains a method that only one fake needs.
 
 ## Working rules for the building agent
 
 - Never move to the next phase with failing gates.
-- Do not change a decision in `product/` unilaterally. Record the question in spec §10 and continue under the spec as written.
+- Clarify the spec freely when it has a gap or an inconsistency: edit it in the same PR and say so in the description. Never change anything recorded in `product/decisions.md` unilaterally: stop, present options, and wait for a human.
 - Keep dependencies minimal and justify each new one with a comment in `Cargo.toml`.
 - Prefer a small change to the spec, made explicitly, over a workaround that makes the code disagree with it.
 - When a normative sentence in the spec has no test or gate, add a row to the traceability table in `acceptance.md` before implementing it.
