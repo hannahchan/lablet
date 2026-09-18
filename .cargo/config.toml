@@ -1,0 +1,9 @@
+# `cargo xtask <task>` runs the gate runner in xtask/, which is its own
+# workspace and not a member of lablet/. --manifest-path resolves against the
+# current directory, so this alias works from the repository root only;
+# lablet/.cargo/config.toml carries a copy for the workspace root, and the two
+# are kept in step. xtask itself finds the repository from its own manifest
+# directory, wherever it is started. -q hides cargo's progress lines, not
+# compiler output.
+[alias]
+xtask = "run -q --manifest-path xtask/Cargo.toml --"

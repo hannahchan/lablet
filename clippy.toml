@@ -1,0 +1,10 @@
+# One clippy configuration for both workspaces. Clippy looks for this file
+# from each package's manifest directory upwards, so it covers every crate
+# under lablet/ and xtask/ alike; a second copy below would shadow it.
+#
+# Tests may unwrap (contributing, "Code conventions"): a failed unwrap in a
+# test is the test failing. Library code stays under unwrap_used/expect_used.
+# This covers `#[test]` functions and `#[cfg(test)]` modules only. A helper
+# function in an integration test target (tests/it/) is not covered.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
