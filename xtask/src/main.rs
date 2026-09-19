@@ -30,7 +30,7 @@ Development:
   doc                 Build rustdoc with warnings denied
 
 Quality checks:
-  fmt [--check]       Format with rustfmt (--check: verify only)
+  fmt [--check]       Format with rustfmt + dprint (--check: verify only)
   fix                 Apply clippy's machine-applicable fixes, then fmt
   clippy              Lint every target with warnings denied
   lint-layers         Layer dependency rules

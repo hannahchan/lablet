@@ -33,6 +33,10 @@ pub const TOOLS: &[Tool] = &[
         bin: "cargo-mutants",
     },
     Tool {
+        mise_name: "dprint",
+        bin: "dprint",
+    },
+    Tool {
         mise_name: "vale",
         bin: "vale",
     },

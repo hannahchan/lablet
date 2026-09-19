@@ -124,15 +124,27 @@ pub fn run_steps(args: &[String]) -> Vec<Step> {
     vec![Step::cargo("run", &cargo)]
 }
 
-/// rustfmt: a rewrite, or with `check` a verification.
+/// rustfmt for Rust and dprint for JSON, TOML, Markdown, and YAML: a rewrite,
+/// or with `check` a verification.
 pub fn fmt_steps(check: bool) -> Vec<Step> {
     let label = ["fmt", "fmt (xtask)"];
-    if check {
+    let mut steps: Vec<Step> = if check {
         let steps = both(label, "fmt", &["--all"], &["--", "--check"]);
         steps.map(|step| step.with_hint(FMT_HINT)).into()
     } else {
         both(label, "fmt", &["--all"], &[]).into()
-    }
+    };
+    let dprint = Step::command(
+        "fmt (dprint)",
+        "dprint",
+        &[if check { "check" } else { "fmt" }],
+    );
+    steps.push(if check {
+        dprint.with_hint(FMT_HINT)
+    } else {
+        dprint
+    });
+    steps
 }
 
 /// Clippy's machine-applicable fixes, then rustfmt. A tree being fixed is
@@ -471,7 +483,7 @@ mod tests {
     fn pre_commit_is_fmt_clippy_and_the_three_lints() {
         assert_eq!(
             labels(&pre_commit_steps()),
-            "fmt, fmt (xtask), clippy, clippy (xtask), lint-layers, lint-manifests, lint-prose"
+            "fmt, fmt (xtask), fmt (dprint), clippy, clippy (xtask), lint-layers, lint-manifests, lint-prose"
         );
     }
 

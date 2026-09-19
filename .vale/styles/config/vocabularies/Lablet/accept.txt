@@ -1,6 +1,11 @@
 [Aa]ggregatab(?:le|ility)
-allowlist
 [Aa]nthropic
+[Cc]onfigs?
+[Ee]val
+[Ll]ablets?
+[Rr]etryable
+[Ww]eaver
+allowlist
 APIs?
 args
 async
@@ -12,16 +17,15 @@ camelCase
 CLI
 clippy
 codegen
-[Cc]onfigs?
 crates
 Datadog
 DataFusion
 deserialisation
 dev
 doctests?
+dprint
 DuckDB
 enums?
-[Ee]val
 Grafana
 gRPC
 Honeycomb
@@ -33,7 +37,6 @@ Jaeger
 JMESPath
 jq
 JSONL
-[Ll]ablets?
 Langfuse
 lockfile
 losslessly
@@ -57,7 +60,6 @@ Pydantic
 Rego
 repo
 reqwest
-[Rr]etryable
 rmcp
 rustdoc
 rustfmt
@@ -88,7 +90,6 @@ unwritable
 vendored
 vendoring
 vLLM
-[Ww]eaver
 wiremock
 xtask
 YAML

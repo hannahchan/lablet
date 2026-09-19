@@ -47,6 +47,31 @@ version = "27.1.0"
 backend = "cargo:cargo-mutants"
 specifiers = ["27.1.0"]
 
+[[tools.dprint]]
+version = "0.57.4"
+backend = "aqua:dprint/dprint"
+specifiers = ["0.57.4"]
+
+[tools.dprint."platforms.linux-arm64"]
+checksum = "sha256:ff961314e7c1ca6a02eaada0e37920a37c668fbc09fd85838c2aced41a4bc0e4"
+url = "https://github.com/dprint/dprint/releases/download/0.57.4/dprint-aarch64-unknown-linux-gnu.zip"
+url_api = "https://api.github.com/repos/dprint/dprint/releases/assets/546351169"
+
+[tools.dprint."platforms.linux-x64"]
+checksum = "sha256:1d26357d8bc66898d4ecc7dafca3d2971cfe222ba487228bd2ce5c3b3a309c33"
+url = "https://github.com/dprint/dprint/releases/download/0.57.4/dprint-x86_64-unknown-linux-gnu.zip"
+url_api = "https://api.github.com/repos/dprint/dprint/releases/assets/546351175"
+
+[tools.dprint."platforms.macos-arm64"]
+checksum = "sha256:f9e752812791f258e89ff88a7affd05c793b0db3d929718651eae7df5f19eb2e"
+url = "https://github.com/dprint/dprint/releases/download/0.57.4/dprint-aarch64-apple-darwin.zip"
+url_api = "https://api.github.com/repos/dprint/dprint/releases/assets/546351171"
+
+[tools.dprint."platforms.macos-x64"]
+checksum = "sha256:8978bd5d9a564ec19472545fb853da9ec468e024e75d39c3a9df9fd5750ecdfd"
+url = "https://github.com/dprint/dprint/releases/download/0.57.4/dprint-x86_64-apple-darwin.zip"
+url_api = "https://api.github.com/repos/dprint/dprint/releases/assets/546351172"
+
 [[tools."github:open-telemetry/weaver"]]
 version = "0.26.1"
 backend = "github:open-telemetry/weaver"

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://dprint.dev/schemas/v0.json",
+  "lineWidth": 100,
+  "useTabs": false,
+  "indentWidth": 2,
+  "newLineKind": "lf",
+  "excludes": [
+    "**/target",
+    "**/*.rs",
+    ".vale/styles/Microsoft/**",
+    "lablet/telemetry/deps/**",
+    "lablet/docs/telemetry/**",
+    "product/research/weaver/spike/**"
+  ],
+  "plugins": [
+    "npm:@dprint/json@0.24.0",
+    "npm:@dprint/toml@0.8.0",
+    "npm:@dprint/markdown@0.24.0",
+    "https://plugins.dprint.dev/g-plane/pretty_yaml-v0.6.0.wasm"
+  ],
+  "markdown": {
+    "textWrap": "maintain"
+  },
+  "toml": {
+    "comment.forceLeadingSpace": true,
+    "cargo.applyConventions": false
+  },
+  "json": {
+    "trailingCommas": "jsonc"
+  }
+}

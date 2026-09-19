@@ -4,25 +4,25 @@ How to work in this repository. The what and why live in [../product/](../produc
 
 ## Layout
 
-| Area | Question | Contents |
-| --- | --- | --- |
-| `product/` | What are we building, and why? | Brief, spec, build plan, decisions log |
-| `contributing/` | How do we work? | This document |
-| `lablet/` | The output | Rust workspace and user-facing docs |
-| `xtask/` | Gates | Root-level crate, not a workspace member |
+| Area            | Question                       | Contents                                 |
+| --------------- | ------------------------------ | ---------------------------------------- |
+| `product/`      | What are we building, and why? | Brief, spec, build plan, decisions log   |
+| `contributing/` | How do we work?                | This document                            |
+| `lablet/`       | The output                     | Rust workspace and user-facing docs      |
+| `xtask/`        | Gates                          | Root-level crate, not a workspace member |
 
 ## Architecture rules
 
 Explicit architecture. Inside `lablet/`, directory `foo/bar/` is package `lablet-bar`, except `apps/lablet` (`lablet`), `tests/conformance` (`lablet-conformance`), and `tests/mcp-server` (`lablet-test-mcp-server`).
 
-| Ring | Path | May depend on | Forbidden crates |
-| --- | --- | --- | --- |
-| Domain | `crates/domain/*` | domain | tokio, reqwest, tracing, opentelemetry, rmcp, tonic, axum, hyper |
-| Application | `crates/application/*` | domain | tokio, reqwest, opentelemetry, rmcp, tonic, axum, hyper |
-| Secondary adapters | `crates/adapters/secondary/*` | application, domain, adapter shared kernel; never a sibling adapter | none |
-| Adapter shared kernel | `crates/adapters/secondary/shared/*` | application, domain, other adapter shared kernels; never an adapter | none; may be used by sibling adapters, implements no port |
-| Composition root | `apps/*` | everything except test support | none |
-| Test support | `tests/*` | anything, dev-only | none |
+| Ring                  | Path                                 | May depend on                                                       | Forbidden crates                                                 |
+| --------------------- | ------------------------------------ | ------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Domain                | `crates/domain/*`                    | domain                                                              | tokio, reqwest, tracing, opentelemetry, rmcp, tonic, axum, hyper |
+| Application           | `crates/application/*`               | domain                                                              | tokio, reqwest, opentelemetry, rmcp, tonic, axum, hyper          |
+| Secondary adapters    | `crates/adapters/secondary/*`        | application, domain, adapter shared kernel; never a sibling adapter | none                                                             |
+| Adapter shared kernel | `crates/adapters/secondary/shared/*` | application, domain, other adapter shared kernels; never an adapter | none; may be used by sibling adapters, implements no port        |
+| Composition root      | `apps/*`                             | everything except test support                                      | none                                                             |
+| Test support          | `tests/*`                            | anything, dev-only                                                  | none                                                             |
 
 `cargo xtask lint-layers` enforces this on `[dependencies]` and `[build-dependencies]` (dev-dependencies are exempt) and runs at pre-commit: a workspace crate is placed by the path of its `[workspace.dependencies]` entry, an external crate is matched by name. A forbidden name covers its family (`opentelemetry` also forbids `opentelemetry_sdk`), and no crate outside `tests/` may depend on a `tests/` crate. `serde` and `serde_json` are allowed everywhere; the domain model is the one serde form of the conversation.
 
@@ -60,7 +60,7 @@ cargo xtask weaver generate    # regenerate the crate and docs after editing the
 Every rule on this page is enforced by a gate. If it's not enforced, it's a suggestion, not a rule.
 
 ```bash
-cargo xtask pre-commit    # fmt, clippy, lint-layers, lint-manifests, lint-prose; from phase 1 also weaver check and generated files up to date
+cargo xtask pre-commit    # fmt (rustfmt and dprint), clippy, lint-layers, lint-manifests, lint-prose; from phase 1 also weaver check and generated files up to date
 ```
 
 ```bash
@@ -70,6 +70,10 @@ cargo xtask pre-push      # pre-commit plus cargo deny, changelog, rustdoc witho
 Run `cargo xtask help` for every task, grouped in the order a developer works: development, quality checks, quality gates, analysis, project. A green gate prints one closing line; the step table appears only when something failed.
 
 CI runs on every pushed branch as a matrix of `cargo xtask ci` (the pre-push list), `cargo xtask coverage` (floor: 90% lines on `lablet-model`, `lablet-policy`, `lablet-run`), and `cargo xtask mutants` (floor: 80% caught on the same crates). A floor crate may measure nothing only while its `src/` defines no function; after that, a run with no lines or no mutants for it fails. A trait method without a body counts as a function, so the first function with a body lands with its test in the same push as the first port. Later phases add `cargo xtask weaver live-check` (phase 6), `cargo xtask bench` with a 20% regression threshold, and the release builds (phase 11). `xtask` is a root-level crate reached through the alias, which is defined twice, in `.cargo/config.toml` and `lablet/.cargo/config.toml`; an xtask test keeps the two in step. It doesn't work from a crate directory below `lablet/`.
+
+## Formatting
+
+`cargo xtask fmt` formats Rust with rustfmt and JSON, TOML, Markdown, and YAML with dprint, configured in `dprint.json`; `fmt --check` verifies both and runs in pre-commit. The vendored and generated trees are excluded there, because they must stay byte-identical to their source. dprint downloads its pinned plugins on first use, so the first run needs the network.
 
 ## Prose
 
