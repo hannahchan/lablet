@@ -37,3 +37,7 @@ lablet-*.otlp.jsonl
 # Claude Code
 .claude/settings.local.json
 .claude/worktrees/
+
+# Vale styles are downloaded by `vale sync`; the vocabulary is ours.
+.vale/styles/*
+!.vale/styles/config/

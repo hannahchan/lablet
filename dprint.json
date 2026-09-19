@@ -7,7 +7,7 @@
   "excludes": [
     "**/target",
     "**/*.rs",
-    ".vale/styles/Microsoft/**",
+    ".vale/styles/**",
     "lablet/telemetry/deps/**",
     "lablet/docs/telemetry/**",
     "product/research/weaver/spike/**"

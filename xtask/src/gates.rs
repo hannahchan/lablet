@@ -89,6 +89,10 @@ const WORKSPACE: &[&str] = &["--workspace"];
 const DENY_WARNINGS: &[&str] = &["--all-targets", "--", "-D", "warnings"];
 const FMT_HINT: &str = "fix with: cargo xtask fmt";
 const VALE_CONFIG: &str = ".vale.ini";
+/// Where `vale sync` puts the package `.vale.ini` names.
+const VALE_STYLE: &str = ".vale/styles/Microsoft";
+/// `--no-global` keeps a developer's own Vale config out of the result.
+const VALE_SYNC: &[&str] = &["--no-global", "--config", VALE_CONFIG, "sync"];
 
 /// One cargo subcommand over the workspace (`selector` picks its packages),
 /// then over xtask, which a cargo run in `lablet/` reaches only by manifest.
@@ -215,11 +219,25 @@ pub fn lint_prose_steps(all: bool) -> Vec<Step> {
     }
     let args = vale_args(&root, all);
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    vec![Step::command("lint-prose", "vale", &args)]
+    prose_steps(root.join(VALE_STYLE).is_dir(), &args)
+}
+
+/// The styles are downloaded, not committed, so a fresh clone syncs first.
+fn prose_steps(styles_present: bool, args: &[&str]) -> Vec<Step> {
+    let mut steps = Vec::new();
+    if !styles_present {
+        steps.push(Step::command("lint-prose (sync)", "vale", VALE_SYNC));
+    }
+    steps.push(Step::command("lint-prose", "vale", args));
+    steps
 }
 
 fn vale_args(root: &Path, all: bool) -> Vec<String> {
-    let mut args = vec!["--config".to_owned(), VALE_CONFIG.to_owned()];
+    let mut args = vec![
+        "--no-global".to_owned(),
+        "--config".to_owned(),
+        VALE_CONFIG.to_owned(),
+    ];
     if !all {
         args.extend(["--minAlertLevel".to_owned(), "error".to_owned()]);
     }
@@ -481,9 +499,22 @@ mod tests {
 
     #[test]
     fn pre_commit_is_fmt_clippy_and_the_three_lints() {
+        let steps: Vec<Step> = pre_commit_steps()
+            .into_iter()
+            .filter(|step| step.label != "lint-prose (sync)")
+            .collect();
         assert_eq!(
-            labels(&pre_commit_steps()),
+            labels(&steps),
             "fmt, fmt (xtask), fmt (dprint), clippy, clippy (xtask), lint-layers, lint-manifests, lint-prose"
+        );
+    }
+
+    #[test]
+    fn prose_styles_are_synced_first_only_when_they_are_missing() {
+        assert_eq!(labels(&prose_steps(true, &[])), "lint-prose");
+        assert_eq!(
+            labels(&prose_steps(false, &[])),
+            "lint-prose (sync), lint-prose"
         );
     }
 
@@ -576,13 +607,19 @@ mod tests {
         let root = repo_root();
         let errors = vale_args(&root, false);
         assert_eq!(
-            errors[..4],
-            ["--config", ".vale.ini", "--minAlertLevel", "error"]
+            errors[..5],
+            [
+                "--no-global",
+                "--config",
+                ".vale.ini",
+                "--minAlertLevel",
+                "error"
+            ]
         );
         let all = vale_args(&root, true);
-        assert_eq!(all[..2], errors[..2]);
-        assert_eq!(all[2..], errors[4..]);
-        let paths = &all[2..];
+        assert_eq!(all[..3], errors[..3]);
+        assert_eq!(all[3..], errors[5..]);
+        let paths = &all[3..];
         for expected in ["README.md", "contributing", "product/spec.md"] {
             assert!(paths.iter().any(|path| path == expected), "{expected}");
         }

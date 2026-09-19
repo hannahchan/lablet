@@ -39,6 +39,10 @@ mise trust "$REPO_ROOT/mise.toml"
 mise install
 echo "[ok] gate tools"
 
+echo "[..] prose styles (.vale.ini)"
+(cd "$REPO_ROOT" && mise exec -- vale --no-global --config .vale.ini sync >/dev/null)
+echo "[ok] prose styles"
+
 "$REPO_ROOT/scripts/install-hooks.sh"
 
 echo
