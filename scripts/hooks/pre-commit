@@ -11,6 +11,11 @@ for dir in /opt/homebrew/bin "${HOME:-}/.local/bin" "${CARGO_HOME:-${HOME:-}/.ca
 done
 export PATH
 
+# Git points a hook at this repository through GIT_DIR and its relatives. The
+# gate runs git in temporary repositories too, which must not inherit them.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+
 # Cargo finds the `xtask` alias only from the repository root or below.
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 

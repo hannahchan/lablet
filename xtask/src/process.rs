@@ -108,8 +108,32 @@ fn command_in(directory: &Path, program: &str, args: &[&str]) -> Result<Command,
         .args(args)
         .current_dir(directory)
         .env("PATH", &tools.path);
+    for variable in GIT_REPOSITORY_ENV {
+        command.env_remove(variable);
+    }
     Ok(command)
 }
+
+/// What `git rev-parse --local-env-vars` lists. Git sets these for a hook, and
+/// a subprocess that inherits them acts on that repository rather than the one
+/// in its working directory, so a test's scratch repository would commit here.
+const GIT_REPOSITORY_ENV: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+];
 
 /// Runs a subprocess with inherited output and returns its status.
 pub fn stream(program: &str, args: &[&str], env: &[(&str, &str)]) -> Result<ExitStatus, String> {
@@ -258,6 +282,25 @@ fn is_executable(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_subprocess_never_inherits_the_repository_git_names_for_a_hook() {
+        let command = command_in(&repo_root(), "git", &["status"]).unwrap();
+        let removed: Vec<_> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect();
+        for variable in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+        ] {
+            assert!(removed.iter().any(|key| key == variable), "{variable}");
+        }
+        assert_eq!(removed.len(), GIT_REPOSITORY_ENV.len());
+    }
 
     #[test]
     fn every_pinned_tool_xtask_runs_is_pinned_in_mise_toml() {
