@@ -1,21 +1,28 @@
-//! The running count of a run: what the loop adds to as things happen, what
-//! the stop policy reads from it, and the summary it becomes.
+//! The running record of a run: what the loop tells it as things happen, what
+//! the stop policy reads from it, and the finished run it becomes.
 //!
-//! This is where a `Duration` becomes whole milliseconds. Each latency is
-//! truncated as it's recorded, so a total and the per-tool values beside it
-//! are sums of the same numbers.
+//! It keeps the transcript, and beside it only what a transcript doesn't
+//! hold: the input waiting for the next turn, and the provider call attempts
+//! that failed. Every total of the
+//! summary is computed from the two when the run ends, so a total can't
+//! disagree with the turns it sums.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use crate::run::{RawOutcome, whole_ms};
 use crate::{
-    Completion, CompletionMode, Cost, Endpoint, FinishReason, ModelRef, RequestDefaults, RunId,
-    RunOutcome, RunResult, RunSummary, StopReason, ToolName, ToolStats, Usage,
+    Completion, CompletionMode, Cost, Endpoint, FinishedRun, Message, ModelRef, RequestDefaults,
+    RunId, RunOutcome, RunResult, RunSummary, StopReason, ToolCallOutcome, ToolName, Transcript,
+    TranscriptError, Turn, Usage, UserContent,
 };
 
-/// What the loop knows about a run before its first provider call.
+/// What the loop knows about a run before its first provider call, the
+/// prompts aside.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunSetup {
+    /// The run's id.
+    pub run_id: RunId,
     /// The model the run calls.
     pub model: ModelRef,
     /// Where the provider's API is served; `None` for a provider that isn't
@@ -32,10 +39,6 @@ pub struct RunSetup {
     pub timeout: Duration,
     /// The request parameters every provider call shares.
     pub request: RequestDefaults,
-    /// Size of the system prompt in bytes, skills included.
-    pub prompt_system_bytes: u64,
-    /// Size of the task prompt in bytes.
-    pub prompt_user_bytes: u64,
 }
 
 /// How far a run has come, which is what its limits are held against.
@@ -51,99 +54,108 @@ pub struct Progress {
     pub consecutive_tool_errors: u32,
 }
 
-/// The running count of one run.
+/// The running record of one run.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunTally {
     setup: RunSetup,
-    usage: Usage,
-    finish_reasons: Vec<FinishReason>,
-    provider_retries: u64,
-    provider_latency_total_ms: u64,
-    provider_latency_max_ms: u64,
-    tool_calls: u64,
-    tool_calls_errors: u64,
-    tool_calls_unknown: u64,
-    tool_latency_total_ms: u64,
-    tool_input_bytes: u64,
-    tool_output_bytes: u64,
-    per_tool: BTreeMap<ToolName, ToolStats>,
-    consecutive_tool_errors: u32,
+    transcript: Transcript,
+    /// What the user has supplied to the next turn: the task prompt until the
+    /// first turn takes it, and nothing after that.
+    input: Vec<UserContent>,
+    /// Failed attempts of the provider call in progress.
+    failed_attempts: u32,
+    failed_latency_total_ms: u64,
+    failed_latency_max_ms: u64,
 }
 
 impl RunTally {
-    /// The tally of a run that has done nothing yet.
+    /// The record of a run that has done nothing yet. `prompt` becomes the
+    /// input of the first turn.
     #[must_use]
-    pub const fn start(setup: RunSetup) -> Self {
+    pub fn start(setup: RunSetup, system: String, prompt: String) -> Self {
         Self {
             setup,
-            usage: Usage::from_inclusive(0, 0, 0, 0),
-            finish_reasons: Vec::new(),
-            provider_retries: 0,
-            provider_latency_total_ms: 0,
-            provider_latency_max_ms: 0,
-            tool_calls: 0,
-            tool_calls_errors: 0,
-            tool_calls_unknown: 0,
-            tool_latency_total_ms: 0,
-            tool_input_bytes: 0,
-            tool_output_bytes: 0,
-            per_tool: BTreeMap::new(),
-            consecutive_tool_errors: 0,
+            transcript: Transcript::new(system),
+            input: vec![UserContent::Text(prompt)],
+            failed_attempts: 0,
+            failed_latency_total_ms: 0,
+            failed_latency_max_ms: 0,
         }
     }
 
-    /// Records a provider call attempt that returned `completion` after `latency`.
-    pub fn completion(&mut self, completion: &Completion, latency: Duration) {
-        self.usage += completion.usage;
-        self.finish_reasons.push(completion.finish.clone());
-        self.provider_latency(latency);
+    /// The conversation so far.
+    #[must_use]
+    pub const fn transcript(&self) -> &Transcript {
+        &self.transcript
+    }
+
+    /// The flat form the next provider call sends. Before each turn's
+    /// response comes one message from the user, which holds the results of
+    /// the tool calls of the turn before, in call order, and then the turn's
+    /// input; the last message is the one the next turn will answer. Blocks
+    /// are rendered as they're stored and in order, which a provider that
+    /// verifies thinking blocks requires.
+    #[must_use]
+    pub fn messages(&self) -> Vec<Message<'_>> {
+        self.transcript.messages(&self.input)
     }
 
     /// Records a provider call attempt that failed after `latency`.
     pub fn failed_attempt(&mut self, latency: Duration) {
-        self.provider_latency(latency);
-    }
-
-    /// Records that a provider call is being attempted again. A failed attempt
-    /// that nothing follows isn't a retry.
-    pub const fn retry(&mut self) {
-        self.provider_retries += 1;
-    }
-
-    /// Records an executed tool call. The intercepted `task_complete` call
-    /// isn't one.
-    ///
-    /// A name the run didn't offer counts in the totals and as an unknown
-    /// call, and gets no per-tool entry: the model can call any name, and the
-    /// per-tool keys of the wide event must stay bounded by the config.
-    pub fn tool_call(
-        &mut self,
-        name: &ToolName,
-        is_error: bool,
-        latency: Duration,
-        input_bytes: u64,
-        output_bytes: u64,
-    ) {
         let latency_ms = whole_ms(latency);
-        let errors = u64::from(is_error);
-        self.tool_calls += 1;
-        self.tool_calls_errors += errors;
-        self.tool_latency_total_ms = self.tool_latency_total_ms.saturating_add(latency_ms);
-        self.tool_input_bytes = self.tool_input_bytes.saturating_add(input_bytes);
-        self.tool_output_bytes = self.tool_output_bytes.saturating_add(output_bytes);
-        self.consecutive_tool_errors = if is_error {
-            self.consecutive_tool_errors.saturating_add(1)
-        } else {
-            0
-        };
-        if self.setup.tools.contains(name) {
-            let stats = self.per_tool.entry(name.clone()).or_default();
-            stats.calls += 1;
-            stats.errors += errors;
-            stats.latency_ms = stats.latency_ms.saturating_add(latency_ms);
-        } else {
-            self.tool_calls_unknown += 1;
-        }
+        self.failed_attempts = self.failed_attempts.saturating_add(1);
+        self.failed_latency_total_ms = self.failed_latency_total_ms.saturating_add(latency_ms);
+        self.failed_latency_max_ms = self.failed_latency_max_ms.max(latency_ms);
+    }
+
+    /// Records the provider call attempt that returned `completion` as the
+    /// next turn, and returns it. The attempt started `started` into the run
+    /// and took `latency`; the turn's record counts it and the failed
+    /// attempts since the turn before. The turn's input is what was waiting
+    /// for it, which is the task prompt for the first turn.
+    ///
+    /// The turn's response is the completion's content without its text
+    /// blocks that are empty or only whitespace, and this is the one place
+    /// where the transcript differs from what the provider sent. Models emit
+    /// such blocks, typically just before a tool call, and Anthropic refuses
+    /// them when the response is replayed. They carry nothing, so refusing
+    /// the response instead would spend a retry on nothing. Everything reads
+    /// the response after the drop, so [`Transcript::final_text`] and every
+    /// size measured from [`RunTally::messages`] describe what's replayed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TranscriptError::UnansweredCalls`] when the turn before made
+    /// tool calls and [`RunTally::tool_calls`] never answered them, and
+    /// [`TranscriptError::NothingFromTheUser`] when it made none, so that
+    /// this response would follow that one directly. The loop makes no
+    /// provider call in either state, so it never sees them. The record is
+    /// unchanged.
+    pub fn completion(
+        &mut self,
+        completion: Completion,
+        started: Duration,
+        latency: Duration,
+    ) -> Result<&Turn, TranscriptError> {
+        let attempts = self.failed_attempts.saturating_add(1);
+        let turn =
+            self.transcript
+                .record(&mut self.input, completion, started, latency, attempts)?;
+        self.failed_attempts = 0;
+        Ok(turn)
+    }
+
+    /// Records what happened to the tool calls of the last turn. The
+    /// intercepted `task_complete` call isn't executed, so it has no outcome.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TranscriptError::OutcomesDontAnswerCalls`] unless `outcomes`
+    /// is empty or answers the tool calls of the last response, each once and
+    /// in call order. The loop builds one outcome for each call, in order, so
+    /// it never sees this.
+    pub fn tool_calls(&mut self, outcomes: Vec<ToolCallOutcome>) -> Result<(), TranscriptError> {
+        self.transcript.answer(outcomes)
     }
 
     /// How far the run has come, `elapsed` after it started.
@@ -152,81 +164,142 @@ impl RunTally {
         Progress {
             turns: self.turns(),
             elapsed,
-            usage: self.usage,
-            consecutive_tool_errors: self.consecutive_tool_errors,
+            usage: self.usage(),
+            consecutive_tool_errors: self.transcript.consecutive_tool_errors(),
         }
     }
 
-    /// Usage summed over every completion so far, which is what a run's cost
-    /// is priced from.
+    /// Usage summed over every turn so far, which is what a run's cost is
+    /// priced from.
     #[must_use]
-    pub const fn usage(&self) -> Usage {
-        self.usage
+    pub fn usage(&self) -> Usage {
+        self.transcript.usage()
     }
 
-    /// Closes the tally of a run that stopped with `stop`, `duration` after it
-    /// started.
+    /// Closes the record of a run that stopped with `stop`, `duration` after
+    /// it started.
+    ///
+    /// `structured` is the argument of a `task_complete` call in the last
+    /// response, and `error` the text of the error that ended the run, when
+    /// the loop has one. The outcome keeps only what the class of `stop`
+    /// allows ([`StopReason::class`]): `structured` when the run completed,
+    /// and an error when it failed, which is the reason's own message when
+    /// `error` is `None`. So the loop passes what it has at hand, and the
+    /// outcome is still one a run can have.
+    ///
+    /// A retry is an attempt made beyond the first of its call, so a call's
+    /// last failed attempt, which nothing followed, isn't one. A tool call to
+    /// a name the run didn't offer counts in the totals and as an unknown
+    /// call, and gets no per-tool entry: the model can call any name, and the
+    /// per-tool keys of the wide event must stay bounded by the config.
     #[must_use]
     pub fn finish(
         self,
-        run_id: RunId,
         stop: StopReason,
         duration: Duration,
-        result: RunResult,
+        structured: Option<serde_json::Value>,
         error: Option<String>,
         cost: Option<Cost>,
-    ) -> RunSummary {
-        let outcome = RunOutcome {
-            run_id,
-            stop_reason: stop,
-            turns: self.turns(),
-            usage: self.usage,
-            tool_calls: self.tool_calls,
-            duration_ms: whole_ms(duration),
-            result,
-            error,
-        };
-        RunSummary {
-            model: self.setup.model,
-            endpoint: self.setup.endpoint,
-            tools: self.setup.tools,
-            completion: self.setup.completion,
-            max_turns: self.setup.max_turns,
-            timeout_ms: whole_ms(self.setup.timeout),
-            request: self.setup.request,
-            prompt_system_bytes: self.setup.prompt_system_bytes,
-            prompt_user_bytes: self.setup.prompt_user_bytes,
-            provider_retries: self.provider_retries,
-            provider_latency_total_ms: self.provider_latency_total_ms,
-            provider_latency_max_ms: self.provider_latency_max_ms,
-            finish_reasons: self.finish_reasons,
-            tool_calls_errors: self.tool_calls_errors,
-            tool_calls_unknown: self.tool_calls_unknown,
-            tool_latency_total_ms: self.tool_latency_total_ms,
-            tool_input_bytes: self.tool_input_bytes,
-            tool_output_bytes: self.tool_output_bytes,
-            per_tool: self.per_tool,
+    ) -> FinishedRun {
+        let Self {
+            setup,
+            transcript,
+            failed_attempts,
+            failed_latency_total_ms,
+            failed_latency_max_ms,
+            input,
+        } = self;
+        let prompt = transcript.turns().first().map_or(&*input, Turn::input);
+        let tool_calls = transcript
+            .turns()
+            .iter()
+            .map(|turn| turn.tool_calls().len() as u64)
+            .sum();
+        let mut summary = RunSummary {
+            model: setup.model,
+            endpoint: setup.endpoint,
+            tools: setup.tools,
+            completion: setup.completion,
+            max_turns: setup.max_turns,
+            timeout_ms: whole_ms(setup.timeout),
+            request: setup.request,
+            prompt_system_bytes: transcript.system().len() as u64,
+            prompt_user_bytes: UserContent::bytes(prompt),
+            provider_retries: u64::from(failed_attempts.saturating_sub(1)),
+            provider_latency_total_ms: failed_latency_total_ms,
+            provider_latency_max_ms: failed_latency_max_ms,
+            finish_reasons: Vec::new(),
+            tool_calls_errors: 0,
+            tool_calls_unknown: 0,
+            tool_latency_total_ms: 0,
+            tool_input_bytes: 0,
+            tool_output_bytes: 0,
+            tool_calls_truncated: 0,
+            per_tool: BTreeMap::new(),
             cost,
-            outcome,
+            outcome: RunOutcome::closing(RawOutcome {
+                run_id: setup.run_id,
+                stop_reason: stop,
+                turns: turns(&transcript),
+                usage: transcript.usage(),
+                tool_calls,
+                duration_ms: whole_ms(duration),
+                result: RunResult {
+                    text: transcript.final_text(),
+                    structured,
+                },
+                error,
+            }),
+        };
+        for turn in transcript.turns() {
+            add_turn(&mut summary, turn);
+        }
+        FinishedRun {
+            summary,
+            transcript,
         }
     }
 
-    /// A run's turns are the model responses it received, so a run whose first
-    /// provider call failed took none.
     fn turns(&self) -> u32 {
-        u32::try_from(self.finish_reasons.len()).unwrap_or(u32::MAX)
-    }
-
-    fn provider_latency(&mut self, latency: Duration) {
-        let latency_ms = whole_ms(latency);
-        self.provider_latency_total_ms = self.provider_latency_total_ms.saturating_add(latency_ms);
-        self.provider_latency_max_ms = self.provider_latency_max_ms.max(latency_ms);
+        turns(&self.transcript)
     }
 }
 
-/// Whole milliseconds, truncated.
-fn whole_ms(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+/// A run's turns are the model responses it received, so a run whose first
+/// provider call failed took none.
+fn turns(transcript: &Transcript) -> u32 {
+    u32::try_from(transcript.turns().len()).unwrap_or(u32::MAX)
+}
+
+/// Adds what `turn` holds to the totals of `summary`.
+fn add_turn(summary: &mut RunSummary, turn: &Turn) {
+    let record = turn.record();
+    summary.provider_retries += u64::from(record.attempts.saturating_sub(1));
+    summary.provider_latency_total_ms = summary
+        .provider_latency_total_ms
+        .saturating_add(record.latency_ms);
+    summary.provider_latency_max_ms = summary.provider_latency_max_ms.max(record.latency_ms);
+    summary.finish_reasons.push(record.finish.clone());
+    for (call, outcome) in turn.tool_uses().zip(turn.tool_calls()) {
+        let errors = u64::from(outcome.status.is_error());
+        summary.tool_calls_errors += errors;
+        summary.tool_calls_truncated += u64::from(outcome.truncated_from_bytes.is_some());
+        summary.tool_latency_total_ms = summary
+            .tool_latency_total_ms
+            .saturating_add(outcome.latency_ms);
+        summary.tool_input_bytes = summary.tool_input_bytes.saturating_add(call.input_bytes());
+        summary.tool_output_bytes = summary
+            .tool_output_bytes
+            .saturating_add(outcome.output_bytes());
+        if summary.tools.contains(&call.name) {
+            let stats = summary.per_tool.entry(call.name.clone()).or_default();
+            stats.calls += 1;
+            stats.errors += errors;
+            stats.latency_ms = stats.latency_ms.saturating_add(outcome.latency_ms);
+        } else {
+            summary.tool_calls_unknown += 1;
+        }
+    }
 }
 
 #[cfg(test)]

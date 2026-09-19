@@ -25,7 +25,9 @@ pub struct StopPolicy {
     /// The elapsed time at which the run stops. Zero stops it before the first
     /// provider call.
     pub timeout: Duration,
-    /// The input plus output tokens at which the run stops; `None` is no budget.
+    /// The input plus output tokens, summed over every provider call, at which
+    /// the run stops; `None` is no budget. Context that's sent again is counted
+    /// again, as it's billed.
     pub max_total_tokens: Option<u64>,
     /// The run of consecutive tool error results at which the run stops. `0`
     /// acts as `1`: a run is never stopped for errors it hasn't had.

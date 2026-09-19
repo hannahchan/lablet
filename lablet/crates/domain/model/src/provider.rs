@@ -1,12 +1,13 @@
 //! What a run asks of a model provider and what a provider answers with.
 
+use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 use std::ops::{Add, AddAssign};
 
 use serde::{Deserialize, Serialize};
 
-use crate::conversation::{tool_uses, validate};
-use crate::{ContentBlock, MessageError, Role, ToolUse};
+use crate::ContentBlock;
+use crate::message::tool_uses;
 
 /// The provider families lablet has an adapter for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -214,18 +215,19 @@ impl From<FinishReason> for String {
     }
 }
 
-/// One successful provider call.
+/// One successful provider call: the response and what the provider said
+/// about it.
 ///
-/// It holds the content of the assistant message, not a message, because the
-/// role can only be the assistant's. Deserialisation validates the content and
-/// refuses a field it doesn't know, so a hand-written script that misspells
-/// one is an error. The fields are public, so an adapter checks the value it
-/// builds with [`Completion::validate`].
+/// A completion's tool calls have distinct ids, because an outcome couldn't
+/// otherwise say which call it answers. [`Completion::new`] and
+/// deserialisation both refuse a repeated id, and `content` isn't public, so
+/// no completion breaks the rule: an adapter reports the error as a malformed
+/// response. Deserialisation also refuses a field it doesn't know, so a
+/// hand-written script that misspells one is an error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "RawCompletion")]
 pub struct Completion {
-    /// The blocks of the assistant message the model produced.
-    pub content: Vec<ContentBlock>,
+    pub(crate) content: Vec<ContentBlock>,
     /// The tokens the call used.
     pub usage: Usage,
     /// Why the model stopped.
@@ -236,7 +238,7 @@ pub struct Completion {
     pub response_model: Option<String>,
 }
 
-/// What a completion is read from, so that reading one validates it.
+/// What a completion is read from, so that reading one checks it.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawCompletion {
@@ -249,36 +251,72 @@ struct RawCompletion {
 }
 
 impl TryFrom<RawCompletion> for Completion {
-    type Error = MessageError;
+    type Error = CompletionError;
 
-    fn try_from(raw: RawCompletion) -> Result<Self, MessageError> {
-        let completion = Self {
-            content: raw.content,
-            usage: raw.usage,
-            finish: raw.finish,
-            response_id: raw.response_id,
-            response_model: raw.response_model,
-        };
-        completion.validate()?;
-        Ok(completion)
+    fn try_from(raw: RawCompletion) -> Result<Self, CompletionError> {
+        Self::new(
+            raw.content,
+            raw.usage,
+            raw.finish,
+            raw.response_id,
+            raw.response_model,
+        )
     }
 }
 
+/// Why content can't be the response of a completion.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CompletionError {
+    /// Two tool-use blocks share an id, so an outcome couldn't say which it answers.
+    #[error("tool call id {id:?} is on more than one tool-use block of the response")]
+    DuplicateToolUse {
+        /// The repeated id.
+        id: String,
+    },
+}
+
 impl Completion {
-    /// Checks the content against the rules an assistant message is held to.
+    /// A completion whose response is `content`.
     ///
     /// # Errors
     ///
-    /// Returns what [`crate::Message::validate`] returns for an assistant
-    /// message of this content.
-    pub fn validate(&self) -> Result<(), MessageError> {
-        validate(Role::Assistant, &self.content)
+    /// Returns [`CompletionError::DuplicateToolUse`] for the first tool-use
+    /// block, in order, whose id an earlier one has.
+    pub fn new(
+        content: Vec<ContentBlock>,
+        usage: Usage,
+        finish: FinishReason,
+        response_id: Option<String>,
+        response_model: Option<String>,
+    ) -> Result<Self, CompletionError> {
+        distinct_tool_use_ids(&content)?;
+        Ok(Self {
+            content,
+            usage,
+            finish,
+            response_id,
+            response_model,
+        })
     }
 
-    /// The tool calls the response makes, in order.
-    pub fn tool_uses(&self) -> impl Iterator<Item = &ToolUse> {
-        tool_uses(&self.content)
+    /// The blocks of the response, in the order the provider sent them.
+    #[must_use]
+    pub fn content(&self) -> &[ContentBlock] {
+        &self.content
     }
+}
+
+/// Refuses content in which two tool-use blocks share an id.
+pub(crate) fn distinct_tool_use_ids(content: &[ContentBlock]) -> Result<(), CompletionError> {
+    let mut seen = BTreeSet::new();
+    for call in tool_uses(content) {
+        if !seen.insert(&call.id) {
+            return Err(CompletionError::DuplicateToolUse {
+                id: call.id.as_str().to_owned(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// An amount of money in US dollars.
@@ -305,8 +343,10 @@ impl Cost {
 pub struct RequestDefaults {
     /// The cap on output tokens for each call.
     pub max_tokens: u32,
-    /// The sampling temperature; `None` leaves the provider's default.
-    pub temperature: Option<f32>,
+    /// The sampling temperature; `None` leaves the provider's default. An
+    /// `f64` because that's what telemetry carries: an `f32` of 0.7 widens to
+    /// 0.699999988.
+    pub temperature: Option<f64>,
     /// How the model is asked to reason.
     pub thinking: Thinking,
     /// The reasoning effort, for providers that take a level.

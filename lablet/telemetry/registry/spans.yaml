@@ -156,9 +156,11 @@ spans:
         requirement_level:
           conditionally_required: If the tool is one the run offered to the model.
       - ref: error.type
-        brief: "The class of tool failure: `unknown`, `timeout`, or `failed`."
+        brief: >
+          How the call failed: `tool_error` when the tool ran and reported an error, `unknown`,
+          `timeout`, or `failed` when the executor did.
         requirement_level:
-          conditionally_required: If the tool executor failed.
+          conditionally_required: If the tool call returned an error result to the model.
       - ref: lablet.turn
         requirement_level: required
       - ref: lablet.tool.source
@@ -168,6 +170,11 @@ spans:
         requirement_level: required
       - ref: lablet.tool.output.bytes
         requirement_level: required
+      - ref: lablet.tool.output.truncated
+        requirement_level: required
+      - ref: lablet.tool.output.original_bytes
+        requirement_level:
+          conditionally_required: If the output cap cut the output short.
       - ref: lablet.tool.is_error
         requirement_level: required
       - ref: mcp.method.name

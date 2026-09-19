@@ -2,7 +2,7 @@
 //! example, shared by every crate that prints or reads an outcome, and the
 //! changelog gate watches it.
 
-use lablet_model::{RunId, RunOutcome, RunResult, StopReason, Usage};
+use lablet_model::{RunOutcome, StopReason, Usage};
 use serde_json::{Value, json};
 
 // Compiled in, so the test reads the same file whatever directory it runs from.
@@ -12,32 +12,33 @@ const FIXTURE: &str = include_str!(concat!(
 ));
 
 fn outcome() -> RunOutcome {
-    RunOutcome {
-        run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").unwrap(),
-        stop_reason: StopReason::Completed,
-        turns: 7,
-        usage: Usage {
+    serde_json::from_str(FIXTURE).unwrap()
+}
+
+#[test]
+fn the_fixture_deserialises_to_the_outcome_it_describes() {
+    let outcome = outcome();
+
+    assert_eq!(outcome.run_id.as_str(), "01K5F3Z8Q4X9T2M7B6W1R0VNEC");
+    assert_eq!(outcome.stop_reason(), StopReason::Completed);
+    assert_eq!(outcome.turns, 7);
+    assert_eq!(
+        outcome.usage,
+        Usage {
             input_tokens: 48_211,
             output_tokens: 1_840,
             cache_read_tokens: 39_104,
             cache_write_tokens: 6_144,
-        },
-        tool_calls: 5,
-        duration_ms: 12_345,
-        result: RunResult {
-            text: "The failing test is fixed.".to_owned(),
-            structured: Some(json!({ "passed": true, "files_changed": ["src/lib.rs"] })),
-        },
-        error: None,
-    }
-}
-
-#[test]
-fn the_fixture_deserialises_to_the_outcome_built_in_code() {
-    assert_eq!(
-        serde_json::from_str::<RunOutcome>(FIXTURE).unwrap(),
-        outcome()
+        }
     );
+    assert_eq!(outcome.tool_calls, 5);
+    assert_eq!(outcome.duration_ms, 12_345);
+    assert_eq!(outcome.result().text, "The failing test is fixed.");
+    assert_eq!(
+        outcome.result().structured,
+        Some(json!({ "passed": true, "files_changed": ["src/lib.rs"] }))
+    );
+    assert_eq!(outcome.error(), None);
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use super::*;
-use crate::{ToolCallId, ToolName};
+use crate::{ToolCallId, ToolName, ToolUse};
 
 const fn usage(input: u64, output: u64, cache_read: u64, cache_write: u64) -> Usage {
     Usage {
@@ -243,14 +243,14 @@ fn a_thinking_budget_of_zero_is_refused() {
 fn request_defaults_have_one_json_form() {
     let request = RequestDefaults {
         max_tokens: 4096,
-        temperature: Some(0.5),
+        temperature: Some(0.7),
         thinking: Thinking::Budget(NonZeroU32::new(1024).unwrap()),
         effort: Some(Effort::High),
         seed: Some(7),
     };
     let expected = json!({
         "max_tokens": 4096,
-        "temperature": 0.5,
+        "temperature": 0.7,
         "thinking": { "budget": 1024 },
         "effort": "high",
         "seed": 7,
@@ -288,13 +288,14 @@ fn a_completion_reads_from_the_form_a_script_would_hold() {
         "usage": { "input_tokens": 12, "output_tokens": 3 },
         "finish": "stop",
     });
-    let completion = Completion {
-        content: vec![ContentBlock::Text("done".to_owned())],
-        usage: usage(12, 3, 0, 0),
-        finish: FinishReason::EndTurn,
-        response_id: None,
-        response_model: None,
-    };
+    let completion = Completion::new(
+        vec![ContentBlock::Text("done".to_owned())],
+        usage(12, 3, 0, 0),
+        FinishReason::EndTurn,
+        None,
+        None,
+    )
+    .unwrap();
 
     assert_eq!(
         serde_json::from_value::<Completion>(script).unwrap(),
@@ -348,49 +349,63 @@ fn a_script_cannot_give_a_completion_a_role_or_a_misspelt_field() {
 }
 
 #[test]
-fn a_completion_is_held_to_the_rules_of_an_assistant_message() {
-    let valid = Completion {
-        content: vec![bash("a"), bash("b")],
-        usage: Usage::default(),
-        finish: FinishReason::ToolUse,
-        response_id: None,
-        response_model: None,
-    };
-    let repeated = Completion {
-        content: vec![bash("a"), bash("a")],
-        ..valid.clone()
-    };
+fn a_completion_whose_tool_calls_have_distinct_ids_holds_its_content_in_order() {
+    let content = vec![ContentBlock::Text("on it".to_owned()), bash("a"), bash("b")];
 
-    assert_eq!(valid.validate(), Ok(()));
-    assert_eq!(
-        repeated.validate(),
-        Err(MessageError::DuplicateToolUse { id: "a".to_owned() })
-    );
-    assert!(
-        serde_json::from_value::<Completion>(serde_json::to_value(&repeated).unwrap()).is_err()
-    );
-    let result = json!({
-        "content": [{ "tool_result": { "call_id": "a", "content": [] } }],
-        "finish": "end_turn",
-    });
-    assert!(serde_json::from_value::<Completion>(result).is_err());
+    let completion = Completion::new(
+        content.clone(),
+        usage(12, 3, 0, 0),
+        FinishReason::ToolUse,
+        Some("msg_1".to_owned()),
+        Some("model-2026".to_owned()),
+    )
+    .unwrap();
+
+    assert_eq!(completion.content(), content);
+    assert_eq!(completion.usage, usage(12, 3, 0, 0));
+    assert_eq!(completion.finish, FinishReason::ToolUse);
+    assert_eq!(completion.response_id.as_deref(), Some("msg_1"));
+    assert_eq!(completion.response_model.as_deref(), Some("model-2026"));
 }
 
 #[test]
-fn a_completions_tool_uses_are_its_calls_in_order() {
-    let completion = Completion {
-        content: vec![ContentBlock::Text("on it".to_owned()), bash("a"), bash("b")],
-        usage: Usage::default(),
-        finish: FinishReason::ToolUse,
-        response_id: None,
-        response_model: None,
-    };
+fn a_repeated_tool_use_id_is_refused_in_code_and_in_a_script() {
+    let repeated = Completion::new(
+        vec![bash("a"), bash("b"), bash("a")],
+        Usage::default(),
+        FinishReason::ToolUse,
+        None,
+        None,
+    );
+    let script = json!({
+        "content": [
+            { "tool_use": { "id": "a", "name": "bash", "input": {} } },
+            { "tool_use": { "id": "a", "name": "bash", "input": {} } },
+        ],
+        "finish": "tool_use",
+    });
 
-    let ids: Vec<&str> = completion
-        .tool_uses()
-        .map(|call| call.id.as_str())
-        .collect();
-    assert_eq!(ids, ["a", "b"]);
+    assert_eq!(
+        repeated,
+        Err(CompletionError::DuplicateToolUse { id: "a".to_owned() })
+    );
+    let error = serde_json::from_value::<Completion>(script).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains(r#"tool call id "a" is on more than one tool-use block"#),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_script_cannot_put_a_tool_result_in_a_completion() {
+    let script = json!({
+        "content": [{ "tool_result": { "call_id": "a", "content": [] } }],
+        "finish": "end_turn",
+    });
+
+    assert!(serde_json::from_value::<Completion>(script).is_err());
 }
 
 #[test]

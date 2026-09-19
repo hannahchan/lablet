@@ -2,18 +2,25 @@
 //! and the two halves of the wide event.
 //!
 //! A duration that reaches telemetry as a `*_ms` attribute is held as whole
-//! milliseconds in a `u64` field named `*_ms`. [`crate::RunTally`] converts
-//! as it records, so no observer rounds for itself and every observer reports
-//! the same number.
+//! milliseconds in a `u64` field named `*_ms`. The model converts as it
+//! records, so no observer rounds for itself and every observer reports the
+//! same number.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
     Cost, Endpoint, FinishReason, ModelRef, RequestDefaults, RunId, ToolName, Transcript, Usage,
 };
+
+/// Whole milliseconds, truncated. The one conversion from a `Duration` in the
+/// model, so every `*_ms` value is cut the same way.
+pub(crate) fn whole_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
 
 /// How a run decides that the model has finished.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -91,18 +98,67 @@ impl StopReason {
     }
 }
 
+/// What kind of ending a [`StopReason`] is, which decides what a
+/// [`RunOutcome`] may carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StopClass {
+    /// The model finished the task. Only this outcome may have a structured result.
+    Completed,
+    /// The run ended in an orderly way short of completing. No error comes with it.
+    Stopped,
+    /// An error ended the run, and the outcome always says which.
+    Failed,
+}
+
+impl StopReason {
+    /// The kind of ending this reason is.
+    #[must_use]
+    pub const fn class(self) -> StopClass {
+        match self {
+            Self::Completed => StopClass::Completed,
+            Self::EndedWithoutCompletion
+            | Self::MaxTurns
+            | Self::Timeout
+            | Self::MaxTotalTokens
+            | Self::OutputTruncated
+            | Self::Cancelled
+            | Self::Refused => StopClass::Stopped,
+            Self::ContextExhausted
+            | Self::RetriesExhausted
+            | Self::ToolErrorsExhausted
+            | Self::ProviderError => StopClass::Failed,
+        }
+    }
+
+    /// What a failed run reports when no error text came with the failure.
+    const fn failure_message(self) -> &'static str {
+        match self {
+            Self::ContextExhausted => "the response was cut short at the model's context window",
+            Self::ToolErrorsExhausted => "consecutive tool error results reached their cap",
+            _ => "a provider call failed",
+        }
+    }
+}
+
 display_as_str!(CompletionMode, StopReason);
 
 /// The outcome document of a run. Its serde form is a public contract, held
 /// by `lablet/tests/fixtures/outcome.json`.
+///
+/// What an outcome carries follows from the [`StopClass`] of its stop reason:
+/// `error` is a message exactly when the run failed, and `result.structured`
+/// is a value only when it completed. Those three fields are private for
+/// that reason. [`crate::RunTally::finish`] builds outcomes that way and
+/// reading one from its serde form refuses any other, so no `RunOutcome`
+/// holds a completed run with an error or a failed one without.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "RawOutcome")]
 pub struct RunOutcome {
     /// The run's id.
     pub run_id: RunId,
-    /// Why the run ended.
-    pub stop_reason: StopReason,
-    /// How many model responses the run received. A run whose first provider
-    /// call failed took none.
+    stop_reason: StopReason,
+    /// How many turns the transcript has, which is how many model responses
+    /// the run received. A run whose first provider call failed took none.
     pub turns: u32,
     /// Usage summed over every successful provider call. `input_tokens`
     /// includes the cached tokens; see [`Usage`].
@@ -111,16 +167,121 @@ pub struct RunOutcome {
     pub tool_calls: u64,
     /// Wall-clock duration of the run, in whole milliseconds.
     pub duration_ms: u64,
-    /// What the run produced.
-    pub result: RunResult,
-    /// The message of the error that ended the run, if one did.
-    pub error: Option<String>,
+    result: RunResult,
+    error: Option<String>,
+}
+
+/// What an outcome is read from, so that reading one holds it to the rules,
+/// and what the tally fills in to close a run.
+#[derive(Deserialize)]
+pub(crate) struct RawOutcome {
+    pub(crate) run_id: RunId,
+    pub(crate) stop_reason: StopReason,
+    pub(crate) turns: u32,
+    pub(crate) usage: Usage,
+    pub(crate) tool_calls: u64,
+    pub(crate) duration_ms: u64,
+    pub(crate) result: RunResult,
+    pub(crate) error: Option<String>,
+}
+
+/// Why an outcome document is one no run could have produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum OutcomeError {
+    /// An error came with a stop reason that isn't a failure.
+    #[error("a run that stopped with {stop_reason} didn't fail, so it has no error")]
+    ErrorWithoutFailure {
+        /// The stop reason of the document.
+        stop_reason: StopReason,
+    },
+    /// A failure came without its error.
+    #[error("a run that stopped with {stop_reason} failed, so it has an error")]
+    FailureWithoutError {
+        /// The stop reason of the document.
+        stop_reason: StopReason,
+    },
+    /// A structured result came with a run that didn't complete.
+    #[error(
+        "a run that stopped with {stop_reason} didn't complete, so it has no structured result"
+    )]
+    StructuredWithoutCompletion {
+        /// The stop reason of the document.
+        stop_reason: StopReason,
+    },
+}
+
+impl TryFrom<RawOutcome> for RunOutcome {
+    type Error = OutcomeError;
+
+    fn try_from(raw: RawOutcome) -> Result<Self, OutcomeError> {
+        let stop_reason = raw.stop_reason;
+        let class = stop_reason.class();
+        if raw.result.structured.is_some() && class != StopClass::Completed {
+            return Err(OutcomeError::StructuredWithoutCompletion { stop_reason });
+        }
+        match (class, &raw.error) {
+            (StopClass::Failed, None) => Err(OutcomeError::FailureWithoutError { stop_reason }),
+            (StopClass::Completed | StopClass::Stopped, Some(_)) => {
+                Err(OutcomeError::ErrorWithoutFailure { stop_reason })
+            }
+            (StopClass::Failed, Some(_)) | (StopClass::Completed | StopClass::Stopped, None) => {
+                Ok(Self::closing(raw))
+            }
+        }
+    }
+}
+
+impl RunOutcome {
+    /// The outcome of a run, keeping of `result.structured` and `error` what
+    /// the class of the stop reason allows, and giving a failure that came
+    /// without an error the reason's own message.
+    pub(crate) fn closing(raw: RawOutcome) -> Self {
+        let class = raw.stop_reason.class();
+        Self {
+            run_id: raw.run_id,
+            stop_reason: raw.stop_reason,
+            turns: raw.turns,
+            usage: raw.usage,
+            tool_calls: raw.tool_calls,
+            duration_ms: raw.duration_ms,
+            result: RunResult {
+                text: raw.result.text,
+                structured: raw
+                    .result
+                    .structured
+                    .filter(|_| class == StopClass::Completed),
+            },
+            error: (class == StopClass::Failed).then(|| {
+                raw.error
+                    .unwrap_or_else(|| raw.stop_reason.failure_message().to_owned())
+            }),
+        }
+    }
+
+    /// Why the run ended.
+    #[must_use]
+    pub const fn stop_reason(&self) -> StopReason {
+        self.stop_reason
+    }
+
+    /// What the run produced. `structured` is a value only when the run completed.
+    #[must_use]
+    pub const fn result(&self) -> &RunResult {
+        &self.result
+    }
+
+    /// The message of the error that ended the run: a message when the run
+    /// failed, `None` otherwise.
+    #[must_use]
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
 }
 
 /// What a run produced.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunResult {
-    /// The text of the last assistant message; empty when there is none.
+    /// The text of the last turn; empty when there is none.
     pub text: String,
     /// The `task_complete` argument when the run completed in explicit mode.
     /// Written as `null` otherwise, never left out.
@@ -168,8 +329,7 @@ pub struct ToolStats {
 ///
 /// The run totals that the outcome document carries (`usage`, `tool_calls`,
 /// `turns`, `duration_ms`, `stop_reason`, `error`) are read from `outcome` and
-/// aren't repeated here, and the number of provider calls is the length of
-/// `finish_reasons`, so no two fields can disagree.
+/// aren't repeated here, so no two fields can disagree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunSummary {
     /// The model the run called.
@@ -209,8 +369,10 @@ pub struct RunSummary {
     pub tool_latency_total_ms: u64,
     /// The summed size of every tool call's input, in bytes.
     pub tool_input_bytes: u64,
-    /// The summed size of every tool call's output, in bytes.
+    /// The summed size of every tool call's output as the model was sent it, in bytes.
     pub tool_output_bytes: u64,
+    /// How many tool calls had their output cut by the output cap.
+    pub tool_calls_truncated: u64,
     /// Each called tool's share, by tool name. The keys are among `tools`,
     /// whatever names the model called.
     pub per_tool: BTreeMap<ToolName, ToolStats>,
@@ -218,14 +380,6 @@ pub struct RunSummary {
     pub cost: Option<Cost>,
     /// The outcome document, which holds the run totals.
     pub outcome: RunOutcome,
-}
-
-impl RunSummary {
-    /// How many provider calls returned a completion.
-    #[must_use]
-    pub const fn provider_calls(&self) -> u64 {
-        self.finish_reasons.len() as u64
-    }
 }
 
 /// What a finished run hands back: everything measured, the outcome inside

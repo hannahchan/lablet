@@ -80,8 +80,6 @@ events:
         requirement_level:
           conditionally_required: If `run.transcript_path` is set.
       # Provider
-      - ref: lablet.provider.calls
-        requirement_level: required
       - ref: lablet.provider.retries
         requirement_level: required
       - ref: lablet.provider.latency_ms.total
@@ -110,6 +108,8 @@ events:
       - ref: lablet.tool_calls.errors
         requirement_level: required
       - ref: lablet.tool_calls.unknown
+        requirement_level: required
+      - ref: lablet.tool_calls.truncated
         requirement_level: required
       - ref: lablet.tool_calls.latency_ms.total
         requirement_level: required

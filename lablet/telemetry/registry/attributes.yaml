@@ -209,14 +209,6 @@ attributes:
     examples: [0.0421]
 
   # Provider totals
-  - key: lablet.provider.calls
-    type: int
-    stability: development
-    brief: Number of provider calls that returned a completion.
-    note: >
-      Justification: the conventions count inference calls in a metric; the wide event needs the
-      count as a column on the run's one row.
-    examples: [7]
   - key: lablet.provider.retries
     type: int
     stability: development
@@ -264,6 +256,14 @@ attributes:
     note: >
       Justification: the model can call any name, so these calls get no per-tool attribute and
       would otherwise be invisible in the per-tool breakdown; no convention counts them.
+    examples: [0]
+  - key: lablet.tool_calls.truncated
+    type: int
+    stability: development
+    brief: Number of tool calls whose output the output cap cut short.
+    note: >
+      Justification: no convention says that a tool's output was cut before the model saw it, per
+      call or per run; the count tells a run whose tools outgrew the cap from one they fitted.
     examples: [0]
   - key: lablet.tool_calls.latency_ms.total
     type: int
@@ -388,11 +388,27 @@ attributes:
   - key: lablet.tool.output.bytes
     type: int
     stability: development
-    brief: Size of a tool call's output in bytes.
+    brief: Size in bytes of a tool call's output as the model was sent it, after the output cap.
     note: >
       Justification: `gen_ai.tool.call.result` is opt-in content; the size is needed when content
       isn't captured, and no convention carries it.
     examples: [20480]
+  - key: lablet.tool.output.truncated
+    type: boolean
+    stability: development
+    brief: Whether the output cap cut the tool call's output short.
+    note: >
+      Justification: no convention says that a tool's output was cut before the model saw it, and
+      `lablet.tool.output.bytes` alone can't tell a cut output from one that fitted.
+    examples: [false]
+  - key: lablet.tool.output.original_bytes
+    type: int
+    stability: development
+    brief: Size in bytes of a tool call's output before the output cap cut it.
+    note: >
+      Justification: once an output is cut, `lablet.tool.output.bytes` is the size sent, and no
+      convention carries the size the tool produced.
+    examples: [5242880]
   - key: lablet.tool.is_error
     type: boolean
     stability: development

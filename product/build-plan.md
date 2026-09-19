@@ -28,17 +28,17 @@ Acceptance: `cargo xtask weaver check` passes. Regeneration is a no-op on a clea
 
 ## Phase 2: Domain
 
-- `lablet-model`: every type in spec §3 with serde derives (including `RequestDefaults`, `Endpoint`, `TraceContext`, `McpCallMeta`), `Usage: Add` and `total()`, display impls for `StopReason` and `FinishReason`, constructors and deserialisation that validate (non-empty tool names, unique block ids), and `RunTally`, which accumulates a run into its `RunSummary`. The transcript shape must map losslessly onto an ATIF v1.8 trajectory (one turn is one step, tool results joined by call id) so the phase 10 export needs no model change.
+- `lablet-model`: every type in spec §3 with serde derives (including `RequestDefaults` and `Endpoint`), `Usage: Add` and `total()`, display impls for `StopReason` and `FinishReason`, constructors and deserialisation that hold each type to its rules (non-empty tool names, distinct tool call ids, a transcript made of turns whose outcomes answer their calls, an outcome whose error and structured result follow from its stop reason), the tool output cap, and `RunTally`, which keeps the transcript and turns a run into its `FinishedRun`. The transcript shape must map losslessly onto an ATIF v1.8 trajectory (one turn is one step, tool call outcomes joined by call id) so the phase 10 export needs no model change.
 - `lablet-policy`: `StopPolicy` with one method for each of the three stop points (`before_call`, `after_response`, `after_tools`) and `allows_wait` for a backoff that would reach the timeout, `RetryPolicy::delay`, `Pricing::cost`.
 
 Acceptance: unit tests cover each of the nine stop reasons the policy decides at the stop point that owns it (including token budget, truncated output, and refusal; `cancelled`, `retries_exhausted`, `provider_error`, and `context_exhausted` for a rejected request belong to the loop and are held by phase 3's scenarios), each completion mode, backoff growth, cap, and exhaustion, and cost arithmetic. Coverage and mutation floors met. No async code and no serde beyond derives in either crate.
 
 ## Phase 3: The loop
 
-- `lablet-run`: ports, errors, `RunEvent`, the `RunSummary` built through the model's `RunTally`, `ToolSet` with the `task_complete` spec, `RunService` with the three-point stop evaluation, `task_complete` interception, and the trace-context handoff from observer to `ToolCall`.
+- `lablet-run`: ports, errors, the port data types `TraceContext`, `McpCallMeta`, and `NetworkTransport`, `RunEvent`, the `FinishedRun` built through the model's `RunTally`, the tool output cap applied to every tool call, `ToolSet` with the `task_complete` spec, `RunService` with the three-point stop evaluation, `task_complete` interception, and the trace-context handoff from observer to `ToolCall`.
 - Hand-written fakes for every port, including a fake clock, in the crate's tests.
 
-Acceptance: end-to-end tests with fakes prove natural and explicit completion, every stop reason, retry with backoff via the fake clock, consecutive tool error counting and reset, allow and deny filtering, duplicate tool name rejection, and that content fields are `None` when capture is off. The event stream for a scripted run is asserted exactly, and the `RunSummary` on `RunFinished` matches the per-step events it summarises. Scenarios L1 to L9, E1 to E8, E10, and C8 pass.
+Acceptance: end-to-end tests with fakes prove natural and explicit completion, every stop reason, retry with backoff via the fake clock, consecutive tool error counting and reset, allow and deny filtering, duplicate tool name rejection, and that content fields are `None` when capture is off. The event stream for a scripted run is asserted exactly, and the `RunSummary` on `RunFinished` matches the per-step events it summarises. Scenarios L1 to L10, E1 to E8, E10, T10, and C8 pass.
 
 ## Phase 4: Library and first traced run
 
@@ -78,11 +78,11 @@ Acceptance: scenarios P1, P2, and P6 pass in CI against wiremock. Manual: `lable
 
 ## Phase 8: MCP
 
-- `lablet-test-mcp-server` (echo, sleep, exit-after-N, `--hang-startup`).
+- `lablet-test-mcp-server` (echo, sleep, exit-after-N, an image tool that returns a text item and an image item, a structured tool that returns `structuredContent` beside its text, `--hang-startup`).
 - `tools-mcp` over `rmcp`, stdio and streamable HTTP, collision rejection and `prefix_tools`, startup timeout, stderr forwarding, dead-server behaviour, lifetime tied to the `Lablet`, trace context in `params._meta`, and the `mcp.*` attributes reported to the observer.
 - `tools-mcp` added to the `ToolExecutor` conformance matrix.
 
-Acceptance: scenarios T1, T3, T5, T6, T7, and T8 pass in CI against the test server. Manual: a run using a public MCP server over stdio completes, its tool spans carry the `mcp.*` attributes, and removing a tool via `tools.deny` changes the `RunStarted` tool list and nothing else.
+Acceptance: scenarios T1, T3, T5, T6, T7, T8, and T9 pass in CI against the test server. Manual: a run using a public MCP server over stdio completes, its tool spans carry the `mcp.*` attributes, and removing a tool via `tools.deny` changes the `RunStarted` tool list and nothing else.
 
 ## Phase 9: Second provider
 

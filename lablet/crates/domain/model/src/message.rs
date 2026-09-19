@@ -1,0 +1,183 @@
+//! The content a user supplies, a model produces, and a tool returns, and the
+//! flat message form a provider call sends.
+
+use serde::{Deserialize, Serialize};
+
+use crate::{ProviderKind, ToolCallId, ToolName};
+
+/// One piece of what the user supplies to a turn. It's text; the type is an
+/// enum so that another kind of content can arrive without changing the serde
+/// form, and so that a turn's input can hold nothing only a model produces.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UserContent {
+    /// Text input, such as the task prompt.
+    Text(String),
+}
+
+impl UserContent {
+    /// The summed byte length of the text of `content`.
+    pub(crate) fn bytes(content: &[Self]) -> u64 {
+        content
+            .iter()
+            .map(|Self::Text(text)| text.len() as u64)
+            .fold(0, u64::saturating_add)
+    }
+}
+
+/// One block of a model response.
+///
+/// A tool result isn't one: results are [`crate::ToolCallOutcome`]s of a turn
+/// and reach a provider in a [`Message::User`], so no response can hold one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentBlock {
+    /// Plain text.
+    Text(String),
+    /// Model reasoning, replayed unchanged because the provider verifies it.
+    Thinking {
+        /// The reasoning text; empty when the provider withholds it.
+        text: String,
+        /// The provider's signature over the block; `None` for a provider that signs nothing.
+        signature: Option<String>,
+    },
+    /// Reasoning the provider returned encrypted, replayed unchanged.
+    RedactedThinking {
+        /// The encrypted payload.
+        data: String,
+    },
+    /// The model's request to call a tool.
+    ToolUse(ToolUse),
+    /// Any other provider-specific block, replayed unchanged to that provider.
+    Opaque {
+        /// The provider that understands the payload.
+        provider: ProviderKind,
+        /// The block as the provider sent it.
+        payload: serde_json::Value,
+    },
+}
+
+/// The model's request to call a tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolUse {
+    /// The call's id, which its outcome answers to.
+    pub id: ToolCallId,
+    /// The tool to call.
+    pub name: ToolName,
+    /// The arguments, as the JSON the model produced.
+    pub input: serde_json::Value,
+}
+
+impl ToolUse {
+    /// The size of the call's input: the byte length of `input` as compact JSON.
+    #[must_use]
+    pub fn input_bytes(&self) -> u64 {
+        self.input.to_string().len() as u64
+    }
+}
+
+/// One piece of what a tool returned. Tool results are text; the type is an
+/// enum so that another kind of content can arrive without changing the serde
+/// form.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolResultContent {
+    /// Text output.
+    Text(String),
+}
+
+impl ToolResultContent {
+    /// The text that stands in for content a tool returned and lablet doesn't
+    /// carry, such as an image: `[image omitted: image/png, 48213 bytes]`.
+    /// Every executor words it here, so the model and a reader of transcripts
+    /// see one form.
+    #[must_use]
+    pub fn omitted(kind: &str, mime_type: &str, bytes: u64) -> Self {
+        Self::Text(format!("[{kind} omitted: {mime_type}, {bytes} bytes]"))
+    }
+
+    /// The line that ends content the output cap cut short:
+    /// `[truncated: the first 100000 of 5242880 bytes]`. Worded here for the
+    /// same reason as [`ToolResultContent::omitted`].
+    fn truncated(kept: u64, original: u64) -> Self {
+        Self::Text(format!("[truncated: the first {kept} of {original} bytes]"))
+    }
+
+    /// The summed byte length of the text of `content`.
+    pub(crate) fn bytes(content: &[Self]) -> u64 {
+        content
+            .iter()
+            .map(|Self::Text(text)| text.len() as u64)
+            .fold(0, u64::saturating_add)
+    }
+
+    /// `content` cut down to `max_bytes` of text, and its size before the cut;
+    /// unchanged, with `None`, when it was within the budget.
+    ///
+    /// Text is kept from the start and cut at a character boundary, so up to
+    /// three bytes fewer than the budget may be kept. One
+    /// [`ToolResultContent::truncated`] line follows it and isn't counted
+    /// against the budget.
+    pub(crate) fn capped(mut content: Vec<Self>, max_bytes: u64) -> (Vec<Self>, Option<u64>) {
+        let original = Self::bytes(&content);
+        if original <= max_bytes {
+            return (content, None);
+        }
+        let mut room = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+        content.retain_mut(|Self::Text(text)| {
+            text.truncate(text.floor_char_boundary(room));
+            room -= text.len();
+            !text.is_empty()
+        });
+        let kept = Self::bytes(&content);
+        content.push(Self::truncated(kept, original));
+        (content, Some(original))
+    }
+}
+
+/// One message of the flat form a provider call sends, borrowed from the
+/// [`crate::Transcript`] that renders it.
+///
+/// The variant is the role, so an adapter maps each to its own wire form and
+/// no message can hold a block its role may not send. Serialising one gives
+/// the size the loop measures as request bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Message<'a> {
+    /// From the user, before a turn's response: the results of the tool calls
+    /// of the turn before, in call order, then the turn's input. At least one
+    /// of the two isn't empty. Anthropic takes both as the blocks of one user
+    /// message, results first; an OpenAI-compatible server takes one `tool`
+    /// message for each result and then a user message for the input.
+    User {
+        /// The results of the turn before's tool calls.
+        tool_results: Vec<ToolResult<'a>>,
+        /// What the user supplied to the turn.
+        input: &'a [UserContent],
+    },
+    /// A model response, from the assistant.
+    Assistant(&'a [ContentBlock]),
+}
+
+/// What a tool call returned, as the model is sent it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ToolResult<'a> {
+    /// The id of the [`ToolUse`] this answers.
+    pub call_id: &'a ToolCallId,
+    /// What the model is shown.
+    pub content: &'a [ToolResultContent],
+    /// Whether the call failed, which is whether its status is anything but `ok`.
+    pub is_error: bool,
+}
+
+/// The tool calls among `content`, in order.
+pub(crate) fn tool_uses(content: &[ContentBlock]) -> impl Iterator<Item = &ToolUse> {
+    content.iter().filter_map(|block| match block {
+        ContentBlock::ToolUse(tool_use) => Some(tool_use),
+        _ => None,
+    })
+}
+
+#[cfg(test)]
+mod tests;

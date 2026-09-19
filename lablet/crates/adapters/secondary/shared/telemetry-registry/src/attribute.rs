@@ -108,9 +108,6 @@ pub const LABLET_PROMPT_SYSTEM_BYTES: &str = "lablet.prompt.system_bytes";
 /// Size of the task prompt in bytes.
 pub const LABLET_PROMPT_USER_BYTES: &str = "lablet.prompt.user_bytes";
 
-/// Number of provider calls that returned a completion.
-pub const LABLET_PROVIDER_CALLS: &str = "lablet.provider.calls";
-
 /// Latency of the slowest provider call attempt, in milliseconds.
 pub const LABLET_PROVIDER_LATENCY_MS_MAX: &str = "lablet.provider.latency_ms.max";
 
@@ -192,8 +189,14 @@ pub const LABLET_TOOL_IS_ERROR: &str = "lablet.tool.is_error";
 /// A template: the emitted key is this prefix, a dot, and `<key>`.
 pub const LABLET_TOOL_LATENCY_MS: &str = "lablet.tool.latency_ms";
 
-/// Size of a tool call's output in bytes.
+/// Size in bytes of a tool call's output as the model was sent it, after the output cap.
 pub const LABLET_TOOL_OUTPUT_BYTES: &str = "lablet.tool.output.bytes";
+
+/// Size in bytes of a tool call's output before the output cap cut it.
+pub const LABLET_TOOL_OUTPUT_ORIGINAL_BYTES: &str = "lablet.tool.output.original_bytes";
+
+/// Whether the output cap cut the tool call's output short.
+pub const LABLET_TOOL_OUTPUT_TRUNCATED: &str = "lablet.tool.output.truncated";
 
 /// Where a tool comes from.
 pub const LABLET_TOOL_SOURCE: &str = "lablet.tool.source";
@@ -212,6 +215,9 @@ pub const LABLET_TOOL_CALLS_OUTPUT_BYTES_TOTAL: &str = "lablet.tool_calls.output
 
 /// Number of tool calls executed. The intercepted `task_complete` call isn't one.
 pub const LABLET_TOOL_CALLS_TOTAL: &str = "lablet.tool_calls.total";
+
+/// Number of tool calls whose output the output cap cut short.
+pub const LABLET_TOOL_CALLS_TRUNCATED: &str = "lablet.tool_calls.truncated";
 
 /// Number of tool calls that named a tool the run didn't offer.
 pub const LABLET_TOOL_CALLS_UNKNOWN: &str = "lablet.tool_calls.unknown";

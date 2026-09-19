@@ -1,7 +1,11 @@
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::*;
-use crate::{ToolName, ToolResultContent, ToolUse};
+use crate::{ProviderKind, ToolName, ToolResultContent, ToolSource};
+
+const fn ms(millis: u64) -> Duration {
+    Duration::from_millis(millis)
+}
 
 fn id(value: &str) -> ToolCallId {
     ToolCallId::new(value).unwrap()
@@ -11,297 +15,735 @@ fn text(text: &str) -> ContentBlock {
     ContentBlock::Text(text.to_owned())
 }
 
-fn tool_use(call_id: &str, tool: &str) -> ContentBlock {
-    ContentBlock::ToolUse(ToolUse {
+fn call(call_id: &str, tool: &str) -> ToolUse {
+    ToolUse {
         id: id(call_id),
         name: ToolName::new(tool).unwrap(),
         input: json!({}),
-    })
-}
-
-fn output(call_id: &str, output: &str) -> ToolResult {
-    ToolResult {
-        call_id: id(call_id),
-        content: vec![ToolResultContent::Text(output.to_owned())],
-        is_error: false,
     }
 }
 
-fn tool_result(call_id: &str, text: &str) -> ContentBlock {
-    ContentBlock::ToolResult(output(call_id, text))
+fn tool_use(call_id: &str, tool: &str) -> ContentBlock {
+    ContentBlock::ToolUse(call(call_id, tool))
 }
 
-fn record(input: u64, output: u64, cache_read: u64) -> TurnRecord {
-    TurnRecord {
-        usage: Usage::from_inclusive(input, output, cache_read, 0),
-        finish: FinishReason::EndTurn,
-        response_id: Some("msg_1".to_owned()),
-        response_model: Some("model-2026".to_owned()),
-    }
-}
-
-/// The completion that `record` with the same counts is the record of.
-fn completion(content: Vec<ContentBlock>, input: u64, output: u64, cache_read: u64) -> Completion {
-    let record = record(input, output, cache_read);
-    Completion {
+fn completion(content: Vec<ContentBlock>, input: u64, output: u64) -> Completion {
+    Completion::new(
         content,
-        usage: record.usage,
-        finish: record.finish,
-        response_id: record.response_id,
-        response_model: record.response_model,
-    }
+        Usage::from_inclusive(input, output, 0, 0),
+        FinishReason::EndTurn,
+        Some("msg_1".to_owned()),
+        Some("model-2026".to_owned()),
+    )
+    .unwrap()
 }
 
-/// A prompt, a turn with two tool calls whose results come back in the
-/// opposite order, and a final turn.
+fn says(words: &str) -> Completion {
+    completion(vec![text(words)], 1, 1)
+}
+
+fn calls(ids: &[&str]) -> Completion {
+    completion(ids.iter().map(|id| tool_use(id, "bash")).collect(), 1, 1)
+}
+
+fn outcome(call_id: &str, status: ToolCallStatus, output: &str) -> ToolCallOutcome {
+    ToolCallOutcome::measured(
+        id(call_id),
+        Some(ToolSource::Builtin),
+        status,
+        vec![ToolResultContent::Text(output.to_owned())],
+        None,
+        ms(900),
+        ms(30),
+    )
+}
+
+fn ok(call_id: &str, output: &str) -> ToolCallOutcome {
+    outcome(call_id, ToolCallStatus::Ok, output)
+}
+
+fn transcript() -> Transcript {
+    Transcript::new("You fix tests.".to_owned())
+}
+
+fn said(words: &str) -> Vec<UserContent> {
+    vec![UserContent::Text(words.to_owned())]
+}
+
+fn prompt() -> Vec<UserContent> {
+    said("Fix the failing test.")
+}
+
+/// Records `completion` as the next turn, with `input` as its input.
+fn turn(
+    transcript: &mut Transcript,
+    mut input: Vec<UserContent>,
+    completion: Completion,
+) -> Result<Turn, TranscriptError> {
+    transcript
+        .record(&mut input, completion, ms(0), ms(0), 1)
+        .cloned()
+}
+
+/// A turn with two tool calls and their outcomes, and a final turn.
 fn two_calls_in_one_turn() -> Transcript {
-    let mut transcript = Transcript::new("You fix tests.".to_owned());
-    transcript.push_user(vec![text("Fix the failing test.")]);
-    transcript.push_assistant(completion(
-        vec![
-            text("Looking."),
-            tool_use("call_a", "read_file"),
-            tool_use("call_b", "bash"),
-        ],
-        100,
-        20,
-        0,
-    ));
-    transcript.push_user(vec![
-        tool_result("call_b", "1 failed"),
-        tool_result("call_a", "fn main() {}"),
-    ]);
-    transcript.push_assistant(completion(vec![text("Fixed.")], 180, 5, 100));
+    let mut transcript = transcript();
+    let looking = vec![
+        text("Looking."),
+        tool_use("call_a", "read_file"),
+        tool_use("call_b", "bash"),
+    ];
+    turn(&mut transcript, prompt(), completion(looking, 100, 20)).unwrap();
+    transcript
+        .answer(vec![
+            ok("call_a", "fn main() {}"),
+            outcome("call_b", ToolCallStatus::ToolError, "1 failed"),
+        ])
+        .unwrap();
+    turn(
+        &mut transcript,
+        Vec::new(),
+        completion(vec![text("Fixed.")], 180, 5),
+    )
+    .unwrap();
     transcript
 }
 
-#[test]
-fn a_new_transcript_holds_the_system_prompt_and_nothing_else() {
-    let transcript = Transcript::new("You fix tests.".to_owned());
+fn strings(ids: &[&str]) -> Vec<String> {
+    ids.iter().map(|&id| id.to_owned()).collect()
+}
 
-    assert_eq!(transcript.system, "You fix tests.");
-    assert!(transcript.messages.is_empty());
-    assert!(transcript.turns.is_empty());
+#[test]
+fn a_new_transcript_holds_the_system_prompt_and_no_turns() {
+    let transcript = transcript();
+
+    assert_eq!(transcript.system(), "You fix tests.");
     assert!(transcript.turns().is_empty());
     assert_eq!(transcript.final_text(), "");
+    assert_eq!(transcript.messages(&[]), []);
 }
 
 #[test]
-fn pushing_sets_the_role_and_keeps_one_record_for_each_assistant_message() {
-    let transcript = two_calls_in_one_turn();
+fn the_first_request_is_the_input_that_waits_for_the_first_turn() {
+    let prompt = prompt();
 
-    let roles: Vec<Role> = transcript
-        .messages
-        .iter()
-        .map(|message| message.role)
-        .collect();
     assert_eq!(
-        roles,
-        [Role::User, Role::Assistant, Role::User, Role::Assistant]
+        transcript().messages(&prompt),
+        [Message::User {
+            tool_results: Vec::new(),
+            input: &prompt,
+        }]
     );
-    assert_eq!(transcript.turns, [record(100, 20, 0), record(180, 5, 100)]);
-    assert!(transcript.messages.iter().all(|m| m.validate().is_ok()));
 }
 
 #[test]
-fn each_result_of_a_turn_with_two_tool_calls_pairs_with_its_call_by_id() {
-    let transcript = two_calls_in_one_turn();
-    let turns = transcript.turns();
-    let turn = turns[0];
+fn a_completion_becomes_a_turn_that_takes_the_input_and_records_the_rest_with_the_timing() {
+    let mut transcript = transcript();
+    let mut input = prompt();
 
-    let pairs: Vec<(&str, &str, Option<&ToolResult>)> = turn
-        .message
-        .tool_uses()
-        .map(|call| {
-            (
-                call.id.as_str(),
-                call.name.as_str(),
-                turn.result_of(&call.id),
-            )
-        })
-        .collect();
+    let turn = transcript
+        .record(
+            &mut input,
+            completion(vec![text("Hello.")], 12, 3),
+            Duration::from_micros(1_500_999),
+            Duration::from_micros(42_999),
+            3,
+        )
+        .unwrap()
+        .clone();
+
+    assert!(input.is_empty());
+    assert_eq!(turn.input(), prompt());
+    assert_eq!(turn.response(), [text("Hello.")]);
+    assert_eq!(
+        turn.record(),
+        &TurnRecord {
+            usage: Usage::from_inclusive(12, 3, 0, 0),
+            finish: FinishReason::EndTurn,
+            response_id: Some("msg_1".to_owned()),
+            response_model: Some("model-2026".to_owned()),
+            started_ms: 1_500,
+            latency_ms: 42,
+            attempts: 3,
+        }
+    );
+    assert!(turn.tool_calls().is_empty());
+    assert_eq!(transcript.turns(), [turn]);
+}
+
+#[test]
+fn text_blocks_that_are_empty_or_only_whitespace_are_dropped_and_nothing_else_is() {
+    let thinking = ContentBlock::Thinking {
+        text: String::new(),
+        signature: Some("sig".to_owned()),
+    };
+    let sent = vec![
+        text(""),
+        thinking.clone(),
+        text(" \n\t"),
+        text("Done. "),
+        tool_use("call_a", "bash"),
+        text(""),
+    ];
+    let kept = vec![thinking, text("Done. "), tool_use("call_a", "bash")];
+    let mut transcript = transcript();
+    let mut without_them = transcript.clone();
+
+    turn(&mut transcript, prompt(), completion(sent, 1, 1)).unwrap();
+    turn(&mut without_them, prompt(), completion(kept.clone(), 1, 1)).unwrap();
+
+    // Equal transcripts give the same final text and the same size for every
+    // message, so nothing measured after the drop can tell the two apart.
+    assert_eq!(transcript, without_them);
+    assert_eq!(transcript.turns()[0].response(), kept);
+    assert_eq!(transcript.final_text(), "Done. ");
+    assert_eq!(
+        serde_json::to_string(&transcript.messages(&[])).unwrap(),
+        serde_json::to_string(&without_them.messages(&[])).unwrap()
+    );
+}
+
+#[test]
+fn each_response_follows_one_user_message_of_the_results_before_it_and_then_its_input() {
+    let mut transcript = two_calls_in_one_turn();
+    turn(&mut transcript, said("And the docs?"), calls(&["call_c"])).unwrap();
+    transcript.answer(vec![ok("call_c", "updated")]).unwrap();
+    let (call_a, call_b, call_c) = (id("call_a"), id("call_b"), id("call_c"));
+    let first = [ToolResultContent::Text("fn main() {}".to_owned())];
+    let second = [ToolResultContent::Text("1 failed".to_owned())];
+    let third = [ToolResultContent::Text("updated".to_owned())];
+    let (prompt, docs, thanks) = (prompt(), said("And the docs?"), said("Thanks."));
+    let result = |call_id, content, is_error| ToolResult {
+        call_id,
+        content,
+        is_error,
+    };
 
     assert_eq!(
-        pairs,
+        transcript.messages(&thanks),
         [
-            (
-                "call_a",
-                "read_file",
-                Some(&output("call_a", "fn main() {}"))
-            ),
-            ("call_b", "bash", Some(&output("call_b", "1 failed"))),
+            Message::User {
+                tool_results: Vec::new(),
+                input: &prompt,
+            },
+            Message::Assistant(transcript.turns()[0].response()),
+            Message::User {
+                tool_results: vec![
+                    result(&call_a, &first, false),
+                    result(&call_b, &second, true)
+                ],
+                input: &[],
+            },
+            Message::Assistant(&[text("Fixed.")]),
+            Message::User {
+                tool_results: Vec::new(),
+                input: &docs,
+            },
+            Message::Assistant(&[tool_use("call_c", "bash")]),
+            Message::User {
+                tool_results: vec![result(&call_c, &third, false)],
+                input: &thanks,
+            },
         ]
     );
 }
 
 #[test]
-fn one_assistant_message_is_one_turn_with_its_own_metrics_and_model() {
-    let transcript = two_calls_in_one_turn();
-    let turns = transcript.turns();
+fn the_request_ends_with_the_results_the_next_turn_answers_or_with_the_last_response() {
+    let mut transcript = transcript();
+    turn(&mut transcript, prompt(), calls(&["call_a"])).unwrap();
+    assert_eq!(transcript.messages(&[]).len(), 2);
 
-    assert_eq!(turns.len(), 2);
-    assert_eq!(turns[0].message, &transcript.messages[1]);
-    assert_eq!(turns[0].record, Some(&record(100, 20, 0)));
-    assert_eq!(turns[0].observation, Some(&transcript.messages[2]));
-    assert_eq!(turns[1].message, &transcript.messages[3]);
-    assert_eq!(turns[1].record, Some(&record(180, 5, 100)));
-    assert_eq!(turns[1].observation, None);
-
-    // What a trajectory export reads for the second turn's metrics.
-    let usage = turns[1].record.unwrap().usage;
-    assert_eq!(
-        (
-            usage.input_tokens,
-            usage.output_tokens,
-            usage.cache_read_tokens
-        ),
-        (180, 5, 100)
-    );
-    assert_eq!(
-        turns[1].record.unwrap().response_model.as_deref(),
-        Some("model-2026")
-    );
-}
-
-#[test]
-fn a_call_the_run_never_executed_has_no_result() {
-    let mut transcript = Transcript::new(String::new());
-    transcript.push_user(vec![text("Do it.")]);
-    transcript.push_assistant(completion(
-        vec![tool_use("call_done", "task_complete")],
-        10,
-        2,
-        0,
+    transcript.answer(vec![ok("call_a", "out")]).unwrap();
+    let messages = transcript.messages(&[]);
+    assert_eq!(messages.len(), 3);
+    assert!(matches!(
+        &messages[2],
+        Message::User { tool_results, input } if tool_results.len() == 1 && input.is_empty()
     ));
-
-    let turns = transcript.turns();
-    assert_eq!(turns[0].observation, None);
-    assert_eq!(turns[0].result_of(&id("call_done")), None);
 }
 
 #[test]
-fn a_user_message_without_tool_results_is_not_an_observation() {
-    let mut transcript = Transcript::new(String::new());
-    transcript.push_assistant(completion(vec![text("Which file?")], 10, 2, 0));
-    transcript.push_user(vec![text("src/lib.rs")]);
+fn a_response_is_rendered_block_for_block_in_the_order_it_arrived() {
+    let response = vec![
+        ContentBlock::Thinking {
+            text: "hm".to_owned(),
+            signature: Some("sig".to_owned()),
+        },
+        ContentBlock::RedactedThinking {
+            data: "encrypted".to_owned(),
+        },
+        text("On it."),
+        ContentBlock::Opaque {
+            provider: ProviderKind::Anthropic,
+            payload: json!({ "type": "server_tool_use" }),
+        },
+        tool_use("call_a", "bash"),
+    ];
+    let mut transcript = transcript();
+    turn(
+        &mut transcript,
+        prompt(),
+        completion(response.clone(), 1, 1),
+    )
+    .unwrap();
 
-    assert_eq!(transcript.turns()[0].observation, None);
+    assert_eq!(transcript.messages(&[])[1], Message::Assistant(&response));
 }
 
 #[test]
-fn results_are_looked_up_in_the_turns_own_observation_even_when_ids_repeat_across_turns() {
-    let mut transcript = Transcript::new(String::new());
-    transcript.push_user(vec![text("Go.")]);
-    transcript.push_assistant(completion(vec![tool_use("call_1", "bash")], 10, 2, 0));
-    transcript.push_user(vec![tool_result("call_1", "first")]);
-    transcript.push_assistant(completion(vec![tool_use("call_1", "bash")], 20, 2, 0));
-    transcript.push_user(vec![tool_result("call_1", "second")]);
+fn the_first_turn_is_refused_without_input() {
+    let mut transcript = transcript();
 
-    let turns = transcript.turns();
     assert_eq!(
-        turns[0].result_of(&id("call_1")),
-        Some(&output("call_1", "first"))
+        turn(&mut transcript, Vec::new(), says("Hello.")),
+        Err(TranscriptError::NothingFromTheUser { turn: 1 })
     );
-    assert_eq!(
-        turns[1].result_of(&id("call_1")),
-        Some(&output("call_1", "second"))
-    );
+    assert!(transcript.turns().is_empty());
 }
 
 #[test]
-fn a_deserialised_transcript_short_of_records_still_yields_every_turn() {
+fn a_turn_after_one_that_called_no_tools_needs_input_of_its_own() {
+    let mut transcript = transcript();
+    turn(&mut transcript, prompt(), says("One.")).unwrap();
+    let before = transcript.clone();
+
+    assert_eq!(
+        turn(&mut transcript, Vec::new(), says("Two.")),
+        Err(TranscriptError::NothingFromTheUser { turn: 2 })
+    );
+    assert_eq!(transcript, before);
+
+    let second = turn(&mut transcript, said("Go on."), says("Two.")).unwrap();
+    assert_eq!(second.input(), said("Go on."));
+    assert_eq!(transcript.turns().len(), 2);
+}
+
+#[test]
+fn a_turn_after_answered_tool_calls_needs_no_input_and_may_have_some() {
+    for input in [Vec::new(), said("Also the docs.")] {
+        let mut transcript = transcript();
+        turn(&mut transcript, prompt(), calls(&["call_a"])).unwrap();
+        transcript.answer(vec![ok("call_a", "out")]).unwrap();
+
+        let next = turn(&mut transcript, input.clone(), says("Done.")).unwrap();
+
+        assert_eq!(next.input(), input);
+    }
+}
+
+#[test]
+fn a_refused_turn_leaves_the_input_it_was_offered() {
+    let mut transcript = transcript();
+    turn(&mut transcript, prompt(), calls(&["call_a"])).unwrap();
+    let mut input = said("Never mind the tools.");
+
+    let refused = transcript.record(&mut input, says("Next."), ms(0), ms(0), 1);
+
+    assert!(refused.is_err());
+    assert_eq!(input, said("Never mind the tools."));
+}
+
+#[test]
+fn outcomes_that_answer_the_calls_each_once_and_in_order_become_the_turns_tool_calls() {
+    let transcript = two_calls_in_one_turn();
+    let turn = &transcript.turns()[0];
+
+    let pairs: Vec<(&str, &str)> = turn
+        .tool_uses()
+        .zip(turn.tool_calls())
+        .map(|(call, outcome)| (call.name.as_str(), outcome.call_id.as_str()))
+        .collect();
+
+    assert_eq!(pairs, [("read_file", "call_a"), ("bash", "call_b")]);
+    assert_eq!(turn.tool_calls()[1].status, ToolCallStatus::ToolError);
+}
+
+#[test]
+fn outcomes_that_are_not_exactly_the_calls_in_call_order_are_refused() {
+    let mut transcript = transcript();
+    turn(&mut transcript, prompt(), calls(&["call_a", "call_b"])).unwrap();
+    let before = transcript.clone();
+
+    for outcomes in [
+        vec!["call_b", "call_a"],
+        vec!["call_a"],
+        vec!["call_b"],
+        vec!["call_a", "call_b", "call_c"],
+        vec!["call_a", "call_a"],
+        vec!["call_a", "call_x"],
+    ] {
+        let error = transcript
+            .answer(outcomes.iter().map(|id| ok(id, "out")).collect())
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            TranscriptError::OutcomesDontAnswerCalls {
+                calls: strings(&["call_a", "call_b"]),
+                outcomes: strings(&outcomes),
+            }
+        );
+        assert_eq!(transcript, before);
+    }
+}
+
+#[test]
+fn outcomes_are_refused_when_no_response_made_a_call() {
+    let mut transcript = transcript();
+    let refused = TranscriptError::OutcomesDontAnswerCalls {
+        calls: Vec::new(),
+        outcomes: strings(&["call_a"]),
+    };
+
+    assert_eq!(
+        transcript.answer(vec![ok("call_a", "out")]),
+        Err(refused.clone())
+    );
+    turn(&mut transcript, prompt(), says("Hello.")).unwrap();
+    assert_eq!(transcript.answer(vec![ok("call_a", "out")]), Err(refused));
+}
+
+#[test]
+fn no_outcomes_leave_the_last_turn_as_it_was() {
+    let mut empty = transcript();
+    let mut answered = two_calls_in_one_turn();
+    let before = answered.clone();
+
+    assert_eq!(answered.answer(Vec::new()), Ok(()));
+    assert_eq!(answered, before);
+    assert_eq!(empty.answer(Vec::new()), Ok(()));
+    assert_eq!(empty, transcript());
+}
+
+#[test]
+fn only_the_last_turn_may_have_tool_calls_and_no_outcomes_whatever_input_follows() {
+    let mut transcript = transcript();
+    turn(&mut transcript, prompt(), calls(&["call_a", "call_b"])).unwrap();
+    let before = transcript.clone();
+
+    for input in [Vec::new(), said("Never mind the tools.")] {
+        assert_eq!(
+            turn(&mut transcript, input, says("Next.")),
+            Err(TranscriptError::UnansweredCalls {
+                turn: 1,
+                calls: strings(&["call_a", "call_b"]),
+            })
+        );
+        assert_eq!(transcript, before);
+    }
+
+    transcript
+        .answer(vec![ok("call_a", "one"), ok("call_b", "two")])
+        .unwrap();
+    assert!(turn(&mut transcript, Vec::new(), says("Next.")).is_ok());
+}
+
+#[test]
+fn a_turn_whose_tools_never_ran_is_told_from_one_that_called_none_by_its_response() {
     let mut transcript = two_calls_in_one_turn();
-    transcript.turns.truncate(1);
+    let called_none = transcript.turns()[1].clone();
+    let done = completion(vec![tool_use("call_done", "task_complete")], 10, 2);
+    let never_ran = turn(&mut transcript, said("Finish."), done).unwrap();
 
-    let turns = transcript.turns();
-    assert_eq!(turns.len(), 2);
-    assert_eq!(turns[0].record, Some(&record(100, 20, 0)));
-    assert_eq!(turns[1].record, None);
+    assert!(called_none.tool_calls().is_empty());
+    assert_eq!(called_none.tool_uses().count(), 0);
+    assert!(never_ran.tool_calls().is_empty());
+    assert_eq!(
+        never_ran.tool_uses().collect::<Vec<_>>(),
+        [&call("call_done", "task_complete")]
+    );
+}
+
+#[test]
+fn final_text_is_the_text_of_the_last_turn_without_its_other_blocks() {
+    let mut transcript = two_calls_in_one_turn();
+    assert_eq!(transcript.final_text(), "Fixed.");
+
+    let blocks = vec![
+        ContentBlock::Thinking {
+            text: "not the answer".to_owned(),
+            signature: None,
+        },
+        text("Also "),
+        ContentBlock::RedactedThinking {
+            data: "encrypted".to_owned(),
+        },
+        tool_use("call_c", "bash"),
+        ContentBlock::Opaque {
+            provider: ProviderKind::Openai,
+            payload: json!({ "type": "refusal" }),
+        },
+        text("tidied."),
+    ];
+    let tidied = turn(&mut transcript, said("And?"), completion(blocks, 200, 9)).unwrap();
+
+    assert_eq!(transcript.final_text(), "Also tidied.");
+    assert_eq!(tidied.text(), "Also tidied.");
+}
+
+#[test]
+fn final_text_is_empty_when_the_last_turn_has_no_text() {
+    let mut transcript = transcript();
+    turn(&mut transcript, prompt(), says("Looking.")).unwrap();
+    turn(&mut transcript, said("Go on."), calls(&["call_a"])).unwrap();
+
+    assert_eq!(transcript.final_text(), "");
+}
+
+#[test]
+fn usage_is_summed_over_every_turn() {
+    assert_eq!(transcript().usage(), Usage::default());
+    assert_eq!(
+        two_calls_in_one_turn().usage(),
+        Usage::from_inclusive(280, 25, 0, 0)
+    );
+}
+
+#[test]
+fn consecutive_tool_errors_count_back_from_the_last_outcome_to_the_last_success() {
+    let mut transcript = transcript();
+    assert_eq!(transcript.consecutive_tool_errors(), 0);
+
+    let statuses = [
+        (ToolCallStatus::Failed, ToolCallStatus::Ok, 0),
+        (ToolCallStatus::Ok, ToolCallStatus::Timeout, 1),
+        (ToolCallStatus::Unknown, ToolCallStatus::ToolError, 3),
+    ];
+    let mut input = prompt();
+    for (first, second, expected) in statuses {
+        turn(
+            &mut transcript,
+            std::mem::take(&mut input),
+            calls(&["call_a", "call_b"]),
+        )
+        .unwrap();
+        transcript
+            .answer(vec![
+                outcome("call_a", first, "out"),
+                outcome("call_b", second, "out"),
+            ])
+            .unwrap();
+        assert_eq!(transcript.consecutive_tool_errors(), expected);
+    }
+
+    turn(&mut transcript, Vec::new(), says("No tools.")).unwrap();
+    assert_eq!(transcript.consecutive_tool_errors(), 3);
+}
+
+/// A two-turn run with one tool call, as the document a grader reads.
+fn document() -> Value {
+    json!({
+        "system": "You fix tests.",
+        "turns": [
+            {
+                "input": [{ "text": "Fix the failing test." }],
+                "response": [
+                    { "text": "Looking." },
+                    { "tool_use": { "id": "call_a", "name": "bash", "input": { "command": "cargo test" } } },
+                ],
+                "record": {
+                    "usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 20,
+                        "cache_read_tokens": 0,
+                        "cache_write_tokens": 0,
+                    },
+                    "finish": "tool_use",
+                    "response_id": "msg_1",
+                    "response_model": "model-2026",
+                    "started_ms": 0,
+                    "latency_ms": 800,
+                    "attempts": 2,
+                },
+                "tool_calls": [{
+                    "call_id": "call_a",
+                    "source": "builtin",
+                    "status": "tool_error",
+                    "started_ms": 900,
+                    "latency_ms": 30,
+                    "truncated_from_bytes": null,
+                    "content": [{ "text": "1 failed" }],
+                }],
+            },
+            {
+                "input": [],
+                "response": [{ "text": "Fixed." }],
+                "record": {
+                    "usage": {
+                        "input_tokens": 180,
+                        "output_tokens": 5,
+                        "cache_read_tokens": 100,
+                        "cache_write_tokens": 0,
+                    },
+                    "finish": "end_turn",
+                    "response_id": null,
+                    "response_model": null,
+                    "started_ms": 1000,
+                    "latency_ms": 300,
+                    "attempts": 1,
+                },
+                "tool_calls": [],
+            },
+        ],
+    })
 }
 
 #[test]
 fn a_transcript_has_one_json_form() {
-    let mut transcript = Transcript::new("Be brief.".to_owned());
-    transcript.push_user(vec![text("Hi.")]);
-    transcript.push_assistant(completion(vec![text("Hello.")], 12, 3, 8));
-    let expected = json!({
-        "system": "Be brief.",
-        "messages": [
-            { "role": "user", "content": [{ "text": "Hi." }] },
-            { "role": "assistant", "content": [{ "text": "Hello." }] },
+    let mut transcript = transcript();
+    let looking = Completion::new(
+        vec![
+            text("Looking."),
+            ContentBlock::ToolUse(ToolUse {
+                input: json!({ "command": "cargo test" }),
+                ..call("call_a", "bash")
+            }),
         ],
-        "turns": [{
-            "usage": {
-                "input_tokens": 12,
-                "output_tokens": 3,
-                "cache_read_tokens": 8,
-                "cache_write_tokens": 0,
-            },
-            "finish": "end_turn",
-            "response_id": "msg_1",
-            "response_model": "model-2026",
-        }],
-    });
+        Usage::from_inclusive(100, 20, 0, 0),
+        FinishReason::ToolUse,
+        Some("msg_1".to_owned()),
+        Some("model-2026".to_owned()),
+    )
+    .unwrap();
+    let fixed = Completion::new(
+        vec![text("Fixed.")],
+        Usage::from_inclusive(180, 5, 100, 0),
+        FinishReason::EndTurn,
+        None,
+        None,
+    )
+    .unwrap();
+    transcript
+        .record(&mut prompt(), looking, ms(0), ms(800), 2)
+        .unwrap();
+    transcript
+        .answer(vec![outcome(
+            "call_a",
+            ToolCallStatus::ToolError,
+            "1 failed",
+        )])
+        .unwrap();
+    transcript
+        .record(&mut Vec::new(), fixed, ms(1_000), ms(300), 1)
+        .unwrap();
 
-    assert_eq!(serde_json::to_value(&transcript).unwrap(), expected);
+    assert_eq!(serde_json::to_value(&transcript).unwrap(), document());
     assert_eq!(
-        serde_json::from_value::<Transcript>(expected).unwrap(),
+        serde_json::from_value::<Transcript>(document()).unwrap(),
         transcript
     );
 }
 
-#[test]
-fn a_turns_record_says_how_the_model_stopped() {
-    let mut transcript = Transcript::new(String::new());
-    transcript.push_user(vec![text("Go.")]);
-    transcript.push_assistant(Completion {
-        finish: FinishReason::MaxTokens,
-        response_id: None,
-        ..completion(vec![text("The answer is")], 10, 4096, 0)
-    });
-
-    let record = transcript.turns()[0].record.unwrap();
-    assert_eq!(record.finish, FinishReason::MaxTokens);
-    assert_eq!(record.response_id, None);
-    assert_eq!(record.usage.output_tokens, 4096);
+fn reading(document: Value) -> String {
+    serde_json::from_value::<Transcript>(document)
+        .unwrap_err()
+        .to_string()
 }
 
 #[test]
-fn final_text_is_the_text_of_the_last_assistant_message() {
-    let mut transcript = two_calls_in_one_turn();
-    assert_eq!(transcript.final_text(), "Fixed.");
+fn a_document_whose_response_repeats_a_tool_call_id_is_not_a_transcript() {
+    let mut document = document();
+    let call = document["turns"][0]["response"][1].clone();
+    document["turns"][0]["response"]
+        .as_array_mut()
+        .unwrap()
+        .push(call);
 
-    transcript.push_assistant(completion(
-        vec![text("Also "), tool_use("call_c", "bash"), text("tidied.")],
-        200,
-        9,
-        0,
-    ));
-    transcript.push_user(vec![text("not the model's words")]);
-    assert_eq!(transcript.final_text(), "Also tidied.");
+    assert_eq!(
+        reading(document),
+        r#"tool call id "call_a" is on more than one tool-use block of the response"#
+    );
 }
 
 #[test]
-fn final_text_is_empty_when_the_model_never_answered_or_answered_without_text() {
-    let mut transcript = Transcript::new("You fix tests.".to_owned());
-    transcript.push_user(vec![text("Fix the failing test.")]);
-    assert_eq!(transcript.final_text(), "");
+fn a_document_whose_outcomes_do_not_answer_the_calls_is_not_a_transcript() {
+    let mut document = document();
+    document["turns"][0]["tool_calls"][0]["call_id"] = json!("call_z");
 
-    transcript.push_assistant(completion(vec![text("Looking.")], 10, 2, 0));
-    transcript.push_assistant(completion(vec![tool_use("call_a", "bash")], 10, 2, 0));
-    assert_eq!(transcript.final_text(), "");
+    assert_eq!(
+        reading(document),
+        r#"the outcomes ["call_z"] don't answer the tool calls ["call_a"], each once and in call order"#
+    );
 }
 
 #[test]
-fn reading_a_transcript_validates_its_messages() {
-    let transcript = json!({
-        "system": "",
-        "messages": [{
-            "role": "user",
-            "content": [{ "tool_use": { "id": "a", "name": "bash", "input": {} } }],
-        }],
-        "turns": [],
-    });
+fn a_document_with_unanswered_calls_before_its_last_turn_is_not_a_transcript() {
+    let mut document = document();
+    document["turns"][0]["tool_calls"] = json!([]);
 
-    assert!(serde_json::from_value::<Transcript>(transcript).is_err());
+    assert_eq!(
+        reading(document),
+        r#"turn 1 made the tool calls ["call_a"] and has no outcomes, which only the last turn may"#
+    );
+}
+
+#[test]
+fn a_document_whose_first_turn_has_no_input_is_not_a_transcript() {
+    let mut document = document();
+    document["turns"][0]["input"] = json!([]);
+
+    assert_eq!(
+        reading(document),
+        "turn 1 has no input and no tool results come before it, \
+         so nothing from the user would precede its response"
+    );
+}
+
+#[test]
+fn a_document_with_two_adjacent_responses_is_not_a_transcript() {
+    let mut document = document();
+    let last = document["turns"][1].clone();
+    document["turns"].as_array_mut().unwrap().push(last);
+
+    assert_eq!(
+        reading(document),
+        "turn 3 has no input and no tool results come before it, \
+         so nothing from the user would precede its response"
+    );
+}
+
+#[test]
+fn a_document_whose_input_holds_a_tool_block_is_not_a_transcript() {
+    for block in [
+        json!({ "tool_use": { "id": "call_b", "name": "bash", "input": {} } }),
+        json!({ "tool_result": { "call_id": "call_a", "content": [] } }),
+    ] {
+        let mut document = document();
+        document["turns"][1]["input"] = json!([block]);
+
+        assert!(reading(document).contains("unknown variant"));
+    }
+}
+
+#[test]
+fn a_document_may_end_on_a_turn_whose_tools_never_ran() {
+    let mut document = document();
+    document["turns"].as_array_mut().unwrap().pop();
+    document["turns"][0]["tool_calls"] = json!([]);
+
+    let transcript = serde_json::from_value::<Transcript>(document).unwrap();
+
+    assert_eq!(transcript.turns().len(), 1);
+    assert_eq!(transcript.turns()[0].tool_uses().count(), 1);
+    assert!(transcript.turns()[0].tool_calls().is_empty());
+}
+
+#[test]
+fn a_document_in_the_flat_message_form_or_short_of_a_field_is_not_a_transcript() {
+    let flat = json!({ "system": "", "messages": [], "turns": [] });
+    let mut no_record = document();
+    no_record["turns"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("record");
+    let mut no_input = document();
+    no_input["turns"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("input");
+
+    for document in [flat, no_record, no_input] {
+        assert!(serde_json::from_value::<Transcript>(document).is_err());
+    }
 }

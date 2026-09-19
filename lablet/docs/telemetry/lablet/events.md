@@ -63,24 +63,24 @@ Emitted once, after the run ends and whatever the stop reason, in the trace cont
 | [`lablet.mcp.servers`](/lablet/docs/telemetry/lablet/README.md#lablet-mcp-servers) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string[] | Names of the configured MCP servers. [12] | `["docs", "search"]` |
 | [`lablet.prompt.system_bytes`](/lablet/docs/telemetry/lablet/README.md#lablet-prompt-system-bytes) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Size of the system prompt in bytes, skills included. [13] | `2048` |
 | [`lablet.prompt.user_bytes`](/lablet/docs/telemetry/lablet/README.md#lablet-prompt-user-bytes) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Size of the task prompt in bytes. [14] | `512` |
-| [`lablet.provider.calls`](/lablet/docs/telemetry/lablet/README.md#lablet-provider-calls) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of provider calls that returned a completion. [15] | `7` |
-| [`lablet.provider.latency_ms.max`](/lablet/docs/telemetry/lablet/README.md#lablet-provider-latency-ms-max) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Latency of the slowest provider call attempt, in milliseconds. [16] | `9800` |
-| [`lablet.provider.latency_ms.total`](/lablet/docs/telemetry/lablet/README.md#lablet-provider-latency-ms-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the latencies of every provider call attempt, in milliseconds. [17] | `41200` |
-| [`lablet.provider.retries`](/lablet/docs/telemetry/lablet/README.md#lablet-provider-retries) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of provider call attempts made beyond the first of their call. [18] | `1` |
-| [`lablet.result.has_structured`](/lablet/docs/telemetry/lablet/README.md#lablet-result-has-structured) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | boolean | Whether the run produced a structured result, the `task_complete` argument. [19] | `true` |
-| [`lablet.result.text_bytes`](/lablet/docs/telemetry/lablet/README.md#lablet-result-text-bytes) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Size of the final assistant text in bytes. [20] | `834` |
-| [`lablet.run.completion_mode`](/lablet/docs/telemetry/lablet/README.md#lablet-run-completion-mode) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | How the run decides that the model has finished. [21] | `natural`; `explicit` |
-| [`lablet.run.duration_ms`](/lablet/docs/telemetry/lablet/README.md#lablet-run-duration-ms) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Wall-clock duration of the run, in milliseconds. [22] | `12345` |
-| [`lablet.run.max_turns`](/lablet/docs/telemetry/lablet/README.md#lablet-run-max-turns) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | The configured cap on turns. [23] | `30` |
-| [`lablet.run.stop_reason`](/lablet/docs/telemetry/lablet/README.md#lablet-run-stop-reason) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | Why the run ended. [24] | `completed`; `max_turns` |
-| [`lablet.run.timeout_ms`](/lablet/docs/telemetry/lablet/README.md#lablet-run-timeout-ms) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | The configured run timeout, in milliseconds. [25] | `600000` |
-| [`lablet.run.turns`](/lablet/docs/telemetry/lablet/README.md#lablet-run-turns) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of turns the run took. [26] | `7` |
-| [`lablet.skills.count`](/lablet/docs/telemetry/lablet/README.md#lablet-skills-count) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of skill files appended to the system prompt. [27] | `2` |
-| [`lablet.tool_calls.errors`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-errors) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls that returned an error result. [28] | `1` |
-| [`lablet.tool_calls.input_bytes.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-input-bytes-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the sizes of every tool call's input, in bytes. [29] | `1820` |
-| [`lablet.tool_calls.latency_ms.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-latency-ms-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the latencies of every tool call, in milliseconds. [30] | `3100` |
-| [`lablet.tool_calls.output_bytes.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-output-bytes-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the sizes of every tool call's output, in bytes. [31] | `56012` |
-| [`lablet.tool_calls.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls executed. The intercepted `task_complete` call isn't one. [32] | `5` |
+| [`lablet.provider.latency_ms.max`](/lablet/docs/telemetry/lablet/README.md#lablet-provider-latency-ms-max) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Latency of the slowest provider call attempt, in milliseconds. [15] | `9800` |
+| [`lablet.provider.latency_ms.total`](/lablet/docs/telemetry/lablet/README.md#lablet-provider-latency-ms-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the latencies of every provider call attempt, in milliseconds. [16] | `41200` |
+| [`lablet.provider.retries`](/lablet/docs/telemetry/lablet/README.md#lablet-provider-retries) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of provider call attempts made beyond the first of their call. [17] | `1` |
+| [`lablet.result.has_structured`](/lablet/docs/telemetry/lablet/README.md#lablet-result-has-structured) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | boolean | Whether the run produced a structured result, the `task_complete` argument. [18] | `true` |
+| [`lablet.result.text_bytes`](/lablet/docs/telemetry/lablet/README.md#lablet-result-text-bytes) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Size of the final assistant text in bytes. [19] | `834` |
+| [`lablet.run.completion_mode`](/lablet/docs/telemetry/lablet/README.md#lablet-run-completion-mode) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | How the run decides that the model has finished. [20] | `natural`; `explicit` |
+| [`lablet.run.duration_ms`](/lablet/docs/telemetry/lablet/README.md#lablet-run-duration-ms) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Wall-clock duration of the run, in milliseconds. [21] | `12345` |
+| [`lablet.run.max_turns`](/lablet/docs/telemetry/lablet/README.md#lablet-run-max-turns) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | The configured cap on turns. [22] | `30` |
+| [`lablet.run.stop_reason`](/lablet/docs/telemetry/lablet/README.md#lablet-run-stop-reason) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | Why the run ended. [23] | `completed`; `max_turns` |
+| [`lablet.run.timeout_ms`](/lablet/docs/telemetry/lablet/README.md#lablet-run-timeout-ms) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | The configured run timeout, in milliseconds. [24] | `600000` |
+| [`lablet.run.turns`](/lablet/docs/telemetry/lablet/README.md#lablet-run-turns) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of turns the run took. [25] | `7` |
+| [`lablet.skills.count`](/lablet/docs/telemetry/lablet/README.md#lablet-skills-count) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of skill files appended to the system prompt. [26] | `2` |
+| [`lablet.tool_calls.errors`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-errors) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls that returned an error result. [27] | `1` |
+| [`lablet.tool_calls.input_bytes.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-input-bytes-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the sizes of every tool call's input, in bytes. [28] | `1820` |
+| [`lablet.tool_calls.latency_ms.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-latency-ms-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the latencies of every tool call, in milliseconds. [29] | `3100` |
+| [`lablet.tool_calls.output_bytes.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-output-bytes-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the sizes of every tool call's output, in bytes. [30] | `56012` |
+| [`lablet.tool_calls.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls executed. The intercepted `task_complete` call isn't one. [31] | `5` |
+| [`lablet.tool_calls.truncated`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-truncated) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls whose output the output cap cut short. [32] | `0` |
 | [`lablet.tool_calls.unknown`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-unknown) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls that named a tool the run didn't offer. [33] | `0` |
 | [`lablet.tools.count`](/lablet/docs/telemetry/lablet/README.md#lablet-tools-count) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tools offered to the model. [34] | `3` |
 | [`lablet.tools.names`](/lablet/docs/telemetry/lablet/README.md#lablet-tools-names) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string[] | Names of the tools offered to the model, after the allow and deny lists. [35] | `["bash", "read_file", "write_file"]` |
@@ -183,41 +183,41 @@ value matches the units the customer is charged for.
 
 **[14] `lablet.prompt.user_bytes`:** Justification: `gen_ai.input.messages` is opt-in content; the size is needed when content isn't captured, and no convention carries it.
 
-**[15] `lablet.provider.calls`:** Justification: the conventions count inference calls in a metric; the wide event needs the count as a column on the run's one row.
+**[15] `lablet.provider.latency_ms.max`:** Justification: the conventions record one operation's duration as a span or a histogram; a per-run maximum has no attribute.
 
-**[16] `lablet.provider.latency_ms.max`:** Justification: the conventions record one operation's duration as a span or a histogram; a per-run maximum has no attribute.
+**[16] `lablet.provider.latency_ms.total`:** Justification: the conventions record one operation's duration as a span or a histogram; a per-run sum has no attribute.
 
-**[17] `lablet.provider.latency_ms.total`:** Justification: the conventions record one operation's duration as a span or a histogram; a per-run sum has no attribute.
+**[17] `lablet.provider.retries`:** Justification: no convention counts repeated inference attempts across an agent run. A call that fails on its only attempt adds none.
 
-**[18] `lablet.provider.retries`:** Justification: no convention counts repeated inference attempts across an agent run. A call that fails on its only attempt adds none.
+**[18] `lablet.result.has_structured`:** Justification: the structured result is a product of lablet's explicit completion mode, which the conventions don't describe.
 
-**[19] `lablet.result.has_structured`:** Justification: the structured result is a product of lablet's explicit completion mode, which the conventions don't describe.
+**[19] `lablet.result.text_bytes`:** Justification: `gen_ai.output.messages` is opt-in content; the size is needed when content isn't captured, and no convention carries it.
 
-**[20] `lablet.result.text_bytes`:** Justification: `gen_ai.output.messages` is opt-in content; the size is needed when content isn't captured, and no convention carries it.
+**[20] `lablet.run.completion_mode`:** Justification: the completion mode is a property of lablet's loop; the GenAI conventions don't describe how an agent decides that it's done.
 
-**[21] `lablet.run.completion_mode`:** Justification: the completion mode is a property of lablet's loop; the GenAI conventions don't describe how an agent decides that it's done.
+**[21] `lablet.run.duration_ms`:** Justification: a span has a duration but a log record has none, and the wide event must be readable without joining the root span.
 
-**[22] `lablet.run.duration_ms`:** Justification: a span has a duration but a log record has none, and the wide event must be readable without joining the root span.
+**[22] `lablet.run.max_turns`:** Justification: the GenAI conventions carry request parameters of one inference call, not the budgets of an agent loop.
 
-**[23] `lablet.run.max_turns`:** Justification: the GenAI conventions carry request parameters of one inference call, not the budgets of an agent loop.
+**[23] `lablet.run.stop_reason`:** Justification: `gen_ai.response.finish_reasons` describes one inference call and can't express a budget, a timeout, or a cancellation; the conventions have no per-run outcome.
 
-**[24] `lablet.run.stop_reason`:** Justification: `gen_ai.response.finish_reasons` describes one inference call and can't express a budget, a timeout, or a cancellation; the conventions have no per-run outcome.
+**[24] `lablet.run.timeout_ms`:** Justification: the GenAI conventions carry request parameters of one inference call, not the budgets of an agent loop.
 
-**[25] `lablet.run.timeout_ms`:** Justification: the GenAI conventions carry request parameters of one inference call, not the budgets of an agent loop.
+**[25] `lablet.run.turns`:** Justification: a turn is the loop's own unit, one provider response and its tool calls; the conventions count inference calls, which also include retries.
 
-**[26] `lablet.run.turns`:** Justification: a turn is the loop's own unit, one provider response and its tool calls; the conventions count inference calls, which also include retries.
+**[26] `lablet.skills.count`:** Justification: skills are a lablet config feature with no counterpart in the conventions.
 
-**[27] `lablet.skills.count`:** Justification: skills are a lablet config feature with no counterpart in the conventions.
+**[27] `lablet.tool_calls.errors`:** Justification: no convention counts the failed tool calls of an agent run.
 
-**[28] `lablet.tool_calls.errors`:** Justification: no convention counts the failed tool calls of an agent run.
+**[28] `lablet.tool_calls.input_bytes.total`:** Justification: `gen_ai.tool.call.arguments` is opt-in content; no convention carries its size, per call or per run.
 
-**[29] `lablet.tool_calls.input_bytes.total`:** Justification: `gen_ai.tool.call.arguments` is opt-in content; no convention carries its size, per call or per run.
+**[29] `lablet.tool_calls.latency_ms.total`:** Justification: the conventions record one tool call's duration as a span; a per-run sum has no attribute.
 
-**[30] `lablet.tool_calls.latency_ms.total`:** Justification: the conventions record one tool call's duration as a span; a per-run sum has no attribute.
+**[30] `lablet.tool_calls.output_bytes.total`:** Justification: `gen_ai.tool.call.result` is opt-in content; no convention carries its size, per call or per run.
 
-**[31] `lablet.tool_calls.output_bytes.total`:** Justification: `gen_ai.tool.call.result` is opt-in content; no convention carries its size, per call or per run.
+**[31] `lablet.tool_calls.total`:** Justification: no convention counts the tool calls of an agent run.
 
-**[32] `lablet.tool_calls.total`:** Justification: no convention counts the tool calls of an agent run.
+**[32] `lablet.tool_calls.truncated`:** Justification: no convention says that a tool's output was cut before the model saw it, per call or per run; the count tells a run whose tools outgrew the cap from one they fitted.
 
 **[33] `lablet.tool_calls.unknown`:** Justification: the model can call any name, so these calls get no per-tool attribute and would otherwise be invisible in the per-tool breakdown; no convention counts them.
 
