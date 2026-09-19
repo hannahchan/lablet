@@ -49,31 +49,54 @@ Explicit architecture. Inside `lablet/`, directory `foo/bar/` is package `lablet
 
 ## Telemetry is contract-first
 
-Every span, event, and attribute is declared in the Weaver registry under `lablet/telemetry/registry/` before it's emitted. The `telemetry-registry` crate (attribute name constants, enums, per-signal key lists) and `lablet/docs/telemetry/` are generated from it and checked in. Don't hand-edit generated files and don't write attribute names as string literals in adapters; add to the registry, regenerate, then use the generated constants.
+Every span, event, and attribute is declared in the Weaver registry under `lablet/telemetry/registry/` before it's emitted: `attributes.yaml` holds lablet's own attributes, `spans.yaml` and `events.yaml` the signals and the semantic-convention attributes they refer to, and `resource.yaml` the imported resource entities. Three rules hold, the first by review and the others by `weaver check`:
+
+- A core or GenAI semantic-convention attribute is used wherever one exists. A `lablet.*` attribute is the last resort.
+- Every `lablet.*` attribute is `development` and has a `note` that opens with `Justification:` and says why no convention covers it.
+- Every attribute on a span or event states its requirement level, with the condition when it's conditional. Captured content is `opt_in`.
+
+The sources of the `telemetry-registry` crate (attribute name constants, enums for lablet's closed value sets, and the required and complete key lists of each span and event) and the reference under `lablet/docs/telemetry/` are generated from the registry and checked in. Everything in those two directories is generated: don't edit it, and don't write an attribute name as a string literal in an adapter. To add an attribute, edit the registry, run `cargo xtask weaver generate`, and use the constant. The Rust templates are in `lablet/telemetry/templates/registry/rust/`; the pages come from the vendored upstream templates.
+
+The lablet policy holds four rules: a `lablet.*` attribute has a note that begins `Justification:`, it's `development` until 1.0, nothing is defined here outside `lablet.*`, and every attribute on a span or event states `required`, `conditionally_required`, or `opt_in`. An omitted level resolves to `recommended` and would drop the key from the generated required list, so lablet doesn't use that level. Constants carry the conventions' own briefs as doc comments. When one trips clippy's `doc_markdown`, add the identifier to `doc-valid-idents` in `clippy.toml`.
 
 ```bash
-cargo xtask weaver generate    # regenerate the crate and docs after editing the registry
+cargo xtask weaver check               # the registry against the lablet, naming, and stability policies
+cargo xtask weaver generate            # write the crate sources and the reference again
+cargo xtask weaver generate --check    # fail when they differ from what the registry renders to
 ```
+
+Both forms of `generate` render into `lablet/target/` first, so a failed run leaves the tree alone, and `--check`, which pre-commit runs, never writes outside it.
+
+`weaver check` reads only the working tree. Weaver clones a git dependency on every run and keeps no cache, so everything it reads from upstream is vendored under `lablet/telemetry/deps/`: the `model/` trees of the core and GenAI semantic conventions, and the naming policies, stability policies, and Markdown templates from `opentelemetry-weaver-packages`. `lablet/telemetry/vendor.sh` holds the pinned commits and is the only thing that writes that directory. Each tree has a `SOURCES` file naming its repository, commit, and copied paths. The files are byte-identical to their source with one exception, which `SOURCES` records: the GenAI manifest names the core conventions by git URL, and the script points that line at the vendored copy, because Weaver would otherwise clone it on every run.
+
+```bash
+cargo xtask weaver vendor            # after changing a pin in lablet/telemetry/vendor.sh
+cargo xtask weaver vendor --check    # fetch the pins again and fail on any difference
+```
+
+Both need the network, so neither is part of a gate. Changing a pin is its own commit.
+
+Weaver's diagnostics go through lablet's templates in `lablet/telemetry/templates/diagnostics/`: `text` on a terminal and `github`, which writes workflow commands, when `CI=true`. They drop the warning Weaver prints for every file in the v2 format and the warnings about vendored files, and nothing more severe than a warning.
 
 ## Gates
 
 Every rule on this page is enforced by a gate. If it's not enforced, it's a suggestion, not a rule.
 
 ```bash
-cargo xtask pre-commit    # fmt (rustfmt and dprint), clippy, lint-layers, lint-manifests, lint-shell, lint-prose; from phase 1 also weaver check and generated files up to date
+cargo xtask pre-commit    # fmt (rustfmt and dprint), clippy, lint-layers, lint-manifests, weaver check, weaver generate --check, lint-shell, lint-prose
 ```
 
 ```bash
 cargo xtask pre-push      # pre-commit plus cargo deny, changelog, rustdoc without warnings, tests
 ```
 
-Run `cargo xtask help` for every task, grouped in the order a developer works: development, quality checks, quality gates, analysis, project. A green gate prints one closing line; the step table appears only when something failed.
+Run `cargo xtask help` for every task, grouped in the order a developer works: development, telemetry contract, quality checks, quality gates, analysis, project. A green gate prints one closing line; the step table appears only when something failed, and it names the task that runs each failed step alone.
 
 CI runs on every pushed branch as a matrix of `cargo xtask ci` (the pre-push list), `cargo xtask coverage` (floor: 90% lines on `lablet-model`, `lablet-policy`, `lablet-run`), and `cargo xtask mutants` (floor: 80% caught on the same crates). A floor crate may measure nothing only while its `src/` defines no function; after that, a run with no lines or no mutants for it fails. A trait method without a body counts as a function, so the first function with a body lands with its test in the same push as the first port. Later phases add `cargo xtask weaver live-check` (phase 6), `cargo xtask bench` with a 20% regression threshold, and the release builds (phase 11). `xtask` is a root-level crate reached through the alias, which is defined twice, in `.cargo/config.toml` and `lablet/.cargo/config.toml`; an xtask test keeps the two in step. It doesn't work from a crate directory below `lablet/`.
 
 ## Shell scripts
 
-`cargo xtask lint-shell` runs shellcheck over every tracked shell script: `.sh` files and the git hooks, which have no extension and are found by their shebang. `product/research/` is left out, as Vale and dprint leave it out, because it's a frozen record.
+`cargo xtask lint-shell` runs shellcheck over every tracked shell script: `.sh` files and the git hooks, which have no extension and are found by their shebang. `product/research/` is left out, as Vale and dprint leave it out, because it's a frozen record, and so is the vendored `lablet/telemetry/deps/`.
 
 ## Editor and agent setup
 
@@ -85,7 +108,7 @@ CI runs on every pushed branch as a matrix of `cargo xtask ci` (the pre-push lis
 
 ## Prose
 
-`cargo xtask lint-prose` runs Vale with the Microsoft writing style package over `README.md`, `CLAUDE.md`, `CHANGELOG.md`, `contributing/`, `product/` (not `product/research/`), `lablet/README.md`, and `lablet/docs/`. The gate fails on errors only; `cargo xtask lint-prose --all` also shows warnings and suggestions. `.vale.ini` names the package by its release URL, so `vale sync` fetches a fixed version into `.vale/styles/`, which git ignores apart from our vocabulary. `scripts/setup.sh` runs the sync, and `lint-prose` runs it when the styles are missing, so only the first run needs the network. To move to a newer package, change the URL and run `cargo xtask setup`. Vale's own notes for agents are at <https://vale.sh/AGENTS.md>. A legitimate technical term that Vale flags as a misspelling goes in `.vale/styles/config/vocabularies/Lablet/accept.txt`, one per line, sorted. Fix an ordinary misspelling in the text. If a rule makes the docs worse, turn that one rule down in `.vale.ini` with a one-line reason.
+`cargo xtask lint-prose` runs Vale with the Microsoft writing style package over `README.md`, `CLAUDE.md`, `CHANGELOG.md`, `contributing/`, `product/` (not `product/research/`), `lablet/README.md`, and `lablet/docs/` (not the generated `lablet/docs/telemetry/`). The gate fails on errors only; `cargo xtask lint-prose --all` also shows warnings and suggestions. `.vale.ini` names the package by its release URL, so `vale sync` fetches a fixed version into `.vale/styles/`, which git ignores apart from our vocabulary. `scripts/setup.sh` runs the sync, and `lint-prose` runs it when the styles are missing, so only the first run needs the network. To move to a newer package, change the URL and run `cargo xtask setup`. Vale's own notes for agents are at <https://vale.sh/AGENTS.md>. A legitimate technical term that Vale flags as a misspelling goes in `.vale/styles/config/vocabularies/Lablet/accept.txt`, one per line, sorted. Fix an ordinary misspelling in the text. If a rule makes the docs worse, turn that one rule down in `.vale.ini` with a one-line reason.
 
 ## Reviews
 

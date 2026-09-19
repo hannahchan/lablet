@@ -24,7 +24,7 @@ Follow `product/research/weaver/README.md` and start from its `spike/` files; it
 - Rust templates under `lablet/telemetry/templates/registry/rust/` (constants, enums, per-signal key lists; no builders) and `cargo xtask weaver generate` producing the `lablet-telemetry-registry` crate, `cargo fmt`, and `lablet/docs/telemetry/` from the vendored markdown templates, with a `--check` mode used as the generated-files gate.
 - `lablet/telemetry/.weaver.toml` with the live-check finding filters from the spike; the `live-check` xtask command itself lands in phase 6.
 
-Acceptance: `cargo xtask weaver check` passes. Regeneration is a no-op on a clean tree. Every attribute in spec §1 and §6 has a constant in the generated crate and the generated docs list it. A `lablet.*` attribute added without a justification note fails the policy. A weekly CI job runs `check` against the git URLs at the pinned refs to catch vendoring drift.
+Acceptance: `cargo xtask weaver check` passes. Regeneration is a no-op on a clean tree. Every attribute in spec §1 and §6 has a constant in the generated crate and the generated docs list it. A `lablet.*` attribute added without a justification note fails the policy. A weekly CI job runs `cargo xtask weaver vendor --check`, which fetches each pinned commit again and fails on any difference from the vendored tree.
 
 ## Phase 2: Domain
 
