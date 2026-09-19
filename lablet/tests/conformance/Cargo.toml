@@ -8,5 +8,13 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[dev-dependencies]
+lablet-model.workspace = true
+lablet-telemetry-registry.workspace = true
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+
 [lints]
 workspace = true
