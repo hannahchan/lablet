@@ -70,6 +70,7 @@ semconv
 semver
 serde
 SHA
+shellcheck
 stderr
 stdin
 stdio

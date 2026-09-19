@@ -35,12 +35,14 @@ Quality checks:
   clippy              Lint every target with warnings denied
   lint-layers         Layer dependency rules
   lint-manifests      Manifest rules: inheritance, exact pins, xtask's lint copy
+  lint-shell          Shell scripts with shellcheck
   lint-prose [--all]  Prose style with vale (--all: warnings and suggestions too)
   deny                Licences, advisories, bans, sources
   changelog           A contract change has an entry under Unreleased
 
 Quality gates:
-  pre-commit          fmt --check + clippy + lint-layers + lint-manifests + lint-prose
+  pre-commit          fmt --check + clippy + lint-layers + lint-manifests + lint-shell
+                      + lint-prose
   pre-push            pre-commit + deny + changelog + doc + test
   ci                  pre-push
 
@@ -87,6 +89,7 @@ fn plan(task: &str, args: &[String]) -> Result<(Mode, Vec<Step>), String> {
         "clippy" => (Mode::Command, gates::clippy_steps()),
         "lint-layers" => (Mode::Command, gates::lint_layers_steps()),
         "lint-manifests" => (Mode::Command, gates::lint_manifests_steps()),
+        "lint-shell" => (Mode::Command, gates::lint_shell_steps()),
         "deny" => (Mode::Command, gates::deny_steps()),
         "changelog" => (Mode::Command, gates::changelog_steps()),
         "pre-commit" => (Mode::Gate("pre-commit"), gates::pre_commit_steps()),
@@ -143,7 +146,7 @@ mod tests {
     fn the_usage_text_groups_every_task_in_the_order_a_developer_works() {
         assert_eq!(
             documented_tasks().join(" "),
-            "check build run test doc fmt fix clippy lint-layers lint-manifests lint-prose deny \
+            "check build run test doc fmt fix clippy lint-layers lint-manifests lint-shell lint-prose deny \
              changelog pre-commit pre-push ci coverage mutants setup clean"
         );
         for task in documented_tasks() {

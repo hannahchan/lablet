@@ -207,6 +207,47 @@ const PROSE: [&str; 7] = [
     "lablet/docs",
 ];
 
+/// A frozen record of what was run, kept out of the linters.
+const RESEARCH: &str = "product/research/";
+
+/// shellcheck over every tracked shell script.
+pub fn lint_shell_steps() -> Vec<Step> {
+    match shell_scripts(&repo_root()) {
+        Ok(scripts) => {
+            let mut args = vec!["--external-sources"];
+            args.extend(scripts.iter().map(String::as_str));
+            vec![Step::command("lint-shell", "shellcheck", &args)]
+        }
+        Err(_) => vec![Step::check("lint-shell", || {
+            shell_scripts(&repo_root()).map(|_| None)
+        })],
+    }
+}
+
+/// Tracked files that are shell: a `.sh` file, or one with no extension whose
+/// first line is a shell shebang, since the git hooks have none.
+fn shell_scripts(root: &Path) -> Result<Vec<String>, String> {
+    let listed = process::capture_in(root, "git", &["ls-files", "-z"])?;
+    Ok(listed
+        .split('\0')
+        .filter(|path| !path.is_empty() && !path.starts_with(RESEARCH))
+        .filter(|path| match Path::new(path).extension() {
+            Some(extension) => extension.eq_ignore_ascii_case("sh"),
+            None => std::fs::read_to_string(root.join(path))
+                .is_ok_and(|text| text.lines().next().is_some_and(is_shell_shebang)),
+        })
+        .map(str::to_owned)
+        .collect())
+}
+
+fn is_shell_shebang(line: &str) -> bool {
+    line.strip_prefix("#!").is_some_and(|interpreter| {
+        ["sh", "bash", "dash", "ksh"]
+            .iter()
+            .any(|shell| interpreter.split(['/', ' ']).any(|word| word == *shell))
+    })
+}
+
 /// Vale over the project's prose: errors only, or with `all` every alert.
 pub fn lint_prose_steps(all: bool) -> Vec<Step> {
     let root = repo_root();
@@ -325,6 +366,7 @@ pub fn pre_commit_steps() -> Vec<Step> {
     steps.extend(clippy_steps());
     steps.extend(lint_layers_steps());
     steps.extend(lint_manifests_steps());
+    steps.extend(lint_shell_steps());
     steps.extend(lint_prose_steps(false));
     steps
 }
@@ -505,8 +547,26 @@ mod tests {
             .collect();
         assert_eq!(
             labels(&steps),
-            "fmt, fmt (xtask), fmt (dprint), clippy, clippy (xtask), lint-layers, lint-manifests, lint-prose"
+            "fmt, fmt (xtask), fmt (dprint), clippy, clippy (xtask), lint-layers, lint-manifests, lint-shell, lint-prose"
         );
+    }
+
+    #[test]
+    fn the_shell_scripts_are_the_sh_files_and_the_extensionless_hooks() {
+        let scripts = shell_scripts(&repo_root()).unwrap();
+        for expected in [
+            "scripts/setup.sh",
+            "scripts/hooks/pre-commit",
+            "scripts/hooks/pre-push",
+            ".claude/hooks/session-start.sh",
+        ] {
+            assert!(scripts.iter().any(|path| path == expected), "{expected}");
+        }
+        assert!(scripts.iter().all(|path| !path.starts_with(RESEARCH)));
+        assert!(is_shell_shebang("#!/usr/bin/env bash"));
+        assert!(is_shell_shebang("#!/bin/sh"));
+        assert!(!is_shell_shebang("#!/usr/bin/env python3"));
+        assert!(!is_shell_shebang("# not a shebang"));
     }
 
     #[test]

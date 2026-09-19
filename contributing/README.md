@@ -60,7 +60,7 @@ cargo xtask weaver generate    # regenerate the crate and docs after editing the
 Every rule on this page is enforced by a gate. If it's not enforced, it's a suggestion, not a rule.
 
 ```bash
-cargo xtask pre-commit    # fmt (rustfmt and dprint), clippy, lint-layers, lint-manifests, lint-prose; from phase 1 also weaver check and generated files up to date
+cargo xtask pre-commit    # fmt (rustfmt and dprint), clippy, lint-layers, lint-manifests, lint-shell, lint-prose; from phase 1 also weaver check and generated files up to date
 ```
 
 ```bash
@@ -70,6 +70,14 @@ cargo xtask pre-push      # pre-commit plus cargo deny, changelog, rustdoc witho
 Run `cargo xtask help` for every task, grouped in the order a developer works: development, quality checks, quality gates, analysis, project. A green gate prints one closing line; the step table appears only when something failed.
 
 CI runs on every pushed branch as a matrix of `cargo xtask ci` (the pre-push list), `cargo xtask coverage` (floor: 90% lines on `lablet-model`, `lablet-policy`, `lablet-run`), and `cargo xtask mutants` (floor: 80% caught on the same crates). A floor crate may measure nothing only while its `src/` defines no function; after that, a run with no lines or no mutants for it fails. A trait method without a body counts as a function, so the first function with a body lands with its test in the same push as the first port. Later phases add `cargo xtask weaver live-check` (phase 6), `cargo xtask bench` with a 20% regression threshold, and the release builds (phase 11). `xtask` is a root-level crate reached through the alias, which is defined twice, in `.cargo/config.toml` and `lablet/.cargo/config.toml`; an xtask test keeps the two in step. It doesn't work from a crate directory below `lablet/`.
+
+## Shell scripts
+
+`cargo xtask lint-shell` runs shellcheck over every tracked shell script: `.sh` files and the git hooks, which have no extension and are found by their shebang. `product/research/` is left out, as Vale and dprint leave it out, because it's a frozen record.
+
+## Editor and agent setup
+
+`.vscode/` recommends rust-analyzer, dprint, Vale, and Claude Code, and points rust-analyzer at both Cargo workspaces. `.claude/settings.json` runs `.claude/hooks/session-start.sh` when a Claude Code session starts. It says when the session is on `main`, when a branch is behind `origin/main` and so can't be fast-forwarded to, when the branch tracks an unexpected upstream, and when the git hooks aren't installed. It only advises; it never stops a session.
 
 ## Formatting
 

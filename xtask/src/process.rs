@@ -37,6 +37,10 @@ pub const TOOLS: &[Tool] = &[
         bin: "dprint",
     },
     Tool {
+        mise_name: "shellcheck",
+        bin: "shellcheck",
+    },
+    Tool {
         mise_name: "vale",
         bin: "vale",
     },

@@ -1,0 +1,7 @@
+{
+  "rust-analyzer.linkedProjects": ["lablet/Cargo.toml", "xtask/Cargo.toml"],
+  "rust-analyzer.check.command": "clippy",
+  "json.schemaDownload.trustedDomains": {
+    "https://dprint.dev/": true
+  }
+}
