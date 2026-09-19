@@ -117,7 +117,7 @@ fn command_in(directory: &Path, program: &str, args: &[&str]) -> Result<Command,
 /// What `git rev-parse --local-env-vars` lists. Git sets these for a hook, and
 /// a subprocess that inherits them acts on that repository rather than the one
 /// in its working directory, so a test's scratch repository would commit here.
-const GIT_REPOSITORY_ENV: &[&str] = &[
+pub const GIT_REPOSITORY_ENV: &[&str] = &[
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_CONFIG",
     "GIT_CONFIG_PARAMETERS",

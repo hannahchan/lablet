@@ -425,30 +425,53 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_contract_file_moved_out_of_the_contract_or_oddly_named_is_still_reported() {
-        let dir = crate::workspace::fixture::TempDir::new("changelog-git");
-        // Cut off from the developer's identity, signing, and hooks.
-        let git = |args: &[&str]| {
-            let mut isolated = vec![
+    /// Git pinned to a scratch repository and cut off from the developer's own
+    /// configuration. Clearing the inherited variables isn't enough on its own:
+    /// under a hook, a command that missed that step would reach the real
+    /// repository, so the repository is named outright.
+    fn scratch_git(root: &std::path::Path, args: &[&str]) -> String {
+        let mut command = std::process::Command::new("git");
+        command
+            .args([
                 "-c",
                 "user.name=xtask",
                 "-c",
                 "user.email=x@example.invalid",
-            ];
-            isolated.extend([
-                "-c",
-                "commit.gpgsign=false",
-                "-c",
-                "core.hooksPath=/dev/null",
-            ]);
-            isolated.extend(args);
-            process::capture_in(dir.path(), "git", &isolated).unwrap();
-        };
+            ])
+            .args(args)
+            .current_dir(root);
+        for variable in process::GIT_REPOSITORY_ENV {
+            command.env_remove(variable);
+        }
+        let output = command
+            .env("GIT_DIR", root.join(".git"))
+            .env("GIT_WORK_TREE", root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    #[test]
+    fn a_contract_file_moved_out_of_the_contract_or_oddly_named_is_still_reported() {
+        let dir = crate::workspace::fixture::TempDir::new("changelog-git");
+        let git = |args: &[&str]| scratch_git(dir.path(), args);
         let registry = "lablet/telemetry/registry/spans";
         let chat = format!("{registry}/chat.yaml");
         dir.write(&chat, "groups: []\n");
         git(&["init", "--quiet", "--initial-branch=main"]);
+        let resolved = git(&["rev-parse", "--show-toplevel"]);
+        assert_eq!(
+            std::fs::canonicalize(resolved.trim()).unwrap(),
+            std::fs::canonicalize(dir.path()).unwrap(),
+            "git resolved outside the scratch repository"
+        );
         git(&["add", "--all"]);
         git(&["commit", "--quiet", "--message=base"]);
         // A span retired from the registry: git sees a rename and, with
