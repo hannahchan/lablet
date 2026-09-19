@@ -1,0 +1,12 @@
+Written by lablet/telemetry/vendor.sh, which holds the pin. Don't edit this tree.
+
+repository: https://github.com/open-telemetry/opentelemetry-weaver-packages.git
+ref: main
+commit: 587265869c37180940d3bae29d23ca385e6baa00
+committed: 2026-09-02T19:18:31-07:00
+copied:
+  policies/check/naming_conventions
+  policies/check/stability
+  templates/docs/markdown
+  LICENSE
+  :(exclude,glob)**/tests/**

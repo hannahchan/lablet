@@ -1,0 +1,10 @@
+Written by lablet/telemetry/vendor.sh, which holds the pin. Don't edit this tree.
+
+repository: https://github.com/open-telemetry/semantic-conventions-genai.git
+ref: main
+commit: c88d504ab3d9879f8e50d3cc87e69775e11db234
+committed: 2026-09-16T01:52:25Z
+copied:
+  model
+  LICENSE
+changed: model/manifest.yaml, where registry_path names lablet/telemetry/deps/semantic-conventions/model

@@ -3,3 +3,13 @@
 
 # Written by `mise lock`, never by hand.
 mise.lock linguist-generated=true
+
+# Upstream's files, copied by lablet/telemetry/vendor.sh. `-text` because
+# `vendor --check` compares them with upstream byte for byte, and line-ending
+# normalisation would change what is committed.
+lablet/telemetry/deps/** linguist-vendored -text
+
+# Written by `cargo xtask weaver generate` from lablet/telemetry/registry/,
+# never by hand.
+lablet/crates/adapters/secondary/shared/telemetry-registry/src/** linguist-generated=true
+lablet/docs/telemetry/** linguist-generated=true

@@ -1,0 +1,9 @@
+Written by lablet/telemetry/vendor.sh, which holds the pin. Don't edit this tree.
+
+repository: https://github.com/open-telemetry/semantic-conventions.git
+ref: v1.44.0
+commit: e10a930844c6951757a43b849d364f7d056ac32b
+committed: 2026-08-04T19:36:15Z
+copied:
+  model
+  LICENSE
