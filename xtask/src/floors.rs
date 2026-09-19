@@ -1,15 +1,12 @@
-//! The coverage and mutation floors, as data (quality-bar item 12). Domain
-//! and application crates carry the floors; adapters are held by conformance
-//! suites and recorded HTTP tests instead of a number.
+//! The coverage and mutation floors, as data (quality-bar item 12).
 //!
 //! Two things keep a floor honest without parsing Rust. A crate may measure
 //! nothing only while its `src/` defines no function. And test code is told
 //! from production code by file name: in a floor crate unit tests live in a
-//! sibling file declared as `#[cfg(test)] mod tests;` (`src/foo.rs` and
-//! `src/foo/tests.rs`, or `src/tests.rs`), which coverage leaves out with
-//! [`TEST_FILES`]. [`crates`] fails a crate whose production files carry any
-//! other attribute that mentions `test` (`#[test]`, `#[cfg(all(test, ..))]`),
-//! since those lines would count as covered production code.
+//! sibling file declared as `#[cfg(test)] mod tests;`, which coverage leaves
+//! out with [`TEST_FILES`]. [`crates`] fails a crate whose production files
+//! carry any other attribute that mentions `test`, since those lines would
+//! count as covered production code.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -47,8 +44,7 @@ pub const FLOORS: &[Floor] = &[
     },
 ];
 
-/// The files that hold test code, as a regex over a source path: a `tests.rs`
-/// file, or anything under a `tests/` directory.
+/// A `tests.rs` file or anything under a `tests/` directory, as a regex.
 pub const TEST_FILES: &str = r"(^|/)tests(\.rs|/)";
 
 /// How one crate fared against one floor.
@@ -56,13 +52,11 @@ pub const TEST_FILES: &str = r"(^|/)tests(\.rs|/)";
 pub enum Standing {
     /// At or above the floor.
     Met,
-    /// Nothing to measure (no coverable lines, no viable mutants) in a crate
-    /// that defines no function yet. It passes, with a note, so the scaffold
-    /// can run the gate.
+    /// Nothing to measure in a crate that defines no function yet. It passes,
+    /// with a note, so a scaffold can run the gate.
     NothingToMeasure,
-    /// Nothing was measured in a crate that defines a function, so the floor
-    /// was not applied at all. A failure: something hid the crate, or no
-    /// function in it has a body the tool can measure.
+    /// Nothing was measured in a crate that defines a function: a failure,
+    /// since the floor was not applied at all.
     NothingMeasured,
     /// Below the floor.
     Below,
@@ -145,9 +139,8 @@ impl fmt::Display for Line {
     }
 }
 
-/// Turns a floor report into a step result: every line is shown either way,
-/// and any crate below its floor, or unmeasured though it defines a function,
-/// fails the step.
+/// A floor report as a step result: every line is shown either way, and any
+/// crate below its floor, or unmeasured though it defines a function, fails.
 pub fn conclude(what: &str, lines: &[Line]) -> crate::gates::CheckResult {
     let report = lines
         .iter()
@@ -176,10 +169,9 @@ pub fn conclude(what: &str, lines: &[Line]) -> crate::gates::CheckResult {
     }))
 }
 
-/// `target/xtask` under the workspace, created: where the floor checks keep
-/// their tools' reports. Git ignores it and `cargo clean` removes it. On a
-/// fresh clone or a CI runner `target/` does not exist yet, and cargo-mutants
-/// does not create the parent of its output directory.
+/// `target/xtask` under the workspace, where the floor checks keep their
+/// tools' reports. Created here: on a fresh clone `target/` does not exist
+/// yet, and cargo-mutants does not create the parent of its output directory.
 pub fn output_directory(workspace_root: &Path) -> Result<PathBuf, String> {
     let directory = workspace_root.join("target").join("xtask");
     std::fs::create_dir_all(&directory)
@@ -199,9 +191,9 @@ pub struct FloorCrate {
     pub holds_code: bool,
 }
 
-/// Every floor crate, read from disk. The errors: a floor naming a crate the
-/// workspace does not have (the list must not rot silently), a source tree
-/// that cannot be read, and test code in a production file.
+/// Every floor crate, read from disk. A floor naming a crate the workspace
+/// does not have is an error, so the list cannot rot silently; so is test
+/// code in a production file.
 pub fn crates(workspace: &Workspace) -> Result<Vec<FloorCrate>, String> {
     let mut crates = Vec::new();
     let mut misplaced = Vec::new();
@@ -245,8 +237,7 @@ pub fn crates(workspace: &Workspace) -> Result<Vec<FloorCrate>, String> {
     ))
 }
 
-/// The `.rs` files under the source directory `src` that [`TEST_FILES`] does
-/// not name, in path order.
+/// The `.rs` files under `src` that [`TEST_FILES`] does not name, sorted.
 fn production_sources(src: &Path) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
     let mut pending = vec![src.to_path_buf()];
@@ -267,9 +258,8 @@ fn production_sources(src: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
-/// Whether a source line defines or declares a function: `fn`, a name, then
-/// `(` or `<`, outside a line comment. A string that reads like one counts
-/// too, which only asks for a measurement sooner.
+/// `fn`, a name, then `(` or `<`, outside a line comment. A string that reads
+/// like one counts too, which only asks for a measurement sooner.
 fn defines_a_function(line: &str) -> bool {
     let line = line.trim_start();
     !line.starts_with("//")
@@ -281,10 +271,9 @@ fn defines_a_function(line: &str) -> bool {
 }
 
 /// The 1-based line of the first attribute that mentions `test` and is not
-/// `#[cfg(test)]` directly on `mod tests;`. An attribute is a line that starts
-/// with `#[` or `#![`, and it mentions `test` when that is one of its words, so
-/// `#[test]`, `#[tokio::test]`, and `#[cfg(all(test, unix))]` do and
-/// `#[serde(rename = "latest")]` does not. The item is the rest of the
+/// `#[cfg(test)]` directly on `mod tests;`. An attribute mentions `test` when
+/// that is one of its words, so `#[tokio::test]` and `#[cfg(all(test, unix))]`
+/// do and `#[serde(rename = "latest")]` does not. The item is the rest of the
 /// attribute's line, or the next line that is not blank or a comment; another
 /// attribute in between (`#[path = ".."]`) is refused with the rest.
 fn misplaced_test_code(source: &str) -> Option<usize> {
@@ -363,7 +352,6 @@ mod tests {
             error.starts_with("mutants: 1 crate(s) below the floor or unmeasured"),
             "{error}"
         );
-        // Both causes are named: a hidden crate, and nothing measurable yet.
         for phrase in ["NOTHING MEASURED", "hides the crate", "without a body"] {
             assert!(error.contains(phrase), "{error}");
         }
@@ -452,8 +440,7 @@ mod tests {
         }
     }
 
-    /// A workspace holding the three floor crates, `lablet-model` with `files`
-    /// under its `src/`.
+    /// The floor crates, `lablet-model` with `files` under its `src/`.
     fn crates_with(files: &[(&str, &str)]) -> Result<Vec<FloorCrate>, String> {
         let mut workspace = FixtureWorkspace::new("");
         for (path, name) in [

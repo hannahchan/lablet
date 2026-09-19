@@ -1,5 +1,5 @@
-//! The end-of-gate report: a verdict line, then one row per step with its
-//! status, its duration, and any note it left.
+//! A gate's closing report: the verdict line and, when a step failed, a table
+//! of every step with the failed ones first.
 
 use std::fmt::Write as _;
 
@@ -12,7 +12,7 @@ pub struct Row {
     pub elapsed: f64,
     /// Whether it passed.
     pub ok: bool,
-    /// What a passing step wants known: a skipped comparison, an empty crate.
+    /// What a passing step wants known, or how to re-run a failed one.
     pub note: Option<String>,
 }
 
@@ -23,18 +23,17 @@ pub fn render(target: &str, rows: &[Row]) -> String {
     }
     let total: f64 = rows.iter().map(|row| row.elapsed).sum();
     let ran = rows.len();
+    let steps = if ran == 1 { "step" } else { "steps" };
     let failed = rows.iter().filter(|row| !row.ok).count();
-    let verdict = if failed == 0 {
-        format!("{ran} step(s) ok")
-    } else {
-        format!("{failed} of {ran} step(s) failed")
-    };
+    if failed == 0 {
+        return format!("{target} · {ran} {steps} ok · {total:.1}s\n");
+    }
 
-    // Width fits the longest step name.
     let width = rows.iter().map(|row| row.name.len()).max().unwrap_or(0);
     let rule = "─".repeat(width + 22);
-    let mut out = format!("{target}  ·  {verdict}  ·  {total:.1}s\n{rule}\n");
-    for row in rows {
+    let mut out = format!("{target} · {failed} of {ran} {steps} failed · {total:.1}s\n{rule}\n");
+    let (red, green): (Vec<&Row>, Vec<&Row>) = rows.iter().partition(|row| !row.ok);
+    for row in red.into_iter().chain(green) {
         let status = if row.ok { "ok" } else { "FAIL" };
         let seconds = format!("{:.1}s", row.elapsed);
         let _ = write!(out, "{:<width$}   {status:<4}   {seconds:>9}", row.name);
@@ -67,35 +66,32 @@ mod tests {
     }
 
     #[test]
-    fn a_green_gate_lists_every_step_with_its_time_and_note() {
+    fn a_green_gate_is_one_line() {
         let rows = [
             row("fmt", 0.42, true, None),
             row("changelog", 0.04, true, Some("no contract file changed")),
         ];
+        assert_eq!(render("pre-push", &rows), "pre-push · 2 steps ok · 0.5s\n");
+        assert_eq!(render("ci", &rows[..1]), "ci · 1 step ok · 0.4s\n");
+    }
+
+    #[test]
+    fn a_red_gate_lists_every_step_with_the_failed_ones_first() {
+        let rows = [
+            row("fmt", 1.0, true, None),
+            row("clippy", 2.0, false, Some("re-run: cargo xtask clippy")),
+            row("changelog", 0.04, true, Some("no contract file changed")),
+        ];
         let rule = "─".repeat(31);
         assert_eq!(
-            render("pre-push", &rows),
+            render("pre-commit", &rows),
             format!(
-                "pre-push  ·  2 step(s) ok  ·  0.5s\n{rule}\n\
-                 fmt         ok          0.4s\n\
+                "pre-commit · 1 of 3 steps failed · 3.0s\n{rule}\n\
+                 clippy      FAIL        2.0s   re-run: cargo xtask clippy\n\
+                 fmt         ok          1.0s\n\
                  changelog   ok          0.0s   no contract file changed\n\
                  {rule}\n"
             )
         );
-    }
-
-    #[test]
-    fn a_red_gate_counts_its_failures_and_marks_each_one() {
-        let rows = [
-            row("fmt", 1.0, false, None),
-            row("clippy", 2.0, true, None),
-            row("lint-layers", 0.0, false, None),
-        ];
-        let report = render("pre-commit", &rows);
-        assert!(
-            report.starts_with("pre-commit  ·  2 of 3 step(s) failed  ·  3.0s\n"),
-            "{report}"
-        );
-        assert_eq!(report.matches("FAIL").count(), 2, "{report}");
     }
 }

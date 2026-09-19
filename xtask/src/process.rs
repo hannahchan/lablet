@@ -1,6 +1,6 @@
 //! Subprocess plumbing: where a command runs, and which copy of a pinned tool
-//! it finds. Nothing here exits the process; a gate keeps going after a
-//! failure, so every problem comes back as an `Err` with its message.
+//! it finds. Nothing here exits the process, because a gate keeps going after
+//! a failure.
 
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt as _;
@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 
 use crate::workspace::{repo_root, workspace_root};
 
-/// A tool mise.toml pins, by its mise name and the binary it provides.
+/// A tool mise.toml pins.
 pub struct Tool {
     /// The key in mise.toml's `[tools]` table.
     pub mise_name: &'static str,
@@ -18,11 +18,7 @@ pub struct Tool {
     pub bin: &'static str,
 }
 
-/// The pinned tools xtask shells out to. A test keeps the names in step with
-/// mise.toml.
-///
-/// Phase 1 extension point: add `github:open-telemetry/weaver` (binary
-/// `weaver`) here when the `weaver` commands land.
+/// The pinned tools xtask shells out to.
 pub const TOOLS: &[Tool] = &[
     Tool {
         mise_name: "cargo-deny",
@@ -36,6 +32,10 @@ pub const TOOLS: &[Tool] = &[
         mise_name: "cargo:cargo-mutants",
         bin: "cargo-mutants",
     },
+    Tool {
+        mise_name: "vale",
+        bin: "vale",
+    },
 ];
 
 /// The line for a subprocess that could not start.
@@ -43,16 +43,15 @@ pub fn could_not_run(program: &str, e: &std::io::Error) -> String {
     format!("could not run `{program}`: {e}")
 }
 
-/// The line for a subprocess that exited non-zero. It names the directory the
-/// command ran in: cargo commands run in `lablet/`, so the line as printed
-/// does not work from the repository root, where `cargo xtask` is started.
+/// The line for a subprocess that exited non-zero. It names the directory:
+/// a cargo command as printed does not work from the repository root, where
+/// `cargo xtask` is started.
 pub fn command_failed(program: &str, args: &[&str]) -> String {
     let (_, place) = working_directory(program);
     format!("command failed (in {place}): {program} {}", args.join(" "))
 }
 
-/// Where a program runs, and what to call the place: cargo commands run in
-/// the Rust workspace, everything else (git, mise) in the repository root.
+/// Cargo runs in the Rust workspace, everything else in the repository root.
 fn working_directory(program: &str) -> (PathBuf, &'static str) {
     if program == "cargo" {
         (workspace_root(), "lablet/")
@@ -61,10 +60,8 @@ fn working_directory(program: &str) -> (PathBuf, &'static str) {
     }
 }
 
-/// A subprocess in the directory [`working_directory`] picks, with the tools
-/// pinned in mise.toml first on PATH. A pinned tool that mise cannot provide
-/// is an error rather than a run of whatever copy PATH holds: the pin is the
-/// point.
+/// A subprocess with the pinned tools first on PATH. A pinned tool that mise
+/// cannot provide is an error, not a run of whatever copy PATH holds.
 pub fn command(program: &str, args: &[&str]) -> Result<Command, String> {
     command_in(&working_directory(program).0, program, args)
 }
@@ -109,8 +106,7 @@ pub fn stream(program: &str, args: &[&str], env: &[(&str, &str)]) -> Result<Exit
     command.status().map_err(|e| could_not_run(program, &e))
 }
 
-/// Runs a subprocess with piped output: its stdout on success, its stderr (or
-/// the reason it could not start) on failure.
+/// A subprocess's stdout, or on failure its stderr or why it could not start.
 pub fn capture(program: &str, args: &[&str]) -> Result<String, String> {
     capture_in(&working_directory(program).0, program, args)
 }
@@ -129,8 +125,8 @@ pub fn capture_in(directory: &Path, program: &str, args: &[&str]) -> Result<Stri
     }
 }
 
-/// Where the pinned tools live, and the PATH that puts them first. `failure`
-/// is why `directories` may be empty: mise could not be run, or refused.
+/// `failure` is why `directories` may be empty: mise could not be run, or
+/// refused.
 struct Tools {
     directories: Vec<PathBuf>,
     path: OsString,
@@ -145,12 +141,11 @@ impl Tools {
     }
 }
 
-/// Resolved once per run. `mise bin-paths` is asked for [`TOOLS`] by name, so
-/// a developer's global mise config does not leak onto PATH. A failure is
-/// kept, not printed, and reported by the first pinned tool that needs it; a
-/// command that needs none still runs. `$CARGO_HOME/bin` goes last if absent:
-/// cargo would otherwise search it ahead of PATH and shadow the pinned cargo
-/// plugins.
+/// `mise bin-paths` is asked for [`TOOLS`] by name, so a developer's global
+/// mise config does not leak onto PATH. A failure is kept for the first pinned
+/// tool that needs it; a command that needs none still runs. `$CARGO_HOME/bin`
+/// goes last if absent: cargo would otherwise search it ahead of PATH and
+/// shadow the pinned cargo plugins.
 fn tools() -> &'static Tools {
     static RESOLVED: OnceLock<Tools> = OnceLock::new();
     RESOLVED.get_or_init(|| {
@@ -208,18 +203,16 @@ fn tools() -> &'static Tools {
 /// Where the mise.run installer puts mise, under `$HOME`.
 const MISE_UNDER_HOME: &str = ".local/bin/mise";
 
-/// Where package managers put mise: Homebrew on Apple silicon, Homebrew on an
-/// Intel Mac, and Linuxbrew.
+/// Homebrew on Apple silicon, Homebrew on an Intel Mac, and Linuxbrew.
 const MISE_FROM_A_PACKAGE_MANAGER: [&str; 3] = [
     "/opt/homebrew/bin/mise",
     "/usr/local/bin/mise",
     "/home/linuxbrew/.linuxbrew/bin/mise",
 ];
 
-/// A `mise` command in the repository root, where mise.toml is: the mise on
-/// PATH, else the first installed copy under `$HOME` or from a package manager
-/// (a git hook or an IDE task runner starts with a minimal PATH that holds
-/// neither). Without any the bare name stays, so the caller's error names mise.
+/// The mise on PATH, else an installed copy: a git hook or an IDE task runner
+/// starts with a minimal PATH that holds none. Without any the bare name
+/// stays, so the caller's error names mise.
 fn mise() -> Command {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let installed = if on_path("mise") {
@@ -231,11 +224,16 @@ fn mise() -> Command {
             .find(|path| is_executable(path))
     };
     let mut command = installed.map_or_else(|| Command::new("mise"), Command::new);
-    command.current_dir(repo_root());
+    let root = repo_root();
+    // A git worktree nested in another checkout would otherwise pick up that
+    // checkout's mise.toml, which mise treats as a separate, untrusted config.
+    if let Some(parent) = root.parent() {
+        command.env("MISE_CEILING_PATHS", parent);
+    }
+    command.current_dir(root);
     command
 }
 
-/// Whether an executable `bin` is on PATH. No `.exe`: Windows is not supported.
 fn on_path(bin: &str) -> bool {
     std::env::var_os("PATH")
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| is_executable(&dir.join(bin))))
@@ -264,10 +262,8 @@ mod tests {
     }
 
     /// `mise lock` skips a platform it cannot look up (a spent GitHub rate
-    /// limit) and still exits 0, so a partial lockfile has to be caught here.
-    /// A tool missing a host installs unverified there and rewrites
-    /// mise.lock, or fails outright under `mise install --locked`. The cargo
-    /// backend builds from source and records no platforms.
+    /// limit) and still exits 0, and a tool missing a host installs unverified
+    /// there. The cargo backend builds from source and records no platforms.
     #[test]
     fn the_mise_lockfile_covers_every_supported_host_for_every_downloaded_tool() {
         const HOSTS: [&str; 4] = ["linux-x64", "linux-arm64", "macos-arm64", "macos-x64"];

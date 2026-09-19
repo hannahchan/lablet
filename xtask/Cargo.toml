@@ -6,25 +6,20 @@ publish = false
 license = "MIT OR Apache-2.0"
 description = "Lablet's gate runner: cargo xtask <task>"
 
-# xtask is its own workspace, not a member of lablet/: building the gates never
-# touches the product's lockfile, and the product never inherits a gate
-# dependency.
+# Its own workspace, not a member of lablet/: building the gates never touches
+# the product's lockfile, and the product never inherits a gate dependency.
 [workspace]
 
-# Third-party crates are pinned to exact versions, as in lablet/Cargo.toml, and
-# bumped only in dedicated commits. `cargo xtask lint-manifests` holds this
-# table to the same pin and comment rules as the workspace.
 [dependencies]
-# Reads Cargo manifests for lint-layers, lint-manifests, and the floor checks
+# Reads Cargo manifests for the lints and the floor checks
 toml = "=1.1.6"
-# Typed views of the manifest tables and tool reports that are read
+# Typed views of the manifest tables and tool reports
 serde = { version = "=1.0.229", features = ["derive"] }
 # Reads the JSON reports of cargo-llvm-cov and cargo-mutants
 serde_json = "=1.0.151"
 
 # xtask cannot inherit `[workspace.lints]` from lablet/Cargo.toml, so this is a
-# copy of that set; `cargo xtask lint-manifests` holds the two in step.
-# Printing is xtask's job, so the two print lints are allowed here.
+# copy; `cargo xtask lint-manifests` holds the two in step.
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
@@ -39,18 +34,13 @@ redundant_explicit_links = "deny"
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 
-# Production hygiene: no debug artefacts. Printing is what xtask does.
 dbg_macro = "warn"
+# Printing is what xtask does, so these two differ from the workspace.
 print_stdout = "allow"
 print_stderr = "allow"
 todo = "warn"
 unimplemented = "warn"
-
-# Error handling discipline
 unwrap_used = "warn"
 expect_used = "warn"
-
-# Suppress with #[expect(..., reason = "...")]; #[allow] is itself a failure,
-# and so is an #[expect] that gives no reason
 allow_attributes = "warn"
 allow_attributes_without_reason = "warn"

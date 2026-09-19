@@ -1,27 +1,20 @@
 //! Where the repository is, and the parsed view of a Cargo workspace that the
-//! lints and the floor checks read. Everything here takes the workspace root
-//! as an argument, so the lints run over a fixture in a test as they do over
-//! `lablet/`.
-//!
-//! The lints model only the Cargo features lablet uses. A workspace shaped any
-//! other way (member globs, `exclude`, a root package, `[patch]`) is refused
-//! with the [`unsupported`] diagnostic instead of being handled, so every
-//! reader of a [`Workspace`] fails safe on it.
+//! lints and the floor checks read. The lints model only the Cargo features
+//! lablet uses; a workspace shaped any other way (member globs, `exclude`, a
+//! root package, `[patch]`) is refused, so every reader fails safe on it.
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// The repository root: the parent of xtask's manifest directory. `cargo run`,
-/// which the `cargo xtask` alias is, names that directory at run time, so a
-/// binary cargo reuses from another checkout (a copied checkout, a shared
-/// target directory) still gates the one it was started in. The value compiled
-/// in is only the fallback for a binary that is run directly.
+/// The repository root: the parent of xtask's manifest directory. `cargo run`
+/// names that directory at run time, so a binary cargo reuses from another
+/// checkout (a shared target directory) still gates the one it was started
+/// in. The compiled-in value is the fallback for a binary run directly.
 pub fn repo_root() -> PathBuf {
     root_from(std::env::var_os("CARGO_MANIFEST_DIR"))
 }
 
-/// The root given the manifest directory cargo named at run time, if it did.
 fn root_from(runtime_manifest_dir: Option<std::ffi::OsString>) -> PathBuf {
     let manifest_dir = runtime_manifest_dir
         .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from);
@@ -40,8 +33,7 @@ pub fn xtask_manifest() -> PathBuf {
     repo_root().join("xtask").join("Cargo.toml")
 }
 
-/// The diagnostic for a Cargo feature lablet does not use, which the lints
-/// refuse rather than model.
+/// The diagnostic for a Cargo feature the lints refuse rather than model.
 pub fn unsupported(feature: &str) -> String {
     format!(
         "{feature} is not supported by lablet's lints, which model only the Cargo features \
@@ -49,14 +41,12 @@ pub fn unsupported(feature: &str) -> String {
     )
 }
 
-/// Whether a raw manifest value is a table holding `workspace = true`: a
-/// dependency, a `[package]` key, or the `[lints]` table, inherited.
+/// Whether a raw manifest value is a table holding `workspace = true`.
 pub fn inherits_workspace(value: &toml::Value) -> bool {
     value.get("workspace").and_then(toml::Value::as_bool) == Some(true)
 }
 
-/// A crate name with `-` folded to `_`, the form rustc sees, so the two
-/// spellings of one name compare equal.
+/// `-` folded to `_`, so the two spellings of one crate name compare equal.
 pub fn normalise(name: &str) -> String {
     name.replace('-', "_")
 }
@@ -110,8 +100,7 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    /// Every non-empty dependency table, top-level first, then each
-    /// `[target.*]` section's.
+    /// Every non-empty dependency table, `[target.*]` sections included.
     pub fn dependency_sections(&self) -> Vec<DependencySection<'_>> {
         let scopes = std::iter::once((String::new(), &self.tables)).chain(
             self.target
@@ -173,9 +162,7 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    /// Reads the workspace rooted at `root`. The error names the file: a
-    /// manifest that is missing or does not parse, a member without a
-    /// `[package]`, or a shape the lints do not support.
+    /// Reads the workspace rooted at `root`. The error names the file.
     pub fn load(root: &Path) -> Result<Self, String> {
         let manifest_path = root.join("Cargo.toml");
         let file = manifest_path.display().to_string();
@@ -233,8 +220,7 @@ impl Workspace {
         })
     }
 
-    /// The member listed at exactly `path`, which is how an internal entry of
-    /// `[workspace.dependencies]` names its crate.
+    /// The member listed at exactly `path`.
     pub fn member_at(&self, path: &str) -> Option<&Member> {
         self.members.iter().find(|member| member.path == path)
     }
@@ -265,8 +251,7 @@ pub mod fixture {
 
     use super::Workspace;
 
-    /// Asserts a lint found one finding per phrase, in order, each holding
-    /// its phrase.
+    /// Asserts one finding per phrase, in order, each holding its phrase.
     #[track_caller]
     pub fn assert_findings(found: &[String], phrases: &[&str]) {
         assert_eq!(found.len(), phrases.len(), "{found:#?}");
@@ -311,8 +296,7 @@ pub mod fixture {
         }
     }
 
-    /// A workspace under construction: a `[workspace.dependencies]` body and
-    /// the members added so far.
+    /// A workspace under construction.
     pub struct FixtureWorkspace {
         dir: TempDir,
         workspace_dependencies: String,
@@ -376,8 +360,6 @@ mod tests {
 
     #[test]
     fn the_manifest_directory_cargo_names_at_run_time_wins_over_the_compiled_one() {
-        // A binary built in one checkout and reused in another must gate the
-        // one it runs in.
         assert_eq!(
             root_from(Some("/elsewhere/checkout/xtask".into())),
             PathBuf::from("/elsewhere/checkout")
@@ -388,8 +370,8 @@ mod tests {
         );
     }
 
-    /// Loads a workspace whose root manifest is `root`, with a package `x` in
-    /// each of `on_disk`.
+    /// A workspace whose root manifest is `root`, with a package `x` in each
+    /// of `on_disk`.
     fn load(root: &str, on_disk: &[&str]) -> Result<Workspace, String> {
         let dir = TempDir::new("load");
         dir.write("Cargo.toml", root);

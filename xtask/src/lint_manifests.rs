@@ -1,50 +1,26 @@
-//! Manifest rules (contributing "Architecture rules", "Code conventions" and
-//! "Versioning", spec §8).
-//!
-//! - Every member opts into `[workspace.lints]` with `[lints] workspace = true`
-//!   and inherits `version`, `edition`, `rust-version`, and `license` from
-//!   `[workspace.package]`: one lint set, one version, one MSRV, one licence.
-//! - Every member's package is named after its directory.
-//! - Every dependency of a member, in every table, is inherited from
-//!   `[workspace.dependencies]` and says nothing else about where it comes
-//!   from. So a version, a path, or a rename lives in one table, and the
-//!   rules below and `lint-layers` have one place to read.
-//! - In `[workspace.dependencies]` a third-party entry is an exact `=x.y.z`
-//!   pin from crates.io, and an internal entry is the path of a listed member
-//!   with the workspace version. Each entry has a comment on the line above it
-//!   saying why it is there. Members only say `workspace = true`, so they need
-//!   none.
-//! - `xtask/` is its own workspace and cannot inherit: its `[lints]` must equal
-//!   `[workspace.lints]` with the two print lints allowed, its dependencies
-//!   follow the same pin and comment rules, and a crate it shares with
-//!   `[workspace.dependencies]` is pinned to the same version there.
-//! - Nothing swaps a pinned crate for other code: `[patch]` and `[replace]` in
-//!   xtask's manifest, and `patch`, `paths`, and `source` in the repository's
-//!   cargo configuration, are refused as unsupported. [`Workspace::load`]
-//!   refuses them in the workspace root.
-//!
-//! The ban on `anyhow` and mocking frameworks is `[bans]` in `lablet/deny.toml`.
+//! The manifest rules of contributing/README.md ("Architecture rules", "Code
+//! conventions", "Versioning"). Members only inherit, so a version, a path,
+//! or a rename lives in one table, and these rules and `lint-layers` have one
+//! place to read. xtask cannot inherit, so its manifest is held to a copy.
+//! Whatever swaps a pinned crate for other code is refused here in xtask's
+//! manifest and the cargo configuration, and by [`Workspace::load`] in the
+//! workspace root.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::workspace::{Member, Workspace, inherits_workspace, unsupported};
 
-/// The `[package]` keys every member inherits from `[workspace.package]`.
 const INHERITED_PACKAGE_KEYS: [&str; 4] = ["version", "edition", "rust-version", "license"];
 
-/// What a member's dependency entry may hold.
 const INHERITED_ENTRY_KEYS: [&str; 4] = ["workspace", "features", "optional", "default-features"];
 
-/// What a third-party pin may hold. Anything else names another source
-/// (`git`, `branch`, `registry`, `path`) or is not a key lablet uses.
+/// Anything else names another source or is not a key lablet uses.
 const PIN_KEYS: [&str; 4] = ["version", "features", "default-features", "package"];
 
-/// What an internal entry of `[workspace.dependencies]` may hold.
 const INTERNAL_KEYS: [&str; 2] = ["path", "version"];
 
-/// The lints xtask sets to `allow` where the workspace warns: printing is
-/// xtask's job.
+/// Printing is xtask's job, so it allows these where the workspace warns.
 const XTASK_ALLOWED_LINTS: [&str; 2] = ["print_stdout", "print_stderr"];
 
 /// The members whose package is not `lablet-<directory name>` (spec §2).
@@ -55,8 +31,7 @@ const PACKAGE_NAME_EXCEPTIONS: [(&str, &str); 3] = [
 ];
 
 /// Every finding over the workspace's manifests, xtask's, and the cargo
-/// configuration files of the repository at `repo`. A finding is one line:
-/// the file, relative to the repository, then what is wrong and how to fix it.
+/// configuration of the repository at `repo`, one line each.
 pub fn lint(workspace: &Workspace, repo: &Path) -> Vec<String> {
     let prefix = workspace
         .root
@@ -74,8 +49,7 @@ pub fn lint(workspace: &Workspace, repo: &Path) -> Vec<String> {
         Err(e) => findings.push(format!("{label}: could not read: {e}")),
     }
     // Cargo reads a `.cargo/config.toml` from the directory it starts in and
-    // every one above it; these two are the repository's. Whether they exist
-    // is the alias test's business (main.rs).
+    // every one above it; these two are the repository's.
     let config = ".cargo/config.toml";
     for (label, path) in [
         (config.to_owned(), repo.join(config)),
@@ -88,8 +62,6 @@ pub fn lint(workspace: &Workspace, repo: &Path) -> Vec<String> {
     findings
 }
 
-/// The member rules: inherited lints, package keys, and dependencies, and a
-/// package named after its directory.
 fn check_member(label: &str, member: &Member) -> Vec<String> {
     let mut findings = Vec::new();
     let manifest = &member.manifest;
@@ -133,7 +105,6 @@ fn check_member(label: &str, member: &Member) -> Vec<String> {
     findings
 }
 
-/// The package name a member's directory calls for.
 fn expected_package_name(member_path: &str) -> String {
     let exception = PACKAGE_NAME_EXCEPTIONS
         .iter()
@@ -145,8 +116,6 @@ fn expected_package_name(member_path: &str) -> String {
     )
 }
 
-/// The `[workspace.dependencies]` rules: each entry is a listed member with
-/// the workspace version or an exact crates.io pin, and each has a comment.
 fn check_workspace_dependencies(label: &str, workspace: &Workspace) -> Vec<String> {
     let table = "[workspace.dependencies]";
     let mut findings = Vec::new();
@@ -163,15 +132,13 @@ fn check_workspace_dependencies(label: &str, workspace: &Workspace) -> Vec<Strin
     findings
 }
 
-/// The first key of a dependency table that `allowed` does not list.
 fn foreign_key<'a>(spec: &'a toml::Value, allowed: &[&str]) -> Option<&'a String> {
     let mut keys = spec.as_table()?.keys();
     keys.find(|key| !allowed.contains(&key.as_str()))
 }
 
-/// What is wrong with an entry that has a `path`, which makes it internal: it
-/// must be `{ path, version }`, the path one `[workspace] members` lists, the
-/// version the workspace's.
+/// A `path` makes an entry internal: it must be `{ path, version }`, the path
+/// a listed member, the version the workspace's.
 fn internal_fault(workspace: &Workspace, spec: &toml::Value) -> Option<String> {
     if let Some(key) = foreign_key(spec, &INTERNAL_KEYS) {
         return Some(format!(
@@ -199,8 +166,6 @@ fn internal_fault(workspace: &Workspace, spec: &toml::Value) -> Option<String> {
     }
 }
 
-/// What is wrong with a third-party entry: it must be an exact pin, written
-/// `"=x.y.z"` or as a table with that `version`, from crates.io.
 fn pin_fault(spec: &toml::Value) -> Option<String> {
     let found = match (foreign_key(spec, &PIN_KEYS), pinned_version(spec)) {
         (Some(key), _) => format!("carries `{key}`"),
@@ -214,15 +179,13 @@ fn pin_fault(spec: &toml::Value) -> Option<String> {
     ))
 }
 
-/// The version of a raw dependency entry: the string itself, or its `version`.
 fn pinned_version(entry: &toml::Value) -> Option<&str> {
     entry
         .as_str()
         .or_else(|| entry.get("version").and_then(toml::Value::as_str))
 }
 
-/// Whether a version requirement is `=x.y.z`, with an optional pre-release or
-/// build suffix, and nothing else.
+/// `=x.y.z`, with an optional pre-release or build suffix, and nothing else.
 fn is_exact_pin(requirement: &str) -> bool {
     let Some(version) = requirement.strip_prefix('=') else {
         return false;
@@ -234,13 +197,12 @@ fn is_exact_pin(requirement: &str) -> bool {
         && !version.contains([',', ' ', '*'])
 }
 
-/// A finding for each of `keys` whose first line under the literal `header`
-/// line has no comment line directly above it, or has no such line at all.
-/// The TOML parser names the keys; this scan only finds their lines. A key
-/// written any other way (a quoted key, `[header.key]`, a dotted path from
-/// another table) is not found, which is a finding too, never a pass. What
-/// the comment says is for review: a group header that touches the entry
-/// below it passes, so the manifests keep headers apart with a blank line.
+/// A finding for each of `keys` with no comment line directly above its line
+/// under the literal `header` line. The TOML parser names the keys; this scan
+/// only finds their lines, and a key written so the scan misses it (quoted,
+/// `[header.key]`, dotted from another table) is a finding too, never a pass.
+/// A group header that touches the entry below it passes as its comment, so
+/// the manifests keep headers apart with a blank line.
 fn comment_findings<'a>(
     label: &str,
     text: &str,
@@ -280,8 +242,6 @@ fn comment_findings<'a>(
     findings
 }
 
-/// The xtask rules: nothing unsupported, the lint copy, and for every
-/// dependency an exact pin that agrees with the workspace's, and a comment.
 fn check_xtask(label: &str, text: &str, workspace: &Workspace) -> Vec<String> {
     let document: toml::Value = match toml::from_str(text) {
         Ok(document) => document,
@@ -321,8 +281,8 @@ fn check_xtask(label: &str, text: &str, workspace: &Workspace) -> Vec<String> {
     findings
 }
 
-/// The rule for a cargo configuration file: `patch`, `paths`, and `source`
-/// swap a pinned crate for other code, as `[patch]` in a manifest does.
+/// `patch`, `paths`, and `source` swap a pinned crate for other code, as
+/// `[patch]` in a manifest does.
 fn check_cargo_config(label: &str, text: &str) -> Vec<String> {
     match toml::from_str::<toml::Value>(text) {
         Ok(document) => refused(label, &document, &["patch", "paths", "source"]),
@@ -330,7 +290,6 @@ fn check_cargo_config(label: &str, text: &str) -> Vec<String> {
     }
 }
 
-/// A finding for each of `keys` the document holds.
 fn refused(label: &str, document: &toml::Value, keys: &[&str]) -> Vec<String> {
     keys.iter()
         .filter(|key| document.get(**key).is_some())
@@ -339,8 +298,7 @@ fn refused(label: &str, document: &toml::Value, keys: &[&str]) -> Vec<String> {
 }
 
 /// Every lint whose level differs between `[workspace.lints]`, with the print
-/// lints allowed, and xtask's `[lints]`, as `group.lint: expected <level>,
-/// found <level>` lines. Empty when the copy is faithful.
+/// lints allowed, and xtask's `[lints]`.
 fn lint_copy_drift(workspace: &toml::Value, xtask: &toml::Value) -> Vec<String> {
     let lints = workspace
         .get("workspace")
@@ -362,8 +320,6 @@ fn lint_copy_drift(workspace: &toml::Value, xtask: &toml::Value) -> Vec<String> 
     drift
 }
 
-/// The lints of a table flattened to `group.lint`, each with its level as
-/// TOML writes it.
 fn lint_levels(table: Option<&toml::Value>) -> BTreeMap<String, String> {
     let groups = table.and_then(toml::Value::as_table).into_iter().flatten();
     groups
@@ -397,8 +353,6 @@ mod tests {
         };
         check_member("m", &member)
     }
-
-    // --- Members ---
 
     #[test]
     fn a_member_that_inherits_everything_is_clean() {
@@ -481,8 +435,6 @@ mod tests {
         );
     }
 
-    // --- [workspace.dependencies] ---
-
     #[test]
     fn only_a_full_version_behind_an_equals_sign_is_an_exact_pin() {
         for pin in ["=1.2.3", "=0.1.0", "=1.0.0-rc.1", "=1.1.6+spec-1.1.0"] {
@@ -534,8 +486,6 @@ mod tests {
         assert!(findings.iter().any(|finding| finding.contains(unchecked)));
     }
 
-    // --- Comments ---
-
     #[test]
     fn a_dependency_needs_a_comment_on_the_line_directly_above_it() {
         // The fixture's [workspace.dependencies] header is line 11.
@@ -585,8 +535,6 @@ mod tests {
         }
     }
 
-    // --- xtask and the cargo configuration ---
-
     /// A workspace whose lint set is small enough to copy by hand.
     fn workspace_with_lints(dependencies: &str) -> Workspace {
         FixtureWorkspace::new(&format!(
@@ -597,7 +545,6 @@ mod tests {
         .load()
     }
 
-    /// A faithful copy of that lint set for an xtask manifest.
     const XTASK_LINTS: &str = "[lints.rust]\nunsafe_code = \"forbid\"\n\n[lints.clippy]\n\
                                all = { level = \"warn\", priority = -1 }\nprint_stdout = \"allow\"\n\
                                print_stderr = \"allow\"\n";
@@ -664,8 +611,6 @@ mod tests {
         }
         assert_findings(&check_cargo_config("c", "[alias"), &["c: could not parse"]);
     }
-
-    // --- The sweep ---
 
     #[test]
     fn the_sweep_runs_every_pass_and_names_the_file_of_each_finding() {

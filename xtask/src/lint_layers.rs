@@ -1,14 +1,10 @@
 //! Layer rules over the workspace (spec §2, contributing "Architecture
-//! rules"). Each crate's ring is read from its path, and its `[dependencies]`
-//! and `[build-dependencies]` are checked against what that ring may reach:
-//! which workspace crates, and which external crate families.
-//! `[dev-dependencies]` are exempt from both. One sweep reports every finding.
+//! rules"). A crate's ring is read from its path, and its dependencies, dev
+//! ones aside, are checked against what that ring may reach.
 //!
 //! `lint-manifests` makes every dependency of a member an inherited entry of
-//! `[workspace.dependencies]`, so that table is the one place a crate's real
-//! name and path are read from. An entry this lint cannot judge (one a member
-//! declares for itself, one the table lacks) is a finding here too, never a
-//! pass.
+//! `[workspace.dependencies]`, so that table is where a crate's real name and
+//! path are read. An entry this lint cannot judge is a finding, never a pass.
 
 use std::fmt;
 
@@ -25,8 +21,7 @@ pub enum Ring {
     SecondaryAdapter,
     /// `apps/*`: the composition root.
     CompositionRoot,
-    /// `tests/*`: conformance suites and test servers, reached only through
-    /// `[dev-dependencies]`.
+    /// `tests/*`: test support, reached only through `[dev-dependencies]`.
     TestSupport,
 }
 
@@ -42,11 +37,9 @@ impl fmt::Display for Ring {
     }
 }
 
-/// The rings, by the directory that places a crate in them. The prefixes are
-/// disjoint, so a member falls in at most one ring; one that falls in none is
-/// a finding. There is no primary adapter ring: spec §2 has no primary
-/// adapters, so a crate under `crates/adapters/primary/` is in no ring until
-/// the spec gains one.
+/// The prefixes are disjoint, so a member falls in at most one ring; one that
+/// falls in none is a finding. Spec §2 has no primary adapters, so there is no
+/// ring for `crates/adapters/primary/`.
 const RINGS: &[(&str, Ring)] = &[
     ("crates/domain/", Ring::Domain),
     ("crates/application/", Ring::Application),
@@ -56,8 +49,7 @@ const RINGS: &[(&str, Ring)] = &[
 ];
 
 impl Ring {
-    /// The rings a crate in this ring may depend on, its own shared kernels
-    /// aside (see [`edge_permitted`]).
+    /// Its own shared kernels aside; see [`edge_permitted`].
     const fn may_depend_on(self) -> &'static [Self] {
         match self {
             Self::Domain | Self::Application => &[Self::Domain],
@@ -82,12 +74,10 @@ impl Ring {
         matches!(self, Self::SecondaryAdapter)
     }
 
-    /// External crate families this ring may not use. Domain and application
-    /// stay free of the runtime, transport, and telemetry frameworks that
-    /// belong to adapters and the composition root; domain also gives up the
-    /// `tracing` facade, which application may use. `serde` and `serde_json`
-    /// are allowed everywhere (decisions.md, "serde derives allowed in the
-    /// domain"). Each list is pinned by a test on the rule a finding quotes.
+    /// External crate families this ring may not use: the runtime, transport,
+    /// and telemetry frameworks belong to adapters and the composition root.
+    /// `serde` and `serde_json` are allowed everywhere (decisions.md, "serde
+    /// derives allowed in the domain").
     const fn forbidden_families(self) -> &'static [&'static str] {
         match self {
             Self::Domain => &[
@@ -114,8 +104,8 @@ impl Ring {
     }
 }
 
-/// The ring a member path belongs to, by its leading directories. A prefix is
-/// never the whole path: [`Workspace::load`] refuses a trailing `/`.
+/// The ring a member path belongs to. A prefix is never the whole path:
+/// [`Workspace::load`] refuses a trailing `/`.
 pub fn classify(member_path: &str) -> Option<Ring> {
     RINGS
         .iter()
@@ -123,22 +113,17 @@ pub fn classify(member_path: &str) -> Option<Ring> {
         .map(|(_, ring)| *ring)
 }
 
-/// Whether a crate is an adapter shared kernel: it sits under
-/// `crates/adapters/secondary/shared/`. A kernel is in the adapter ring, may
-/// be depended on by the adapters beside it, and implements no port.
+/// Whether a crate is a shared kernel, which the adapters beside it may use.
 pub fn is_kernel(member_path: &str) -> bool {
     member_path.starts_with("crates/adapters/secondary/shared/")
 }
 
-/// Whether a crate in ring `from` may depend on a crate in ring `to`: the
-/// inward rule, plus the one intra-ring edge, from an adapter (or a kernel) to
-/// a shared kernel of its own ring. Nothing but test support reaches test
-/// support.
+/// The inward rule, plus the one intra-ring edge: from an adapter or a kernel
+/// to a shared kernel of its own ring.
 fn edge_permitted(from: Ring, to: Ring, to_is_kernel: bool) -> bool {
     from.may_depend_on().contains(&to) || (from.is_adapter() && to == from && to_is_kernel)
 }
 
-/// The rule an impermissible edge breaks, in words.
 fn edge_rule(from: Ring, to: Ring) -> String {
     if to == Ring::TestSupport {
         return "only tests/ crates and [dev-dependencies] may depend on a tests/ crate".to_owned();
@@ -161,9 +146,8 @@ fn edge_rule(from: Ring, to: Ring) -> String {
     format!("{from} may depend only on {}{kernels}", allowed.join(", "))
 }
 
-/// The forbidden family `name` belongs to, if any. A crate belongs to a family
-/// when any `-` or `_` separated part of its name is the family name, so
-/// `opentelemetry` covers `opentelemetry_sdk`, `opentelemetry-otlp`, and
+/// A crate belongs to a family when any `-` or `_` separated part of its name
+/// is the family name, so `opentelemetry` covers `opentelemetry_sdk` and
 /// `tracing-opentelemetry` alike.
 fn forbidden_family(ring: Ring, name: &str) -> Option<&'static str> {
     let normalised = normalise(name);
@@ -173,10 +157,7 @@ fn forbidden_family(ring: Ring, name: &str) -> Option<&'static str> {
         .copied()
 }
 
-// --- The sweep ---
-
-/// Every finding in the workspace, in member order. A finding is one line: the
-/// crate, its directory and ring, the dependency, and the rule it breaks.
+/// Every finding in the workspace, in member order, one line each.
 pub fn lint(workspace: &Workspace) -> Vec<String> {
     let mut findings = Vec::new();
     for member in &workspace.members {
@@ -236,9 +217,7 @@ pub fn lint(workspace: &Workspace) -> Vec<String> {
     findings
 }
 
-/// What a member's dependency is, once followed into `[workspace.dependencies]`.
 enum Dependency<'a> {
-    /// The listed member the entry's `path` names.
     Internal(&'a Member),
     /// A registry crate, by its real name: the entry's `package`, or its key.
     External(&'a str),
@@ -306,8 +285,6 @@ mod tests {
         Ring::TestSupport,
     ];
 
-    // --- Classification ---
-
     #[test]
     fn a_member_path_classifies_by_its_leading_directories() {
         for (path, ring) in [
@@ -320,7 +297,6 @@ mod tests {
             ("tests/mcp-server", Some(Ring::TestSupport)),
             ("xtask", None),
             ("crates/foo", None),
-            // Spec §2 has no primary adapters, so there is no such ring.
             ("crates/adapters/primary/http", None),
         ] {
             assert_eq!(classify(path), ring, "{path}");
@@ -339,8 +315,6 @@ mod tests {
             assert!(!is_kernel(path), "{path}");
         }
     }
-
-    // --- The edge table ---
 
     #[test]
     fn edges_point_inward_and_a_kernel_opens_only_its_own_adapter_ring() {
@@ -363,8 +337,6 @@ mod tests {
             }
         }
     }
-
-    // --- Forbidden families ---
 
     #[test]
     fn a_family_covers_both_spellings_and_every_member_crate() {
@@ -398,8 +370,6 @@ mod tests {
         }
     }
 
-    // --- The sweep, over fixture workspaces on disk ---
-
     /// What every fixture workspace offers for inheritance. An internal entry
     /// is read only when a member inherits it.
     const ENTRIES: &str = r#"
@@ -416,7 +386,6 @@ lablet-conformance = { path = "tests/conformance", version = "0.1.0" }
 lablet-test-mcp-server = { path = "tests/mcp-server", version = "0.1.0" }
 "#;
 
-    /// A dependency table inheriting each of `keys`.
     fn inherit(table: &str, keys: &[&str]) -> String {
         let entries: Vec<String> = keys
             .iter()
@@ -425,7 +394,6 @@ lablet-test-mcp-server = { path = "tests/mcp-server", version = "0.1.0" }
         format!("[{table}]\n{}\n", entries.concat())
     }
 
-    /// The base every fixture starts from: one clean crate per inner ring.
     fn base() -> FixtureWorkspace {
         FixtureWorkspace::new(ENTRIES)
             .member(MODEL, "lablet-model", "")
@@ -436,7 +404,6 @@ lablet-test-mcp-server = { path = "tests/mcp-server", version = "0.1.0" }
             )
     }
 
-    /// The findings with a second domain crate, `lablet-policy`, added.
     fn lint_policy(tables: &str) -> Vec<String> {
         lint(&base().member(POLICY, "lablet-policy", tables).load())
     }

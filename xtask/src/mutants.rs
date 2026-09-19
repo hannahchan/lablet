@@ -1,7 +1,6 @@
 //! `cargo xtask mutants`: mutation testing from cargo-mutants, held to the
-//! floors in [`crate::floors`]. Only the floor crates are mutated, and each
-//! mutant runs its own package's tests, so a crate is judged on the tests it
-//! carries.
+//! floors in [`crate::floors`]. Each mutant runs its own package's tests, so a
+//! crate is judged on the tests it carries.
 //!
 //! The score is caught over viable: caught, missed, and timed-out mutants
 //! count; a mutant that does not build does not. A timeout counts against the
@@ -39,7 +38,6 @@ struct Mutant {
     package: String,
 }
 
-/// One report line per floor crate, from the outcomes of its mutants.
 fn lines_by_crate(outcomes: &Outcomes, crates: &[FloorCrate]) -> Vec<Line> {
     crates
         .iter()
@@ -81,7 +79,6 @@ fn lines_by_crate(outcomes: &Outcomes, crates: &[FloorCrate]) -> Vec<Line> {
 /// caught, some missed, some timed out. Anything else means it did not test.
 const EXITS_WITH_OUTCOMES: [i32; 3] = [0, 2, 3];
 
-/// The cargo-mutants command: the floor crates only, reports under `output`.
 /// cargo-mutants hands `--cargo-arg` to every cargo command it runs, so the
 /// builds in its copies of the tree hold to the committed lockfile too.
 fn mutants_args(output: &str) -> Vec<&str> {
@@ -133,7 +130,6 @@ mod tests {
     use super::*;
     use crate::floors::Standing;
 
-    /// A cut-down cargo-mutants 27 `outcomes.json`.
     const OUTCOMES: &str = r#"{
       "outcomes": [
         {"scenario": "Baseline", "summary": "Success", "log_path": "log/baseline.log"},
@@ -151,7 +147,6 @@ mod tests {
       "total_mutants": 9, "missed": 2, "caught": 5, "timeout": 1, "unviable": 1, "success": 0
     }"#;
 
-    /// The floor crates, each defining a function or not.
     fn crates(holds_code: bool) -> Vec<FloorCrate> {
         FLOORS
             .iter()

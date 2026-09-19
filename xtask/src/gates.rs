@@ -1,13 +1,12 @@
 //! The steps, the commands and gates built from them, and the runner.
 //!
-//! A step is a subprocess or an in-process check. A command such as `clippy`
-//! is a short list of steps with their output streamed; a gate such as
-//! `pre-push` is a longer list with each step's output held back and shown
-//! only if it fails. Either way every step runs, so one run reports every
-//! failure, and any failure makes `cargo xtask` exit non-zero.
+//! A command such as `clippy` streams its steps' output; a gate such as
+//! `pre-push` holds each step's output back and shows it only on failure.
+//! Either way every step runs, so one run reports every failure.
 
 use std::fmt::Write as _;
 use std::io::{IsTerminal, Read as _, Write as _};
+use std::path::Path;
 use std::sync::LazyLock;
 use std::time::Instant;
 
@@ -15,59 +14,51 @@ use crate::report::{self, Row};
 use crate::workspace::{Workspace, repo_root, workspace_root, xtask_manifest};
 use crate::{changelog, coverage, lint_layers, lint_manifests, mutants, process};
 
-/// What an in-process check returns: `Ok(None)` for a plain pass, `Ok(Some)`
-/// for a pass with a note worth a line in the report, `Err` with the whole
-/// diagnostic for a failure.
+/// `Ok(None)` is a pass, `Ok(Some)` a pass with a note for the report, `Err`
+/// the whole diagnostic of a failure.
 pub type CheckResult = Result<Option<String>, String>;
 
 /// One named unit of a command or gate.
 pub struct Step {
-    label: &'static str,
+    /// Its first word is the task a gate's report says re-runs the step.
+    pub label: &'static str,
     action: Action,
-    /// What to run when the step fails, where one command is the remedy.
     hint: Option<&'static str>,
 }
 
 enum Action {
-    /// A subprocess; the step passes when it exits zero.
     Command {
         program: &'static str,
         args: Vec<String>,
         env: &'static [(&'static str, &'static str)],
     },
-    /// A check that runs in this process.
     Check(fn() -> CheckResult),
 }
 
 impl Step {
-    fn cargo(label: &'static str, args: &[&str]) -> Self {
-        Self::cargo_with_env(label, args, &[])
-    }
-
-    /// A cargo step. Every subcommand that resolves dependencies gets
-    /// `--locked` straight after its name, where cargo's own subcommands and
-    /// cargo-deny both take it: a gate judges the committed lockfiles, and
-    /// without the flag cargo would quietly re-resolve a stale one, pass
-    /// against a graph nobody committed, and leave the tree dirty. `cargo fmt`
-    /// resolves nothing and rejects the flag.
-    fn cargo_with_env(
-        label: &'static str,
-        args: &[&str],
-        env: &'static [(&'static str, &'static str)],
-    ) -> Self {
-        let mut args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-        if args.first().is_some_and(|subcommand| subcommand != "fmt") {
-            args.insert(1, LOCKED.to_owned());
-        }
+    fn command(label: &'static str, program: &'static str, args: &[&str]) -> Self {
         Self {
             label,
             action: Action::Command {
-                program: "cargo",
-                args,
-                env,
+                program,
+                args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+                env: &[],
             },
             hint: None,
         }
+    }
+
+    /// `--locked` follows every subcommand but `fmt`, which resolves nothing
+    /// and rejects it: a gate judges the committed lockfiles, and without the
+    /// flag cargo would quietly re-resolve a stale one and leave the tree dirty.
+    fn cargo(label: &'static str, args: &[&str]) -> Self {
+        let mut step = Self::command(label, "cargo", args);
+        if let Action::Command { args, .. } = &mut step.action
+            && args.first().is_some_and(|subcommand| subcommand != "fmt")
+        {
+            args.insert(1, LOCKED.to_owned());
+        }
+        step
     }
 
     const fn check(label: &'static str, check: fn() -> CheckResult) -> Self {
@@ -82,56 +73,81 @@ impl Step {
         self.hint = Some(hint);
         self
     }
+
+    fn with_env(mut self, variables: &'static [(&'static str, &'static str)]) -> Self {
+        if let Action::Command { env, .. } = &mut self.action {
+            *env = variables;
+        }
+        self
+    }
 }
 
-/// The cargo flag that refuses to touch a lockfile; see [`Step::cargo_with_env`].
+/// The cargo flag that refuses to touch a lockfile; see [`Step::cargo`].
 pub const LOCKED: &str = "--locked";
 
-/// xtask's manifest as a cargo argument. Cargo commands run in `lablet/`, so
-/// the passes over xtask itself name its manifest.
-fn xtask_manifest_arg() -> String {
-    xtask_manifest().display().to_string()
-}
+const WORKSPACE: &[&str] = &["--workspace"];
+const DENY_WARNINGS: &[&str] = &["--all-targets", "--", "-D", "warnings"];
+const FMT_HINT: &str = "fix with: cargo xtask fmt";
+const VALE_CONFIG: &str = ".vale.ini";
 
-// --- The steps of each command ---
-
-/// rustfmt over the workspace and xtask: a check, or with `fix` a rewrite.
-pub fn fmt_steps(fix: bool) -> Vec<Step> {
-    let manifest = xtask_manifest_arg();
-    let mut workspace = vec!["fmt", "--all"];
-    let mut xtask = vec!["fmt", "--manifest-path", &manifest];
-    if !fix {
-        workspace.extend(["--", "--check"]);
-        xtask.extend(["--", "--check"]);
-    }
-    let steps = [
-        Step::cargo("fmt", &workspace),
-        Step::cargo("fmt (xtask)", &xtask),
-    ];
-    if fix {
-        steps.into()
-    } else {
-        // The command a failed check echoes only reports; this one repairs.
-        steps.map(|step| step.with_hint(FMT_HINT)).into()
-    }
-}
-
-/// What a failed formatting check says to run.
-const FMT_HINT: &str = "fix with: cargo xtask fmt --fix";
-
-/// clippy over every target of the workspace and of xtask, warnings denied.
-/// The lint set itself lives in the manifests (`[workspace.lints]`).
-pub fn clippy_steps() -> Vec<Step> {
-    const DENY_WARNINGS: [&str; 4] = ["--all-targets", "--", "-D", "warnings"];
-    let manifest = xtask_manifest_arg();
-    let mut workspace = vec!["clippy", "--workspace"];
-    workspace.extend(DENY_WARNINGS);
-    let mut xtask = vec!["clippy", "--manifest-path", &manifest];
-    xtask.extend(DENY_WARNINGS);
-    vec![
-        Step::cargo("clippy", &workspace),
-        Step::cargo("clippy (xtask)", &xtask),
+/// One cargo subcommand over the workspace (`selector` picks its packages),
+/// then over xtask, which a cargo run in `lablet/` reaches only by manifest.
+fn both(label: [&'static str; 2], subcommand: &str, selector: &[&str], rest: &[&str]) -> [Step; 2] {
+    let manifest = xtask_manifest().display().to_string();
+    let workspace = [&[subcommand], selector, rest].concat();
+    let xtask = [&[subcommand, "--manifest-path", &manifest], rest].concat();
+    [
+        Step::cargo(label[0], &workspace),
+        Step::cargo(label[1], &xtask),
     ]
+}
+
+/// `cargo check` over every target.
+pub fn check_steps() -> Vec<Step> {
+    let rest = &["--all-targets"];
+    both(["check", "check (xtask)"], "check", WORKSPACE, rest).into()
+}
+
+/// `cargo build` over the workspace.
+pub fn build_steps(release: bool) -> Vec<Step> {
+    let mut args = vec!["build", "--workspace"];
+    if release {
+        args.push("--release");
+    }
+    vec![Step::cargo("build", &args)]
+}
+
+/// The `lablet` binary, with `args` handed to it.
+pub fn run_steps(args: &[String]) -> Vec<Step> {
+    let mut cargo = vec!["run", "--bin", "lablet", "--"];
+    cargo.extend(args.iter().map(String::as_str));
+    vec![Step::cargo("run", &cargo)]
+}
+
+/// rustfmt: a rewrite, or with `check` a verification.
+pub fn fmt_steps(check: bool) -> Vec<Step> {
+    let label = ["fmt", "fmt (xtask)"];
+    if check {
+        let steps = both(label, "fmt", &["--all"], &["--", "--check"]);
+        steps.map(|step| step.with_hint(FMT_HINT)).into()
+    } else {
+        both(label, "fmt", &["--all"], &[]).into()
+    }
+}
+
+/// Clippy's machine-applicable fixes, then rustfmt. A tree being fixed is
+/// dirty by definition, hence the two `--allow` flags.
+pub fn fix_steps() -> Vec<Step> {
+    const FIX: &[&str] = &["--fix", "--allow-dirty", "--allow-staged", "--all-targets"];
+    let mut steps = Vec::from(both(["fix", "fix (xtask)"], "clippy", WORKSPACE, FIX));
+    steps.extend(fmt_steps(false));
+    steps
+}
+
+/// Clippy over every target, warnings denied.
+pub fn clippy_steps() -> Vec<Step> {
+    let label = ["clippy", "clippy (xtask)"];
+    both(label, "clippy", WORKSPACE, DENY_WARNINGS).into()
 }
 
 /// The layer rules; see [`lint_layers`].
@@ -163,71 +179,87 @@ fn listed(findings: &[String]) -> CheckResult {
     Err(message)
 }
 
+/// The prose vale reads, relative to the repository root. A directory is read
+/// whole, except `product`: its `research/` notes are not held to the style.
+const PROSE: [&str; 7] = [
+    "README.md",
+    "CLAUDE.md",
+    "CHANGELOG.md",
+    "contributing",
+    "product",
+    "lablet/README.md",
+    "lablet/docs",
+];
+
+/// Vale over the project's prose: errors only, or with `all` every alert.
+pub fn lint_prose_steps(all: bool) -> Vec<Step> {
+    let root = repo_root();
+    if !root.join(VALE_CONFIG).is_file() {
+        return vec![Step::check("lint-prose", || {
+            Err(format!(
+                "{VALE_CONFIG} is missing from the repository root, so vale has no style to apply"
+            ))
+        })];
+    }
+    let args = vale_args(&root, all);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    vec![Step::command("lint-prose", "vale", &args)]
+}
+
+fn vale_args(root: &Path, all: bool) -> Vec<String> {
+    let mut args = vec!["--config".to_owned(), VALE_CONFIG.to_owned()];
+    if !all {
+        args.extend(["--minAlertLevel".to_owned(), "error".to_owned()]);
+    }
+    for path in PROSE {
+        if path == "product" {
+            let mut files: Vec<String> = std::fs::read_dir(root.join(path))
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+                .filter(|name| Path::new(name).extension().is_some_and(|ext| ext == "md"))
+                .map(|name| format!("{path}/{name}"))
+                .collect();
+            files.sort();
+            args.extend(files);
+        } else if root.join(path).exists() {
+            args.push(path.to_owned());
+        }
+    }
+    args
+}
+
 /// cargo-deny under `lablet/deny.toml`, over the workspace and over xtask,
 /// which has its own lockfile. `cargo tree -d` recovers the suppressed graphs.
 pub fn deny_steps() -> Vec<Step> {
+    // The policy is written for the workspace, so entries that match nothing
+    // in xtask's small graph are expected there.
+    const UNMATCHED: &str = "-A advisory-not-detected -A license-not-encountered -A unmatched-skip";
     let config = workspace_root().join("deny.toml").display().to_string();
-    let manifest = xtask_manifest_arg();
+    let manifest = xtask_manifest().display().to_string();
+    // cargo-deny takes `--config` ahead of `check`, not after it.
+    let check = ["--config", &config, "check", "--hide-inclusion-graph"];
+    let workspace = [&["deny"], &check[..]].concat();
+    let mut xtask = [&["deny", "--manifest-path", &manifest], &check[..]].concat();
+    xtask.extend(UNMATCHED.split(' '));
     vec![
-        // cargo-deny 0.20 takes `--config` ahead of `check`.
-        Step::cargo(
-            "deny",
-            &[
-                "deny",
-                "--config",
-                &config,
-                "check",
-                "--hide-inclusion-graph",
-            ],
-        ),
-        // The policy is written for the workspace, so entries that match
-        // nothing in xtask's small graph are expected here.
-        Step::cargo(
-            "deny (xtask)",
-            &[
-                "deny",
-                "--manifest-path",
-                &manifest,
-                "--config",
-                &config,
-                "check",
-                "--hide-inclusion-graph",
-                "-A",
-                "advisory-not-detected",
-                "-A",
-                "license-not-encountered",
-                "-A",
-                "unmatched-skip",
-            ],
-        ),
+        Step::cargo("deny", &workspace),
+        Step::cargo("deny (xtask)", &xtask),
     ]
 }
 
-/// rustdoc over the workspace and xtask, without dependencies, any warning an
-/// error: a broken intra-doc link or a missing doc fails the step. This is the
-/// only step that evaluates the `rustdoc` lints; clippy never runs rustdoc.
-/// `cargo doc` documents a package's library and skips a binary of the same
-/// name, so `apps/lablet/src/main.rs` is not covered.
+/// rustdoc without dependencies, warnings denied: the only step that evaluates
+/// the `rustdoc` lints. `cargo doc` skips a binary named like its package's
+/// library, so `apps/lablet/src/main.rs` is not covered.
 pub fn doc_steps() -> Vec<Step> {
-    const DENY_WARNINGS: &[(&str, &str)] = &[("RUSTDOCFLAGS", "-D warnings")];
-    let manifest = xtask_manifest_arg();
-    vec![
-        Step::cargo_with_env("doc", &["doc", "--workspace", "--no-deps"], DENY_WARNINGS),
-        Step::cargo_with_env(
-            "doc (xtask)",
-            &["doc", "--manifest-path", &manifest, "--no-deps"],
-            DENY_WARNINGS,
-        ),
-    ]
+    both(["doc", "doc (xtask)"], "doc", WORKSPACE, &["--no-deps"])
+        .map(|step| step.with_env(&[("RUSTDOCFLAGS", "-D warnings")]))
+        .into()
 }
 
 /// The workspace's tests, doctests included, and xtask's own.
 pub fn test_steps() -> Vec<Step> {
-    let manifest = xtask_manifest_arg();
-    vec![
-        Step::cargo("test", &["test", "--workspace"]),
-        Step::cargo("test (xtask)", &["test", "--manifest-path", &manifest]),
-    ]
+    both(["test", "test (xtask)"], "test", WORKSPACE, &[]).into()
 }
 
 /// The line coverage floors; see [`coverage`].
@@ -245,50 +277,58 @@ pub fn changelog_steps() -> Vec<Step> {
     vec![Step::check("changelog", changelog::check)]
 }
 
-/// The fast gate: what judges a commit and finishes quickly.
-///
-/// Phase 1 extension point: `weaver check` and the generated-files check
-/// (`weaver generate --check`) join this list, as contributing/README.md
-/// already says.
+/// scripts/setup.sh: the pinned toolchain, the pinned tools, the git hooks.
+pub fn setup_steps() -> Vec<Step> {
+    vec![Step::command("setup", "bash", &["scripts/setup.sh"])]
+}
+
+/// `cargo clean` in both workspaces, which takes the coverage and mutation
+/// reports under `lablet/target` too. xtask goes last: this binary runs from
+/// its target directory.
+pub fn clean_steps() -> Vec<Step> {
+    both(["clean", "clean (xtask)"], "clean", &[], &[]).into()
+}
+
+/// The fast gate: what judges a commit without building the whole tree.
 pub fn pre_commit_steps() -> Vec<Step> {
-    let mut steps = fmt_steps(false);
+    let mut steps = fmt_steps(true);
     steps.extend(clippy_steps());
     steps.extend(lint_layers_steps());
     steps.extend(lint_manifests_steps());
+    steps.extend(lint_prose_steps(false));
     steps
 }
 
-/// The full local gate: pre-commit, plus what needs the whole tree built or
-/// the whole history read. `ci` runs the same list.
-///
-/// `coverage` and `mutants` are not here: CI runs them as jobs of their own.
-/// Phase 6 extension point: `weaver live-check` is a CI job too. Phase 11
-/// extension point: so is `bench`, with its regression threshold.
+/// The full local gate, cheap steps first; `ci` runs the same list.
+/// `coverage` and `mutants` are CI jobs of their own.
 pub fn pre_push_steps() -> Vec<Step> {
     let mut steps = pre_commit_steps();
-    steps.extend(test_steps());
-    steps.extend(doc_steps());
     steps.extend(deny_steps());
     steps.extend(changelog_steps());
+    steps.extend(doc_steps());
+    steps.extend(test_steps());
     steps
 }
-
-// --- The runner ---
 
 /// How a list of steps is run.
 #[derive(Clone, Copy)]
 pub enum Mode {
-    /// A single command: subprocess output streams as it comes.
+    /// Output streams, and every step's outcome gets a line.
     Command,
-    /// A named gate: subprocess output is shown only for a failed step, and a
-    /// report closes the run.
+    /// Output streams and a pass adds nothing: the program's output is the point.
+    Passthrough,
+    /// Output is shown only for a failed step, and a report closes the run.
     Gate(&'static str),
 }
 
-/// Runs every step, in order, whatever fails, and reports. Returns whether
-/// every step passed.
+/// Runs every step, in order, whatever fails. Returns whether all passed.
 pub fn run(mode: Mode, steps: &[Step]) -> bool {
     let capture = matches!(mode, Mode::Gate(_));
+    let lists_passes = match mode {
+        Mode::Command => true,
+        Mode::Passthrough => false,
+        Mode::Gate(_) => verbose(),
+    };
     let mut rows = Vec::new();
     for step in steps {
         if capture && on_terminal() {
@@ -303,16 +343,17 @@ pub fn run(mode: Mode, steps: &[Step]) -> bool {
             }
             Action::Check(check) => check(),
         };
-        let result = result.map_err(|diagnostic| with_hint(diagnostic, step.hint));
         let elapsed = start.elapsed().as_secs_f64();
         if capture && on_terminal() {
             print!("\r");
             let _ = std::io::stdout().flush();
         }
         match &result {
+            Ok(_) if !lists_passes => {}
             Ok(None) => println!("[ok] {} ({elapsed:.1}s)", step.label),
             Ok(Some(note)) => println!("[ok] {} ({elapsed:.1}s): {note}", step.label),
             Err(diagnostic) => {
+                let diagnostic = with_hint(diagnostic, step.hint);
                 eprintln!("[FAIL] {} ({elapsed:.1}s)\n\n{diagnostic}\n", step.label);
             }
         }
@@ -320,7 +361,7 @@ pub fn run(mode: Mode, steps: &[Step]) -> bool {
             name: step.label.to_owned(),
             elapsed,
             ok: result.is_ok(),
-            note: result.ok().flatten(),
+            note: result.unwrap_or_else(|_| Some(rerun(step.label))),
         });
     }
 
@@ -328,7 +369,7 @@ pub fn run(mode: Mode, steps: &[Step]) -> bool {
     match mode {
         Mode::Gate(name) => {
             // A failed step ends in a blank line of its own.
-            if rows.last().is_some_and(|row| row.ok) {
+            if lists_passes && rows.last().is_some_and(|row| row.ok) {
                 println!();
             }
             print!("{}", report::render(name, &rows));
@@ -336,14 +377,21 @@ pub fn run(mode: Mode, steps: &[Step]) -> bool {
         Mode::Command if failed > 0 && rows.len() > 1 => {
             eprintln!("error: {failed} of {} step(s) failed", rows.len());
         }
-        Mode::Command => {}
+        Mode::Command | Mode::Passthrough => {}
     }
     failed == 0
 }
 
-/// Runs a subprocess step. Streamed, the failure is one line, since the
-/// output is already on screen. Captured, both streams share one pipe so
-/// their interleaving survives, and the failure carries the capture.
+/// The command that runs a failed gate step alone, as a gate runs it.
+fn rerun(label: &str) -> String {
+    let task = label.split(' ').next().unwrap_or(label);
+    let check = if task == "fmt" { " --check" } else { "" };
+    format!("re-run: cargo xtask {task}{check}")
+}
+
+/// Streamed, a failure is one line, since the output is already on screen.
+/// Captured, both streams share one pipe so their interleaving survives, and
+/// the failure carries the capture.
 fn run_command(program: &str, args: &[&str], env: &[(&str, &str)], capture: bool) -> CheckResult {
     let failed = || format!("error: {}", process::command_failed(program, args));
     if !capture {
@@ -383,11 +431,10 @@ fn run_command(program: &str, args: &[&str], env: &[(&str, &str)], capture: bool
     }
 }
 
-/// A failure's diagnostic, closed by the step's hint when it has one.
-fn with_hint(diagnostic: String, hint: Option<&str>) -> String {
+fn with_hint(diagnostic: &str, hint: Option<&str>) -> String {
     match hint {
         Some(hint) => format!("{diagnostic}\n{hint}"),
-        None => diagnostic,
+        None => diagnostic.to_owned(),
     }
 }
 
@@ -399,79 +446,137 @@ fn on_terminal() -> bool {
     *TERMINAL
 }
 
+/// Whether a green gate lists its steps: on a terminal, under `CI=true` where
+/// the log is the only record, or under `XTASK_VERBOSE=1`. A hook under an
+/// agent or a piped run gets one line.
+fn verbose() -> bool {
+    static VERBOSE: LazyLock<bool> = LazyLock::new(|| {
+        std::io::stdout().is_terminal()
+            || std::env::var("CI").is_ok_and(|v| v == "true")
+            || std::env::var("XTASK_VERBOSE").is_ok_and(|v| v == "1")
+    });
+    *VERBOSE
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn labels(steps: &[Step]) -> Vec<&'static str> {
-        steps.iter().map(|step| step.label).collect()
+    fn labels(steps: &[Step]) -> String {
+        let labels: Vec<&str> = steps.iter().map(|step| step.label).collect();
+        labels.join(", ")
     }
 
     #[test]
-    fn pre_commit_is_fmt_clippy_and_the_two_lints() {
+    fn pre_commit_is_fmt_clippy_and_the_three_lints() {
         assert_eq!(
             labels(&pre_commit_steps()),
-            [
-                "fmt",
-                "fmt (xtask)",
-                "clippy",
-                "clippy (xtask)",
-                "lint-layers",
-                "lint-manifests"
-            ]
+            "fmt, fmt (xtask), clippy, clippy (xtask), lint-layers, lint-manifests, lint-prose"
         );
     }
 
     #[test]
-    fn pre_push_is_pre_commit_then_test_doc_deny_and_changelog() {
+    fn pre_push_is_pre_commit_then_deny_changelog_doc_and_test() {
         let pre_commit = labels(&pre_commit_steps());
-        let pre_push = labels(&pre_push_steps());
-        assert_eq!(pre_push[..pre_commit.len()], pre_commit);
         assert_eq!(
-            pre_push[pre_commit.len()..],
-            [
-                "test",
-                "test (xtask)",
-                "doc",
-                "doc (xtask)",
-                "deny",
-                "deny (xtask)",
-                "changelog"
-            ]
+            labels(&pre_push_steps()),
+            format!(
+                "{pre_commit}, deny, deny (xtask), changelog, doc, doc (xtask), test, test (xtask)"
+            )
         );
     }
 
     #[test]
-    fn a_failed_formatting_check_says_how_to_fix_it() {
-        for step in fmt_steps(false) {
+    fn a_failed_formatting_check_says_how_to_fix_it_and_how_to_run_it_again() {
+        for step in fmt_steps(true) {
             assert_eq!(
                 step.hint,
-                Some("fix with: cargo xtask fmt --fix"),
+                Some("fix with: cargo xtask fmt"),
                 "{}",
                 step.label
             );
+            assert_eq!(rerun(step.label), "re-run: cargo xtask fmt --check");
         }
-        for step in fmt_steps(true) {
+        for step in fmt_steps(false) {
             assert_eq!(step.hint, None, "{}", step.label);
         }
         assert_eq!(
-            with_hint("error: command failed".to_owned(), Some(FMT_HINT)),
-            "error: command failed\nfix with: cargo xtask fmt --fix"
+            with_hint("error: command failed", Some(FMT_HINT)),
+            "error: command failed\nfix with: cargo xtask fmt"
         );
-        assert_eq!(with_hint("error".to_owned(), None), "error");
+        assert_eq!(with_hint("error", None), "error");
+        assert_eq!(rerun("clippy (xtask)"), "re-run: cargo xtask clippy");
     }
 
     #[test]
     fn every_cargo_step_that_resolves_dependencies_refuses_to_touch_the_lockfile() {
         let mut steps = pre_push_steps();
-        steps.extend(fmt_steps(true));
+        for more in [check_steps(), build_steps(true), fix_steps(), clean_steps()] {
+            steps.extend(more);
+        }
+        steps.extend(run_steps(&["--version".to_owned()]));
         for step in &steps {
-            let Action::Command { args, .. } = &step.action else {
+            let Action::Command { program, args, .. } = &step.action else {
                 continue;
             };
-            let locked = args.get(1).map(String::as_str) == Some("--locked");
-            // `cargo fmt` resolves nothing and rejects the flag.
-            assert_eq!(locked, args[0] != "fmt", "{}: {args:?}", step.label);
+            if *program == "cargo" {
+                let locked = args.get(1).map(String::as_str) == Some("--locked");
+                assert_eq!(locked, args[0] != "fmt", "{}: {args:?}", step.label);
+            }
+        }
+    }
+
+    #[test]
+    fn the_thin_tasks_run_the_cargo_commands_a_developer_expects() {
+        let args = |steps: &[Step]| -> Vec<String> {
+            steps
+                .iter()
+                .map(|step| match &step.action {
+                    Action::Command { args, .. } => args.join(" "),
+                    Action::Check(_) => String::new(),
+                })
+                .collect()
+        };
+        let build = args(&build_steps(true));
+        assert_eq!(build, ["build --locked --workspace --release"]);
+        let deny = args(&deny_steps());
+        assert!(deny[0].ends_with("deny.toml check --hide-inclusion-graph"));
+        assert!(deny[1].ends_with("--hide-inclusion-graph -A advisory-not-detected -A license-not-encountered -A unmatched-skip"));
+        assert_eq!(
+            args(&run_steps(&["--help".to_owned()])),
+            ["run --locked --bin lablet -- --help"]
+        );
+        assert_eq!(args(&fmt_steps(false))[0], "fmt --all");
+        assert_eq!(args(&fmt_steps(true))[0], "fmt --all -- --check");
+        let fix = args(&fix_steps());
+        assert_eq!(
+            fix[0],
+            "clippy --locked --workspace --fix --allow-dirty --allow-staged --all-targets"
+        );
+        assert_eq!(fix[2], "fmt --all");
+        let clean = args(&clean_steps());
+        assert_eq!(clean[0], "clean --locked");
+        assert!(clean[1].starts_with("clean --locked --manifest-path "));
+    }
+
+    #[test]
+    fn lint_prose_reads_the_project_prose_but_not_the_research_notes() {
+        let root = repo_root();
+        let errors = vale_args(&root, false);
+        assert_eq!(
+            errors[..4],
+            ["--config", ".vale.ini", "--minAlertLevel", "error"]
+        );
+        let all = vale_args(&root, true);
+        assert_eq!(all[..2], errors[..2]);
+        assert_eq!(all[2..], errors[4..]);
+        let paths = &all[2..];
+        for expected in ["README.md", "contributing", "product/spec.md"] {
+            assert!(paths.iter().any(|path| path == expected), "{expected}");
+        }
+        for path in paths {
+            assert!(root.join(path).exists(), "{path}");
+            assert!(path != "product" && !path.contains("research"), "{path}");
         }
     }
 

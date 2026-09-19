@@ -1,10 +1,8 @@
 //! The changelog gate (spec §8). The config schema, the telemetry registry,
 //! and the outcome JSON are lablet's public contract, so a change to any of
 //! them must come with an entry under `## [Unreleased]` in `CHANGELOG.md`.
-//!
 //! The comparison runs from a base commit to the working tree, so it judges
-//! what is committed on the branch and what is about to be. The decision is a
-//! pure function of what git reports; only [`check`] talks to git.
+//! what is committed on the branch and what is about to be.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -21,10 +19,7 @@ const CONTRACT_PATHS: [&str; 3] = [
     "lablet/tests/fixtures/outcome.json",
 ];
 
-/// The changelog, relative to the repository root.
 const CHANGELOG: &str = "CHANGELOG.md";
-
-/// The heading of the section the gate reads.
 const UNRELEASED_HEADING: &str = "## [Unreleased]";
 
 /// Names the base commit outright, for CI events where the merge-base with
@@ -45,7 +40,6 @@ pub enum Verdict {
     Empty(Vec<String>),
 }
 
-/// Whether `path`, relative to the repository root, is part of the contract.
 fn is_contract_path(path: &str) -> bool {
     CONTRACT_PATHS.iter().any(|contract| {
         if contract.ends_with('/') {
@@ -56,8 +50,8 @@ fn is_contract_path(path: &str) -> bool {
     })
 }
 
-/// The body of the `## [Unreleased]` section: the lines after its heading, up
-/// to the next second-level heading. `None` when there is no such section.
+/// The lines after the heading, up to the next second-level heading. `None`
+/// when there is no such section.
 fn unreleased_section(changelog: &str) -> Option<String> {
     let mut lines = changelog.lines();
     lines.find(|line| line.trim_end().eq_ignore_ascii_case(UNRELEASED_HEADING))?;
@@ -65,16 +59,14 @@ fn unreleased_section(changelog: &str) -> Option<String> {
     Some(body.join("\n").trim().to_owned())
 }
 
-/// Whether a section body holds at least one list entry.
 fn has_entry(section: &str) -> bool {
     section
         .lines()
         .any(|line| line.trim_start().starts_with(['-', '*']))
 }
 
-/// The decision, from what changed and the changelog at both ends.
 /// `changed` is every path that differs between the base and the working
-/// tree; the changelogs are whole files, `None` when the file does not exist.
+/// tree; a changelog is the whole file, `None` when it does not exist.
 pub fn decide(
     changed: &[String],
     changelog_at_base: Option<&str>,
@@ -109,13 +101,10 @@ pub struct Base {
     pub source: String,
 }
 
-/// Picks the base commit: `LABLET_CHANGELOG_BASE` when it names a commit, else
-/// the merge-base with `origin/main`, else the merge-base with `main`. An
-/// all-zero id, which GitHub sends for a new branch, counts as unset; CI sets
-/// the variable only to a commit it has checked exists. The `source` says
-/// which was used, and reaches the step's note and the gate's report. The
-/// error is the note for a run that can compare nothing: spec §8 has an
-/// unresolvable base warn and pass.
+/// `LABLET_CHANGELOG_BASE` when it names a commit, else the merge-base with
+/// `origin/main`, else with `main`. An all-zero id, which GitHub sends for a
+/// new branch, counts as unset. The error is the note for a run that can
+/// compare nothing: spec §8 has an unresolvable base warn and pass.
 pub fn resolve_base(
     from_environment: Option<&str>,
     resolves: impl Fn(&str) -> bool,
@@ -144,12 +133,11 @@ pub fn resolve_base(
     ))
 }
 
-/// Every path that differs between `base` and the working tree of the
-/// repository at `directory`, untracked files included. Rename detection is
-/// off: with it git names only the new path of a rename, and a contract file
-/// moved out of the contract is exactly the change the gate is for. `-z`
-/// keeps git from quoting a name with a quote, a backslash, or a byte
-/// outside ASCII, which would no longer start with a contract path.
+/// Every path that differs between `base` and the working tree, untracked
+/// files included. Rename detection is off: with it git names only the new
+/// path, and a contract file moved out of the contract is exactly the change
+/// the gate is for. `-z` keeps git from quoting an unusual name, which would
+/// no longer start with a contract path.
 fn changed_paths(directory: &Path, base: &str) -> Result<Vec<String>, String> {
     let git = |args: &[&str]| process::capture_in(directory, "git", args);
     let mut changed = nul_separated(&git(&[
@@ -160,7 +148,6 @@ fn changed_paths(directory: &Path, base: &str) -> Result<Vec<String>, String> {
         base,
         "--",
     ])?);
-    // Files git does not track yet differ from the base too.
     changed.extend(nul_separated(&git(&[
         "ls-files",
         "--others",
@@ -170,8 +157,7 @@ fn changed_paths(directory: &Path, base: &str) -> Result<Vec<String>, String> {
     Ok(changed)
 }
 
-/// The gate: gathers the inputs from git and the working tree, decides, and
-/// words the outcome.
+/// The changelog gate as a step.
 pub fn check() -> CheckResult {
     let commit = |revision: &str| {
         let commit = format!("{revision}^{{commit}}");
@@ -225,7 +211,6 @@ pub fn check() -> CheckResult {
     }
 }
 
-/// The failure diagnostic: what changed, what is missing, what to do.
 fn failure(paths: &[String], since: &str, missing: &str) -> String {
     let mut message = format!("Contract files changed since {since}, but {missing}:\n\n");
     for path in paths {
@@ -240,12 +225,10 @@ fn failure(paths: &[String], since: &str, missing: &str) -> String {
     message
 }
 
-/// Runs git in the repository root and returns its stdout.
 fn git(args: &[&str]) -> Result<String, String> {
     process::capture("git", args)
 }
 
-/// The paths of a `-z` listing: NUL-terminated, each exactly as git holds it.
 fn nul_separated(output: &str) -> Vec<String> {
     output
         .split('\0')
@@ -273,8 +256,6 @@ mod tests {
         paths.iter().map(|path| (*path).to_owned()).collect()
     }
 
-    // --- Contract paths ---
-
     #[test]
     fn the_contract_is_the_schema_the_registry_tree_and_the_outcome_fixture() {
         for path in [
@@ -299,8 +280,6 @@ mod tests {
         }
     }
 
-    // --- The Unreleased section ---
-
     #[test]
     fn the_unreleased_section_ends_at_the_next_release_heading() {
         assert_eq!(
@@ -321,8 +300,6 @@ mod tests {
             Some("- a\n- b")
         );
     }
-
-    // --- The decision ---
 
     #[test]
     fn no_contract_change_passes_whatever_the_changelog_says() {
@@ -405,8 +382,6 @@ mod tests {
         );
     }
 
-    // --- The base ---
-
     fn base(
         environment: Option<&str>,
         known: &[&str],
@@ -429,8 +404,6 @@ mod tests {
         let found = base(Some("abc123"), &["abc123"], &[("origin/main", "def456")]).unwrap();
         assert_eq!(found.revision, "abc123");
         assert_eq!(found.source, "LABLET_CHANGELOG_BASE");
-        // Unset, all zeros, or not a commit here: the merge-base, and the
-        // source says so.
         let zeros = "0".repeat(40);
         for unusable in [None, Some(""), Some(zeros.as_str()), Some("gone")] {
             let found = base(unusable, &["abc123"], &[("origin/main", "def456")]).unwrap();
@@ -451,8 +424,6 @@ mod tests {
             "{skipped}"
         );
     }
-
-    // --- What git reports ---
 
     #[test]
     fn a_contract_file_moved_out_of_the_contract_or_oddly_named_is_still_reported() {

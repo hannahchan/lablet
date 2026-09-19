@@ -4,9 +4,7 @@
 //!
 //! The floor is on production lines. Test code is covered by construction, so
 //! counting it would lift a crate over the floor with its production code well
-//! under it. The report leaves out every file [`floors::TEST_FILES`] names,
-//! and [`floors::crates`] fails a floor crate that keeps test code anywhere
-//! else.
+//! under it; the report leaves out every file [`floors::TEST_FILES`] names.
 
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -16,8 +14,7 @@ use crate::gates::{CheckResult, LOCKED};
 use crate::process;
 use crate::workspace::{Workspace, workspace_root};
 
-/// The part of `llvm-cov export --summary-only` JSON that is read: per file,
-/// its name and its line counts.
+/// The part of `llvm-cov export --summary-only` JSON that is read.
 #[derive(Debug, Deserialize)]
 struct Export {
     data: Vec<ExportData>,
@@ -45,9 +42,9 @@ struct ExportCounts {
     covered: u64,
 }
 
-/// One report line per floor crate: the lines of every file under the crate's
+/// One report line per floor crate: the lines of every file under its
 /// directory, summed. A crate with no file in the report has no coverable
-/// lines, which passes only while it defines no function.
+/// lines.
 fn lines_by_crate(export: &Export, crates: &[FloorCrate]) -> Vec<Line> {
     crates
         .iter()
@@ -76,8 +73,6 @@ fn lines_by_crate(export: &Export, crates: &[FloorCrate]) -> Vec<Line> {
         .collect()
 }
 
-/// The cargo-llvm-cov command: every test of the workspace, the committed
-/// lockfile, test files left out, a JSON summary at `report`.
 fn llvm_cov_args(report: &str) -> [&str; 9] {
     [
         "llvm-cov",
@@ -126,8 +121,8 @@ mod tests {
     use super::*;
     use crate::floors::Standing;
 
-    /// A cut-down cargo-llvm-cov 0.9 report: two files in one crate, one in a
-    /// crate whose name shares a prefix, one in another floor crate.
+    /// Two files in one crate, one in a crate whose name shares a prefix, one
+    /// in another floor crate.
     const REPORT: &str = r#"{
       "data": [{
         "files": [
@@ -146,7 +141,6 @@ mod tests {
       "type": "llvm.coverage.json.export", "version": "2.0.1"
     }"#;
 
-    /// The three floor crates under `/ws`, each defining a function or not.
     fn crates(holds_code: bool) -> Vec<FloorCrate> {
         [
             "/ws/crates/domain/model",
