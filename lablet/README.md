@@ -8,14 +8,14 @@ Every crate is an empty shell from the phase 0 scaffold. Each crate's doc commen
 
 Explicit architecture: a ring is a directory prefix, and directory `foo/bar/` is package `lablet-bar`. The two exceptions are `apps/lablet` (package `lablet`) and the test-support crates, whose package names are in the table.
 
-| Path | Ring | May depend on |
-| --- | --- | --- |
-| `crates/domain/model`, `crates/domain/policy` | Domain | domain |
-| `crates/application/run` | Application | domain |
-| `crates/adapters/secondary/*` (`provider-anthropic`, `provider-openai`, `provider-fake`, `tools-builtin`, `tools-mcp`, `telemetry-otel`) | Secondary adapters | application, domain, the adapter shared kernel |
-| `crates/adapters/secondary/shared/telemetry-registry` | Adapter shared kernel | application, domain, other adapter shared kernels |
-| `apps/lablet` | Composition root | everything except test support |
-| `tests/conformance` (`lablet-conformance`), `tests/mcp-server` (`lablet-test-mcp-server`) | Test support | anything; used as dev-dependencies only |
+| Path                                                                                                                                     | Ring                  | May depend on                                     |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------------------------------------------------- |
+| `crates/domain/model`, `crates/domain/policy`                                                                                            | Domain                | domain                                            |
+| `crates/application/run`                                                                                                                 | Application           | domain                                            |
+| `crates/adapters/secondary/*` (`provider-anthropic`, `provider-openai`, `provider-fake`, `tools-builtin`, `tools-mcp`, `telemetry-otel`) | Secondary adapters    | application, domain, the adapter shared kernel    |
+| `crates/adapters/secondary/shared/telemetry-registry`                                                                                    | Adapter shared kernel | application, domain, other adapter shared kernels |
+| `apps/lablet`                                                                                                                            | Composition root      | everything except test support                    |
+| `tests/conformance` (`lablet-conformance`), `tests/mcp-server` (`lablet-test-mcp-server`)                                                | Test support          | anything; used as dev-dependencies only           |
 
 Domain crates may not use tokio, reqwest, tracing, opentelemetry, or rmcp; the application crate may not use tokio, reqwest, opentelemetry, or rmcp (`tracing` is allowed there). The gate also refuses tonic, axum, and hyper in both rings, and matches a whole crate family by name, so `opentelemetry` covers `opentelemetry_sdk` and `tracing-opentelemetry` alike. `serde` and `serde_json` are allowed everywhere. An adapter never depends on another adapter, and there is no primary adapter ring: a crate under `crates/adapters/primary/` fails the gate as a member in no ring. `cargo xtask lint-layers` enforces all of this on `[dependencies]` and `[build-dependencies]`; dev-dependencies are exempt from the ring rules. It reads a dependency's real name and path from `[workspace.dependencies]`, so a dependency it can't find there, dev ones included, fails the gate rather than passing unread. The full rules are in [../contributing/README.md](../contributing/README.md).
 

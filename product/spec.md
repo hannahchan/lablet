@@ -29,10 +29,10 @@ Every provider call, tool call, retry, and stop decision is reported to an obser
 
 ### Completion modes
 
-| Mode | Completes when | Ends without completing when |
-| --- | --- | --- |
-| `natural` (default) | The model returns a turn with no tool calls and a finish reason other than `max_tokens`. | Never. Other stop reasons still apply. |
-| `explicit` | The model calls the built-in `task_complete` tool. The call is intercepted by the loop, never executed, not counted in `tool_calls`, and its JSON argument is the run's structured result. Other tool calls in the same response are ignored. | The model returns a turn with no tool calls. Stop reason `ended_without_completion`. |
+| Mode                | Completes when                                                                                                                                                                                                                                | Ends without completing when                                                         |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `natural` (default) | The model returns a turn with no tool calls and a finish reason other than `max_tokens`.                                                                                                                                                      | Never. Other stop reasons still apply.                                               |
+| `explicit`          | The model calls the built-in `task_complete` tool. The call is intercepted by the loop, never executed, not counted in `tool_calls`, and its JSON argument is the run's structured result. Other tool calls in the same response are ignored. | The model returns a turn with no tool calls. Stop reason `ended_without_completion`. |
 
 ### Stop reasons
 
@@ -63,10 +63,18 @@ Written to stdout as one JSON document when the run ends, whatever the stop reas
   "run_id": "01J...",
   "stop_reason": "completed",
   "turns": 7,
-  "usage": { "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0 },
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_write_tokens": 0
+  },
   "tool_calls": 5,
   "duration_ms": 12345,
-  "result": { "text": "final assistant text", "structured": { "...": "task_complete argument, explicit mode only" } },
+  "result": {
+    "text": "final assistant text",
+    "structured": { "...": "task_complete argument, explicit mode only" }
+  },
   "error": null
 }
 ```
@@ -79,14 +87,14 @@ Exit codes: `0` completed, `2` ended with any other stop reason, `1` the run nev
 
 When a run ends, every observer emits exactly one wide event: a single record carrying everything worth knowing about the run, so an analyst can answer most questions from one row without joining spans. It's emitted after `RunFinished`, whatever the stop reason, and is the last thing the run produces. Its content is `RunContext` plus `RunSummary` (§3), flattened to the attribute names below.
 
-| Group | Attributes |
-| --- | --- |
-| identity | `gen_ai.conversation.id` and `session.id` (both the run id), `gen_ai.agent.name`, `gen_ai.agent.version`, `lablet.config.digest` |
-| setup | `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.request.max_tokens`, `gen_ai.request.seed`, `gen_ai.request.reasoning.level`, `lablet.run.completion_mode`, `lablet.run.max_turns`, `lablet.run.timeout_ms`, `lablet.tools.names` (string[]), `lablet.tools.count`, `lablet.mcp.servers` (string[]), `lablet.prompt.system_bytes`, `lablet.prompt.user_bytes`, `lablet.skills.count` |
-| outcome | `lablet.run.stop_reason`, `error.type`, `lablet.run.error`, `lablet.run.duration_ms`, `lablet.run.turns`, `lablet.result.text_bytes`, `lablet.result.has_structured`, `lablet.run.transcript_path` |
-| provider | `lablet.provider.calls`, `lablet.provider.retries`, `lablet.provider.latency_ms.total`, `lablet.provider.latency_ms.max`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_write.input_tokens`, `gen_ai.response.finish_reasons` (string[], one per call), `lablet.run.cost_usd` (when pricing configured) |
-| tools | `lablet.tool_calls.total`, `lablet.tool_calls.errors`, `lablet.tool_calls.latency_ms.total`, `lablet.tool_calls.input_bytes.total`, `lablet.tool_calls.output_bytes.total`, `lablet.tool.calls.<name>`, `lablet.tool.errors.<name>`, `lablet.tool.latency_ms.<name>` (templates, int) |
-| content | `lablet.result.text` and `lablet.result.structured` (JSON string) only when `telemetry.capture_content` is on |
+| Group    | Attributes                                                                                                                                                                                                                                                                                                                                                                                   |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| identity | `gen_ai.conversation.id` and `session.id` (both the run id), `gen_ai.agent.name`, `gen_ai.agent.version`, `lablet.config.digest`                                                                                                                                                                                                                                                             |
+| setup    | `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.request.max_tokens`, `gen_ai.request.seed`, `gen_ai.request.reasoning.level`, `lablet.run.completion_mode`, `lablet.run.max_turns`, `lablet.run.timeout_ms`, `lablet.tools.names` (string[]), `lablet.tools.count`, `lablet.mcp.servers` (string[]), `lablet.prompt.system_bytes`, `lablet.prompt.user_bytes`, `lablet.skills.count` |
+| outcome  | `lablet.run.stop_reason`, `error.type`, `lablet.run.error`, `lablet.run.duration_ms`, `lablet.run.turns`, `lablet.result.text_bytes`, `lablet.result.has_structured`, `lablet.run.transcript_path`                                                                                                                                                                                           |
+| provider | `lablet.provider.calls`, `lablet.provider.retries`, `lablet.provider.latency_ms.total`, `lablet.provider.latency_ms.max`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_write.input_tokens`, `gen_ai.response.finish_reasons` (string[], one per call), `lablet.run.cost_usd` (when pricing configured)             |
+| tools    | `lablet.tool_calls.total`, `lablet.tool_calls.errors`, `lablet.tool_calls.latency_ms.total`, `lablet.tool_calls.input_bytes.total`, `lablet.tool_calls.output_bytes.total`, `lablet.tool.calls.<name>`, `lablet.tool.errors.<name>`, `lablet.tool.latency_ms.<name>` (templates, int)                                                                                                        |
+| content  | `lablet.result.text` and `lablet.result.structured` (JSON string) only when `telemetry.capture_content` is on                                                                                                                                                                                                                                                                                |
 
 Naming rule: a GenAI or core semantic-convention attribute is used wherever one exists. A `lablet.*` attribute is added only when the run can't be described without it, and every one carries a one-line justification in the registry. Per-tool values use Weaver `template[int]` attributes, which allow a dynamic suffix only; there are no map-typed attributes. `gen_ai.usage.input_tokens` includes cached tokens; `run.max_total_tokens` counts `input + output`. Extensions considered and deferred are listed in the research catalogue, not here.
 
@@ -120,13 +128,13 @@ lablet/
 
 Dependency direction, enforced by `cargo xtask lint-layers` (a workspace crate is placed by its path, an external crate is matched by name; dev-dependencies aren't held to the ring rules):
 
-| Ring | May depend on | May not use |
-| --- | --- | --- |
-| domain | domain | tokio, reqwest, tracing, opentelemetry, rmcp, tonic, axum, hyper |
-| application | domain | tokio, reqwest, opentelemetry, rmcp, tonic, axum, hyper (`tracing` allowed) |
-| adapters and adapter shared kernels | application, domain, and the shared kernels of their own ring; never a sibling adapter | (no restriction) |
-| composition root | everything except test support | (no restriction) |
-| test support (`tests/*`) | anything | (no restriction) |
+| Ring                                | May depend on                                                                          | May not use                                                                 |
+| ----------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| domain                              | domain                                                                                 | tokio, reqwest, tracing, opentelemetry, rmcp, tonic, axum, hyper            |
+| application                         | domain                                                                                 | tokio, reqwest, opentelemetry, rmcp, tonic, axum, hyper (`tracing` allowed) |
+| adapters and adapter shared kernels | application, domain, and the shared kernels of their own ring; never a sibling adapter | (no restriction)                                                            |
+| composition root                    | everything except test support                                                         | (no restriction)                                                            |
+| test support (`tests/*`)            | anything                                                                               | (no restriction)                                                            |
 
 A listed name forbids its whole family: a crate matches when any `-` or `_` separated part of its name equals the listed name, so `opentelemetry` also forbids `opentelemetry_sdk` and `opentelemetry-otlp`. Every dependency of a member is inherited from `[workspace.dependencies]` (`lint-manifests` allows nothing else), so that table is where a rename (`package = "..."`) is resolved to the real crate name and where a workspace crate's path places it in a ring; a dependency that can't be read from it's an error, not a pass. Target-specific tables are walked. No crate outside `tests/` may list a `tests/` crate in `[dependencies]` or `[build-dependencies]`. A workspace member that falls in no ring is an error.
 
@@ -263,21 +271,27 @@ Tool calls within one turn are executed sequentially. Parallel execution is a la
 ## 6. Adapters
 
 ### `provider-anthropic`
+
 Messages API via `reqwest` with `rustls`. Maps `ContentBlock` both ways, including `thinking`, `redacted_thinking`, and cache-control (applied to the system prompt and tool specs when `model.cache: true`). Reads `cache_read_input_tokens` and `cache_creation_input_tokens` into `Usage`; the latter is reported as `gen_ai.usage.cache_write.input_tokens`, the semantic-convention name, not Anthropic's. Thinking: `Default` sends nothing (current models think adaptively by default), `Enabled` sends `thinking: {type: enabled, budget_tokens}`, `Disabled` sends `type: disabled`; `effort` maps to `output_config.effort` and is reported as `gen_ai.request.reasoning.level`. `temperature` is sent only when set; the build step warns that models from Opus 4.7 and Sonnet 5 onward reject a non-default value. Validates `budget < max_tokens` at build. Classifies 429, 529, 5xx, transport errors, and per-call timeouts as retryable, the `prompt is too long` invalid-request error as context exhausted, and 401 and 403 as fatal. Ignores `seed`.
 
 ### `provider-openai`
+
 `/v1/chat/completions` with function calling. Covers OpenAI, Ollama, vLLM, and gateways via `base_url`. Sends `max_completion_tokens` and falls back to `max_tokens` if the server rejects it. One user message holding N `ToolResult` blocks becomes N `role: tool` messages on the way out. `Thinking` blocks are dropped on the way out; `reasoning_content` and `reasoning` fields are mapped to `Thinking` with an empty signature on the way in. Function `arguments` that aren't valid JSON are `Malformed`. Unknown fields go to `Opaque`. Passes `seed` when set. Classifies `context_length_exceeded` and equivalents as context exhausted. `api_key_env` is optional; no header is sent when it's unset.
 
 ### `provider-fake`
+
 Plays a scripted sequence of `Completion`s from a YAML or JSON file (the domain model's serde form), with optional per-call latency (real time) and injected errors of each `ProviderError` class. Selected with `model.provider: fake` and `model.script: path`. Reports usage from the script so token accounting is exercised end to end. Used by lablet's smoke tests, doctests, and examples, and by users testing their own frameworks. `lablet init --provider fake` writes both a config and a script.
 
 ### `tools-builtin`
+
 Each tool is a small struct; the executor holds only those enabled in config. Initial set: `bash` (working directory and timeout from config, captures stdout, stderr, exit code), `read_file`, `write_file`. All paths are resolved under `tools.builtin.root` and rejected if they escape it. `task_complete` isn't here; see §5.
 
 ### `tools-mcp`
+
 One `rmcp` client per configured server (version pinned in the workspace `Cargo.toml`). Tool names are exposed exactly as the server reports them, so measurements reflect the server as-is. A name collision across servers is a build error; a server with `prefix_tools: true` has its tools renamed `<server>__<tool>`, which is the escape hatch. `execute` forwards the call and maps `isError` results to `is_error: true`. It injects the `ToolCall`'s `trace_context` into the request's `params._meta` as unprefixed `traceparent` and `tracestate`, per MCP SEP-414, and fills `McpCallMeta` (method, session id, protocol version, JSON-RPC request id, RPC status code on error, transport `pipe` for stdio or `tcp` for HTTP) on the output or error so the OTel observer can put `mcp.*`, `jsonrpc.*`, `rpc.*`, and `network.transport` on the `execute_tool` span; the conventions want one span carrying both `gen_ai.tool.*` and `mcp.*`, not a nested MCP span. Servers are started when the `Lablet` is built, with `tools.mcp[].startup_timeout`, live for the lifetime of the `Lablet` across runs, and are shut down by `Lablet::shutdown`. A stdio server's stderr is forwarded line by line to the diagnostic log at `debug`. HTTP servers receive `headers` verbatim. If a server exits or its transport breaks mid-run, every call to its tools returns a tool error naming the server, so the consecutive error cap ends the run; its tools stay listed so the model's behaviour is observable.
 
 ### Telemetry contract (`lablet/telemetry/`)
+
 Telemetry is contract-first. An OpenTelemetry Weaver registry under `lablet/telemetry/registry/` in the v2 syntax (`file_format: definition/2`) declares every attribute, span, and log record lablet emits. The approach follows `product/research/weaver/`, which verified it against Weaver v0.26.1:
 
 - `manifest.yaml` (the `registry_manifest.yaml` name is deprecated) depends on the core semantic conventions (`v1.44.0`) and `semantic-conventions-genai` (pinned commit) through **relative paths** to `model/` trees vendored under `lablet/telemetry/deps/` by `cargo xtask weaver vendor`, each with a `SOURCES` file recording repo, ref, and date. Weaver has no dependency cache and clones on every run, so the committed manifest never uses git URLs. The shared naming and stability policies and the markdown doc templates from `opentelemetry-weaver-packages` are vendored the same way. CI needs no network.
@@ -290,19 +304,21 @@ Telemetry is contract-first. An OpenTelemetry Weaver registry under `lablet/tele
 The tables in this document are the human summary; the registry is the source of truth. When they disagree, the registry wins and this document is corrected. Renames upstream in `gen_ai.*` are tracked as breaking changes to lablet's telemetry contract. Fallback if Weaver becomes unusable: the registry YAML and policies stay, codegen becomes a small xtask step over the committed resolved JSON, and live-check becomes an in-process observer test against the generated key lists.
 
 ### `telemetry-otel`
+
 The only telemetry observer. It maps `RunEvent`s to OTel spans and log records exactly once, through `opentelemetry` and `opentelemetry_sdk`, and hands them to the SDK's pluggable `SpanExporter` and `LogExporter` implementations selected by config; there is no second rendering of the contract anywhere. Exporters: **OTLP network** via `opentelemetry-otlp` (gRPC via tonic or HTTP/protobuf, both on `rustls`), and the **OTLP/JSON file** exporter below. Both may be active at once. Batch span and log processors keep export off the loop's path. Every attribute name comes from `lablet-telemetry-registry`; string literals for attribute names are a lint failure in this crate. Unit tests assert each span's name and required attribute set against the generated per-signal key lists, since live-check doesn't. Follows the GenAI semantic conventions; anything the conventions lack uses the `lablet.` namespace. The wide event is a log record emitted through the logs API with the root span's trace context set on it. Shutdown runs from a blocking task with the export timeout lowered so an unreachable endpoint costs seconds, not the default ten.
 
-| Event | Span | Key attributes |
-| --- | --- | --- |
-| RunStarted..RunFinished | `invoke_agent lablet` (root, INTERNAL) | `gen_ai.operation.name=invoke_agent`, `gen_ai.agent.name`, `gen_ai.agent.version`, `gen_ai.conversation.id` and `session.id` (run id), `lablet.config.digest`, `lablet.run.stop_reason`, `error.type` on failure, `lablet.run.turns`, `lablet.tool_calls.total`, aggregate `gen_ai.usage.*` (the conventions allow the aggregate on `invoke_agent`; a query summing `gen_ai.usage.*` over every span in a trace double counts and must filter on `gen_ai.operation.name`), `lablet.run.cost_usd` when pricing configured |
-| ProviderCall* | `chat <model>` child of root (CLIENT) | `gen_ai.operation.name=chat`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.request.max_tokens`, `gen_ai.request.temperature` when set, `gen_ai.request.seed` when set, `gen_ai.request.reasoning.level` when set, `gen_ai.response.model`, `gen_ai.response.id`, `gen_ai.response.finish_reasons`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_write.input_tokens`, `server.address`, `server.port`, `error.type` on failure, `lablet.turn`, `lablet.attempt`, `lablet.request.bytes` |
-| ToolCall* | `execute_tool <name>` child of root (INTERNAL) | `gen_ai.operation.name=execute_tool`, `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type` (`function` for builtin, `extension` for MCP), `gen_ai.tool.description`, `error.type` on failure, `lablet.turn`, `lablet.tool.source`, `lablet.tool.input.bytes`, `lablet.tool.output.bytes`, `lablet.tool.is_error`; for MCP tools also `mcp.method.name`, `mcp.session.id`, `mcp.protocol.version`, `jsonrpc.request.id`, `rpc.response.status_code`, `network.transport` |
-| ProviderCallFailed | `gen_ai.client.operation.exception` log record (severity WARN) in the chat span's context, plus a span event on the chat span for the retry | log record: `exception.type`, `exception.message`, the chat span's `gen_ai.*`; span event: `lablet.attempt`, `lablet.retry.will_retry`, `lablet.retry.backoff_ms`. The deprecated `exception` span event isn't used |
-| RunFinished | one log record `lablet.run` (the wide event), trace context of the root span | the §1 wide-event attribute set |
+| Event                   | Span                                                                                                                                        | Key attributes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| RunStarted..RunFinished | `invoke_agent lablet` (root, INTERNAL)                                                                                                      | `gen_ai.operation.name=invoke_agent`, `gen_ai.agent.name`, `gen_ai.agent.version`, `gen_ai.conversation.id` and `session.id` (run id), `lablet.config.digest`, `lablet.run.stop_reason`, `error.type` on failure, `lablet.run.turns`, `lablet.tool_calls.total`, aggregate `gen_ai.usage.*` (the conventions allow the aggregate on `invoke_agent`; a query summing `gen_ai.usage.*` over every span in a trace double counts and must filter on `gen_ai.operation.name`), `lablet.run.cost_usd` when pricing configured                                                    |
+| ProviderCall*           | `chat <model>` child of root (CLIENT)                                                                                                       | `gen_ai.operation.name=chat`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.request.max_tokens`, `gen_ai.request.temperature` when set, `gen_ai.request.seed` when set, `gen_ai.request.reasoning.level` when set, `gen_ai.response.model`, `gen_ai.response.id`, `gen_ai.response.finish_reasons`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_write.input_tokens`, `server.address`, `server.port`, `error.type` on failure, `lablet.turn`, `lablet.attempt`, `lablet.request.bytes` |
+| ToolCall*               | `execute_tool <name>` child of root (INTERNAL)                                                                                              | `gen_ai.operation.name=execute_tool`, `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type` (`function` for builtin, `extension` for MCP), `gen_ai.tool.description`, `error.type` on failure, `lablet.turn`, `lablet.tool.source`, `lablet.tool.input.bytes`, `lablet.tool.output.bytes`, `lablet.tool.is_error`; for MCP tools also `mcp.method.name`, `mcp.session.id`, `mcp.protocol.version`, `jsonrpc.request.id`, `rpc.response.status_code`, `network.transport`                                                                                            |
+| ProviderCallFailed      | `gen_ai.client.operation.exception` log record (severity WARN) in the chat span's context, plus a span event on the chat span for the retry | log record: `exception.type`, `exception.message`, the chat span's `gen_ai.*`; span event: `lablet.attempt`, `lablet.retry.will_retry`, `lablet.retry.backoff_ms`. The deprecated `exception` span event isn't used                                                                                                                                                                                                                                                                                                                                                         |
+| RunFinished             | one log record `lablet.run` (the wide event), trace context of the root span                                                                | the §1 wide-event attribute set                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 Content, when captured, is emitted as `gen_ai.client.inference.operation.details` log records carrying `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions`, and tool inputs and outputs. Resource attributes: `service.name=lablet`, `service.version`, plus `telemetry.resource` from config. The exporter is flushed before the process exits.
 
 ### OTLP/JSON file exporter (in `telemetry-otel`)
+
 A `SpanExporter` and `LogExporter` pair that writes each export batch as one line of OTLP/JSON, the protobuf JSON mapping of `ExportTraceServiceRequest` and `ExportLogsServiceRequest`, to `lablet-<run_id>.otlp.jsonl` in the working directory by default, any path, or stderr with `-`. This is the format the OpenTelemetry Collector's file exporter writes and its OTLP JSON file receiver reads, so a file written without a collector can be replayed into one later, or into any tool that speaks OTLP. Each line carries the full resource and instrumentation scope, so a file is byte-for-byte the data a collector would have received: spans with start and end times, status, events, and attributes; log records including the wide event and, when captured, the content records. No lablet-specific envelope exists; the registry describes the attributes and OTLP describes the structure. Always available, no endpoint needed, and the default when no OTLP endpoint is configured. Flattening is the consumer's first step, which DuckDB, DataFusion, jq, and the collector all do directly.
 
 Lifecycle: the providers and exporters are built once per `Lablet`, before any run id exists. On `RunStarted` the observer hands the file exporter the run's path (the `lablet-<run_id>` default); a fixed `telemetry.file.path` receives every run of that `Lablet`, appended. After emitting the wide event, `Lablet::run` calls `force_flush` on the tracer and logger providers before returning, so the file is complete when `run` returns and a caller may read it immediately. Serialisation uses `opentelemetry-proto` with the `with-serde` feature and the same `group_spans_by_resource_and_scope` and `group_logs_by_resource_and_scope` transforms the OTLP HTTP/JSON path uses, written compact (`serde_json::to_string`, one request per line, newline terminated), which yields hex ids, stringified 64-bit integers, and camelCase names as the OTLP/JSON mapping requires. Readers dispatch on the top-level `resourceSpans` or `resourceLogs` key, as the Collector does, because the prost serde derives don't reject unknown fields.
@@ -342,67 +358,67 @@ Error messages name the config key, line, offending value, and accepted values, 
 
 ```yaml
 run:
-  completion: natural            # natural | explicit
+  completion: natural # natural | explicit
   max_turns: 30
   timeout: 10m
-  max_total_tokens: null         # input + output across the run (input already includes cached tokens); null means unlimited
-  max_retries: 3                 # per provider call
+  max_total_tokens: null # input + output across the run (input already includes cached tokens); null means unlimited
+  max_retries: 3 # per provider call
   max_consecutive_tool_errors: 3
   tool_timeout: 60s
   provider_timeout: 120s
-  transcript_path: null          # write the full conversation at run end
-  transcript_format: json        # json | atif (ATIF v1.8, phase 10)
-  completion_schema: null        # explicit mode: JSON schema for the task_complete argument; null means any object
+  transcript_path: null # write the full conversation at run end
+  transcript_format: json # json | atif (ATIF v1.8, phase 10)
+  completion_schema: null # explicit mode: JSON schema for the task_complete argument; null means any object
 
 model:
-  provider: anthropic            # anthropic | openai | fake
-  script: null                   # fake only: path to the scripted responses
+  provider: anthropic # anthropic | openai | fake
+  script: null # fake only: path to the scripted responses
   name: claude-sonnet-5
   api_key_env: ANTHROPIC_API_KEY # never the key itself; optional for openai (Ollama) and fake
-  base_url: null                 # override for gateways, Ollama, vLLM
+  base_url: null # override for gateways, Ollama, vLLM
   max_tokens: 4096
-  temperature: null              # sent only when set; rejected by current Anthropic models
+  temperature: null # sent only when set; rejected by current Anthropic models
   thinking:
-    mode: default                # default | enabled | disabled
-    budget: null                 # tokens, enabled mode only, must be below max_tokens
-    effort: null                 # low | medium | high | xhigh | max (anthropic)
-  seed: null                     # passed through when the provider supports it
-  cache: true                    # anthropic only
-  pricing: null                  # { input, output, cache_read, cache_write } USD per million tokens
+    mode: default # default | enabled | disabled
+    budget: null # tokens, enabled mode only, must be below max_tokens
+    effort: null # low | medium | high | xhigh | max (anthropic)
+  seed: null # passed through when the provider supports it
+  cache: true # anthropic only
+  pricing: null # { input, output, cache_read, cache_write } USD per million tokens
 
 prompt:
-  system: "You are ..."          # exactly one of system or system_file
+  system: "You are ..." # exactly one of system or system_file
   system_file: null
-  skills: []                     # paths to SKILL.md files, appended to the system prompt in order
+  skills: [] # paths to SKILL.md files, appended to the system prompt in order
 
 tools:
   builtin:
-    root: .                      # sandbox root for file and bash tools
-    enabled: [bash, read_file, write_file]   # task_complete is implied by run.completion: explicit
+    root: . # sandbox root for file and bash tools
+    enabled: [bash, read_file, write_file] # task_complete is implied by run.completion: explicit
   mcp:
     - name: docs
       transport: stdio
       command: npx
       args: ["-y", "@example/docs-mcp"]
-      env: { }
+      env: {}
       startup_timeout: 30s
-      prefix_tools: false        # true renames its tools <name>__<tool>
+      prefix_tools: false # true renames its tools <name>__<tool>
     - name: search
       transport: http
       url: http://localhost:8080/mcp
-      headers: { }
-  allow: null                    # list of tool names; null means all
-  deny: []                       # removed after allow is applied
+      headers: {}
+  allow: null # list of tool names; null means all
+  deny: [] # removed after allow is applied
 
 telemetry:
   capture_content: false
   otlp:
-    endpoint: null               # e.g. http://localhost:4317; null disables the network exporter and makes the file exporter the default
-    protocol: grpc               # grpc | http
-    headers: { }
+    endpoint: null # e.g. http://localhost:4317; null disables the network exporter and makes the file exporter the default
+    protocol: grpc # grpc | http
+    headers: {}
   file:
-    path: null                   # OTLP/JSON lines; file path, "-" for stderr; null means lablet-<run_id>.otlp.jsonl when otlp.endpoint is also null
-  resource: { }                  # extra resource attributes, e.g. experiment ids
+    path: null # OTLP/JSON lines; file path, "-" for stderr; null means lablet-<run_id>.otlp.jsonl when otlp.endpoint is also null
+  resource: {} # extra resource attributes, e.g. experiment ids
 ```
 
 Config digest (`lablet.config.digest`) is a SHA-256 of the canonical JSON form of the **resolved** config (defaults filled in) after `--set` overrides but before `${VAR}` substitution. Any value injected from the environment never enters the digest, two configs with the same effect share a digest, and a default change in a new lablet version changes the digest, which is why `gen_ai.agent.version` sits beside it in the wide event.
