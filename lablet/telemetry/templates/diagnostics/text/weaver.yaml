@@ -1,0 +1,15 @@
+# Weaver warns once for every file in the alpha v2 format, and about vendored
+# files nobody here can change. Left in, those warnings bury the finding that
+# failed the check. Nothing above a warning is ever dropped.
+# github/weaver.yaml is a copy: weaver reads one file per format.
+templates:
+  - template: errors.txt.j2
+    filter: >
+      map(select(
+        .diagnostic.severity? != "Warning"
+        or (
+          .error.FailToResolveDefinition?.UnstableFileFormat? == null
+          and ((.diagnostic.message // "") | contains("lablet/telemetry/deps/") | not)
+        )
+      ))
+    application_mode: single

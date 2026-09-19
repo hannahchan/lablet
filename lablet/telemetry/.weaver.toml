@@ -1,0 +1,18 @@
+# Read only by live-check, which is handed this file by path. Setting
+# `[registry] v2 = true` here would break it: the v2 index leaves out every
+# attribute that comes from a dependency. The table name is hyphenated because
+# weaver reads a section by its subcommand name and ignores one it doesn't know.
+[live-check]
+fail_on = "violation"
+
+# Every lablet attribute is `development`, so this would fire on every sample.
+[[live-check.finding_filters]]
+exclude = ["not_stable"]
+
+# A value outside one of lablet's closed sets is a bug in lablet. The
+# conventions' own enums are open, so a provider they don't list stays
+# information.
+[[live-check.finding_level_overrides]]
+ids = ["undefined_enum_variant"]
+sample_names = ["lablet.*"]
+level = "violation"

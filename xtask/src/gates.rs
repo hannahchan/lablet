@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use crate::report::{self, Row};
 use crate::workspace::{Workspace, repo_root, workspace_root, xtask_manifest};
-use crate::{changelog, coverage, lint_layers, lint_manifests, mutants, process};
+use crate::{changelog, coverage, generated, lint_layers, lint_manifests, mutants, process};
 
 /// `Ok(None)` is a pass, `Ok(Some)` a pass with a note for the report, `Err`
 /// the whole diagnostic of a failure.
@@ -20,7 +20,8 @@ pub type CheckResult = Result<Option<String>, String>;
 
 /// One named unit of a command or gate.
 pub struct Step {
-    /// Its first word is the task a gate's report says re-runs the step.
+    /// The task a gate's report says re-runs the step, then an optional
+    /// ` (qualifier)`; see [`task_of`].
     pub label: &'static str,
     action: Action,
     hint: Option<&'static str>,
@@ -210,6 +211,9 @@ const PROSE: [&str; 7] = [
 /// A frozen record of what was run, kept out of the linters.
 const RESEARCH: &str = "product/research/";
 
+/// Upstream's files, which stay as upstream wrote them.
+const VENDORED: &str = "lablet/telemetry/deps/";
+
 /// shellcheck over every tracked shell script.
 pub fn lint_shell_steps() -> Vec<Step> {
     match shell_scripts(&repo_root()) {
@@ -230,7 +234,8 @@ fn shell_scripts(root: &Path) -> Result<Vec<String>, String> {
     let listed = process::capture_in(root, "git", &["ls-files", "-z"])?;
     Ok(listed
         .split('\0')
-        .filter(|path| !path.is_empty() && !path.starts_with(RESEARCH))
+        .filter(|path| !path.is_empty())
+        .filter(|path| !path.starts_with(RESEARCH) && !path.starts_with(VENDORED))
         .filter(|path| match Path::new(path).extension() {
             Some(extension) => extension.eq_ignore_ascii_case("sh"),
             None => std::fs::read_to_string(root.join(path))
@@ -300,6 +305,82 @@ fn vale_args(root: &Path, all: bool) -> Vec<String> {
     args
 }
 
+/// Paths are relative to the repository root, where weaver runs: it resolves
+/// the registry manifest's dependency paths against its working directory.
+/// `--v2` because the policies read the v2 form of the resolved registry.
+/// `--quiet` still prints every diagnostic.
+const WEAVER_CHECK: [&str; 12] = [
+    "registry",
+    "check",
+    "--v2",
+    "--quiet",
+    "--registry",
+    "lablet/telemetry/registry",
+    "--policy",
+    "lablet/telemetry/policies",
+    "--policy",
+    "lablet/telemetry/deps/weaver-packages/policies/check/naming_conventions",
+    "--policy",
+    "lablet/telemetry/deps/weaver-packages/policies/check/stability",
+];
+
+const WEAVER_DIAGNOSTICS: &str = "lablet/telemetry/templates/diagnostics";
+
+const WEAVER_VENDOR: &str = "lablet/telemetry/vendor.sh";
+
+/// The telemetry registry against the lablet policies and the vendored naming
+/// and stability policies. It reads only the working tree, never the network.
+pub fn weaver_check_steps() -> Vec<Step> {
+    let args = weaver_check_args(in_ci());
+    vec![Step::command("weaver check", "weaver", &args)]
+}
+
+fn weaver_check_args(github: bool) -> Vec<&'static str> {
+    let mut args = WEAVER_CHECK.to_vec();
+    args.extend(diagnostic_args(github));
+    args
+}
+
+/// The diagnostic formats are lablet's own templates; `github` renders
+/// workflow commands, which Actions turns into annotations.
+const fn diagnostic_args(github: bool) -> [&'static str; 4] {
+    let format = if github { "github" } else { "text" };
+    [
+        "--diagnostic-template",
+        WEAVER_DIAGNOSTICS,
+        "--diagnostic-format",
+        format,
+    ]
+}
+
+/// How every weaver command here reports: as text, or for GitHub in CI.
+pub fn weaver_diagnostic_args() -> [&'static str; 4] {
+    diagnostic_args(in_ci())
+}
+
+/// Renders the `lablet-telemetry-registry` sources and the telemetry reference
+/// from the registry, or with `check` fails when the tree differs from that
+/// rendering; see [`generated`].
+pub fn weaver_generate_steps(check: bool) -> Vec<Step> {
+    let run = if check {
+        generated::check
+    } else {
+        generated::write
+    };
+    vec![Step::check("weaver generate", run)]
+}
+
+/// Replaces the vendored upstream trees from the pins in the vendor script,
+/// or with `check` fetches them again and fails on any difference. Both need
+/// the network, so neither is part of a gate.
+pub fn weaver_vendor_steps(check: bool) -> Vec<Step> {
+    let mut args = vec![WEAVER_VENDOR];
+    if check {
+        args.push("--check");
+    }
+    vec![Step::command("weaver vendor", "bash", &args)]
+}
+
 /// cargo-deny under `lablet/deny.toml`, over the workspace and over xtask,
 /// which has its own lockfile. `cargo tree -d` recovers the suppressed graphs.
 pub fn deny_steps() -> Vec<Step> {
@@ -366,6 +447,8 @@ pub fn pre_commit_steps() -> Vec<Step> {
     steps.extend(clippy_steps());
     steps.extend(lint_layers_steps());
     steps.extend(lint_manifests_steps());
+    steps.extend(weaver_check_steps());
+    steps.extend(weaver_generate_steps(true));
     steps.extend(lint_shell_steps());
     steps.extend(lint_prose_steps(false));
     steps
@@ -454,10 +537,17 @@ pub fn run(mode: Mode, steps: &[Step]) -> bool {
     failed == 0
 }
 
+/// The task that runs a step alone: its label up to any ` (qualifier)`, so
+/// `clippy (xtask)` is `clippy` and `weaver check` is itself.
+pub fn task_of(label: &str) -> &str {
+    label.split_once(" (").map_or(label, |(task, _)| task)
+}
+
 /// The command that runs a failed gate step alone, as a gate runs it.
 fn rerun(label: &str) -> String {
-    let task = label.split(' ').next().unwrap_or(label);
-    let check = if task == "fmt" { " --check" } else { "" };
+    let task = task_of(label);
+    let verifies = ["fmt", "weaver generate"].contains(&task);
+    let check = if verifies { " --check" } else { "" };
     format!("re-run: cargo xtask {task}{check}")
 }
 
@@ -524,10 +614,14 @@ fn on_terminal() -> bool {
 fn verbose() -> bool {
     static VERBOSE: LazyLock<bool> = LazyLock::new(|| {
         std::io::stdout().is_terminal()
-            || std::env::var("CI").is_ok_and(|v| v == "true")
+            || in_ci()
             || std::env::var("XTASK_VERBOSE").is_ok_and(|v| v == "1")
     });
     *VERBOSE
+}
+
+fn in_ci() -> bool {
+    std::env::var("CI").is_ok_and(|v| v == "true")
 }
 
 #[cfg(test)]
@@ -540,14 +634,14 @@ mod tests {
     }
 
     #[test]
-    fn pre_commit_is_fmt_clippy_and_the_three_lints() {
+    fn pre_commit_is_fmt_clippy_the_lints_and_the_registry_checks() {
         let steps: Vec<Step> = pre_commit_steps()
             .into_iter()
             .filter(|step| step.label != "lint-prose (sync)")
             .collect();
         assert_eq!(
             labels(&steps),
-            "fmt, fmt (xtask), fmt (dprint), clippy, clippy (xtask), lint-layers, lint-manifests, lint-shell, lint-prose"
+            "fmt, fmt (xtask), fmt (dprint), clippy, clippy (xtask), lint-layers, lint-manifests, weaver check, weaver generate, lint-shell, lint-prose"
         );
     }
 
@@ -563,6 +657,7 @@ mod tests {
             assert!(scripts.iter().any(|path| path == expected), "{expected}");
         }
         assert!(scripts.iter().all(|path| !path.starts_with(RESEARCH)));
+        assert!(scripts.iter().all(|path| !path.starts_with(VENDORED)));
         assert!(is_shell_shebang("#!/usr/bin/env bash"));
         assert!(is_shell_shebang("#!/bin/sh"));
         assert!(!is_shell_shebang("#!/usr/bin/env python3"));
@@ -609,6 +704,67 @@ mod tests {
         );
         assert_eq!(with_hint("error", None), "error");
         assert_eq!(rerun("clippy (xtask)"), "re-run: cargo xtask clippy");
+    }
+
+    #[test]
+    fn a_failed_step_of_a_two_word_task_is_re_run_by_both_words() {
+        assert_eq!(task_of("weaver check"), "weaver check");
+        assert_eq!(task_of("lint-prose (sync)"), "lint-prose");
+        assert_eq!(rerun("weaver check"), "re-run: cargo xtask weaver check");
+    }
+
+    #[test]
+    fn a_gate_compares_the_generated_files_and_never_writes_them() {
+        let steps = pre_commit_steps();
+        let generate = steps.iter().find(|step| step.label == "weaver generate");
+        let Some(Action::Check(run)) = generate.map(|step| &step.action) else {
+            panic!("pre-commit has no `weaver generate` check");
+        };
+        assert!(std::ptr::fn_addr_eq(
+            *run,
+            generated::check as fn() -> CheckResult
+        ));
+        assert_eq!(
+            rerun("weaver generate"),
+            "re-run: cargo xtask weaver generate --check"
+        );
+    }
+
+    #[test]
+    fn weaver_check_reads_the_working_tree_and_renders_for_github_only_in_ci() {
+        let local = weaver_check_args(false);
+        assert_eq!(local[..4], ["registry", "check", "--v2", "--quiet"]);
+        assert_eq!(local[local.len() - 2..], ["--diagnostic-format", "text"]);
+        let ci = weaver_check_args(true);
+        assert_eq!(ci[ci.len() - 2..], ["--diagnostic-format", "github"]);
+        assert_eq!(local[..local.len() - 1], ci[..ci.len() - 1]);
+
+        // A git URL in place of any of these would be cloned on every run.
+        let root = repo_root();
+        let paths: Vec<&str> = local
+            .iter()
+            .copied()
+            .filter(|arg| !arg.starts_with("--") && arg.contains('/'))
+            .collect();
+        assert_eq!(paths.len(), 5, "{paths:?}");
+        for path in &paths {
+            assert!(root.join(path).is_dir(), "{path}");
+        }
+        for format in ["text", "github"] {
+            let template = format!("{WEAVER_DIAGNOSTICS}/{format}/weaver.yaml");
+            assert!(root.join(&template).is_file(), "{template}");
+        }
+    }
+
+    #[test]
+    fn weaver_vendor_runs_the_script_that_holds_the_pins() {
+        let args = |check: bool| match &weaver_vendor_steps(check)[0].action {
+            Action::Command { program, args, .. } => format!("{program} {}", args.join(" ")),
+            Action::Check(_) => String::new(),
+        };
+        assert_eq!(args(false), "bash lablet/telemetry/vendor.sh");
+        assert_eq!(args(true), "bash lablet/telemetry/vendor.sh --check");
+        assert!(repo_root().join(WEAVER_VENDOR).is_file());
     }
 
     #[test]

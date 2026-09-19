@@ -1,0 +1,403 @@
+file_format: definition/2
+
+# Every attribute lablet owns. A core or GenAI attribute is used wherever one
+# exists, so each entry's note opens with why none does; the justification
+# policy fails an entry without one.
+attributes:
+  # Identity and setup
+  - key: lablet.config.digest
+    type: string
+    stability: development
+    brief: SHA-256 of the resolved config, in hex.
+    note: >
+      Justification: no convention identifies the configuration that produced a run, and grouping
+      runs by configuration is what lablet's measurements are for.
+    examples: ["9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"]
+  - key: lablet.run.completion_mode
+    type:
+      members:
+        - id: natural
+          value: natural
+          brief: The run completes when the model returns a turn with no tool calls.
+          stability: development
+        - id: explicit
+          value: explicit
+          brief: The run completes when the model calls `task_complete`.
+          stability: development
+    stability: development
+    brief: How the run decides that the model has finished.
+    note: >
+      Justification: the completion mode is a property of lablet's loop; the GenAI conventions
+      don't describe how an agent decides that it's done.
+    examples: [natural, explicit]
+  - key: lablet.run.max_turns
+    type: int
+    stability: development
+    brief: The configured cap on turns.
+    note: >
+      Justification: the GenAI conventions carry request parameters of one inference call, not
+      the budgets of an agent loop.
+    examples: [30]
+  - key: lablet.run.timeout_ms
+    type: int
+    stability: development
+    brief: The configured run timeout, in milliseconds.
+    note: >
+      Justification: the GenAI conventions carry request parameters of one inference call, not
+      the budgets of an agent loop.
+    examples: [600000]
+  - key: lablet.tools.names
+    type: string[]
+    stability: development
+    brief: Names of the tools offered to the model, after the allow and deny lists.
+    note: >
+      Justification: `gen_ai.tool.definitions` holds full definitions and is opt-in content; the
+      names alone are needed on every run to compare tool sets.
+    examples: [["bash", "read_file", "write_file"]]
+  - key: lablet.tools.count
+    type: int
+    stability: development
+    brief: Number of tools offered to the model.
+    note: >
+      Justification: no convention counts the tools offered, and an array's length can't be
+      aggregated in most backends.
+    examples: [3]
+  - key: lablet.mcp.servers
+    type: string[]
+    stability: development
+    brief: Names of the configured MCP servers.
+    note: >
+      Justification: the `mcp.*` conventions describe one MCP call; none lists the servers an
+      agent was configured with.
+    examples: [["docs", "search"]]
+  - key: lablet.prompt.system_bytes
+    type: int
+    stability: development
+    brief: Size of the system prompt in bytes, skills included.
+    note: >
+      Justification: `gen_ai.system_instructions` is opt-in content; the size is needed when
+      content isn't captured, and no convention carries it.
+    examples: [2048]
+  - key: lablet.prompt.user_bytes
+    type: int
+    stability: development
+    brief: Size of the task prompt in bytes.
+    note: >
+      Justification: `gen_ai.input.messages` is opt-in content; the size is needed when content
+      isn't captured, and no convention carries it.
+    examples: [512]
+  - key: lablet.skills.count
+    type: int
+    stability: development
+    brief: Number of skill files appended to the system prompt.
+    note: >
+      Justification: skills are a lablet config feature with no counterpart in the conventions.
+    examples: [2]
+
+  # Outcome
+  - key: lablet.run.stop_reason
+    type:
+      members:
+        - id: completed
+          value: completed
+          brief: The model finished, by a turn with no tool calls or by calling `task_complete`.
+          stability: development
+        - id: ended_without_completion
+          value: ended_without_completion
+          brief: In explicit mode, the model returned a turn with no tool calls and never called `task_complete`.
+          stability: development
+        - id: max_turns
+          value: max_turns
+          brief: The run reached `run.max_turns`.
+          stability: development
+        - id: timeout
+          value: timeout
+          brief: The run reached `run.timeout`.
+          stability: development
+        - id: max_total_tokens
+          value: max_total_tokens
+          brief: Input plus output tokens reached `run.max_total_tokens`.
+          stability: development
+        - id: output_truncated
+          value: output_truncated
+          brief: The last response hit the output token limit and called no tools.
+          stability: development
+        - id: context_exhausted
+          value: context_exhausted
+          brief: The provider rejected the request as longer than the model's context.
+          stability: development
+        - id: retries_exhausted
+          value: retries_exhausted
+          brief: One provider call failed on every attempt `run.max_retries` allows.
+          stability: development
+        - id: tool_errors_exhausted
+          value: tool_errors_exhausted
+          brief: Consecutive tool error results reached `run.max_consecutive_tool_errors`.
+          stability: development
+        - id: cancelled
+          value: cancelled
+          brief: The run was cancelled.
+          stability: development
+        - id: provider_error
+          value: provider_error
+          brief: The provider returned an error that isn't retryable.
+          stability: development
+    stability: development
+    brief: Why the run ended.
+    note: >
+      Justification: `gen_ai.response.finish_reasons` describes one inference call and can't
+      express a budget, a timeout, or a cancellation; the conventions have no per-run outcome.
+    examples: [completed, max_turns]
+  - key: lablet.run.error
+    type: string
+    stability: development
+    brief: The message of the error that ended the run.
+    note: >
+      Justification: `error.type` is a low-cardinality class and `error.message` is deprecated;
+      `exception.message` belongs to an exception record, not to a run summary.
+    examples: ["provider: 401 invalid x-api-key"]
+  - key: lablet.run.duration_ms
+    type: int
+    stability: development
+    brief: Wall-clock duration of the run, in milliseconds.
+    note: >
+      Justification: a span has a duration but a log record has none, and the wide event must be
+      readable without joining the root span.
+    examples: [12345]
+  - key: lablet.run.turns
+    type: int
+    stability: development
+    brief: Number of turns the run took.
+    note: >
+      Justification: a turn is the loop's own unit, one provider response and its tool calls; the
+      conventions count inference calls, which also include retries.
+    examples: [7]
+  - key: lablet.result.text_bytes
+    type: int
+    stability: development
+    brief: Size of the final assistant text in bytes.
+    note: >
+      Justification: `gen_ai.output.messages` is opt-in content; the size is needed when content
+      isn't captured, and no convention carries it.
+    examples: [834]
+  - key: lablet.result.has_structured
+    type: boolean
+    stability: development
+    brief: Whether the run produced a structured result, the `task_complete` argument.
+    note: >
+      Justification: the structured result is a product of lablet's explicit completion mode,
+      which the conventions don't describe.
+    examples: [true]
+  - key: lablet.run.transcript_path
+    type: string
+    stability: development
+    brief: Where the run's transcript was written.
+    note: >
+      Justification: `file.path` describes a file an operation acts on; this points from the
+      telemetry to a separate artefact of the run, which no convention does.
+    examples: ["runs/01J9Z3/transcript.json"]
+  - key: lablet.run.cost_usd
+    type: double
+    stability: development
+    brief: Cost of the run in US dollars, from the configured pricing.
+    note: >
+      Justification: the GenAI conventions report token counts only and define no cost attribute.
+    examples: [0.0421]
+
+  # Provider totals
+  - key: lablet.provider.calls
+    type: int
+    stability: development
+    brief: Number of provider calls that returned a completion.
+    note: >
+      Justification: the conventions count inference calls in a metric; the wide event needs the
+      count as a column on the run's one row.
+    examples: [7]
+  - key: lablet.provider.retries
+    type: int
+    stability: development
+    brief: Number of provider call attempts that failed.
+    note: >
+      Justification: no convention counts failed inference attempts across an agent run.
+    examples: [1]
+  - key: lablet.provider.latency_ms.total
+    type: int
+    stability: development
+    brief: Sum of the latencies of every provider call attempt, in milliseconds.
+    note: >
+      Justification: the conventions record one operation's duration as a span or a histogram; a
+      per-run sum has no attribute.
+    examples: [41200]
+  - key: lablet.provider.latency_ms.max
+    type: int
+    stability: development
+    brief: Latency of the slowest provider call attempt, in milliseconds.
+    note: >
+      Justification: the conventions record one operation's duration as a span or a histogram; a
+      per-run maximum has no attribute.
+    examples: [9800]
+
+  # Tool totals
+  - key: lablet.tool_calls.total
+    type: int
+    stability: development
+    brief: Number of tool calls executed. The intercepted `task_complete` call isn't one.
+    note: >
+      Justification: no convention counts the tool calls of an agent run.
+    examples: [5]
+  - key: lablet.tool_calls.errors
+    type: int
+    stability: development
+    brief: Number of tool calls that returned an error result.
+    note: >
+      Justification: no convention counts the failed tool calls of an agent run.
+    examples: [1]
+  - key: lablet.tool_calls.latency_ms.total
+    type: int
+    stability: development
+    brief: Sum of the latencies of every tool call, in milliseconds.
+    note: >
+      Justification: the conventions record one tool call's duration as a span; a per-run sum has
+      no attribute.
+    examples: [3100]
+  - key: lablet.tool_calls.input_bytes.total
+    type: int
+    stability: development
+    brief: Sum of the sizes of every tool call's input, in bytes.
+    note: >
+      Justification: `gen_ai.tool.call.arguments` is opt-in content; no convention carries its
+      size, per call or per run.
+    examples: [1820]
+  - key: lablet.tool_calls.output_bytes.total
+    type: int
+    stability: development
+    brief: Sum of the sizes of every tool call's output, in bytes.
+    note: >
+      Justification: `gen_ai.tool.call.result` is opt-in content; no convention carries its size,
+      per call or per run.
+    examples: [56012]
+  - key: lablet.tool.calls
+    type: template[int]
+    stability: development
+    brief: Number of calls to one tool, `<key>` being the tool name.
+    note: >
+      Justification: per-tool counts on the run's one row answer which tool dominated without a
+      join; the conventions have no per-tool aggregate, and a template is the only dynamic key
+      Weaver allows.
+    examples: [[3]]
+  - key: lablet.tool.errors
+    type: template[int]
+    stability: development
+    brief: Number of error results from one tool, `<key>` being the tool name.
+    note: >
+      Justification: per-tool error counts on the run's one row; the conventions have no per-tool
+      aggregate.
+    examples: [[1]]
+  - key: lablet.tool.latency_ms
+    type: template[int]
+    stability: development
+    brief: Sum of the latencies of the calls to one tool, in milliseconds, `<key>` being the tool name.
+    note: >
+      Justification: per-tool latency on the run's one row; the conventions have no per-tool
+      aggregate.
+    examples: [[2100]]
+
+  # Content, captured only on request
+  - key: lablet.result.text
+    type: string
+    stability: development
+    brief: The final assistant text.
+    note: >
+      Justification: `gen_ai.output.messages` holds every message of one inference call in a
+      structured form; the run's result is one string on the run's one row.
+    examples: ["The function returns early when the list is empty."]
+  - key: lablet.result.structured
+    type: string
+    stability: development
+    brief: The structured result, the `task_complete` argument, as a JSON string.
+    note: >
+      Justification: the structured result is a product of lablet's explicit completion mode,
+      which the conventions don't describe.
+    examples: ['{"answer": 42}']
+
+  # Per-step
+  - key: lablet.turn
+    type: int
+    stability: development
+    brief: One-based index of the turn a provider call or tool call belongs to.
+    note: >
+      Justification: the conventions have no turn; the index groups a turn's chat and tool spans
+      without adding a span level.
+    examples: [1, 2]
+  - key: lablet.attempt
+    type: int
+    stability: development
+    brief: One-based attempt number of a provider call within its turn.
+    note: >
+      Justification: `http.request.resend_count` counts resends of one HTTP request inside a
+      client; lablet's retry is a new inference call with a span of its own.
+    examples: [1, 2]
+  - key: lablet.request.bytes
+    type: int
+    stability: development
+    brief: Size in bytes of the system prompt, messages, and tool specs sent in a provider call.
+    note: >
+      Justification: `http.request.body.size` measures a wire body only an HTTP client sees; this
+      is the loop's provider-independent measure of context growth.
+    examples: [48211]
+  - key: lablet.tool.source
+    type:
+      members:
+        - id: builtin
+          value: builtin
+          brief: One of lablet's built-in tools.
+          stability: development
+        - id: mcp
+          value: mcp
+          brief: A tool served by a configured MCP server.
+          stability: development
+    stability: development
+    brief: Where a tool comes from.
+    note: >
+      Justification: `gen_ai.tool.type` says how a tool is invoked (function, extension,
+      datastore), not which executor serves it.
+    examples: [builtin, mcp]
+  - key: lablet.tool.input.bytes
+    type: int
+    stability: development
+    brief: Size of a tool call's input in bytes.
+    note: >
+      Justification: `gen_ai.tool.call.arguments` is opt-in content; the size is needed when
+      content isn't captured, and no convention carries it.
+    examples: [96]
+  - key: lablet.tool.output.bytes
+    type: int
+    stability: development
+    brief: Size of a tool call's output in bytes.
+    note: >
+      Justification: `gen_ai.tool.call.result` is opt-in content; the size is needed when content
+      isn't captured, and no convention carries it.
+    examples: [20480]
+  - key: lablet.tool.is_error
+    type: boolean
+    stability: development
+    brief: Whether the tool call returned an error result to the model.
+    note: >
+      Justification: the model gets an error result both when the executor fails and when a tool
+      reports an error in its own result; `error.type` classifies a failure, and no convention
+      carries the flag.
+    examples: [false]
+  - key: lablet.retry.will_retry
+    type: boolean
+    stability: development
+    brief: Whether the failed provider call is retried.
+    note: >
+      Justification: the conventions have no attribute for a retry decision.
+    examples: [true]
+  - key: lablet.retry.backoff_ms
+    type: int
+    stability: development
+    brief: How long the loop waits before the next attempt, in milliseconds.
+    note: >
+      Justification: the conventions have no attribute for a retry delay.
+    examples: [2000]

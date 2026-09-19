@@ -1,0 +1,190 @@
+file_format: definition/2
+
+# The spans are lablet's own rather than refinements of the GenAI spans:
+# live-check indexes only what a registry declares itself, and the doc templates
+# give a refinement no page. Each follows the GenAI span it names in its brief.
+attribute_groups:
+  # The keys a consumer groups by, on every signal so that no query needs a join.
+  - id: attributes.lablet.join
+    visibility: internal
+    attributes:
+      - ref: gen_ai.conversation.id
+        brief: The run id.
+        requirement_level: required
+      - ref: session.id
+        brief: The run id, for backends that group by session.
+        requirement_level: required
+      - ref: lablet.config.digest
+        requirement_level: required
+
+spans:
+  - type: lablet.invoke_agent
+    requirement_level: recommended
+    kind: internal
+    stability: development
+    brief: The root span of a run. Follows the GenAI `invoke_agent` span for an agent in the same process.
+    note: >
+      The `gen_ai.usage.*` values are the run's totals. A query that sums them over every span of
+      a trace counts each token twice unless it filters on `gen_ai.operation.name`.
+    name:
+      note: "`invoke_agent {gen_ai.agent.name}`"
+    attributes:
+      - ref_group: attributes.lablet.join
+      - ref: gen_ai.operation.name
+        brief: Always `invoke_agent`.
+        requirement_level: required
+      - ref: gen_ai.agent.name
+        brief: Always `lablet`.
+        requirement_level: required
+      - ref: gen_ai.agent.version
+        brief: The lablet version.
+        requirement_level: required
+      - ref: gen_ai.request.model
+        requirement_level: required
+      - ref: lablet.run.stop_reason
+        requirement_level: required
+      - ref: error.type
+        brief: The stop reason, when the run didn't complete.
+        requirement_level:
+          conditionally_required: If the stop reason isn't `completed`.
+      - ref: lablet.run.turns
+        requirement_level: required
+      - ref: lablet.tool_calls.total
+        requirement_level: required
+      - ref: gen_ai.usage.input_tokens
+        requirement_level: required
+      - ref: gen_ai.usage.output_tokens
+        requirement_level: required
+      - ref: gen_ai.usage.cache_read.input_tokens
+        requirement_level: required
+      - ref: gen_ai.usage.cache_write.input_tokens
+        requirement_level: required
+      - ref: lablet.run.cost_usd
+        requirement_level:
+          conditionally_required: If `model.pricing` is configured.
+
+  - type: lablet.chat
+    requirement_level: recommended
+    kind: client
+    stability: development
+    brief: One attempt of a provider call, a child of the root span. Follows the GenAI inference span.
+    name:
+      note: "`chat {gen_ai.request.model}`"
+    attributes:
+      - ref_group: attributes.lablet.join
+      - ref: gen_ai.operation.name
+        brief: Always `chat`.
+        requirement_level: required
+      - ref: gen_ai.provider.name
+        requirement_level: required
+      - ref: gen_ai.request.model
+        requirement_level: required
+      - ref: gen_ai.request.max_tokens
+        requirement_level: required
+      - ref: gen_ai.request.temperature
+        requirement_level:
+          conditionally_required: If `model.temperature` is set.
+      - ref: gen_ai.request.seed
+        requirement_level:
+          conditionally_required: If `model.seed` is set.
+      - ref: gen_ai.request.reasoning.level
+        requirement_level:
+          conditionally_required: If `model.thinking.effort` is set.
+      - ref: server.address
+        requirement_level:
+          conditionally_required: If the provider is reached over the network.
+      - ref: server.port
+        requirement_level:
+          conditionally_required: If `server.address` is set.
+      - ref: gen_ai.response.id
+        requirement_level:
+          conditionally_required: If the call succeeded and the provider returned one.
+      - ref: gen_ai.response.model
+        requirement_level:
+          conditionally_required: If the call succeeded and the provider returned one.
+      - ref: gen_ai.response.finish_reasons
+        requirement_level:
+          conditionally_required: If the call succeeded.
+      - ref: gen_ai.usage.input_tokens
+        requirement_level:
+          conditionally_required: If the call succeeded.
+      - ref: gen_ai.usage.output_tokens
+        requirement_level:
+          conditionally_required: If the call succeeded.
+      - ref: gen_ai.usage.cache_read.input_tokens
+        requirement_level:
+          conditionally_required: If the call succeeded.
+      - ref: gen_ai.usage.cache_write.input_tokens
+        requirement_level:
+          conditionally_required: If the call succeeded.
+      - ref: error.type
+        brief: "The class of provider error: `retryable`, `context_exhausted`, `fatal`, or `malformed`."
+        requirement_level:
+          conditionally_required: If the call failed.
+      - ref: lablet.turn
+        requirement_level: required
+      - ref: lablet.attempt
+        requirement_level: required
+      - ref: lablet.request.bytes
+        requirement_level: required
+
+  - type: lablet.execute_tool
+    requirement_level: recommended
+    kind: internal
+    stability: development
+    brief: One tool call, a child of the root span. Follows the GenAI `execute_tool` span.
+    note: >
+      A call to an MCP tool is this one span carrying the `mcp.*` attributes too, not a nested
+      MCP client span, as the MCP conventions ask of an instrumentation that already traces the
+      tool call.
+    name:
+      note: "`execute_tool {gen_ai.tool.name}`"
+    attributes:
+      - ref_group: attributes.lablet.join
+      - ref: gen_ai.operation.name
+        brief: Always `execute_tool`.
+        requirement_level: required
+      - ref: gen_ai.tool.name
+        requirement_level: required
+      - ref: gen_ai.tool.call.id
+        requirement_level: required
+      - ref: gen_ai.tool.type
+        brief: "`function` for a built-in tool, `extension` for an MCP tool."
+        requirement_level: required
+      - ref: gen_ai.tool.description
+        requirement_level:
+          conditionally_required: If the tool is one the run offered to the model.
+      - ref: error.type
+        brief: "The class of tool failure: `unknown`, `timeout`, or `failed`."
+        requirement_level:
+          conditionally_required: If the tool executor failed.
+      - ref: lablet.turn
+        requirement_level: required
+      - ref: lablet.tool.source
+        requirement_level: required
+      - ref: lablet.tool.input.bytes
+        requirement_level: required
+      - ref: lablet.tool.output.bytes
+        requirement_level: required
+      - ref: lablet.tool.is_error
+        requirement_level: required
+      - ref: mcp.method.name
+        requirement_level:
+          conditionally_required: If the tool is served over MCP.
+      - ref: mcp.session.id
+        requirement_level:
+          conditionally_required: If the tool is served over MCP and the transport has a session.
+      - ref: mcp.protocol.version
+        requirement_level:
+          conditionally_required: If the tool is served over MCP and the version was negotiated.
+      - ref: jsonrpc.request.id
+        requirement_level:
+          conditionally_required: If the tool is served over MCP and the request had an id.
+      - ref: rpc.response.status_code
+        brief: The error code of the JSON-RPC response.
+        requirement_level:
+          conditionally_required: If the MCP response carried a JSON-RPC error.
+      - ref: network.transport
+        brief: "`pipe` for a stdio MCP server, `tcp` for an HTTP one."
+        requirement_level:
+          conditionally_required: If the tool is served over MCP.

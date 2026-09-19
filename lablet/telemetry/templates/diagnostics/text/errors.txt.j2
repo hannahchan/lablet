@@ -1,0 +1,13 @@
+{#- No colour: a gate holds this output back and may print it into a log. -#}
+{%- for item in ctx %}
+{% if item.error.type == "policy_violation" -%}
+Violation: {{ item.error.violation.id }}
+  {{ item.error.violation.message }}
+  {%- for key in item.error.violation.context %}
+  {{ key }}: {{ item.error.violation.context[key] }}
+  {%- endfor %}
+  in {{ item.error.provenance }}
+{% else -%}
+{{ item.diagnostic.ansi_message }}
+{%- endif %}
+{%- endfor %}

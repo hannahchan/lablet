@@ -1,0 +1,58 @@
+# The context is the v2 form of the resolved registry. There `.registry.attributes`
+# holds lablet's own attributes only; a core or GenAI attribute appears inlined
+# on each signal that refers to it, with that signal's overrides, and as
+# upstream defined it under `.dependencies`. A constant documents the attribute
+# itself, so the filters take its definition from `.dependencies`.
+whitespace_control:
+  trim_blocks: true
+  lstrip_blocks: true
+
+comment_formats:
+  rust:
+    format: markdown
+    prefix: "/// "
+    trim: true
+    remove_trailing_dots: false
+    escape_square_brackets: true
+default_comment_format: rust
+
+templates:
+  - template: lib.rs.j2
+    filter: "{schema_url: .schema_url}"
+    application_mode: single
+    file_name: lib.rs
+  # Lablet's attributes, and every upstream attribute on a lablet span, event,
+  # or resource entity. The core conventions keep deprecated copies of the
+  # GenAI attributes; those are passed over for the GenAI registry's own.
+  - template: attribute.rs.j2
+    filter: >
+      ([(.registry.spans[], .registry.events[] | .attributes[]),
+        (.registry.entities[] | .identity[]?, .description[]?)
+        | .key] | unique) as $used
+      | [.registry.attributes[],
+         (.dependencies[].registry.attributes[]
+          | select((.deprecated | not) and (.key as $key | any($used[]; . == $key))))]
+      | unique_by(.key)
+    application_mode: single
+    file_name: attribute.rs
+  # Lablet's own enums only: they're closed sets. An upstream enum is open, and
+  # lablet sets a handful of its values.
+  - template: enums.rs.j2
+    filter: >
+      .registry.attributes
+      | map(select(.type | type == "object"))
+      | sort_by(.key)
+    application_mode: single
+    file_name: enums.rs
+  - template: signals.rs.j2
+    filter: >
+      def keys: {
+        required: [.attributes[] | select(.requirement_level == "required") | .key],
+        all: [.attributes[].key]
+      };
+      {
+        spans: [.registry.spans[] | {id: .type, kind: .kind, name: .name.note} + keys],
+        events: [.registry.events[] | {id: .name} + keys]
+      }
+    application_mode: single
+    file_name: signals.rs

@@ -10,6 +10,7 @@ mod changelog;
 mod coverage;
 mod floors;
 mod gates;
+mod generated;
 mod lint_layers;
 mod lint_manifests;
 mod mutants;
@@ -23,36 +24,42 @@ const USAGE: &str = "\
 Usage: cargo xtask <task> [args]
 
 Development:
-  check               Type-check every target
-  build [--release]   Build the workspace
-  run [-- <args>]     Run the lablet binary, passing <args> to it
-  test                Run tests, doctests included
-  doc                 Build rustdoc with warnings denied
+  check                    Type-check every target
+  build [--release]        Build the workspace
+  run [-- <args>]          Run the lablet binary, passing <args> to it
+  test                     Run tests, doctests included
+  doc                      Build rustdoc with warnings denied
+
+Telemetry contract:
+  weaver check             Registry against the lablet, naming, and stability policies
+  weaver generate [--check]
+                           Render the registry crate and docs (--check: compare only)
+  weaver vendor [--check]  Fetch the pinned upstream registries (--check: compare only)
 
 Quality checks:
-  fmt [--check]       Format with rustfmt + dprint (--check: verify only)
-  fix                 Apply clippy's machine-applicable fixes, then fmt
-  clippy              Lint every target with warnings denied
-  lint-layers         Layer dependency rules
-  lint-manifests      Manifest rules: inheritance, exact pins, xtask's lint copy
-  lint-shell          Shell scripts with shellcheck
-  lint-prose [--all]  Prose style with vale (--all: warnings and suggestions too)
-  deny                Licences, advisories, bans, sources
-  changelog           A contract change has an entry under Unreleased
+  fmt [--check]            Format with rustfmt + dprint (--check: verify only)
+  fix                      Apply clippy's machine-applicable fixes, then fmt
+  clippy                   Lint every target with warnings denied
+  lint-layers              Layer dependency rules
+  lint-manifests           Manifest rules: inheritance, exact pins, xtask's lint copy
+  lint-shell               Shell scripts with shellcheck
+  lint-prose [--all]       Prose style with vale (--all: warnings and suggestions too)
+  deny                     Licences, advisories, bans, sources
+  changelog                A contract change has an entry under Unreleased
 
 Quality gates:
-  pre-commit          fmt --check + clippy + lint-layers + lint-manifests + lint-shell
-                      + lint-prose
-  pre-push            pre-commit + deny + changelog + doc + test
-  ci                  pre-push
+  pre-commit               fmt --check + clippy + lint-layers + lint-manifests + weaver check
+                           + weaver generate --check + lint-shell + lint-prose
+  pre-push                 pre-commit + deny + changelog + doc + test
+  ci                       pre-push
 
 Analysis:
-  coverage            Line coverage against the floors
-  mutants             Mutation testing against the floors
+  coverage                 Line coverage against the floors
+  mutants                  Mutation testing against the floors
 
 Project:
-  setup               Install the pinned toolchain, tools, and git hooks
-  clean               Remove build, coverage, and mutation output
+  setup                    Install the pinned toolchain, tools, and git hooks
+  clean                    Remove build, coverage, and mutation output
 
 Tasks cover the lablet/ workspace and, where it applies, xtask. A gate runs
 every step even after one fails. On a terminal it lists each step; off one (a
@@ -60,17 +67,32 @@ hook, a pipe) a green gate prints one line, and XTASK_VERBOSE=1 or CI=true
 lists the steps anyway. Pinned tools come from mise.toml.
 ";
 
+const WEAVER_USAGE: &str = "`weaver` takes `check`, `generate [--check]`, or `vendor [--check]`";
+
 /// A task's steps and how to run them, or why the arguments are wrong.
 fn plan(task: &str, args: &[String]) -> Result<(Mode, Vec<Step>), String> {
-    let flag = |name: &str| match args {
+    let flag_of = |task: &str, args: &[String], name: &str| match args {
         [] => Ok(false),
         [arg] if arg == name => Ok(true),
         _ => Err(format!("`{task}` takes only `{name}`")),
     };
+    let flag = |name: &str| flag_of(task, args, name);
     let with_arguments = match (task, args) {
         ("build", _) => Some((Mode::Command, gates::build_steps(flag("--release")?))),
         ("fmt", _) => Some((Mode::Command, gates::fmt_steps(flag("--check")?))),
         ("lint-prose", _) => Some((Mode::Command, gates::lint_prose_steps(flag("--all")?))),
+        ("weaver", [subtask]) if subtask == "check" => {
+            Some((Mode::Command, gates::weaver_check_steps()))
+        }
+        ("weaver", [subtask, rest @ ..]) if subtask == "generate" => {
+            let check = flag_of("weaver generate", rest, "--check")?;
+            Some((Mode::Command, gates::weaver_generate_steps(check)))
+        }
+        ("weaver", [subtask, rest @ ..]) if subtask == "vendor" => {
+            let check = flag_of("weaver vendor", rest, "--check")?;
+            Some((Mode::Command, gates::weaver_vendor_steps(check)))
+        }
+        ("weaver", _) => return Err(WEAVER_USAGE.to_owned()),
         ("run", []) => Some((Mode::Passthrough, gates::run_steps(&[]))),
         ("run", [dashes, rest @ ..]) if dashes == "--" => {
             Some((Mode::Passthrough, gates::run_steps(rest)))
@@ -133,25 +155,34 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
-    /// Task lines are the ones indented by exactly two spaces.
-    fn documented_tasks() -> Vec<&'static str> {
+    /// Task lines are the ones indented by exactly two spaces. A task is the
+    /// words ahead of the two-space gap, less any `[argument]`.
+    fn documented_tasks() -> Vec<String> {
         USAGE
             .lines()
             .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
-            .filter_map(|line| line.split_whitespace().next())
+            .filter_map(|line| line.trim_start().split("  ").next())
+            .map(|usage| usage.split(" [").next().unwrap_or(usage).to_owned())
             .collect()
+    }
+
+    /// A task as typed after `cargo xtask`, without arguments of its own.
+    fn plan_of(task: &str) -> Result<(Mode, Vec<Step>), String> {
+        let words: Vec<String> = task.split(' ').map(str::to_owned).collect();
+        plan(&words[0], &words[1..])
     }
 
     #[test]
     fn the_usage_text_groups_every_task_in_the_order_a_developer_works() {
         assert_eq!(
-            documented_tasks().join(" "),
-            "check build run test doc fmt fix clippy lint-layers lint-manifests lint-shell lint-prose deny \
-             changelog pre-commit pre-push ci coverage mutants setup clean"
+            documented_tasks().join(", "),
+            "check, build, run, test, doc, weaver check, weaver generate, weaver vendor, fmt, fix, clippy, \
+             lint-layers, lint-manifests, lint-shell, lint-prose, deny, changelog, pre-commit, \
+             pre-push, ci, coverage, mutants, setup, clean"
         );
         for task in documented_tasks() {
             assert!(
-                plan(task, &[]).is_ok(),
+                plan_of(&task).is_ok(),
                 "`{task}` is documented but not dispatched"
             );
         }
@@ -160,8 +191,11 @@ mod tests {
     #[test]
     fn a_failed_gate_step_names_a_task_that_runs_it_alone() {
         for step in gates::pre_push_steps() {
-            let task = step.label.split(' ').next().unwrap();
-            assert!(plan(task, &[]).is_ok(), "{}", step.label);
+            assert!(
+                plan_of(gates::task_of(step.label)).is_ok(),
+                "{}",
+                step.label
+            );
         }
     }
 
@@ -184,11 +218,31 @@ mod tests {
             error("run", &["--version"]).as_deref(),
             Some("`run` takes the binary's arguments after `--`")
         );
+        for args in [vec![], vec!["live-check"], vec!["check", "--v2"]] {
+            assert_eq!(
+                error("weaver", &args).as_deref(),
+                Some(WEAVER_USAGE),
+                "{args:?}"
+            );
+        }
+        assert_eq!(
+            error("weaver", &["generate", "--force"]).as_deref(),
+            Some("`weaver generate` takes only `--check`")
+        );
+        assert_eq!(
+            error("weaver", &["vendor", "--force"]).as_deref(),
+            Some("`weaver vendor` takes only `--check`")
+        );
         for (task, args) in [
             ("fmt", vec!["--check"]),
             ("build", vec!["--release"]),
             ("lint-prose", vec!["--all"]),
             ("run", vec!["--", "--version"]),
+            ("weaver", vec!["check"]),
+            ("weaver", vec!["generate"]),
+            ("weaver", vec!["generate", "--check"]),
+            ("weaver", vec!["vendor"]),
+            ("weaver", vec!["vendor", "--check"]),
         ] {
             assert_eq!(error(task, &args), None, "{task}");
         }

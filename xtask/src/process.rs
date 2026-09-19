@@ -33,6 +33,10 @@ pub const TOOLS: &[Tool] = &[
         bin: "cargo-mutants",
     },
     Tool {
+        mise_name: "github:open-telemetry/weaver",
+        bin: "weaver",
+    },
+    Tool {
         mise_name: "dprint",
         bin: "dprint",
     },

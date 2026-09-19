@@ -2,3 +2,7 @@
 # either would shadow it.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+
+# A proper noun in the semantic-convention briefs that become doc comments in
+# the generated telemetry-registry crate. `..` keeps clippy's own list.
+doc-valid-idents = ["..", "GenAI"]

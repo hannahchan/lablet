@@ -2,7 +2,7 @@
 
 The Cargo workspace that builds lablet: a lightweight, instrumented agent loop, as a library and a `lablet` binary. What it does and why is in [../product/](../product/); how to work on the code is in [../contributing/README.md](../contributing/README.md). User-facing docs will live in [docs/](docs/).
 
-Every crate is an empty shell from the phase 0 scaffold. Each crate's doc comment names the [build-plan](../product/build-plan.md) phase that fills it.
+Every crate but one is an empty shell from the phase 0 scaffold, and its doc comment names the [build-plan](../product/build-plan.md) phase that fills it. The exception is `telemetry-registry`, whose sources `cargo xtask weaver generate` writes from the registry in `telemetry/`.
 
 ## Layout
 
@@ -19,7 +19,7 @@ Explicit architecture: a ring is a directory prefix, and directory `foo/bar/` is
 
 Domain crates may not use tokio, reqwest, tracing, opentelemetry, or rmcp; the application crate may not use tokio, reqwest, opentelemetry, or rmcp (`tracing` is allowed there). The gate also refuses tonic, axum, and hyper in both rings, and matches a whole crate family by name, so `opentelemetry` covers `opentelemetry_sdk` and `tracing-opentelemetry` alike. `serde` and `serde_json` are allowed everywhere. An adapter never depends on another adapter, and there is no primary adapter ring: a crate under `crates/adapters/primary/` fails the gate as a member in no ring. `cargo xtask lint-layers` enforces all of this on `[dependencies]` and `[build-dependencies]`; dev-dependencies are exempt from the ring rules. It reads a dependency's real name and path from `[workspace.dependencies]`, so a dependency it can't find there, dev ones included, fails the gate rather than passing unread. The full rules are in [../contributing/README.md](../contributing/README.md).
 
-Also here: `deny.toml` (the `cargo deny` policy) and, from phase 1, `telemetry/` (the Weaver registry the telemetry crate and docs are generated from).
+Also here: `deny.toml` (the `cargo deny` policy) and `telemetry/` (the Weaver registry the telemetry crate and docs are generated from, its policies, and the vendored upstream registries it depends on).
 
 ## Dependencies
 
@@ -38,7 +38,7 @@ cargo test -p lablet-run
 The gates are `cargo xtask` commands. `xtask/` is a separate crate at the repository root, not a member of this workspace, reached through a cargo alias:
 
 ```bash
-cargo xtask pre-commit    # fmt, clippy, lint-layers, lint-manifests, lint-prose
+cargo xtask pre-commit    # fmt, clippy, lint-layers, lint-manifests, weaver check, weaver generate --check, lint-shell, lint-prose
 cargo xtask pre-push      # pre-commit plus cargo deny, changelog, rustdoc, tests
 ```
 

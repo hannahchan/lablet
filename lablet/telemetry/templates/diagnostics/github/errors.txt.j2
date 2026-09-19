@@ -1,0 +1,11 @@
+{#- Weaver's gh_workflow_command template prints policy violations only, so a
+    reference that doesn't resolve fails the check without a word. -#}
+{%- for item in ctx %}
+{% if item.error.type == "policy_violation" -%}
+::error file={{ item.error.provenance }},title={{ item.error.violation.id }}::{{ item.error.violation.message }}
+{%- elif item.diagnostic.severity == "Warning" -%}
+::warning title=weaver::{{ item.diagnostic.message | replace("\n", "%0A") }}
+{%- else -%}
+::error title=weaver::{{ item.diagnostic.message | replace("\n", "%0A") }}
+{%- endif %}
+{%- endfor %}
