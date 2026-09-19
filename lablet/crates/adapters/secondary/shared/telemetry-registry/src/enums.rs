@@ -46,9 +46,9 @@ pub enum LabletRunStopReason {
     Timeout,
     /// Input plus output tokens reached `run.max_total_tokens`.
     MaxTotalTokens,
-    /// The last response hit the output token limit and called no tools.
+    /// The last response hit the output token limit. Its tool calls, if any, weren't executed.
     OutputTruncated,
-    /// The provider rejected the request as longer than the model's context.
+    /// The conversation outgrew the model's context. The provider rejected the request as too long, or cut the response short at the window.
     ContextExhausted,
     /// One provider call failed on every attempt `run.max_retries` allows.
     RetriesExhausted,
@@ -58,6 +58,8 @@ pub enum LabletRunStopReason {
     Cancelled,
     /// The provider returned an error that isn't retryable.
     ProviderError,
+    /// The model declined to answer, or a content filter withheld the response.
+    Refused,
 }
 
 impl LabletRunStopReason {
@@ -76,6 +78,7 @@ impl LabletRunStopReason {
             Self::ToolErrorsExhausted => "tool_errors_exhausted",
             Self::Cancelled => "cancelled",
             Self::ProviderError => "provider_error",
+            Self::Refused => "refused",
         }
     }
 }

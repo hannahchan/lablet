@@ -117,7 +117,7 @@ pub const LABLET_PROVIDER_LATENCY_MS_MAX: &str = "lablet.provider.latency_ms.max
 /// Sum of the latencies of every provider call attempt, in milliseconds.
 pub const LABLET_PROVIDER_LATENCY_MS_TOTAL: &str = "lablet.provider.latency_ms.total";
 
-/// Number of provider call attempts that failed.
+/// Number of provider call attempts made beyond the first of their call.
 pub const LABLET_PROVIDER_RETRIES: &str = "lablet.provider.retries";
 
 /// Size in bytes of the system prompt, messages, and tool specs sent in a provider call.
@@ -212,6 +212,9 @@ pub const LABLET_TOOL_CALLS_OUTPUT_BYTES_TOTAL: &str = "lablet.tool_calls.output
 
 /// Number of tool calls executed. The intercepted `task_complete` call isn't one.
 pub const LABLET_TOOL_CALLS_TOTAL: &str = "lablet.tool_calls.total";
+
+/// Number of tool calls that named a tool the run didn't offer.
+pub const LABLET_TOOL_CALLS_UNKNOWN: &str = "lablet.tool_calls.unknown";
 
 /// Number of tools offered to the model.
 pub const LABLET_TOOLS_COUNT: &str = "lablet.tools.count";

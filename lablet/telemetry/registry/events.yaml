@@ -26,6 +26,12 @@ events:
         requirement_level: required
       - ref: gen_ai.request.model
         requirement_level: required
+      - ref: server.address
+        requirement_level:
+          conditionally_required: If the provider is reached over the network.
+      - ref: server.port
+        requirement_level:
+          conditionally_required: If `server.address` is set.
       - ref: gen_ai.request.max_tokens
         requirement_level: required
       - ref: gen_ai.request.seed
@@ -33,7 +39,7 @@ events:
           conditionally_required: If `model.seed` is set.
       - ref: gen_ai.request.reasoning.level
         requirement_level:
-          conditionally_required: If `model.thinking.effort` is set.
+          conditionally_required: If `model.effort` is set.
       - ref: lablet.run.completion_mode
         requirement_level: required
       - ref: lablet.run.max_turns
@@ -103,6 +109,8 @@ events:
         requirement_level: required
       - ref: lablet.tool_calls.errors
         requirement_level: required
+      - ref: lablet.tool_calls.unknown
+        requirement_level: required
       - ref: lablet.tool_calls.latency_ms.total
         requirement_level: required
       - ref: lablet.tool_calls.input_bytes.total
@@ -111,13 +119,13 @@ events:
         requirement_level: required
       - ref: lablet.tool.calls
         requirement_level:
-          conditionally_required: One for each tool the run called.
+          conditionally_required: One for each tool the run offered and called.
       - ref: lablet.tool.errors
         requirement_level:
-          conditionally_required: One for each tool the run called.
+          conditionally_required: One for each tool the run offered and called.
       - ref: lablet.tool.latency_ms
         requirement_level:
-          conditionally_required: One for each tool the run called.
+          conditionally_required: One for each tool the run offered and called.
       # Content
       - ref: lablet.result.text
         requirement_level: opt_in

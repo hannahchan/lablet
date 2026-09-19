@@ -89,7 +89,7 @@ spans:
           conditionally_required: If `model.seed` is set.
       - ref: gen_ai.request.reasoning.level
         requirement_level:
-          conditionally_required: If `model.thinking.effort` is set.
+          conditionally_required: If `model.effort` is set.
       - ref: server.address
         requirement_level:
           conditionally_required: If the provider is reached over the network.
@@ -150,7 +150,8 @@ spans:
         requirement_level: required
       - ref: gen_ai.tool.type
         brief: "`function` for a built-in tool, `extension` for an MCP tool."
-        requirement_level: required
+        requirement_level:
+          conditionally_required: If the tool is one the run offered to the model.
       - ref: gen_ai.tool.description
         requirement_level:
           conditionally_required: If the tool is one the run offered to the model.
@@ -161,7 +162,8 @@ spans:
       - ref: lablet.turn
         requirement_level: required
       - ref: lablet.tool.source
-        requirement_level: required
+        requirement_level:
+          conditionally_required: If the tool is one the run offered to the model.
       - ref: lablet.tool.input.bytes
         requirement_level: required
       - ref: lablet.tool.output.bytes

@@ -120,11 +120,11 @@ attributes:
           stability: development
         - id: output_truncated
           value: output_truncated
-          brief: The last response hit the output token limit and called no tools.
+          brief: The last response hit the output token limit. Its tool calls, if any, weren't executed.
           stability: development
         - id: context_exhausted
           value: context_exhausted
-          brief: The provider rejected the request as longer than the model's context.
+          brief: The conversation outgrew the model's context. The provider rejected the request as too long, or cut the response short at the window.
           stability: development
         - id: retries_exhausted
           value: retries_exhausted
@@ -141,6 +141,10 @@ attributes:
         - id: provider_error
           value: provider_error
           brief: The provider returned an error that isn't retryable.
+          stability: development
+        - id: refused
+          value: refused
+          brief: The model declined to answer, or a content filter withheld the response.
           stability: development
     stability: development
     brief: Why the run ended.
@@ -216,9 +220,10 @@ attributes:
   - key: lablet.provider.retries
     type: int
     stability: development
-    brief: Number of provider call attempts that failed.
+    brief: Number of provider call attempts made beyond the first of their call.
     note: >
-      Justification: no convention counts failed inference attempts across an agent run.
+      Justification: no convention counts repeated inference attempts across an agent run. A call
+      that fails on its only attempt adds none.
     examples: [1]
   - key: lablet.provider.latency_ms.total
     type: int
@@ -252,6 +257,14 @@ attributes:
     note: >
       Justification: no convention counts the failed tool calls of an agent run.
     examples: [1]
+  - key: lablet.tool_calls.unknown
+    type: int
+    stability: development
+    brief: Number of tool calls that named a tool the run didn't offer.
+    note: >
+      Justification: the model can call any name, so these calls get no per-tool attribute and
+      would otherwise be invisible in the per-tool breakdown; no convention counts them.
+    examples: [0]
   - key: lablet.tool_calls.latency_ms.total
     type: int
     stability: development
@@ -343,7 +356,9 @@ attributes:
     brief: Size in bytes of the system prompt, messages, and tool specs sent in a provider call.
     note: >
       Justification: `http.request.body.size` measures a wire body only an HTTP client sees; this
-      is the loop's provider-independent measure of context growth.
+      is the loop's provider-independent measure of context growth. The loop measures it: the
+      length of the system prompt plus the length of each message and each tool spec as compact
+      JSON in lablet's own form.
     examples: [48211]
   - key: lablet.tool.source
     type:

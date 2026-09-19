@@ -36,7 +36,7 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 | <a id="lablet-provider-calls">`lablet.provider.calls`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of provider calls that returned a completion. [6] | `7` |
 | <a id="lablet-provider-latency-ms-max">`lablet.provider.latency_ms.max`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Latency of the slowest provider call attempt, in milliseconds. [7] | `9800` |
 | <a id="lablet-provider-latency-ms-total">`lablet.provider.latency_ms.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Sum of the latencies of every provider call attempt, in milliseconds. [8] | `41200` |
-| <a id="lablet-provider-retries">`lablet.provider.retries`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of provider call attempts that failed. [9] | `1` |
+| <a id="lablet-provider-retries">`lablet.provider.retries`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of provider call attempts made beyond the first of their call. [9] | `1` |
 | <a id="lablet-request-bytes">`lablet.request.bytes`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Size in bytes of the system prompt, messages, and tool specs sent in a provider call. [10] | `48211` |
 | <a id="lablet-result-has-structured">`lablet.result.has_structured`</a> | ![Development](https://img.shields.io/badge/-development-blue) | boolean | Whether the run produced a structured result, the `task_complete` argument. [11] | `true` |
 | <a id="lablet-result-structured">`lablet.result.structured`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | The structured result, the `task_complete` argument, as a JSON string. [12] | `{"answer": 42}` |
@@ -66,9 +66,10 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 | <a id="lablet-tool-calls-latency-ms-total">`lablet.tool_calls.latency_ms.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Sum of the latencies of every tool call, in milliseconds. [36] | `3100` |
 | <a id="lablet-tool-calls-output-bytes-total">`lablet.tool_calls.output_bytes.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Sum of the sizes of every tool call's output, in bytes. [37] | `56012` |
 | <a id="lablet-tool-calls-total">`lablet.tool_calls.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tool calls executed. The intercepted `task_complete` call isn't one. [38] | `5` |
-| <a id="lablet-tools-count">`lablet.tools.count`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tools offered to the model. [39] | `3` |
-| <a id="lablet-tools-names">`lablet.tools.names`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string[] | Names of the tools offered to the model, after the allow and deny lists. [40] | `["bash", "read_file", "write_file"]` |
-| <a id="lablet-turn">`lablet.turn`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | One-based index of the turn a provider call or tool call belongs to. [41] | `1`; `2` |
+| <a id="lablet-tool-calls-unknown">`lablet.tool_calls.unknown`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tool calls that named a tool the run didn't offer. [39] | `0` |
+| <a id="lablet-tools-count">`lablet.tools.count`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tools offered to the model. [40] | `3` |
+| <a id="lablet-tools-names">`lablet.tools.names`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string[] | Names of the tools offered to the model, after the allow and deny lists. [41] | `["bash", "read_file", "write_file"]` |
+| <a id="lablet-turn">`lablet.turn`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | One-based index of the turn a provider call or tool call belongs to. [42] | `1`; `2` |
 
 **[1] `lablet.attempt`:** Justification: `http.request.resend_count` counts resends of one HTTP request inside a client; lablet's retry is a new inference call with a span of its own.
 
@@ -86,9 +87,9 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 
 **[8] `lablet.provider.latency_ms.total`:** Justification: the conventions record one operation's duration as a span or a histogram; a per-run sum has no attribute.
 
-**[9] `lablet.provider.retries`:** Justification: no convention counts failed inference attempts across an agent run.
+**[9] `lablet.provider.retries`:** Justification: no convention counts repeated inference attempts across an agent run. A call that fails on its only attempt adds none.
 
-**[10] `lablet.request.bytes`:** Justification: `http.request.body.size` measures a wire body only an HTTP client sees; this is the loop's provider-independent measure of context growth.
+**[10] `lablet.request.bytes`:** Justification: `http.request.body.size` measures a wire body only an HTTP client sees; this is the loop's provider-independent measure of context growth. The loop measures it: the length of the system prompt plus the length of each message and each tool spec as compact JSON in lablet's own form.
 
 **[11] `lablet.result.has_structured`:** Justification: the structured result is a product of lablet's explicit completion mode, which the conventions don't describe.
 
@@ -146,11 +147,13 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 
 **[38] `lablet.tool_calls.total`:** Justification: no convention counts the tool calls of an agent run.
 
-**[39] `lablet.tools.count`:** Justification: no convention counts the tools offered, and an array's length can't be aggregated in most backends.
+**[39] `lablet.tool_calls.unknown`:** Justification: the model can call any name, so these calls get no per-tool attribute and would otherwise be invisible in the per-tool breakdown; no convention counts them.
 
-**[40] `lablet.tools.names`:** Justification: `gen_ai.tool.definitions` holds full definitions and is opt-in content; the names alone are needed on every run to compare tool sets.
+**[40] `lablet.tools.count`:** Justification: no convention counts the tools offered, and an array's length can't be aggregated in most backends.
 
-**[41] `lablet.turn`:** Justification: the conventions have no turn; the index groups a turn's chat and tool spans without adding a span level.
+**[41] `lablet.tools.names`:** Justification: `gen_ai.tool.definitions` holds full definitions and is opt-in content; the names alone are needed on every run to compare tool sets.
+
+**[42] `lablet.turn`:** Justification: the conventions have no turn; the index groups a turn's chat and tool spans without adding a span level.
 
 ---
 
@@ -169,12 +172,13 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 | --- | --- | --- |
 | `cancelled` | The run was cancelled. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `completed` | The model finished, by a turn with no tool calls or by calling `task_complete`. | ![Development](https://img.shields.io/badge/-development-blue) |
-| `context_exhausted` | The provider rejected the request as longer than the model's context. | ![Development](https://img.shields.io/badge/-development-blue) |
+| `context_exhausted` | The conversation outgrew the model's context. The provider rejected the request as too long, or cut the response short at the window. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `ended_without_completion` | In explicit mode, the model returned a turn with no tool calls and never called `task_complete`. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `max_total_tokens` | Input plus output tokens reached `run.max_total_tokens`. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `max_turns` | The run reached `run.max_turns`. | ![Development](https://img.shields.io/badge/-development-blue) |
-| `output_truncated` | The last response hit the output token limit and called no tools. | ![Development](https://img.shields.io/badge/-development-blue) |
+| `output_truncated` | The last response hit the output token limit. Its tool calls, if any, weren't executed. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `provider_error` | The provider returned an error that isn't retryable. | ![Development](https://img.shields.io/badge/-development-blue) |
+| `refused` | The model declined to answer, or a content filter withheld the response. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `retries_exhausted` | One provider call failed on every attempt `run.max_retries` allows. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `timeout` | The run reached `run.timeout`. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `tool_errors_exhausted` | Consecutive tool error results reached `run.max_consecutive_tool_errors`. | ![Development](https://img.shields.io/badge/-development-blue) |
