@@ -28,17 +28,17 @@ Acceptance: `cargo xtask weaver check` passes. Regeneration is a no-op on a clea
 
 ## Phase 2: Domain
 
-- `lablet-model`: every type in spec §3 with serde derives (including `RequestDefaults`, `Endpoint`, `TraceContext`, `McpCallMeta`), `Usage: Add` and `total()`, display impls for `StopReason` and `FinishReason`, constructors that validate (non-empty tool names, unique block ids). The transcript shape must map losslessly onto an ATIF v1.8 trajectory (one turn is one step, tool results joined by call id) so the phase 10 export needs no model change.
-- `lablet-policy`: `StopPolicy::evaluate` at the three stop points (before a provider call, after a provider response, after a tool phase), `RetryPolicy::delay`, `Pricing::cost`.
+- `lablet-model`: every type in spec §3 with serde derives (including `RequestDefaults`, `Endpoint`, `TraceContext`, `McpCallMeta`), `Usage: Add` and `total()`, display impls for `StopReason` and `FinishReason`, constructors and deserialisation that validate (non-empty tool names, unique block ids), and `RunTally`, which accumulates a run into its `RunSummary`. The transcript shape must map losslessly onto an ATIF v1.8 trajectory (one turn is one step, tool results joined by call id) so the phase 10 export needs no model change.
+- `lablet-policy`: `StopPolicy` with one method for each of the three stop points (`before_call`, `after_response`, `after_tools`) and `allows_wait` for a backoff that would reach the timeout, `RetryPolicy::delay`, `Pricing::cost`.
 
-Acceptance: unit tests cover each of the seven stop reasons the policy owns at the stop point that owns it (including token budget and truncated output; `cancelled`, `retries_exhausted`, `context_exhausted`, and `provider_error` belong to the loop and are held by phase 3's scenarios), each completion mode, backoff growth, cap, and exhaustion, and cost arithmetic. Coverage and mutation floors met. No async code and no serde beyond derives in either crate.
+Acceptance: unit tests cover each of the nine stop reasons the policy decides at the stop point that owns it (including token budget, truncated output, and refusal; `cancelled`, `retries_exhausted`, `provider_error`, and `context_exhausted` for a rejected request belong to the loop and are held by phase 3's scenarios), each completion mode, backoff growth, cap, and exhaustion, and cost arithmetic. Coverage and mutation floors met. No async code and no serde beyond derives in either crate.
 
 ## Phase 3: The loop
 
-- `lablet-run`: ports, errors, `RunEvent`, `RunSummary` accumulation, `ToolSet` with the `task_complete` spec, `RunService` with the three-point stop evaluation, `task_complete` interception, and the trace-context handoff from observer to `ToolCall`.
+- `lablet-run`: ports, errors, `RunEvent`, the `RunSummary` built through the model's `RunTally`, `ToolSet` with the `task_complete` spec, `RunService` with the three-point stop evaluation, `task_complete` interception, and the trace-context handoff from observer to `ToolCall`.
 - Hand-written fakes for every port, including a fake clock, in the crate's tests.
 
-Acceptance: end-to-end tests with fakes prove natural and explicit completion, every stop reason, retry with backoff via the fake clock, consecutive tool error counting and reset, allow and deny filtering, duplicate tool name rejection, and that content fields are `None` when capture is off. The event stream for a scripted run is asserted exactly, and the `RunSummary` on `RunFinished` matches the per-step events it summarises. Scenarios L1 to L8, E1 to E8, and C8 pass.
+Acceptance: end-to-end tests with fakes prove natural and explicit completion, every stop reason, retry with backoff via the fake clock, consecutive tool error counting and reset, allow and deny filtering, duplicate tool name rejection, and that content fields are `None` when capture is off. The event stream for a scripted run is asserted exactly, and the `RunSummary` on `RunFinished` matches the per-step events it summarises. Scenarios L1 to L9, E1 to E8, E10, and C8 pass.
 
 ## Phase 4: Library and first traced run
 
