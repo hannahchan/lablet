@@ -77,6 +77,23 @@ deny = [
   { crate = "openssl", reason = "lablet is rustls-only (spec §6)" },
   { crate = "openssl-sys", reason = "lablet is rustls-only (spec §6)" },
   { crate = "native-tls", reason = "lablet is rustls-only (spec §6)" },
+  # The two crate bans in contributing/README.md "Code conventions". They
+  # cover dev-dependencies and xtask's graph too. A ban is on the whole graph,
+  # and an upstream crate may use one of these inside (prost-derive uses
+  # anyhow). When the gate first fails for that reason, keep the ban and list
+  # the upstream crate under `wrappers`, which allows the banned crate as that
+  # crate's direct dependency only, with a comment naming what pulls it in.
+  { crate = "anyhow", reason = "errors are thiserror enums, one per port or boundary (contributing)" },
+  { crate = "eyre", reason = "errors are thiserror enums, one per port or boundary (contributing)" },
+  { crate = "color-eyre", reason = "errors are thiserror enums, one per port or boundary (contributing)" },
+  { crate = "mockall", reason = "test doubles are hand-written fakes; no mocking framework (contributing)" },
+  { crate = "mockall_double", reason = "test doubles are hand-written fakes; no mocking framework (contributing)" },
+  { crate = "mockiato", reason = "test doubles are hand-written fakes; no mocking framework (contributing)" },
+  { crate = "mocktopus", reason = "test doubles are hand-written fakes; no mocking framework (contributing)" },
+  { crate = "faux", reason = "test doubles are hand-written fakes; no mocking framework (contributing)" },
+  { crate = "unimock", reason = "test doubles are hand-written fakes; no mocking framework (contributing)" },
+  { crate = "mry", reason = "test doubles are hand-written fakes; no mocking framework (contributing)" },
+  { crate = "double", reason = "test doubles are hand-written fakes; no mocking framework (contributing)" },
 ]
 # No skips. A `skip` entry needs the crate, the version, and which upstream
 # pulls the duplicate.

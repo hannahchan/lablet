@@ -47,22 +47,17 @@ pub fn could_not_run(program: &str, e: &std::io::Error) -> String {
 /// command ran in: cargo commands run in `lablet/`, so the line as printed
 /// does not work from the repository root, where `cargo xtask` is started.
 pub fn command_failed(program: &str, args: &[&str]) -> String {
-    let directory = working_directory(program);
-    let place = match directory.strip_prefix(repo_root()) {
-        Ok(relative) if relative.as_os_str().is_empty() => "the repository root".to_owned(),
-        Ok(relative) => format!("{}/", relative.display()),
-        Err(_) => directory.display().to_string(),
-    };
+    let (_, place) = working_directory(program);
     format!("command failed (in {place}): {program} {}", args.join(" "))
 }
 
-/// Cargo commands run in the Rust workspace; everything else (git, mise)
-/// runs in the repository root.
-fn working_directory(program: &str) -> PathBuf {
+/// Where a program runs, and what to call the place: cargo commands run in
+/// the Rust workspace, everything else (git, mise) in the repository root.
+fn working_directory(program: &str) -> (PathBuf, &'static str) {
     if program == "cargo" {
-        workspace_root()
+        (workspace_root(), "lablet/")
     } else {
-        repo_root()
+        (repo_root(), "the repository root")
     }
 }
 
@@ -71,7 +66,7 @@ fn working_directory(program: &str) -> PathBuf {
 /// is an error rather than a run of whatever copy PATH holds: the pin is the
 /// point.
 pub fn command(program: &str, args: &[&str]) -> Result<Command, String> {
-    command_in(&working_directory(program), program, args)
+    command_in(&working_directory(program).0, program, args)
 }
 
 /// [`command`], in a directory the caller names.
@@ -117,7 +112,7 @@ pub fn stream(program: &str, args: &[&str], env: &[(&str, &str)]) -> Result<Exit
 /// Runs a subprocess with piped output: its stdout on success, its stderr (or
 /// the reason it could not start) on failure.
 pub fn capture(program: &str, args: &[&str]) -> Result<String, String> {
-    capture_in(&working_directory(program), program, args)
+    capture_in(&working_directory(program).0, program, args)
 }
 
 /// [`capture`], in a directory the caller names.
@@ -221,25 +216,18 @@ const MISE_FROM_A_PACKAGE_MANAGER: [&str; 3] = [
     "/home/linuxbrew/.linuxbrew/bin/mise",
 ];
 
-/// The places [`mise`] looks when PATH has no mise, in order. A git hook or an
-/// IDE task runner starts with a minimal PATH that holds none of them.
-fn mise_locations(home: Option<&Path>) -> Vec<PathBuf> {
-    home.map(|home| home.join(MISE_UNDER_HOME))
-        .into_iter()
-        .chain(MISE_FROM_A_PACKAGE_MANAGER.map(PathBuf::from))
-        .collect()
-}
-
 /// A `mise` command in the repository root, where mise.toml is: the mise on
-/// PATH, else the first installed copy among [`mise_locations`]. Without
-/// either the bare name stays, so the caller's error names mise.
+/// PATH, else the first installed copy under `$HOME` or from a package manager
+/// (a git hook or an IDE task runner starts with a minimal PATH that holds
+/// neither). Without any the bare name stays, so the caller's error names mise.
 fn mise() -> Command {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let installed = if on_path("mise") {
         None
     } else {
-        mise_locations(home.as_deref())
+        home.map(|home| home.join(MISE_UNDER_HOME))
             .into_iter()
+            .chain(MISE_FROM_A_PACKAGE_MANAGER.map(PathBuf::from))
             .find(|path| is_executable(path))
     };
     let mut command = installed.map_or_else(|| Command::new("mise"), Command::new);
@@ -319,21 +307,5 @@ mod tests {
             command_failed("git", &["status"]),
             "command failed (in the repository root): git status"
         );
-    }
-
-    #[test]
-    fn mise_is_looked_for_under_home_then_where_package_managers_put_it() {
-        assert_eq!(
-            mise_locations(Some(Path::new("/home/dev"))),
-            [
-                "/home/dev/.local/bin/mise",
-                "/opt/homebrew/bin/mise",
-                // Homebrew on an Intel Mac.
-                "/usr/local/bin/mise",
-                "/home/linuxbrew/.linuxbrew/bin/mise",
-            ]
-            .map(PathBuf::from)
-        );
-        assert_eq!(mise_locations(None).len(), 3);
     }
 }

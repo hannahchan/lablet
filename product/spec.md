@@ -118,7 +118,7 @@ lablet/
   xtask/                         (repo root, not a member) lint-layers, gates
 ```
 
-Dependency direction, enforced by `cargo xtask lint-layers` (crates are matched by name; dev-dependencies are not linted):
+Dependency direction, enforced by `cargo xtask lint-layers` (a workspace crate is placed by its path, an external crate is matched by name; dev-dependencies are not held to the ring rules):
 
 | Ring | May depend on | May not use |
 | --- | --- | --- |
@@ -128,7 +128,7 @@ Dependency direction, enforced by `cargo xtask lint-layers` (crates are matched 
 | composition root | everything except test support | (no restriction) |
 | test support (`tests/*`) | anything | (no restriction) |
 
-A listed name forbids its whole family: a crate matches when any `-` or `_` separated part of its name equals the listed name, so `opentelemetry` also forbids `opentelemetry_sdk` and `opentelemetry-otlp`. Renamed dependencies and workspace-inherited ones are resolved to the real crate name, and target-specific tables are walked. No crate outside `tests/` may list a `tests/` crate in `[dependencies]` or `[build-dependencies]`. A workspace member that falls in no ring is an error.
+A listed name forbids its whole family: a crate matches when any `-` or `_` separated part of its name equals the listed name, so `opentelemetry` also forbids `opentelemetry_sdk` and `opentelemetry-otlp`. Every dependency of a member is inherited from `[workspace.dependencies]` (`lint-manifests` allows nothing else), so that table is where a rename (`package = "..."`) is resolved to the real crate name and where a workspace crate's path places it in a ring; a dependency that cannot be read from it is an error, not a pass. Target-specific tables are walked. No crate outside `tests/` may list a `tests/` crate in `[dependencies]` or `[build-dependencies]`. A workspace member that falls in no ring is an error.
 
 `serde` and `serde_json` are allowed in every ring: the domain model derives `Serialize` and `Deserialize` once, and every JSON surface (transcript, fake-provider scripts) reuses it. Provider wire formats are still separate types in their adapters.
 
@@ -411,12 +411,12 @@ Config digest (`lablet.config.digest`) is a SHA-256 of the canonical JSON form o
 
 - One workspace version, semver. The config schema, the outcome JSON, and the telemetry registry are the public contract; a breaking change to any of them is a major bump.
 - `CHANGELOG.md` in keep-a-changelog format with an `Unreleased` section. `cargo xtask changelog` fails when `lablet/schema.json`, `lablet/telemetry/registry/`, or `lablet/tests/fixtures/outcome.json` differ from `main` and `Unreleased` has no entry. The base is the merge-base with `origin/main`; on `main` itself CI sets `LABLET_CHANGELOG_BASE` to the commit before the push. Uncommitted and untracked files count. "No entry" means the body of `## [Unreleased]` is unchanged since the base or has no list item. An unresolvable base warns and passes. CI checks out full history so the comparison works.
-- Every third-party crate is pinned to an exact version in `[workspace.dependencies]`; a version bump is its own commit, never mixed with feature work. `xtask` is its own workspace and pins its own dependencies exactly; `lint-manifests` requires a crate pinned in both places to carry the same version.
+- Every third-party crate is pinned to an exact version in `[workspace.dependencies]`; a version bump is its own commit, never mixed with feature work. A member's manifest only inherits (`name.workspace = true`, with at most `features`, `optional`, or `default-features` beside it), so no version, path, git source, or rename exists outside that table, and each entry there has a comment on the line above it saying why. `xtask` is its own workspace and pins its own dependencies exactly; `lint-manifests` requires a crate pinned in both places to carry the same version. The lints refuse the Cargo features lablet does not use (member globs, `exclude`, a root package, `[patch]`, `[replace]`, cargo-config `patch`, `paths`, `source`) rather than model them.
 - `rust-version` in the workspace `Cargo.toml` is the MSRV; policy is the pinned toolchain minus two minor versions, raised only in a minor release.
 
 ## 9. Testing
 
-- Unit tests inline. Policy and model crates are the bulk and need no async.
+- Unit tests live beside the code in a sibling file declared `#[cfg(test)] mod tests;` (`src/foo.rs` with `src/foo/tests.rs`, or `src/tests.rs`), never as an inline `mod tests { ... }` body, so the coverage floor can exclude test code by file name instead of parsing Rust. The gate enforces this in the three floor crates (`lablet-model`, `lablet-policy`, `lablet-run`); elsewhere it is the convention. Policy and model crates are the bulk and need no async.
 - `lablet-run` is tested end to end with hand-written fakes for every port, including a fake clock. No mocking framework.
 - Provider adapters are tested against `wiremock` with recorded payloads, including error classification and content-block round trips.
 - `lablet-conformance` holds case sets for `ToolExecutor` and `RunObserver`, pulled in as dev-dependencies by each adapter.

@@ -10,7 +10,7 @@
 use serde::Deserialize;
 use std::path::Path;
 
-use crate::floors::{self, FLOORS, Line};
+use crate::floors::{self, FLOORS, FloorCrate, Line};
 use crate::gates::CheckResult;
 use crate::process;
 use crate::workspace::{Workspace, workspace_root};
@@ -40,10 +40,11 @@ struct Mutant {
 }
 
 /// One report line per floor crate, from the outcomes of its mutants.
-fn lines_by_crate(outcomes: &Outcomes) -> Vec<Line> {
-    FLOORS
+fn lines_by_crate(outcomes: &Outcomes, crates: &[FloorCrate]) -> Vec<Line> {
+    crates
         .iter()
-        .map(|floor| {
+        .map(|krate| {
+            let floor = krate.floor;
             let mut caught = 0;
             let mut viable = 0;
             for outcome in &outcomes.outcomes {
@@ -70,7 +71,7 @@ fn lines_by_crate(outcomes: &Outcomes) -> Vec<Line> {
                 floor: floor.mutants_caught,
                 unit: "mutants caught",
                 none_of: "viable mutants",
-                may_be_empty: floor.may_be_empty,
+                holds_code: krate.holds_code,
             }
         })
         .collect()
@@ -93,9 +94,8 @@ fn mutants_args(output: &str) -> Vec<&str> {
 
 /// Runs cargo-mutants over the floor crates and judges the floors.
 pub fn check() -> CheckResult {
-    // Fails early, and by name, if a floor crate has left the workspace.
-    let workspace = Workspace::load(&workspace_root()).map_err(|e| e.to_string())?;
-    floors::crate_directories(&workspace)?;
+    let workspace = Workspace::load(&workspace_root())?;
+    let crates = floors::crates(&workspace)?;
 
     let output = floors::output_directory(&workspace.root)?;
     let output_arg = output.display().to_string();
@@ -111,11 +111,12 @@ pub fn check() -> CheckResult {
         ));
     }
     let outcomes = read_outcomes(&output.join("mutants.out").join("outcomes.json"))?;
-    floors::conclude("mutants", &lines_by_crate(&outcomes))
+    floors::conclude("mutants", &lines_by_crate(&outcomes, &crates))
 }
 
 /// cargo-mutants writes no `outcomes.json` when it finds nothing to mutate,
-/// so a missing file is an empty run, not an error.
+/// so a missing file is an empty run, not an error; the floors then fail any
+/// crate that defines a function.
 fn read_outcomes(path: &Path) -> Result<Outcomes, String> {
     if !path.is_file() {
         return Ok(Outcomes {
@@ -150,19 +151,35 @@ mod tests {
       "total_mutants": 9, "missed": 2, "caught": 5, "timeout": 1, "unviable": 1, "success": 0
     }"#;
 
+    /// The floor crates, each defining a function or not.
+    fn crates(holds_code: bool) -> Vec<FloorCrate> {
+        FLOORS
+            .iter()
+            .map(|floor| FloorCrate {
+                floor,
+                directory: std::path::PathBuf::new(),
+                holds_code,
+            })
+            .collect()
+    }
+
+    fn seen(lines: &[Line]) -> Vec<(&str, u64, u64, Standing)> {
+        lines
+            .iter()
+            .map(|line| (line.package, line.hit, line.total, line.standing()))
+            .collect()
+    }
+
     #[test]
     fn the_score_is_caught_over_viable_per_crate() {
         let outcomes: Outcomes = serde_json::from_str(OUTCOMES).unwrap();
-        let seen: Vec<(&str, u64, u64, Standing)> = lines_by_crate(&outcomes)
-            .iter()
-            .map(|line| (line.package, line.hit, line.total, line.standing()))
-            .collect();
         assert_eq!(
-            seen,
+            seen(&lines_by_crate(&outcomes, &crates(true))),
             [
                 // 4 of 5: the unviable mutant is left out, and 80% meets 80%.
                 ("lablet-model", 4, 5, Standing::Met),
-                ("lablet-policy", 0, 0, Standing::NothingToMeasure),
+                // It defines a function, and no mutant of it was tested.
+                ("lablet-policy", 0, 0, Standing::NothingMeasured),
                 // 1 of 2: the timeout counts against the score.
                 ("lablet-run", 1, 2, Standing::Below),
             ]
@@ -182,12 +199,14 @@ mod tests {
     }
 
     #[test]
-    fn a_run_that_found_no_mutants_has_nothing_to_measure() {
+    fn a_run_that_found_no_mutants_passes_only_for_crates_that_define_no_function() {
         let outcomes = read_outcomes(Path::new("/nonexistent/mutants.out/outcomes.json")).unwrap();
-        assert!(
-            lines_by_crate(&outcomes)
-                .iter()
-                .all(|line| line.standing() == Standing::NothingToMeasure)
-        );
+        for (holds_code, standing) in [
+            (false, Standing::NothingToMeasure),
+            (true, Standing::NothingMeasured),
+        ] {
+            let lines = lines_by_crate(&outcomes, &crates(holds_code));
+            assert!(lines.iter().all(|line| line.standing() == standing));
+        }
     }
 }

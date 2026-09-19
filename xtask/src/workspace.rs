@@ -2,19 +2,21 @@
 //! lints and the floor checks read. Everything here takes the workspace root
 //! as an argument, so the lints run over a fixture in a test as they do over
 //! `lablet/`.
+//!
+//! The lints model only the Cargo features lablet uses. A workspace shaped any
+//! other way (member globs, `exclude`, a root package, `[patch]`) is refused
+//! with the [`unsupported`] diagnostic instead of being handled, so every
+//! reader of a [`Workspace`] fails safe on it.
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// The repository root: the parent of xtask's manifest directory. `cargo run`,
-/// which the `cargo xtask` alias is, sets `CARGO_MANIFEST_DIR` for the binary
-/// it starts, so the root is the checkout the command was started in and does
-/// not depend on the directory below it. Cargo does not rebuild xtask when a
-/// checkout is copied or moved, or when two checkouts share a target
-/// directory, so the value compiled in is only the fallback for a binary that
-/// is run directly.
+/// which the `cargo xtask` alias is, names that directory at run time, so a
+/// binary cargo reuses from another checkout (a copied checkout, a shared
+/// target directory) still gates the one it was started in. The value compiled
+/// in is only the fallback for a binary that is run directly.
 pub fn repo_root() -> PathBuf {
     root_from(std::env::var_os("CARGO_MANIFEST_DIR"))
 }
@@ -38,253 +40,121 @@ pub fn xtask_manifest() -> PathBuf {
     repo_root().join("xtask").join("Cargo.toml")
 }
 
-/// The `name = spec` entries of one dependency table.
-pub type Dependencies = BTreeMap<String, DependencySpec>;
-
-/// One dependency as a manifest declares it.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum DependencySpec {
-    /// A bare version requirement: `foo = "1"`.
-    Version(String),
-    /// A table, inline or dotted: `foo = { path = ".." }`, `foo.workspace = true`.
-    Table(DependencyTable),
+/// The diagnostic for a Cargo feature lablet does not use, which the lints
+/// refuse rather than model.
+pub fn unsupported(feature: &str) -> String {
+    format!(
+        "{feature} is not supported by lablet's lints, which model only the Cargo features \
+         lablet uses; remove it, or extend xtask deliberately to support it"
+    )
 }
 
-/// The keys of a dependency table that the lints read.
-#[derive(Debug, Deserialize)]
-pub struct DependencyTable {
-    /// The version requirement, when one is given.
-    pub version: Option<String>,
-    /// A path dependency's location, relative to the declaring manifest.
-    pub path: Option<String>,
-    /// The real crate name behind a renamed dependency key.
-    pub package: Option<String>,
-    /// A git source, which is never an exact pin.
-    pub git: Option<String>,
-    /// A registry other than crates.io, by its configured name.
-    pub registry: Option<String>,
-    /// A registry other than crates.io, by its index URL.
-    #[serde(rename = "registry-index")]
-    pub registry_index: Option<String>,
-    /// `workspace = true`: the entry is inherited from `[workspace.dependencies]`.
+/// Whether a raw manifest value is a table holding `workspace = true`: a
+/// dependency, a `[package]` key, or the `[lints]` table, inherited.
+pub fn inherits_workspace(value: &toml::Value) -> bool {
+    value.get("workspace").and_then(toml::Value::as_bool) == Some(true)
+}
+
+/// A crate name with `-` folded to `_`, the form rustc sees, so the two
+/// spellings of one name compare equal.
+pub fn normalise(name: &str) -> String {
+    name.replace('-', "_")
+}
+
+/// The `name = spec` entries of one dependency table, specs left raw.
+pub type Dependencies = BTreeMap<String, toml::Value>;
+
+/// Cargo's three dependency tables, at the top level or under `[target.*]`.
+#[derive(Debug, Default, Deserialize)]
+struct DependencyTables {
     #[serde(default)]
-    pub workspace: bool,
+    dependencies: Dependencies,
+    #[serde(default, rename = "dev-dependencies")]
+    dev_dependencies: Dependencies,
+    #[serde(default, rename = "build-dependencies")]
+    build_dependencies: Dependencies,
 }
 
-impl DependencySpec {
-    /// The version requirement, when one is given.
-    pub fn version(&self) -> Option<&str> {
-        match self {
-            Self::Version(version) => Some(version),
-            Self::Table(table) => table.version.as_deref(),
-        }
-    }
-
-    /// A path dependency's location.
-    pub fn path(&self) -> Option<&str> {
-        match self {
-            Self::Version(_) => None,
-            Self::Table(table) => table.path.as_deref(),
-        }
-    }
-
-    /// The real crate name behind a renamed dependency key, when declared.
-    pub fn package(&self) -> Option<&str> {
-        match self {
-            Self::Version(_) => None,
-            Self::Table(table) => table.package.as_deref(),
-        }
-    }
-
-    /// Whether the entry comes from a git repository.
-    pub fn is_git(&self) -> bool {
-        matches!(self, Self::Table(table) if table.git.is_some())
-    }
-
-    /// Whether the entry names a registry other than crates.io.
-    pub fn is_alternative_registry(&self) -> bool {
-        matches!(self, Self::Table(table) if table.registry.is_some() || table.registry_index.is_some())
-    }
-
-    /// Whether the entry is inherited from `[workspace.dependencies]`.
-    pub fn inherits_workspace(&self) -> bool {
-        matches!(self, Self::Table(table) if table.workspace)
-    }
-}
-
-/// Which of cargo's three dependency tables an entry sits in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DependencyKind {
-    /// `[dependencies]`: ships with the crate.
-    Normal,
-    /// `[build-dependencies]`: runs in the crate's build script.
-    Build,
-    /// `[dev-dependencies]`: tests, examples, and benches only.
-    Dev,
-}
-
-/// One dependency table of a manifest, top-level or under `[target.*]`.
+/// One non-empty dependency table of a manifest.
 #[derive(Debug)]
 pub struct DependencySection<'a> {
     /// The table header in cargo's usual spelling, for diagnostics.
     pub header: String,
-    /// The table's key path: `["target", "cfg(unix)", "dependencies"]`.
-    pub path: Vec<String>,
-    /// Which of the three tables this is.
-    pub kind: DependencyKind,
+    /// Whether this is a `dev-dependencies` table: tests, examples, benches.
+    pub dev: bool,
     /// The entries.
     pub entries: &'a Dependencies,
 }
 
-/// The dependency tables of one `[target.'cfg(..)']` section.
-#[derive(Debug, Default, Deserialize)]
-pub struct TargetTables {
-    #[serde(default)]
-    dependencies: Dependencies,
-    #[serde(default, rename = "dev-dependencies")]
-    dev_dependencies: Dependencies,
-    #[serde(default, rename = "build-dependencies")]
-    build_dependencies: Dependencies,
-}
-
-/// The `[package]` keys the lints read. The inheritable ones stay raw values:
-/// the lint asks whether each is `{ workspace = true }`, not what it holds.
+/// `[package]`: the name, and every other key left raw.
 #[derive(Debug, Deserialize)]
 pub struct Package {
     /// The package name, which is how crates are matched.
     pub name: String,
-    /// `version`, raw.
-    pub version: Option<toml::Value>,
-    /// `edition`, raw.
-    pub edition: Option<toml::Value>,
-    /// `rust-version`, raw.
-    #[serde(rename = "rust-version")]
-    pub rust_version: Option<toml::Value>,
-    /// `license`, raw.
-    pub license: Option<toml::Value>,
+    /// The other keys; the lint asks whether each inherits, not what it holds.
+    #[serde(flatten)]
+    pub keys: BTreeMap<String, toml::Value>,
 }
 
-/// The `[lints]` table of a member: only the inheritance flag matters.
-#[derive(Debug, Deserialize)]
-pub struct LintsTable {
-    /// `workspace = true`.
-    #[serde(default)]
-    pub workspace: bool,
-}
-
-/// A package manifest, reduced to what the lints read.
+/// A member's manifest, reduced to what the lints read.
 #[derive(Debug, Deserialize)]
 pub struct Manifest {
-    /// `[package]`.
-    pub package: Option<Package>,
-    /// `[lints]`.
-    pub lints: Option<LintsTable>,
+    /// `[package]`. A member without one does not parse.
+    pub package: Package,
+    /// `[lints]`, raw.
+    pub lints: Option<toml::Value>,
+    #[serde(flatten)]
+    tables: DependencyTables,
     #[serde(default)]
-    dependencies: Dependencies,
-    #[serde(default, rename = "dev-dependencies")]
-    dev_dependencies: Dependencies,
-    #[serde(default, rename = "build-dependencies")]
-    build_dependencies: Dependencies,
-    #[serde(default)]
-    target: BTreeMap<String, TargetTables>,
-    /// `[[test]]`: integration test targets declared by hand.
-    #[serde(default, rename = "test")]
-    pub test_targets: Vec<toml::Value>,
+    target: BTreeMap<String, DependencyTables>,
 }
 
 impl Manifest {
-    /// Parses a manifest; the error is the parser's own message.
-    pub fn parse(text: &str) -> Result<Self, String> {
-        toml::from_str(text).map_err(|e| e.to_string())
-    }
-
     /// Every non-empty dependency table, top-level first, then each
     /// `[target.*]` section's.
     pub fn dependency_sections(&self) -> Vec<DependencySection<'_>> {
-        let mut sections = Vec::new();
-        push_sections(
-            &mut sections,
-            &[],
-            [
-                &self.dependencies,
-                &self.dev_dependencies,
-                &self.build_dependencies,
-            ],
+        let scopes = std::iter::once((String::new(), &self.tables)).chain(
+            self.target
+                .iter()
+                .map(|(target, tables)| (format!("target.'{target}'."), tables)),
         );
-        for (target, tables) in &self.target {
-            push_sections(
-                &mut sections,
-                &["target", target],
-                [
-                    &tables.dependencies,
-                    &tables.dev_dependencies,
-                    &tables.build_dependencies,
-                ],
-            );
+        let mut sections = Vec::new();
+        for (scope, tables) in scopes {
+            for (name, dev, entries) in [
+                ("dependencies", false, &tables.dependencies),
+                ("dev-dependencies", true, &tables.dev_dependencies),
+                ("build-dependencies", false, &tables.build_dependencies),
+            ] {
+                if !entries.is_empty() {
+                    sections.push(DependencySection {
+                        header: format!("[{scope}{name}]"),
+                        dev,
+                        entries,
+                    });
+                }
+            }
         }
         sections
     }
 }
 
-/// Appends the non-empty tables of one scope, given as normal, dev, build.
-fn push_sections<'a>(
-    sections: &mut Vec<DependencySection<'a>>,
-    scope: &[&str],
-    tables: [&'a Dependencies; 3],
-) {
-    let prefix = match scope {
-        [first, target] => format!("{first}.'{target}'."),
-        _ => String::new(),
-    };
-    let kinds = [
-        (DependencyKind::Normal, "dependencies"),
-        (DependencyKind::Dev, "dev-dependencies"),
-        (DependencyKind::Build, "build-dependencies"),
-    ];
-    for ((kind, name), entries) in kinds.into_iter().zip(tables) {
-        if !entries.is_empty() {
-            sections.push(DependencySection {
-                header: format!("[{prefix}{name}]"),
-                path: scope
-                    .iter()
-                    .chain([&name])
-                    .map(|part| (*part).to_owned())
-                    .collect(),
-                kind,
-                entries,
-            });
-        }
-    }
-}
-
-/// The `[workspace]` table of the root manifest.
-#[derive(Debug, Deserialize)]
-pub struct WorkspaceTable {
-    /// Member paths, each listed literally. `exclude` is not read: cargo lets
-    /// a literally listed member win over it, so it never removes one.
-    pub members: Vec<String>,
-    /// `[workspace.dependencies]`, which members inherit with `workspace = true`.
-    #[serde(default)]
-    pub dependencies: Dependencies,
-}
-
-#[derive(Debug, Deserialize)]
-struct RootManifest {
-    workspace: WorkspaceTable,
-}
-
 /// One workspace member.
 #[derive(Debug)]
 pub struct Member {
-    /// The member's directory, relative to the workspace root, with `/`.
+    /// The member's directory as `[workspace].members` lists it.
     pub path: String,
     /// The package name.
     pub name: String,
-    /// The manifest as written, for the checks that read comments.
-    pub text: String,
     /// The manifest parsed.
     pub manifest: Manifest,
+}
+
+/// The `[workspace]` keys that are read.
+#[derive(Debug, Deserialize)]
+struct WorkspaceTable {
+    members: Vec<String>,
+    #[serde(default)]
+    dependencies: Dependencies,
 }
 
 /// A Cargo workspace read from disk: the root manifest and every member's.
@@ -292,60 +162,65 @@ pub struct Member {
 pub struct Workspace {
     /// The directory holding the root `Cargo.toml`.
     pub root: PathBuf,
-    /// The root manifest as written.
+    /// The root manifest as written, for the check that reads comments.
     pub text: String,
     /// The root manifest as a raw document, for the tables compared whole.
     pub document: toml::Value,
-    /// The `[workspace]` table.
-    pub table: WorkspaceTable,
-    /// Every member, in path order.
+    /// `[workspace.dependencies]`, which members inherit with `workspace = true`.
+    pub dependencies: Dependencies,
+    /// Every member, in the order listed.
     pub members: Vec<Member>,
 }
 
-/// Why a workspace could not be read. The message names the file.
-#[derive(Debug, PartialEq, Eq)]
-pub struct LoadError(pub String);
-
-impl fmt::Display for LoadError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
 impl Workspace {
-    /// Reads the workspace rooted at `root`. Any manifest that is missing,
-    /// unparsable, or without a `[package]` name is an error: a lint that
-    /// skipped such a member would pass it unread. A root manifest with a
-    /// `[package]` table is a member too, as it is to cargo, at the empty path.
-    pub fn load(root: &Path) -> Result<Self, LoadError> {
+    /// Reads the workspace rooted at `root`. The error names the file: a
+    /// manifest that is missing or does not parse, a member without a
+    /// `[package]`, or a shape the lints do not support.
+    pub fn load(root: &Path) -> Result<Self, String> {
         let manifest_path = root.join("Cargo.toml");
+        let file = manifest_path.display().to_string();
         let text = read(&manifest_path)?;
         let document: toml::Value = parse(&manifest_path, &text)?;
-        let table = parse::<RootManifest>(&manifest_path, &text)?.workspace;
-        let mut members = Vec::new();
-        let root_manifest: Manifest = parse(&manifest_path, &text)?;
-        if let Some(package) = &root_manifest.package {
-            members.push(Member {
-                path: String::new(),
-                name: package.name.clone(),
-                text: text.clone(),
-                manifest: root_manifest,
-            });
+        let table = document.get("workspace");
+        let refused = ["package", "patch", "replace"]
+            .into_iter()
+            .filter(|key| document.get(key).is_some())
+            .map(|key| format!("a `[{key}]` table in the workspace root"))
+            .chain(
+                ["exclude", "default-members"]
+                    .into_iter()
+                    .filter(|key| table.is_some_and(|table| table.get(key).is_some()))
+                    .map(|key| format!("`[workspace] {key}`")),
+            )
+            .next();
+        if let Some(feature) = refused {
+            return Err(format!("{file}: {}", unsupported(&feature)));
         }
-        for path in expand_members(root, &table.members)? {
+        let table: WorkspaceTable = table
+            .cloned()
+            .ok_or_else(|| format!("{file} has no [workspace] table"))?
+            .try_into()
+            .map_err(|e| format!("could not parse {file}: {e}"))?;
+
+        let mut members = Vec::new();
+        for path in table.members {
+            // A crate's ring is read from this text, so it must be the path.
+            let literal = !path.contains(['*', '?', '[', ']', '{', '}'])
+                && path
+                    .split('/')
+                    .all(|part| !part.is_empty() && part != "." && part != "..");
+            if !literal {
+                let feature = format!(
+                    "workspace member `{path}` (a glob, a `.` or `..` component, an absolute \
+                     path, or a trailing `/`, where a literal relative directory is wanted)"
+                );
+                return Err(format!("{file}: {}", unsupported(&feature)));
+            }
             let member_manifest = root.join(&path).join("Cargo.toml");
-            let member_text = read(&member_manifest)?;
-            let manifest: Manifest = parse(&member_manifest, &member_text)?;
-            let Some(package) = &manifest.package else {
-                return Err(LoadError(format!(
-                    "{} has no [package] table",
-                    member_manifest.display()
-                )));
-            };
+            let manifest: Manifest = parse(&member_manifest, &read(&member_manifest)?)?;
             members.push(Member {
                 path,
-                name: package.name.clone(),
-                text: member_text,
+                name: manifest.package.name.clone(),
                 manifest,
             });
         }
@@ -353,20 +228,15 @@ impl Workspace {
             root: root.to_path_buf(),
             text,
             document,
-            table,
+            dependencies: table.dependencies,
             members,
         })
     }
 
-    /// The member a path dependency points at. `path` is read as cargo reads
-    /// it, relative to the directory `from` of the manifest declaring it
-    /// (itself relative to the workspace root; empty for the root manifest),
-    /// with `.` and `..` folded by name. `None` when the path is absolute,
-    /// leaves the workspace, or is no member's directory, whatever the
-    /// package there is called.
-    pub fn member_at(&self, from: &str, path: &str) -> Option<&Member> {
-        let resolved = resolve_path(from, path)?;
-        self.members.iter().find(|member| member.path == resolved)
+    /// The member listed at exactly `path`, which is how an internal entry of
+    /// `[workspace.dependencies]` names its crate.
+    pub fn member_at(&self, path: &str) -> Option<&Member> {
+        self.members.iter().find(|member| member.path == path)
     }
 
     /// The member whose package name is `name`, treating `-` and `_` alike.
@@ -378,95 +248,12 @@ impl Workspace {
     }
 }
 
-/// A crate name with `-` folded to `_`, the form rustc sees, so the two
-/// spellings of one name compare equal.
-pub fn normalise(name: &str) -> String {
-    name.replace('-', "_")
+fn read(path: &Path) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| format!("could not read {}: {e}", path.display()))
 }
 
-fn read(path: &Path) -> Result<String, LoadError> {
-    std::fs::read_to_string(path)
-        .map_err(|e| LoadError(format!("could not read {}: {e}", path.display())))
-}
-
-fn parse<T: serde::de::DeserializeOwned>(path: &Path, text: &str) -> Result<T, LoadError> {
-    toml::from_str(text).map_err(|e| LoadError(format!("could not parse {}: {e}", path.display())))
-}
-
-/// `path` as a manifest in directory `from` declares it, relative to the
-/// workspace root, or `None` when it is absolute or climbs out of the root.
-fn resolve_path(from: &str, path: &str) -> Option<String> {
-    if Path::new(path).is_absolute() {
-        return None;
-    }
-    let mut segments: Vec<&str> = from.split('/').filter(|s| !s.is_empty()).collect();
-    for segment in path.split('/') {
-        match segment {
-            "" | "." => {}
-            ".." => {
-                segments.pop()?;
-            }
-            name => segments.push(name),
-        }
-    }
-    Some(segments.join("/"))
-}
-
-/// The member directories `[workspace].members` lists, sorted and without
-/// duplicates. A crate's ring is read from this path, so each entry must be
-/// the plain relative path of a real directory holding a `Cargo.toml`: a
-/// wildcard, a `.` or `..` segment, or a symlink on the way would let the
-/// path name one ring while cargo builds a crate that lives in another.
-fn expand_members(root: &Path, listed: &[String]) -> Result<Vec<String>, LoadError> {
-    let mut members = Vec::new();
-    for entry in listed {
-        let member = entry.trim_end_matches('/');
-        if member.contains(['*', '?', '[', ']']) {
-            return Err(LoadError(format!(
-                "workspace member `{entry}` is a wildcard pattern; list workspace members \
-                 literally, since xtask does not expand globs and would lint none of the crates \
-                 cargo finds"
-            )));
-        }
-        let plain = !Path::new(member).is_absolute()
-            && !member.contains('\\')
-            && member
-                .split('/')
-                .all(|segment| !segment.is_empty() && segment != "." && segment != "..");
-        if !plain {
-            return Err(LoadError(format!(
-                "workspace member `{entry}` is not a plain relative path; a crate's ring is \
-                 read from this path, so write it without `.`, `..`, or empty segments"
-            )));
-        }
-        if !root.join(member).join("Cargo.toml").is_file() {
-            return Err(LoadError(format!(
-                "workspace member `{member}` has no Cargo.toml under {}",
-                root.display()
-            )));
-        }
-        members.push(member.to_owned());
-    }
-    members.sort();
-    members.dedup();
-
-    let real_root = root
-        .canonicalize()
-        .map_err(|e| LoadError(format!("could not resolve {}: {e}", root.display())))?;
-    for member in &members {
-        let directory = root.join(member);
-        let real = directory
-            .canonicalize()
-            .map_err(|e| LoadError(format!("could not resolve {}: {e}", directory.display())))?;
-        if real != real_root.join(member) {
-            return Err(LoadError(format!(
-                "workspace member `{member}` resolves to {}, not to its own path; a crate's \
-                 ring is read from its path, so a member may not sit behind a symlink",
-                real.display()
-            )));
-        }
-    }
-    Ok(members)
+fn parse<T: serde::de::DeserializeOwned>(path: &Path, text: &str) -> Result<T, String> {
+    toml::from_str(text).map_err(|e| format!("could not parse {}: {e}", path.display()))
 }
 
 #[cfg(test)]
@@ -477,6 +264,16 @@ pub mod fixture {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::Workspace;
+
+    /// Asserts a lint found one finding per phrase, in order, each holding
+    /// its phrase.
+    #[track_caller]
+    pub fn assert_findings(found: &[String], phrases: &[&str]) {
+        assert_eq!(found.len(), phrases.len(), "{found:#?}");
+        for (finding, phrase) in found.iter().zip(phrases) {
+            assert!(finding.contains(phrase), "`{phrase}` is not in: {finding}");
+        }
+    }
 
     /// A directory under the system temporary directory, removed on drop.
     pub struct TempDir(PathBuf);
@@ -541,23 +338,23 @@ pub mod fixture {
                  [lints]\nworkspace = true\n\n{tables}"
             );
             self.dir.write(&format!("{path}/Cargo.toml"), &manifest);
-            self.members.push(path.to_owned());
+            self.members.push(format!("\"{path}\""));
             self
+        }
+
+        /// Writes a file of the workspace, such as a member's source.
+        pub fn write(&self, relative: &str, text: &str) {
+            self.dir.write(relative, text);
         }
 
         /// Writes the root manifest and reads the whole workspace back.
         pub fn load(&self) -> Workspace {
-            let members: Vec<String> = self
-                .members
-                .iter()
-                .map(|member| format!("  \"{member}\",\n"))
-                .collect();
             let root = format!(
-                "[workspace]\nresolver = \"3\"\nmembers = [\n{}]\n\n\
+                "[workspace]\nresolver = \"3\"\nmembers = [{}]\n\n\
                  [workspace.package]\nversion = \"0.1.0\"\nedition = \"2024\"\n\
                  rust-version = \"1.96\"\nlicense = \"MIT OR Apache-2.0\"\n\n\
                  [workspace.dependencies]\n{}\n",
-                members.concat(),
+                self.members.join(", "),
                 self.workspace_dependencies
             );
             self.dir.write("Cargo.toml", &root);
@@ -574,13 +371,13 @@ mod tests {
     #[test]
     fn the_repository_root_holds_xtask_and_the_workspace() {
         assert!(xtask_manifest().is_file());
-        assert_eq!(workspace_root(), repo_root().join("lablet"));
+        assert!(workspace_root().join("Cargo.toml").is_file());
     }
 
     #[test]
     fn the_manifest_directory_cargo_names_at_run_time_wins_over_the_compiled_one() {
-        // A binary built in one checkout and reused in another (a copied
-        // checkout, a shared target directory) must gate the one it runs in.
+        // A binary built in one checkout and reused in another must gate the
+        // one it runs in.
         assert_eq!(
             root_from(Some("/elsewhere/checkout/xtask".into())),
             PathBuf::from("/elsewhere/checkout")
@@ -591,16 +388,11 @@ mod tests {
         );
     }
 
-    fn load_with_members(
-        tag: &str,
-        members: &str,
-        on_disk: &[&str],
-    ) -> Result<Workspace, LoadError> {
-        let dir = TempDir::new(tag);
-        dir.write(
-            "Cargo.toml",
-            &format!("[workspace]\nmembers = [{members}]\n"),
-        );
+    /// Loads a workspace whose root manifest is `root`, with a package `x` in
+    /// each of `on_disk`.
+    fn load(root: &str, on_disk: &[&str]) -> Result<Workspace, String> {
+        let dir = TempDir::new("load");
+        dir.write("Cargo.toml", root);
         for member in on_disk {
             dir.write(&format!("{member}/Cargo.toml"), "[package]\nname = \"x\"\n");
         }
@@ -608,200 +400,111 @@ mod tests {
     }
 
     #[test]
-    fn a_wildcard_member_is_an_error_naming_the_entry() {
-        for pattern in [
+    fn a_member_that_is_not_a_literal_relative_directory_is_refused() {
+        // Each reaches a real crate on disk while its text names another
+        // ring, or none, or more than one crate.
+        for path in [
             "crates/domain/*",
             "crates/domain/mode?",
-            "crates/domain/[mp]*",
-            "crates/**",
+            "crates/domain/[mx]",
+            "crates/{domain,application}/x",
+            "apps/../crates/domain/x",
+            "./crates/domain/x",
+            "crates//domain/x",
+            "crates/domain/x/",
+            "/crates/domain/x",
         ] {
-            let error =
-                load_with_members("glob", &format!("\"{pattern}\""), &["crates/domain/model"])
-                    .unwrap_err();
+            let root = format!("[workspace]\nmembers = [\"{path}\"]\n");
+            let error = load(&root, &["crates/domain/x"]).unwrap_err();
             assert!(
-                error
-                    .0
-                    .contains(&format!("`{pattern}` is a wildcard pattern")),
+                error.contains(&format!("workspace member `{path}`")),
+                "{error}"
+            );
+            assert!(
+                error.contains("is not supported by lablet's lints"),
                 "{error}"
             );
         }
-    }
-
-    #[test]
-    fn a_member_path_with_dot_segments_is_an_error() {
-        // Each of these reaches crates/domain/x or crates/application/run on
-        // disk while its leading text names another ring, or none.
-        for path in [
-            "apps/../crates/domain/x",
-            "crates/adapters/secondary/shared/../../../application/run",
-            "./crates/domain/x",
-            "crates//domain/x",
-        ] {
-            let error = load_with_members(
-                "dots",
-                &format!("\"{path}\""),
-                &["crates/domain/x", "crates/application/run", "apps/lablet"],
+        assert!(
+            load(
+                "[workspace]\nmembers = [\"crates/domain/x\"]\n",
+                &["crates/domain/x"]
             )
-            .unwrap_err();
-            assert!(
-                error.0.contains("is not a plain relative path"),
-                "{path}: {error}"
-            );
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_workspace_shape_lablet_does_not_use_is_refused() {
+        for (feature, root) in [
+            (
+                "a `[package]` table",
+                "[package]\nname = \"root\"\n\n[workspace]\nmembers = []\n",
+            ),
+            (
+                "a `[patch]` table",
+                "[workspace]\nmembers = []\n\n[patch.crates-io]\nserde = { path = \"vendor/serde\" }\n",
+            ),
+            (
+                "a `[replace]` table",
+                "[workspace]\nmembers = []\n\n[replace]\n\"serde:1.0.0\" = { path = \"vendor/serde\" }\n",
+            ),
+            (
+                "`[workspace] exclude`",
+                "[workspace]\nmembers = []\nexclude = [\"crates/old\"]\n",
+            ),
+            (
+                "`[workspace] default-members`",
+                "[workspace]\nmembers = []\ndefault-members = []\n",
+            ),
+        ] {
+            let error = load(root, &[]).unwrap_err();
+            assert!(error.contains(feature), "{error}");
+            assert!(error.contains("extend xtask deliberately"), "{error}");
         }
     }
 
     #[test]
-    fn an_absolute_member_path_is_an_error() {
-        let dir = TempDir::new("absolute");
-        dir.write("crates/domain/x/Cargo.toml", "[package]\nname = \"x\"\n");
-        let absolute = dir.path().join("crates/domain/x");
-        dir.write(
-            "Cargo.toml",
-            &format!("[workspace]\nmembers = [\"{}\"]\n", absolute.display()),
-        );
-        let error = Workspace::load(dir.path()).unwrap_err();
-        assert!(error.0.contains("is not a plain relative path"), "{error}");
-    }
+    fn a_member_with_no_manifest_or_no_package_is_an_error_naming_the_file() {
+        let error = load("[workspace]\nmembers = [\"crates/gone\"]\n", &[]).unwrap_err();
+        assert!(error.contains("crates/gone/Cargo.toml"), "{error}");
 
-    #[test]
-    fn a_member_behind_a_symlink_is_an_error() {
-        let dir = TempDir::new("symlink");
-        dir.write(
-            "Cargo.toml",
-            "[workspace]\nmembers = [\"crates/adapters/secondary/shared/run\"]\n",
-        );
-        dir.write(
-            "crates/application/run/Cargo.toml",
-            "[package]\nname = \"x\"\n",
-        );
-        let shared = dir.path().join("crates/adapters/secondary/shared");
-        std::fs::create_dir_all(&shared).unwrap();
-        std::os::unix::fs::symlink("../../../application/run", shared.join("run")).unwrap();
-        let error = Workspace::load(dir.path()).unwrap_err();
-        assert!(error.0.contains("may not sit behind a symlink"), "{error}");
-    }
-
-    #[test]
-    fn a_literal_member_stays_a_member_whatever_exclude_says() {
-        // Cargo lets a literally listed member win over `exclude`.
-        let dir = TempDir::new("exclude");
-        dir.write(
-            "Cargo.toml",
-            "[workspace]\nmembers = [\"crates/domain/model\", \"apps/lablet/\"]\nexclude = [\"crates/domain\"]\n",
-        );
-        for member in ["crates/domain/model", "apps/lablet"] {
-            dir.write(&format!("{member}/Cargo.toml"), "[package]\nname = \"x\"\n");
-        }
-        let workspace = Workspace::load(dir.path()).unwrap();
-        let paths: Vec<&str> = workspace.members.iter().map(|m| m.path.as_str()).collect();
-        assert_eq!(paths, ["apps/lablet", "crates/domain/model"]);
-    }
-
-    #[test]
-    fn a_root_manifest_with_a_package_table_is_a_member_at_the_empty_path() {
-        let dir = TempDir::new("root-package");
-        dir.write(
-            "Cargo.toml",
-            "[package]\nname = \"lablet-root\"\n\n[workspace]\nmembers = [\"a\"]\n",
-        );
-        dir.write("a/Cargo.toml", "[package]\nname = \"a\"\n");
-        let workspace = Workspace::load(dir.path()).unwrap();
-        let members: Vec<(&str, &str)> = workspace
-            .members
-            .iter()
-            .map(|m| (m.path.as_str(), m.name.as_str()))
-            .collect();
-        assert_eq!(members, [("", "lablet-root"), ("a", "a")]);
-    }
-
-    #[test]
-    fn a_path_dependency_resolves_to_the_member_whose_directory_it_names() {
-        let workspace = load_with_members(
-            "member-at",
-            "\"crates/domain/model\", \"apps/lablet\"",
-            &["crates/domain/model", "apps/lablet"],
-        )
-        .unwrap();
-        let at = |from: &str, path: &str| workspace.member_at(from, path).map(|m| m.path.as_str());
-        assert_eq!(
-            at("apps/lablet", "../../crates/domain/model"),
-            Some("crates/domain/model")
-        );
-        assert_eq!(at("", "crates/domain/model"), Some("crates/domain/model"));
-        assert_eq!(
-            at("", "./crates/domain/../domain/model/"),
-            Some("crates/domain/model")
-        );
-        assert_eq!(at("apps/lablet", "../../crates/domain"), None);
-        // A path that climbs out of the workspace root is no member's.
-        assert_eq!(at("apps/lablet", "../../../outside/policy"), None);
-        assert_eq!(at("", "/crates/domain/model"), None);
-    }
-
-    #[test]
-    fn a_literal_member_without_a_manifest_is_an_error_naming_it() {
-        let dir = TempDir::new("missing");
-        dir.write("Cargo.toml", "[workspace]\nmembers = [\"crates/gone\"]\n");
-        let error = Workspace::load(dir.path()).unwrap_err();
-        assert!(error.0.contains("crates/gone"), "{error}");
-    }
-
-    #[test]
-    fn a_member_without_a_package_table_is_an_error() {
         let dir = TempDir::new("virtual");
         dir.write("Cargo.toml", "[workspace]\nmembers = [\"a\"]\n");
         dir.write("a/Cargo.toml", "[dependencies]\n");
         let error = Workspace::load(dir.path()).unwrap_err();
-        assert!(error.0.contains("no [package] table"), "{error}");
+        assert!(error.contains("a/Cargo.toml"), "{error}");
+        assert!(error.contains("package"), "{error}");
     }
 
     #[test]
     fn dependency_sections_cover_target_tables_and_name_their_headers() {
-        let manifest = Manifest::parse(
-            r#"
-[package]
-name = "x"
-
-[dependencies]
-a = "1"
-
-[dev-dependencies]
-b = "1"
-
-[target.'cfg(unix)'.build-dependencies]
-c = { version = "1" }
-"#,
+        let manifest: Manifest = toml::from_str(
+            "[package]\nname = \"x\"\n\n[dependencies]\na.workspace = true\n\n\
+             [dev-dependencies]\nb = \"1\"\n\n\
+             [target.'cfg(unix)'.build-dependencies]\nc = { version = \"1\" }\n",
         )
         .unwrap();
-        let headers: Vec<(String, DependencyKind)> = manifest
-            .dependency_sections()
-            .into_iter()
-            .map(|section| (section.header, section.kind))
+        let sections = manifest.dependency_sections();
+        let headers: Vec<(&str, bool)> = sections
+            .iter()
+            .map(|section| (section.header.as_str(), section.dev))
             .collect();
         assert_eq!(
             headers,
             [
-                ("[dependencies]".to_owned(), DependencyKind::Normal),
-                ("[dev-dependencies]".to_owned(), DependencyKind::Dev),
-                (
-                    "[target.'cfg(unix)'.build-dependencies]".to_owned(),
-                    DependencyKind::Build
-                ),
+                ("[dependencies]", false),
+                ("[dev-dependencies]", true),
+                ("[target.'cfg(unix)'.build-dependencies]", false),
             ]
         );
+        // The dotted and the inline spelling both read as inherited.
+        assert!(inherits_workspace(&sections[0].entries["a"]));
+        assert!(!inherits_workspace(&sections[1].entries["b"]));
     }
 
     #[test]
-    fn a_dotted_workspace_key_reads_as_inherited() {
-        let manifest =
-            Manifest::parse("[package]\nname = \"x\"\n[dependencies]\nserde.workspace = true\n")
-                .unwrap();
-        let sections = manifest.dependency_sections();
-        assert!(sections[0].entries["serde"].inherits_workspace());
-    }
-
-    #[test]
-    fn members_are_found_by_name_in_either_spelling() {
+    fn members_are_found_by_listed_path_and_by_name_in_either_spelling() {
         let dir = TempDir::new("names");
         dir.write("Cargo.toml", "[workspace]\nmembers = [\"a\"]\n");
         dir.write(
@@ -811,5 +514,7 @@ c = { version = "1" }
         let workspace = Workspace::load(dir.path()).unwrap();
         assert!(workspace.member_named("lablet_telemetry_otel").is_some());
         assert!(workspace.member_named("lablet-telemetry").is_none());
+        assert!(workspace.member_at("a").is_some());
+        assert!(workspace.member_at("./a").is_none());
     }
 }

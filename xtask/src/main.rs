@@ -28,20 +28,20 @@ Checks:
   fmt [--fix]      rustfmt over the workspace and xtask (--fix: rewrite)
   clippy           clippy over every target, warnings denied
   lint-layers      Layer rules: which crate may depend on which, by ring
-  lint-manifests   Manifest rules: inherited lints and package keys, package
-                   names, one integration target, exact crates.io pins, no
-                   replaced or banned crate, a comment on every dependency,
-                   xtask's lint copy
+  lint-manifests   Manifest rules: members inherit their lints, package keys,
+                   and every dependency; package names; exact crates.io pins,
+                   each with a comment, in [workspace.dependencies] and xtask;
+                   no replaced crate; xtask's lint copy
   deny             cargo-deny under lablet/deny.toml: licences, advisories,
-                   bans, sources
+                   sources, bans (anyhow and mocking frameworks among them)
   doc              rustdoc without dependencies, warnings denied
   test             The workspace's tests and xtask's own
   changelog        A contract change needs an entry under Unreleased
                    (base: $LABLET_CHANGELOG_BASE, else the merge-base with main)
 
 Floors (CI):
-  coverage         Line coverage of production code (inline test modules
-                   left out): 90% on lablet-model, lablet-policy, lablet-run
+  coverage         Line coverage of production code (tests.rs files left
+                   out): 90% on lablet-model, lablet-policy, lablet-run
   mutants          Mutants caught: 80% on the same crates
 
 Gates:

@@ -37,9 +37,11 @@ repository = "https://github.com/hannahchan/lablet"
 # feature work (spec §8). Members take an entry with `<name>.workspace = true`.
 # Cargo features are additive, so a member cannot narrow a list below; each
 # list is the base every user of the crate needs, and a member that needs more
-# writes `{ workspace = true, features = [...] }` with its own comment. Every
-# entry carries a one-line comment saying why it is there (`cargo xtask
-# lint-manifests`).
+# writes `{ workspace = true, features = [...] }`. A member declares nothing
+# else of its own. Every entry here has a comment on the line directly above
+# it saying why it is there (`cargo xtask lint-manifests`). A trailing comment
+# or a comment above a blank line does not count, so keep the blank line under
+# each group header: the header then covers no entry.
 [workspace.dependencies]
 # Internal
 

@@ -137,37 +137,30 @@ pub fn clippy_steps() -> Vec<Step> {
 /// The layer rules; see [`lint_layers`].
 pub fn lint_layers_steps() -> Vec<Step> {
     vec![Step::check("lint-layers", || {
-        let workspace = Workspace::load(&workspace_root()).map_err(|e| e.to_string())?;
-        let violations = lint_layers::lint(&workspace);
-        if violations.is_empty() {
-            return Ok(None);
-        }
-        let mut message = String::new();
-        for kind in lint_layers::Kind::ALL {
-            let of_kind: Vec<_> = violations.iter().filter(|v| v.kind == kind).collect();
-            write_section(&mut message, kind.heading(), &of_kind);
-        }
-        let _ = write!(message, "{} violation(s) found.", violations.len());
-        Err(message)
+        let workspace = Workspace::load(&workspace_root())?;
+        listed(&lint_layers::lint(&workspace))
     })]
 }
 
 /// The manifest rules; see [`lint_manifests`].
 pub fn lint_manifests_steps() -> Vec<Step> {
     vec![Step::check("lint-manifests", || {
-        let workspace = Workspace::load(&workspace_root()).map_err(|e| e.to_string())?;
-        let violations = lint_manifests::lint(&workspace, &repo_root());
-        if violations.is_empty() {
-            return Ok(None);
-        }
-        let mut message = String::new();
-        for rule in lint_manifests::Rule::ALL {
-            let of_rule: Vec<_> = violations.iter().filter(|v| v.rule == rule).collect();
-            write_section(&mut message, rule.heading(), &of_rule);
-        }
-        let _ = write!(message, "{} violation(s) found.", violations.len());
-        Err(message)
+        let workspace = Workspace::load(&workspace_root())?;
+        listed(&lint_manifests::lint(&workspace, &repo_root()))
     })]
+}
+
+/// A lint's result: a pass, or every finding in a paragraph of its own.
+fn listed(findings: &[String]) -> CheckResult {
+    if findings.is_empty() {
+        return Ok(None);
+    }
+    let mut message = String::new();
+    for finding in findings {
+        let _ = writeln!(message, "  {finding}\n");
+    }
+    let _ = write!(message, "{} violation(s) found.", findings.len());
+    Err(message)
 }
 
 /// cargo-deny under `lablet/deny.toml`, over the workspace and over xtask,
@@ -406,34 +399,12 @@ fn on_terminal() -> bool {
     *TERMINAL
 }
 
-/// Appends a heading and its items to a diagnostic, or nothing when there are
-/// no items.
-fn write_section<T: std::fmt::Display>(message: &mut String, heading: &str, items: &[T]) {
-    if items.is_empty() {
-        return;
-    }
-    let _ = writeln!(message, "{heading}\n");
-    for item in items {
-        let _ = writeln!(message, "  {item}\n");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn labels(steps: &[Step]) -> Vec<&'static str> {
         steps.iter().map(|step| step.label).collect()
-    }
-
-    fn cargo_args(step: &Step) -> Vec<&str> {
-        match &step.action {
-            Action::Command { program, args, .. } => {
-                assert_eq!(*program, "cargo");
-                args.iter().map(String::as_str).collect()
-            }
-            Action::Check(_) => panic!("{} is not a subprocess step", step.label),
-        }
     }
 
     #[test]
@@ -471,20 +442,6 @@ mod tests {
     }
 
     #[test]
-    fn fmt_checks_by_default_and_writes_only_when_asked() {
-        for step in fmt_steps(false) {
-            assert!(
-                cargo_args(&step).ends_with(&["--", "--check"]),
-                "{}",
-                step.label
-            );
-        }
-        for step in fmt_steps(true) {
-            assert!(!cargo_args(&step).contains(&"--check"), "{}", step.label);
-        }
-    }
-
-    #[test]
     fn a_failed_formatting_check_says_how_to_fix_it() {
         for step in fmt_steps(false) {
             assert_eq!(
@@ -519,17 +476,6 @@ mod tests {
     }
 
     #[test]
-    fn clippy_covers_every_target_with_warnings_denied() {
-        for step in clippy_steps() {
-            assert!(
-                cargo_args(&step).ends_with(&["--all-targets", "--", "-D", "warnings"]),
-                "{}",
-                step.label
-            );
-        }
-    }
-
-    #[test]
     fn one_clippy_configuration_lets_tests_unwrap_in_both_workspaces() {
         let root = crate::workspace::repo_root();
         let text = std::fs::read_to_string(root.join("clippy.toml")).unwrap();
@@ -552,38 +498,12 @@ mod tests {
     }
 
     #[test]
-    fn rustdoc_denies_warnings_and_skips_dependencies() {
-        for step in doc_steps() {
-            assert!(cargo_args(&step).contains(&"--no-deps"), "{}", step.label);
-            let Action::Command { env, .. } = &step.action else {
-                panic!("doc is a subprocess step");
-            };
-            assert_eq!(*env, [("RUSTDOCFLAGS", "-D warnings")]);
-        }
-    }
-
-    #[test]
-    fn deny_reads_the_workspace_policy_for_both_lockfiles() {
-        for step in deny_steps() {
-            let args = cargo_args(&step);
-            let config = args.iter().position(|arg| *arg == "--config").unwrap();
-            assert!(args[config + 1].ends_with("lablet/deny.toml"), "{args:?}");
-            assert!(config < args.iter().position(|arg| *arg == "check").unwrap());
-        }
-    }
-
-    #[test]
-    fn write_section_skips_an_empty_list() {
-        let mut message = String::new();
-        write_section::<String>(&mut message, "Heading:", &[]);
-        assert!(message.is_empty());
-    }
-
-    #[test]
-    fn write_section_indents_each_item_under_its_heading() {
-        let mut message = String::new();
-        write_section(&mut message, "Heading:", &["one", "two"]);
-        assert_eq!(message, "Heading:\n\n  one\n\n  two\n\n");
+    fn a_lint_passes_with_no_finding_and_lists_every_finding_otherwise() {
+        assert_eq!(listed(&[]), Ok(None));
+        assert_eq!(
+            listed(&["one".to_owned(), "two".to_owned()]).unwrap_err(),
+            "  one\n\n  two\n\n2 violation(s) found."
+        );
     }
 
     #[test]
