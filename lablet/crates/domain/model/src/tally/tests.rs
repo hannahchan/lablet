@@ -156,6 +156,16 @@ fn the_prompt_sizes_are_byte_lengths_whether_or_not_a_turn_has_taken_the_prompt(
 }
 
 #[test]
+fn the_conversation_so_far_can_be_read_while_the_run_goes_on() {
+    let mut tally = start();
+    assert_eq!(tally.transcript().system(), "You fix tests.");
+    assert!(tally.transcript().turns().is_empty());
+
+    tool_turn(&mut tally, &["bash"], &[ToolCallStatus::Ok]);
+    assert_eq!(tally.transcript().turns().len(), 1);
+}
+
+#[test]
 fn the_prompt_is_the_input_of_the_first_turn_and_of_no_other() {
     let mut tally = start();
     tool_turn(&mut tally, &["bash"], &[ToolCallStatus::Ok]);

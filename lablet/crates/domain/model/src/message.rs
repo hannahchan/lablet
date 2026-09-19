@@ -151,7 +151,7 @@ pub enum Message<'a> {
     /// message, results first; an OpenAI-compatible server takes one `tool`
     /// message for each result and then a user message for the input.
     User {
-        /// The results of the turn before's tool calls.
+        /// The results of the previous turn's tool calls.
         tool_results: Vec<ToolResult<'a>>,
         /// What the user supplied to the turn.
         input: &'a [UserContent],
