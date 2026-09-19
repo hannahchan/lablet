@@ -9,3 +9,7 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+lablet-model.workspace = true
+thiserror.workspace = true
