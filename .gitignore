@@ -1,6 +1,4 @@
-# Rust / Cargo. `**/` because there are two target directories: lablet/target
-# and xtask/target. Cargo.lock is committed in both (binary workspace,
-# reproducible gates).
+# Rust / Cargo. `**/` because lablet/ and xtask/ each have a target directory.
 **/target/
 **/*.pdb
 
@@ -15,17 +13,13 @@
 !.vscode/extensions.json
 !.vscode/settings.json
 
-# Environment. Provider API keys live here; never commit one. A checked-in
-# template is the one exception.
+# Environment. Provider API keys live here; the template is the one exception.
 .env
 .env.*
 !.env.example
 
-# Test & quality output: cargo-llvm-cov and cargo-mutants. The gates write
-# under lablet/target/xtask; these are for runs by hand. `coverage/` is
-# anchored to where such a run puts it, so that a source directory of that
-# name (xtask/src/coverage/, a docs page) is never ignored without a word.
-# For the same reason no source directory may be called `target`.
+# Test & quality output from runs by hand; the gates write under target/.
+# `coverage/` is anchored so a source directory of that name is never ignored.
 *.profdata
 *.profraw
 lcov.info
@@ -33,9 +27,8 @@ lcov.info
 /lablet/coverage/
 mutants.out*/
 
-# Run output. The OTLP/JSON file exporter writes one file per run into the
-# working directory by default, wherever `lablet run` was started. A fixture in
-# this format that must be committed needs a different name.
+# Run output: the OTLP/JSON file exporter writes into the working directory.
+# A committed fixture in this format needs a different name.
 lablet-*.otlp.jsonl
 
 # Local configuration

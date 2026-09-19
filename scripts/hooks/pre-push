@@ -2,9 +2,8 @@
 # Git pre-push hook: the full local gate. Enabled by scripts/install-hooks.sh.
 set -euo pipefail
 
-# Git runs hooks from whatever started it (an IDE, an agent), and that shell's
-# PATH may lack cargo, so add the usual install locations. HOME may be unset
-# there as well, hence the empty defaults.
+# Whatever started git (an IDE, an agent) may have a PATH without cargo, and
+# no HOME either, hence the empty defaults.
 for dir in /opt/homebrew/bin "${HOME:-}/.local/bin" "${CARGO_HOME:-${HOME:-}/.cargo}/bin"; do
   if [[ -d "$dir" ]]; then
     PATH="$dir:$PATH"
@@ -12,14 +11,11 @@ for dir in /opt/homebrew/bin "${HOME:-}/.local/bin" "${CARGO_HOME:-${HOME:-}/.ca
 done
 export PATH
 
-# The `xtask` alias lives in the root .cargo/config.toml, which cargo only
-# finds from the repository root or below.
+# Cargo finds the `xtask` alias only from the repository root or below.
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
-# Git feeds one "<local-ref> <local-sha> <remote-ref> <remote-sha>" line per ref
-# on stdin, with an all-zero local sha for a ref being deleted. A push made up
-# purely of deletions ships no code, so it skips the gate. Everything else runs
-# it, including a hook run by hand with no ref lines on stdin.
+# A push made up purely of deletions (all-zero local sha) ships no code, so it
+# skips the gate. A hook run by hand, with no ref lines on stdin, still runs it.
 refs=0
 deletions=0
 if [[ ! -t 0 ]]; then
@@ -37,8 +33,6 @@ if ((refs > 0 && refs == deletions)); then
   exit 0
 fi
 
-# xtask puts the tools pinned in mise.toml on PATH itself, finds mise where
-# installers put it, and names any tool it cannot find (xtask/src/process.rs).
-# No `mise exec` here: run from a hook it trusts mise.toml and installs every
-# missing pin on the spot, which is scripts/setup.sh's decision to make.
+# No `mise exec`: from a hook it would trust mise.toml and install missing
+# pins on the spot, which is scripts/setup.sh's decision. xtask finds the tools.
 exec cargo xtask pre-push

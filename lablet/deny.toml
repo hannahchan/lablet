@@ -1,15 +1,9 @@
-# cargo-deny policy for the lablet workspace, run by `cargo xtask deny`
-# (pre-push and CI). Written for cargo-deny 0.20; the version is pinned in the
-# root mise.toml. https://embarkstudios.github.io/cargo-deny/
-#
-# The policy starts strict. Loosening it (a new licence, an ignored advisory, a
-# skipped duplicate) is a deliberate edit with a comment saying which crate
-# needs it and when to revisit.
+# Loosening this policy (a new licence, an ignored advisory, a skipped
+# duplicate) needs a comment saying which crate needs it and when to revisit.
 
 [graph]
-# Windows is not supported (spec §2), so Windows-only dependencies are outside
-# the graph that ships. These are the hosts lablet builds for: Linux (glibc for
-# development and CI, musl for the release binary) and macOS.
+# Windows is not supported, so Windows-only dependencies are not checked. musl
+# is the release binary.
 targets = [
   "x86_64-unknown-linux-gnu",
   "aarch64-unknown-linux-gnu",
@@ -18,71 +12,51 @@ targets = [
   "x86_64-apple-darwin",
   "aarch64-apple-darwin",
 ]
-# Check what any feature combination could pull in, not only the defaults.
 all-features = true
 
 [advisories]
-# Vulnerability advisories are always an error in this version of cargo-deny;
-# there is no level to set. The scopes below widen the other classes from
-# their defaults to the whole graph, direct and transitive.
 unmaintained = "all"
 unsound = "all"
 yanked = "deny"
-# No ignores. An entry here needs the advisory id, why lablet is not affected,
-# and what upgrade removes it.
+# An entry needs the advisory id, why lablet is not affected, and what upgrade
+# removes it.
 ignore = []
 
 [licenses]
-# Lablet is distributed under MIT OR Apache-2.0, so every dependency must be
-# usable under both. This list is the policy, not an inventory: a licence may
-# be listed before any dependency uses it.
+# Lablet is MIT OR Apache-2.0, so every dependency must be usable under both.
 allow = [
   "MIT",
   "Apache-2.0",
-  # The Apache-2.0 form used by LLVM-derived crates; the exception only adds
-  # permissions.
   "Apache-2.0 WITH LLVM-exception",
   "BSD-2-Clause",
   "BSD-3-Clause",
   "ISC",
-  # The Unicode data tables behind the ICU and unicode-* crates.
   "Unicode-3.0",
   "Zlib",
   "CC0-1.0",
-  # Deliberately absent until a dependency needs them, each with a comment:
-  # MPL-2.0 (file-level copyleft), CDLA-Permissive-2.0 (webpki-roots data),
-  # OpenSSL (aws-lc-sys). Copyleft licences (GPL, LGPL, AGPL) are never added.
+  # Absent until a dependency needs them: MPL-2.0, CDLA-Permissive-2.0,
+  # OpenSSL. Copyleft licences (GPL, LGPL, AGPL) are never added.
 ]
 confidence-threshold = 0.8
-# The allow-list is policy, so an entry nothing uses yet is not a finding.
+# The allow-list is policy, not an inventory: an unused entry is not a finding.
 unused-allowed-license = "allow"
-# Workspace crates all declare `license = "MIT OR Apache-2.0"`, so there is no
-# [licenses.private] exemption: a crate without a licence field fails here.
 
 [bans]
-# Duplicates are reported, not failed: upstream crates decide most of them.
+# Upstream crates decide most duplicates, so they are reported, not failed.
 multiple-versions = "warn"
-# Third-party crates are pinned to exact versions (spec §8), so a `*`
-# requirement is always a mistake. The internal entries in
-# [workspace.dependencies] carry a version beside their path, so they pass
-# either way; the exemption covers a path dependency written without one.
 wildcards = "deny"
 allow-wildcard-paths = true
 highlight = "all"
 deny = [
-  # Lablet is rustls-only (spec §6): no OpenSSL and no platform TLS anywhere in
-  # the graph, so the static musl build needs no system libraries. If one of
-  # these appears, a dependency has a default TLS feature that must be turned
-  # off in [workspace.dependencies].
+  # The static musl build must need no system libraries. If one of these
+  # appears, turn off a dependency's default TLS feature in
+  # [workspace.dependencies].
   { crate = "openssl", reason = "lablet is rustls-only (spec §6)" },
   { crate = "openssl-sys", reason = "lablet is rustls-only (spec §6)" },
   { crate = "native-tls", reason = "lablet is rustls-only (spec §6)" },
-  # The two crate bans in contributing/README.md "Code conventions". They
-  # cover dev-dependencies and xtask's graph too. A ban is on the whole graph,
-  # and an upstream crate may use one of these inside (prost-derive uses
-  # anyhow). When the gate first fails for that reason, keep the ban and list
-  # the upstream crate under `wrappers`, which allows the banned crate as that
-  # crate's direct dependency only, with a comment naming what pulls it in.
+  # A ban covers the whole graph. If an upstream crate uses one of these
+  # inside, keep the ban and list that crate under `wrappers`, with a comment
+  # naming what pulls it in.
   { crate = "anyhow", reason = "errors are thiserror enums, one per port or boundary (contributing)" },
   { crate = "eyre", reason = "errors are thiserror enums, one per port or boundary (contributing)" },
   { crate = "color-eyre", reason = "errors are thiserror enums, one per port or boundary (contributing)" },
@@ -95,12 +69,10 @@ deny = [
   { crate = "mry", reason = "test doubles are hand-written fakes; no mocking framework (contributing)" },
   { crate = "double", reason = "test doubles are hand-written fakes; no mocking framework (contributing)" },
 ]
-# No skips. A `skip` entry needs the crate, the version, and which upstream
-# pulls the duplicate.
+# An entry needs the crate, the version, and which upstream pulls the duplicate.
 skip = []
 
 [sources]
-# crates.io only: no git dependencies and no alternative registries.
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]

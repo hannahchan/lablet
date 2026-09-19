@@ -1,8 +1,4 @@
-# Workspace copy of the alias in ../.cargo/config.toml; keep the two in step.
-# --manifest-path resolves against the current directory, so this copy works
-# when cargo is started from lablet/ itself (where plain cargo commands run)
-# and the root copy works from the repository root. Cargo reads both files
-# from here; this one is nearer, so it wins. --locked holds xtask to its
-# committed lockfile. -q hides cargo's progress lines, not compiler output.
+# A copy of the alias in ../.cargo/config.toml with the path adjusted, because
+# --manifest-path resolves against the current directory. Keep the two in step.
 [alias]
 xtask = "run -q --locked --manifest-path ../xtask/Cargo.toml --"

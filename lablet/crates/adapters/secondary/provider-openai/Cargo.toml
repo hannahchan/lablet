@@ -1,6 +1,6 @@
 [package]
 name = "lablet-provider-openai"
-description = "ModelProvider over OpenAI-compatible chat completions (Ollama, vLLM, gateways)"
+description = "ModelProvider over OpenAI-compatible chat completions"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

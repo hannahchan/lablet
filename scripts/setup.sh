@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# One command for a fresh clone: the pinned Rust toolchain, the pinned gate
-# tools, and the git hooks. Safe to run again; every step is a no-op when it
-# has already been done.
-#
-# It installs nothing system-wide and never installs rustup or mise itself:
-# those two are yours to install, and the messages below say where from.
+# Sets up a fresh clone: the pinned Rust toolchain, the pinned gate tools, and
+# the git hooks. Safe to run again. It never installs rustup or mise itself.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,17 +27,13 @@ fi
 # rustup and mise both resolve their pin files from the current directory.
 cd "$REPO_ROOT"
 
-# The toolchain comes first because mise's cargo backend needs a working cargo.
-# `rustup toolchain install` with no argument installs what rust-toolchain.toml
-# names and needs rustup 1.28+. The fallback is for an older rustup, where
-# `show active-toolchain` installs the pin as a side effect; newer ones
-# deprecate that and warn.
+# Before mise, whose cargo backend needs a working cargo. The fallback is for
+# an older rustup, where `show active-toolchain` installs the pin.
 echo "[..] Rust toolchain (rust-toolchain.toml)"
 rustup toolchain install || rustup show active-toolchain
 echo "[ok] Rust toolchain"
 
-# mise reads a project's mise.toml only once it is trusted; running this
-# script is that decision.
+# Running this script is the decision to trust mise.toml.
 echo "[..] gate tools (mise.toml)"
 mise trust "$REPO_ROOT/mise.toml"
 mise install

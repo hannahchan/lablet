@@ -1,11 +1,5 @@
-# `cargo xtask <task>` runs the gate runner in xtask/, which is its own
-# workspace and not a member of lablet/. --manifest-path resolves against the
-# current directory, so this alias works from the repository root only;
-# lablet/.cargo/config.toml carries a copy for the workspace root, and the two
-# are kept in step (an xtask test checks). xtask itself finds the repository
-# from the manifest directory cargo names when it runs the binary, so a binary
-# cargo reuses from another checkout still gates this one. --locked holds
-# xtask to its committed lockfile, as the gates hold the workspace to its own.
-# -q hides cargo's progress lines, not compiler output.
+# --manifest-path resolves against the current directory, so this alias works
+# from the repository root only. lablet/.cargo/config.toml carries a copy for
+# the workspace root; keep the two in step.
 [alias]
 xtask = "run -q --locked --manifest-path xtask/Cargo.toml --"

@@ -1,6 +1,6 @@
 [package]
 name = "lablet-provider-fake"
-description = "ModelProvider that plays scripted responses; a product feature, not test scaffolding"
+description = "ModelProvider that plays scripted responses"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

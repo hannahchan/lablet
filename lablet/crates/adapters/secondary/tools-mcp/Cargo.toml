@@ -1,6 +1,6 @@
 [package]
 name = "lablet-tools-mcp"
-description = "ToolExecutor over rmcp (stdio and streamable HTTP clients)"
+description = "ToolExecutor over rmcp"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

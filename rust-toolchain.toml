@@ -1,10 +1,4 @@
-# The one Rust toolchain for the workspace, xtask, and CI. rustup reads this
-# file from any directory below it; `rustup toolchain install`, which
-# scripts/setup.sh and CI run, installs the pin. MSRV policy (spec §8) is this
-# version minus two minor versions, and an xtask test holds `rust-version` in
-# lablet/Cargo.toml to it.
-#
-# llvm-tools-preview is what cargo-llvm-cov drives for `cargo xtask coverage`.
+# llvm-tools-preview is what cargo-llvm-cov needs for `cargo xtask coverage`.
 [toolchain]
 channel = "1.98.1"
 components = ["rustfmt", "clippy", "llvm-tools-preview"]

@@ -1,7 +1,5 @@
-# Normalise line endings on commit; Windows is not a supported host, but a
-# contributor's editor may still be one.
+# Windows is not a supported host, but a contributor's editor may still be one.
 * text=auto
 
-# Written by `mise lock`, never by hand: collapse it in diffs and keep it out
-# of language statistics.
+# Written by `mise lock`, never by hand.
 mise.lock linguist-generated=true

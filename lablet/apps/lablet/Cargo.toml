@@ -1,6 +1,6 @@
 [package]
 name = "lablet"
-description = "A lightweight, instrumented agent loop: config, build(), and the CLI"
+description = "A lightweight, instrumented agent loop"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
