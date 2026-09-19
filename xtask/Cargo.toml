@@ -50,5 +50,7 @@ unimplemented = "warn"
 unwrap_used = "warn"
 expect_used = "warn"
 
-# Suppress with #[expect(..., reason = "...")]; #[allow] is itself a failure
+# Suppress with #[expect(..., reason = "...")]; #[allow] is itself a failure,
+# and so is an #[expect] that gives no reason
 allow_attributes = "warn"
+allow_attributes_without_reason = "warn"

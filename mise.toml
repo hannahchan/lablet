@@ -5,6 +5,9 @@
 # A version bump here is its own commit, like a crate bump (spec §8). After a
 # bump, refresh the lockfile for every supported host:
 #   mise lock --platform linux-x64,linux-arm64,macos-arm64,macos-x64
+# Export GITHUB_TOKEN first. Without one the GitHub API rate limit is soon
+# spent, and `mise lock` then warns, skips the platforms it could not look up,
+# and still exits 0. An xtask test fails while a tool lacks one of the four.
 
 # The floor for `mise lock --platform` and the lockfile format in mise.lock;
 # the same floor UsefulBytes uses for the same backends. This file was written

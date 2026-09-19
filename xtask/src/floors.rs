@@ -16,6 +16,12 @@ pub struct Floor {
     pub line_coverage: u64,
     /// The least share of viable mutants, in percent, its tests must catch.
     pub mutants_caught: u64,
+    /// Whether the crate is still a shell with no function in it. Only then
+    /// may a run measure nothing and pass; for a crate that holds code,
+    /// nothing measured means a filter or a path remap hid it, which fails.
+    /// A test fails once a `may_be_empty` crate gains a function, so the flag
+    /// is set to `false` in the commit that adds the first one.
+    pub may_be_empty: bool,
 }
 
 /// Every crate with a floor. Changing a number or the list is a decision:
@@ -25,16 +31,19 @@ pub const FLOORS: &[Floor] = &[
         package: "lablet-model",
         line_coverage: 90,
         mutants_caught: 80,
+        may_be_empty: true,
     },
     Floor {
         package: "lablet-policy",
         line_coverage: 90,
         mutants_caught: 80,
+        may_be_empty: true,
     },
     Floor {
         package: "lablet-run",
         line_coverage: 90,
         mutants_caught: 80,
+        may_be_empty: true,
     },
 ];
 
@@ -43,11 +52,22 @@ pub const FLOORS: &[Floor] = &[
 pub enum Standing {
     /// At or above the floor.
     Met,
-    /// Nothing to measure: no coverable lines, or no viable mutants. An empty
-    /// crate passes, with a note, so the scaffold can run the gate.
+    /// Nothing to measure: no coverable lines, or no viable mutants, in a
+    /// crate that is still an empty shell ([`Floor::may_be_empty`]). It
+    /// passes, with a note, so the scaffold can run the gate.
     NothingToMeasure,
+    /// Nothing was measured in a crate that holds code, so the floor was not
+    /// applied at all. A failure: a filter or a path remap hid the crate.
+    NothingMeasured,
     /// Below the floor.
     Below,
+}
+
+impl Standing {
+    /// Whether this standing fails the step.
+    pub fn fails(&self) -> bool {
+        matches!(self, Self::NothingMeasured | Self::Below)
+    }
 }
 
 /// One crate's result line in a floor report.
@@ -65,13 +85,17 @@ pub struct Line {
     pub unit: &'static str,
     /// What there was none of when `total` is zero: "coverable lines".
     pub none_of: &'static str,
+    /// Whether `total` may be zero; see [`Floor::may_be_empty`].
+    pub may_be_empty: bool,
 }
 
 impl Line {
     /// Judges `hit` of `total` against the floor in exact integer arithmetic.
     pub fn standing(&self) -> Standing {
-        if self.total == 0 {
+        if self.total == 0 && self.may_be_empty {
             Standing::NothingToMeasure
+        } else if self.total == 0 {
+            Standing::NothingMeasured
         } else if self.hit * 100 >= self.floor * self.total {
             Standing::Met
         } else {
@@ -89,12 +113,22 @@ impl fmt::Display for Line {
             floor,
             unit,
             none_of,
+            may_be_empty: _,
         } = self;
         match self.standing() {
             Standing::NothingToMeasure => {
                 write!(
                     f,
                     "{package}: nothing to measure yet (no {none_of}); floor {floor}%"
+                )
+            }
+            Standing::NothingMeasured => {
+                write!(
+                    f,
+                    "{package}: NOTHING MEASURED (no {none_of}) in a crate that holds code, so \
+                     the {floor}% floor was not applied; look for a filter that hides the crate \
+                     (.cargo/mutants.toml, an ignore regex) or a path remap \
+                     (--remap-path-prefix)"
                 )
             }
             standing => {
@@ -117,20 +151,18 @@ impl fmt::Display for Line {
 }
 
 /// Turns a floor report into a step result: every line is shown either way,
-/// and any crate below its floor fails the step.
+/// and any crate below its floor, or unmeasured when it holds code, fails the
+/// step.
 pub fn conclude(what: &str, lines: &[Line]) -> crate::gates::CheckResult {
     let report = lines
         .iter()
         .map(|line| format!("  {line}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let below = lines
-        .iter()
-        .filter(|line| line.standing() == Standing::Below)
-        .count();
-    if below > 0 {
+    let failed = lines.iter().filter(|line| line.standing().fails()).count();
+    if failed > 0 {
         return Err(format!(
-            "{what}: {below} crate(s) below the floor\n\n{report}"
+            "{what}: {failed} crate(s) below the floor\n\n{report}"
         ));
     }
     println!("{report}");
@@ -144,6 +176,17 @@ pub fn conclude(what: &str, lines: &[Line]) -> crate::gates::CheckResult {
             lines.len()
         )
     }))
+}
+
+/// `target/xtask` under the workspace, created: where the floor checks keep
+/// their tools' reports. Git ignores it and `cargo clean` removes it. On a
+/// fresh clone or a CI runner `target/` does not exist yet, and cargo-mutants
+/// does not create the parent of its output directory.
+pub fn output_directory(workspace_root: &std::path::Path) -> Result<PathBuf, String> {
+    let directory = workspace_root.join("target").join("xtask");
+    std::fs::create_dir_all(&directory)
+        .map_err(|e| format!("could not create {}: {e}", directory.display()))?;
+    Ok(directory)
 }
 
 /// Each floor crate's directory in the workspace. A floor naming a crate the
@@ -178,6 +221,15 @@ mod tests {
             floor,
             unit: "lines covered",
             none_of: "coverable lines",
+            may_be_empty: true,
+        }
+    }
+
+    /// The same result in a crate that holds code.
+    fn holding_code(hit: u64, total: u64, floor: u64) -> Line {
+        Line {
+            may_be_empty: false,
+            ..line(hit, total, floor)
         }
     }
 
@@ -202,6 +254,54 @@ mod tests {
     #[test]
     fn nothing_to_measure_is_its_own_standing() {
         assert_eq!(line(0, 0, 90).standing(), Standing::NothingToMeasure);
+    }
+
+    #[test]
+    fn nothing_measured_in_a_crate_that_holds_code_fails() {
+        let unmeasured = holding_code(0, 0, 90);
+        assert_eq!(unmeasured.standing(), Standing::NothingMeasured);
+        assert!(unmeasured.to_string().contains("NOTHING MEASURED"));
+        let error = conclude("mutants", &[line(0, 0, 90), unmeasured]).unwrap_err();
+        assert!(
+            error.starts_with("mutants: 1 crate(s) below the floor"),
+            "{error}"
+        );
+        // With something to measure the flag changes nothing.
+        assert_eq!(holding_code(9, 10, 90).standing(), Standing::Met);
+        assert_eq!(holding_code(8, 10, 90).standing(), Standing::Below);
+    }
+
+    /// The allowance expires by itself: the first function in a floor crate
+    /// fails this test until the crate's `may_be_empty` is set to `false`,
+    /// after which a run that measures nothing for it fails the gate.
+    #[test]
+    fn a_crate_that_may_be_empty_holds_no_function() {
+        let workspace = Workspace::load(&crate::workspace::workspace_root()).unwrap();
+        for (floor, directory) in crate_directories(&workspace).unwrap() {
+            if !floor.may_be_empty {
+                continue;
+            }
+            let mut pending = vec![directory.join("src")];
+            while let Some(path) = pending.pop() {
+                if path.is_dir() {
+                    pending.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+                } else if path.extension().is_some_and(|extension| extension == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let function = text
+                        .lines()
+                        .map(str::trim_start)
+                        .find(|line| !line.starts_with("//") && line.contains("fn "));
+                    assert_eq!(
+                        function,
+                        None,
+                        "{} holds a function, so `{}` is no longer an empty shell: set its \
+                         `may_be_empty` to false in xtask/src/floors.rs",
+                        path.display(),
+                        floor.package
+                    );
+                }
+            }
+        }
     }
 
     #[test]

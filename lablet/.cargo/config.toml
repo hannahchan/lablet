@@ -2,7 +2,7 @@
 # --manifest-path resolves against the current directory, so this copy works
 # when cargo is started from lablet/ itself (where plain cargo commands run)
 # and the root copy works from the repository root. Cargo reads both files
-# from here; this one is nearer, so it wins. -q hides cargo's progress lines,
-# not compiler output.
+# from here; this one is nearer, so it wins. --locked holds xtask to its
+# committed lockfile. -q hides cargo's progress lines, not compiler output.
 [alias]
-xtask = "run -q --manifest-path ../xtask/Cargo.toml --"
+xtask = "run -q --locked --manifest-path ../xtask/Cargo.toml --"

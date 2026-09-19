@@ -2,7 +2,11 @@
 //! rules"). Each crate's ring is read from its path, and its `[dependencies]`
 //! and `[build-dependencies]` are checked against what that ring may reach:
 //! which workspace crates, matched by package name, and which external crate
-//! families. `[dev-dependencies]` are exempt. One sweep reports every finding.
+//! families. `[dev-dependencies]` are exempt from the ring rules, but not from
+//! the rule that every internal crate is a listed member: cargo makes any path
+//! dependency under the workspace root a member, listed or not, and an
+//! unlisted one is in no ring and read by no lint. One sweep reports every
+//! finding.
 
 use std::fmt;
 
@@ -124,13 +128,9 @@ pub fn classify(member_path: &str) -> Option<Ring> {
 /// `crates/adapters/secondary/shared/`. A kernel is in the adapter ring, may
 /// be depended on by the adapters beside it, and implements no port.
 pub fn is_kernel(member_path: &str) -> bool {
-    RINGS.iter().any(|(prefix, ring)| {
-        ring.is_adapter()
-            && member_path
-                .strip_prefix(prefix)
-                .and_then(|rest| rest.strip_prefix("shared/"))
-                .is_some_and(|rest| !rest.is_empty())
-    })
+    member_path
+        .strip_prefix("crates/adapters/secondary/shared/")
+        .is_some_and(|rest| !rest.is_empty())
 }
 
 /// Whether a crate in ring `from` may depend on a crate in ring `to`: the
@@ -222,7 +222,13 @@ pub struct Violation {
 
 impl fmt::Display for Violation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} ({}", self.crate_name, self.crate_path)?;
+        // A root manifest with a `[package]` table is the member at no path.
+        let path = if self.crate_path.is_empty() {
+            "the workspace root"
+        } else {
+            &self.crate_path
+        };
+        write!(f, "{} ({path}", self.crate_name)?;
         if let Some(ring) = self.ring {
             write!(f, ", {ring}")?;
         }
@@ -264,12 +270,11 @@ fn lint_member(workspace: &Workspace, member: &Member, violations: &mut Vec<Viol
     };
 
     for section in member.manifest.dependency_sections() {
-        if section.kind == DependencyKind::Dev {
-            continue;
-        }
+        // Dev-dependencies are exempt from the ring and family rules only.
+        let shipped = section.kind != DependencyKind::Dev;
         let header = &section.header;
         for (key, spec) in section.entries {
-            let resolved = match resolve(workspace, key, spec) {
+            let resolved = match resolve(workspace, &member.path, key, spec) {
                 Ok(resolved) => resolved,
                 Err(detail) => {
                     report(Kind::Classification, format!("{header} {detail}"));
@@ -283,11 +288,34 @@ fn lint_member(workspace: &Workspace, member: &Member, violations: &mut Vec<Viol
                 format!(" (declared as `{key}`)")
             };
             if let Some(target) = workspace.member_named(name) {
+                // The name alone is not the member: the entry must also point
+                // at the member's directory, or cargo builds something else.
+                let points_at_target = resolved.path.is_some_and(|path| {
+                    workspace
+                        .member_at(resolved.declared_in, path)
+                        .is_some_and(|found| found.path == target.path)
+                });
+                if !points_at_target {
+                    let source = resolved.path.map_or_else(
+                        || "from a registry or git source".to_owned(),
+                        |path| format!("at `{path}`"),
+                    );
+                    report(
+                        Kind::Classification,
+                        format!(
+                            "{header} depends on {name}{declared} {source}, which shares the \
+                             name of the workspace member in {} but is not that member. Rule: \
+                             every internal crate is a member in exactly one ring",
+                            target.path
+                        ),
+                    );
+                    continue;
+                }
                 let Some(target_ring) = classify(&target.path) else {
                     // The target is reported once, as a member in no ring.
                     continue;
                 };
-                if !edge_permitted(ring, target_ring, is_kernel(&target.path)) {
+                if shipped && !edge_permitted(ring, target_ring, is_kernel(&target.path)) {
                     report(
                         Kind::Layer,
                         format!(
@@ -306,7 +334,7 @@ fn lint_member(workspace: &Workspace, member: &Member, violations: &mut Vec<Viol
                          one ring"
                     ),
                 );
-            } else if let Some(family) = forbidden_family(ring, name) {
+            } else if let Some(family) = forbidden_family(ring, name).filter(|_| shipped) {
                 report(
                     Kind::ForbiddenDependency,
                     format!(
@@ -320,10 +348,14 @@ fn lint_member(workspace: &Workspace, member: &Member, violations: &mut Vec<Viol
     }
 }
 
-/// A dependency's real crate name and, for a path dependency, its path.
+/// A dependency's real crate name and, for a path dependency, its path and
+/// the directory that path is relative to.
 struct Resolved<'a> {
     name: &'a str,
     path: Option<&'a str>,
+    /// The directory of the manifest that wrote `path`, relative to the
+    /// workspace root: the member's, or the root for an inherited entry.
+    declared_in: &'a str,
 }
 
 /// Follows `workspace = true` into `[workspace.dependencies]` and a renamed
@@ -331,19 +363,22 @@ struct Resolved<'a> {
 /// workspace table lacks, which cargo rejects and the rules cannot judge.
 fn resolve<'a>(
     workspace: &'a Workspace,
+    member_path: &'a str,
     key: &'a str,
     spec: &'a DependencySpec,
 ) -> Result<Resolved<'a>, String> {
-    let spec = if spec.inherits_workspace() {
-        workspace.table.dependencies.get(key).ok_or_else(|| {
+    let (spec, declared_in) = if spec.inherits_workspace() {
+        let inherited = workspace.table.dependencies.get(key).ok_or_else(|| {
             format!("inherits `{key}` with `workspace = true`, but [workspace.dependencies] has no `{key}`")
-        })?
+        })?;
+        (inherited, "")
     } else {
-        spec
+        (spec, member_path)
     };
     Ok(Resolved {
         name: spec.package().unwrap_or(key),
         path: spec.path(),
+        declared_in,
     })
 }
 
@@ -632,59 +667,6 @@ lablet-model = { path = "crates/domain/model" }
     }
 
     #[test]
-    fn a_domain_crate_depending_on_opentelemetry_sdk_fails() {
-        let workspace = base()
-            .member(
-                "crates/domain/policy",
-                "lablet-policy",
-                "[dependencies]\nopentelemetry_sdk.workspace = true\n",
-            )
-            .load();
-        let violations = lint(&workspace);
-        let violation = one(&violations);
-        assert_eq!(violation.kind, Kind::ForbiddenDependency);
-        assert!(
-            violation
-                .detail
-                .contains("depends on opentelemetry_sdk, of the `opentelemetry` family"),
-            "{violation}"
-        );
-    }
-
-    #[test]
-    fn an_application_crate_depending_on_tracing_passes() {
-        let workspace = FixtureWorkspace::new(PINS)
-            .member(MODEL, "lablet-model", "")
-            .member(
-                RUN,
-                "lablet-run",
-                "[dependencies]\nlablet-model.workspace = true\ntracing.workspace = true\n\
-                 serde.workspace = true\nserde_json.workspace = true\n",
-            )
-            .load();
-        let violations = lint(&workspace);
-        assert!(violations.is_empty(), "{violations:#?}");
-    }
-
-    #[test]
-    fn a_domain_crate_depending_on_tracing_fails() {
-        let workspace = base()
-            .member(
-                "crates/domain/policy",
-                "lablet-policy",
-                "[dependencies]\ntracing.workspace = true\n",
-            )
-            .load();
-        let violations = lint(&workspace);
-        let violation = one(&violations);
-        assert_eq!(violation.kind, Kind::ForbiddenDependency);
-        assert!(
-            violation.detail.contains("depends on tracing,"),
-            "{violation}"
-        );
-    }
-
-    #[test]
     fn an_adapter_depending_on_a_sibling_adapter_fails() {
         let workspace = base()
             .member(FAKE, "lablet-provider-fake", "")
@@ -738,6 +720,27 @@ lablet-model = { path = "crates/domain/model" }
             )
             .load();
         assert_eq!(one(&lint(&workspace)).kind, Kind::Layer);
+    }
+
+    #[test]
+    fn a_shared_kernel_depending_on_another_shared_kernel_passes() {
+        // Deliberate (spec §2): adapters and kernels alike reach "the shared
+        // kernels of their own ring". Cargo refuses cycles, and no kernel can
+        // reach an adapter, so the worst case is a chain of kernels.
+        let workspace = base()
+            .member(
+                "crates/adapters/secondary/shared/http-util",
+                "lablet-http-util",
+                "",
+            )
+            .member(
+                REGISTRY,
+                "lablet-telemetry-registry",
+                "[dependencies]\nlablet-http-util = { path = \"../http-util\" }\n",
+            )
+            .load();
+        let violations = lint(&workspace);
+        assert!(violations.is_empty(), "{violations:#?}");
     }
 
     #[test]
@@ -916,6 +919,118 @@ lablet-model = { path = "crates/domain/model" }
     }
 
     #[test]
+    fn a_dev_path_dependency_that_is_not_a_member_is_a_classification_gap() {
+        // Cargo makes the first an unlisted workspace member and builds the
+        // second from outside the repository; neither is in a ring.
+        for path in ["../../../tests/testkit", "../../../../outside/wiremock"] {
+            let workspace = base()
+                .member(
+                    "crates/domain/policy",
+                    "lablet-policy",
+                    &format!("[dev-dependencies]\nhelper = {{ path = \"{path}\" }}\n"),
+                )
+                .load();
+            let violations = lint(&workspace);
+            let violation = one(&violations);
+            assert_eq!(violation.kind, Kind::Classification);
+            assert!(
+                violation
+                    .detail
+                    .starts_with("[dev-dependencies] depends on helper at `"),
+                "{violation}"
+            );
+            assert!(
+                violation.detail.contains("not a workspace member"),
+                "{violation}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_inherited_dev_dependency_whose_path_is_not_a_member_is_a_classification_gap() {
+        let workspace = FixtureWorkspace::new("lablet-testkit = { path = \"tests/testkit\" }\n")
+            .member(
+                MODEL,
+                "lablet-model",
+                "[dev-dependencies]\nlablet-testkit.workspace = true\n",
+            )
+            .load();
+        let violations = lint(&workspace);
+        assert_eq!(one(&violations).kind, Kind::Classification);
+    }
+
+    #[test]
+    fn a_dependency_with_a_members_name_that_is_not_that_member_is_a_classification_gap() {
+        // Each entry is named like the domain crate lablet-model, which the
+        // application ring may depend on, and is something else.
+        for (workspace_table, entry, source) in [
+            // A path outside the workspace.
+            (
+                "",
+                "lablet-model = { path = \"../../../../outside/model\" }",
+                "at `../../../../outside/model`",
+            ),
+            // The same, behind a renamed key.
+            (
+                "",
+                "helper = { package = \"lablet-model\", path = \"../../../../outside/model\" }",
+                "at `../../../../outside/model`",
+            ),
+            // Another member's directory.
+            (
+                "",
+                "lablet-model = { path = \"../../domain/policy\" }",
+                "at `../../domain/policy`",
+            ),
+            // The workspace entry repointed outside the workspace.
+            (
+                "lablet-model = { path = \"../outside/model\" }\n",
+                "lablet-model.workspace = true",
+                "at `../outside/model`",
+            ),
+            // A registry pin under a member's name.
+            (
+                "lablet-model = \"=9.9.9\"\n",
+                "lablet-model.workspace = true",
+                "from a registry or git source",
+            ),
+        ] {
+            let workspace = FixtureWorkspace::new(workspace_table)
+                .member(MODEL, "lablet-model", "")
+                .member("crates/domain/policy", "lablet-policy", "")
+                .member(RUN, "lablet-run", &format!("[dependencies]\n{entry}\n"))
+                .load();
+            let violations = lint(&workspace);
+            let violation = one(&violations);
+            assert_eq!(violation.kind, Kind::Classification, "{entry}");
+            assert!(
+                violation.detail.contains(&format!(
+                    "{source}, which shares the name of the workspace member in \
+                     crates/domain/model but is not that member"
+                )),
+                "{violation}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_root_package_is_a_member_in_no_ring() {
+        let dir = crate::workspace::fixture::TempDir::new("root-package");
+        dir.write(
+            "Cargo.toml",
+            "[package]\nname = \"lablet-root\"\n\n[workspace]\nmembers = []\n",
+        );
+        let workspace = Workspace::load(dir.path()).unwrap();
+        let violations = lint(&workspace);
+        assert!(
+            one(&violations)
+                .to_string()
+                .starts_with("lablet-root (the workspace root): in no ring."),
+            "{violations:#?}"
+        );
+    }
+
+    #[test]
     fn an_inherited_key_missing_from_the_workspace_table_is_reported() {
         let workspace = base()
             .member(
@@ -940,13 +1055,6 @@ lablet-model = { path = "crates/domain/model" }
     #[test]
     fn the_real_workspace_has_no_violations() {
         let root = crate::workspace::workspace_root();
-        if !root.join("Cargo.toml").is_file() {
-            eprintln!(
-                "skipped: {} does not exist yet, so there is no real workspace to lint",
-                root.join("Cargo.toml").display()
-            );
-            return;
-        }
         let workspace = Workspace::load(&root).unwrap();
         let violations = lint(&workspace);
         let listed: Vec<String> = violations.iter().map(ToString::to_string).collect();

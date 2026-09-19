@@ -13,17 +13,17 @@ Explicit architecture: a ring is a directory prefix, and directory `foo/bar/` is
 | `crates/domain/model`, `crates/domain/policy` | Domain | domain |
 | `crates/application/run` | Application | domain |
 | `crates/adapters/secondary/*` (`provider-anthropic`, `provider-openai`, `provider-fake`, `tools-builtin`, `tools-mcp`, `telemetry-otel`) | Secondary adapters | application, domain, the adapter shared kernel |
-| `crates/adapters/secondary/shared/telemetry-registry` | Adapter shared kernel | application, domain |
-| `apps/lablet` | Composition root | everything |
+| `crates/adapters/secondary/shared/telemetry-registry` | Adapter shared kernel | application, domain, other adapter shared kernels |
+| `apps/lablet` | Composition root | everything except test support |
 | `tests/conformance` (`lablet-conformance`), `tests/mcp-server` (`lablet-test-mcp-server`) | Test support | anything; used as dev-dependencies only |
 
-Domain crates may not use tokio, reqwest, tracing, opentelemetry, or rmcp; the application crate may not use tokio, reqwest, opentelemetry, or rmcp (`tracing` is allowed there). The gate also refuses tonic, axum, and hyper in both rings, and matches a whole crate family by name, so `opentelemetry` covers `opentelemetry_sdk` and `tracing-opentelemetry` alike. `serde` and `serde_json` are allowed everywhere. An adapter never depends on another adapter, and there is no primary adapter ring: a crate under `crates/adapters/primary/` fails the gate as a member in no ring. `cargo xtask lint-layers` enforces all of this by crate name on `[dependencies]` and `[build-dependencies]`; dev-dependencies are exempt. The full rules are in [../contributing/README.md](../contributing/README.md).
+Domain crates may not use tokio, reqwest, tracing, opentelemetry, or rmcp; the application crate may not use tokio, reqwest, opentelemetry, or rmcp (`tracing` is allowed there). The gate also refuses tonic, axum, and hyper in both rings, and matches a whole crate family by name, so `opentelemetry` covers `opentelemetry_sdk` and `tracing-opentelemetry` alike. `serde` and `serde_json` are allowed everywhere. An adapter never depends on another adapter, and there is no primary adapter ring: a crate under `crates/adapters/primary/` fails the gate as a member in no ring. `cargo xtask lint-layers` enforces all of this by crate name on `[dependencies]` and `[build-dependencies]`; dev-dependencies are exempt from the ring rules, but every path dependency, dev ones included, must point at a crate listed in `[workspace] members`. The full rules are in [../contributing/README.md](../contributing/README.md).
 
 Also here: `deny.toml` (the `cargo deny` policy) and, from phase 1, `telemetry/` (the Weaver registry the telemetry crate and docs are generated from).
 
 ## Dependencies
 
-Third-party crates are declared once, in `[workspace.dependencies]` in [Cargo.toml](Cargo.toml), pinned to exact versions, each with a comment saying why it is there. A member takes one with `<name>.workspace = true` and repeats the reason in its own manifest. A version bump is its own commit.
+Third-party crates are declared once, in `[workspace.dependencies]` in [Cargo.toml](Cargo.toml), pinned to exact versions, each with a comment saying why it is there. A member takes one with `<name>.workspace = true` and repeats the reason in its own manifest. A version bump is its own commit. The gates run cargo with `--locked`, so after editing a manifest refresh the lockfile (any plain cargo command here, or in `../xtask/` for xtask's own) and commit it with the manifest.
 
 ## Running things
 

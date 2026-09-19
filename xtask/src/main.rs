@@ -3,7 +3,8 @@
 //!
 //! Every rule in contributing/README.md is enforced here or is labelled a
 //! review convention. xtask is its own workspace at the repository root, not a
-//! member of `lablet/`, and finds the repository from its own location.
+//! member of `lablet/`, and finds the repository from the manifest directory
+//! cargo names when it runs it.
 
 use std::process::ExitCode;
 
@@ -27,8 +28,10 @@ Checks:
   fmt [--fix]      rustfmt over the workspace and xtask (--fix: rewrite)
   clippy           clippy over every target, warnings denied
   lint-layers      Layer rules: which crate may depend on which, by ring
-  lint-manifests   Manifest rules: inherited lints and package keys, exact
-                   pins, a comment on every dependency, xtask's lint copy
+  lint-manifests   Manifest rules: inherited lints and package keys, package
+                   names, one integration target, exact crates.io pins, no
+                   replaced or banned crate, a comment on every dependency,
+                   xtask's lint copy
   deny             cargo-deny under lablet/deny.toml: licences, advisories,
                    bans, sources
   doc              rustdoc without dependencies, warnings denied
@@ -37,7 +40,8 @@ Checks:
                    (base: $LABLET_CHANGELOG_BASE, else the merge-base with main)
 
 Floors (CI):
-  coverage         Line coverage: 90% on lablet-model, lablet-policy, lablet-run
+  coverage         Line coverage of production code (inline test modules
+                   left out): 90% on lablet-model, lablet-policy, lablet-run
   mutants          Mutants caught: 80% on the same crates
 
 Gates:
@@ -176,23 +180,28 @@ mod tests {
     #[test]
     fn the_xtask_alias_points_at_this_crate_from_both_roots() {
         let alias = |config: &std::path::Path| {
+            assert!(
+                config.is_file(),
+                "{} is missing; `cargo xtask` needs the alias at the repository root and its \
+                 copy in lablet/",
+                config.display()
+            );
             let text = std::fs::read_to_string(config).unwrap();
             let document: toml::Value = toml::from_str(&text).unwrap();
-            document["alias"]["xtask"].as_str().map(str::to_owned)
+            document
+                .get("alias")
+                .and_then(|aliases| aliases.get("xtask"))
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned)
         };
         let root = workspace::repo_root();
         assert_eq!(
             alias(&root.join(".cargo/config.toml")).as_deref(),
-            Some("run -q --manifest-path xtask/Cargo.toml --")
+            Some("run -q --locked --manifest-path xtask/Cargo.toml --")
         );
-        let copy = workspace::workspace_root().join(".cargo/config.toml");
-        if !copy.is_file() {
-            eprintln!("skipped: {} does not exist yet", copy.display());
-            return;
-        }
         assert_eq!(
-            alias(&copy).as_deref(),
-            Some("run -q --manifest-path ../xtask/Cargo.toml --"),
+            alias(&workspace::workspace_root().join(".cargo/config.toml")).as_deref(),
+            Some("run -q --locked --manifest-path ../xtask/Cargo.toml --"),
             "the workspace copy of the alias has drifted from the root one"
         );
     }

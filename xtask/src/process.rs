@@ -43,9 +43,17 @@ pub fn could_not_run(program: &str, e: &std::io::Error) -> String {
     format!("could not run `{program}`: {e}")
 }
 
-/// The line for a subprocess that exited non-zero.
+/// The line for a subprocess that exited non-zero. It names the directory the
+/// command ran in: cargo commands run in `lablet/`, so the line as printed
+/// does not work from the repository root, where `cargo xtask` is started.
 pub fn command_failed(program: &str, args: &[&str]) -> String {
-    format!("command failed: {program} {}", args.join(" "))
+    let directory = working_directory(program);
+    let place = match directory.strip_prefix(repo_root()) {
+        Ok(relative) if relative.as_os_str().is_empty() => "the repository root".to_owned(),
+        Ok(relative) => format!("{}/", relative.display()),
+        Err(_) => directory.display().to_string(),
+    };
+    format!("command failed (in {place}): {program} {}", args.join(" "))
 }
 
 /// Cargo commands run in the Rust workspace; everything else (git, mise)
@@ -63,7 +71,11 @@ fn working_directory(program: &str) -> PathBuf {
 /// is an error rather than a run of whatever copy PATH holds: the pin is the
 /// point.
 pub fn command(program: &str, args: &[&str]) -> Result<Command, String> {
-    let directory = working_directory(program);
+    command_in(&working_directory(program), program, args)
+}
+
+/// [`command`], in a directory the caller names.
+fn command_in(directory: &Path, program: &str, args: &[&str]) -> Result<Command, String> {
     if !directory.is_dir() {
         return Err(format!(
             "{} does not exist, so `{program}` has nowhere to run",
@@ -105,7 +117,12 @@ pub fn stream(program: &str, args: &[&str], env: &[(&str, &str)]) -> Result<Exit
 /// Runs a subprocess with piped output: its stdout on success, its stderr (or
 /// the reason it could not start) on failure.
 pub fn capture(program: &str, args: &[&str]) -> Result<String, String> {
-    let output = command(program, args)?
+    capture_in(&working_directory(program), program, args)
+}
+
+/// [`capture`], in a directory the caller names.
+pub fn capture_in(directory: &Path, program: &str, args: &[&str]) -> Result<String, String> {
+    let output = command_in(directory, program, args)?
         .output()
         .map_err(|e| could_not_run(program, &e))?;
     if output.status.success() {
@@ -193,19 +210,39 @@ fn tools() -> &'static Tools {
     })
 }
 
-/// Where the mise.run installer puts mise, under `$HOME`. macOS shells do not
-/// put that directory on PATH, so [`mise`] looks there when PATH has no mise.
+/// Where the mise.run installer puts mise, under `$HOME`.
 const MISE_UNDER_HOME: &str = ".local/bin/mise";
 
+/// Where package managers put mise: Homebrew on Apple silicon, Homebrew on an
+/// Intel Mac, and Linuxbrew.
+const MISE_FROM_A_PACKAGE_MANAGER: [&str; 3] = [
+    "/opt/homebrew/bin/mise",
+    "/usr/local/bin/mise",
+    "/home/linuxbrew/.linuxbrew/bin/mise",
+];
+
+/// The places [`mise`] looks when PATH has no mise, in order. A git hook or an
+/// IDE task runner starts with a minimal PATH that holds none of them.
+fn mise_locations(home: Option<&Path>) -> Vec<PathBuf> {
+    home.map(|home| home.join(MISE_UNDER_HOME))
+        .into_iter()
+        .chain(MISE_FROM_A_PACKAGE_MANAGER.map(PathBuf::from))
+        .collect()
+}
+
 /// A `mise` command in the repository root, where mise.toml is: the mise on
-/// PATH, else the installer's copy. Without either the bare name stays, so the
-/// caller's error names mise.
+/// PATH, else the first installed copy among [`mise_locations`]. Without
+/// either the bare name stays, so the caller's error names mise.
 fn mise() -> Command {
-    let installed = std::env::var_os("HOME").map(|home| Path::new(&home).join(MISE_UNDER_HOME));
-    let mut command = match installed {
-        Some(path) if !on_path("mise") && is_executable(&path) => Command::new(path),
-        _ => Command::new("mise"),
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let installed = if on_path("mise") {
+        None
+    } else {
+        mise_locations(home.as_deref())
+            .into_iter()
+            .find(|path| is_executable(path))
     };
+    let mut command = installed.map_or_else(|| Command::new("mise"), Command::new);
     command.current_dir(repo_root());
     command
 }
@@ -227,10 +264,6 @@ mod tests {
     #[test]
     fn every_pinned_tool_xtask_runs_is_pinned_in_mise_toml() {
         let path = repo_root().join("mise.toml");
-        if !path.is_file() {
-            eprintln!("skipped: {} does not exist yet", path.display());
-            return;
-        }
         let config: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let pinned = config.get("tools").and_then(toml::Value::as_table).unwrap();
         for tool in TOOLS {
@@ -242,11 +275,65 @@ mod tests {
         }
     }
 
+    /// `mise lock` skips a platform it cannot look up (a spent GitHub rate
+    /// limit) and still exits 0, so a partial lockfile has to be caught here.
+    /// A tool missing a host installs unverified there and rewrites
+    /// mise.lock, or fails outright under `mise install --locked`. The cargo
+    /// backend builds from source and records no platforms.
     #[test]
-    fn a_failed_command_is_named_with_its_arguments() {
+    fn the_mise_lockfile_covers_every_supported_host_for_every_downloaded_tool() {
+        const HOSTS: [&str; 4] = ["linux-x64", "linux-arm64", "macos-arm64", "macos-x64"];
+        let path = repo_root().join("mise.lock");
+        let lock: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let tools = lock.get("tools").and_then(toml::Value::as_table).unwrap();
+        let mut downloaded = 0;
+        for (name, entries) in tools {
+            for entry in entries.as_array().unwrap() {
+                let backend = entry.get("backend").and_then(toml::Value::as_str).unwrap();
+                if backend.starts_with("cargo:") {
+                    continue;
+                }
+                downloaded += 1;
+                for host in HOSTS {
+                    let checksum = entry
+                        .get(format!("platforms.{host}"))
+                        .and_then(|platform| platform.get("checksum"));
+                    assert!(
+                        checksum.is_some(),
+                        "mise.lock has no checksum for `{name}` on {host}; rerun the `mise lock` \
+                         command in mise.toml with GITHUB_TOKEN set"
+                    );
+                }
+            }
+        }
+        assert!(downloaded > 0, "mise.lock lists no downloaded tool");
+    }
+
+    #[test]
+    fn a_failed_command_is_named_with_its_arguments_and_where_it_ran() {
         assert_eq!(
             command_failed("cargo", &["deny", "check"]),
-            "command failed: cargo deny check"
+            "command failed (in lablet/): cargo deny check"
         );
+        assert_eq!(
+            command_failed("git", &["status"]),
+            "command failed (in the repository root): git status"
+        );
+    }
+
+    #[test]
+    fn mise_is_looked_for_under_home_then_where_package_managers_put_it() {
+        assert_eq!(
+            mise_locations(Some(Path::new("/home/dev"))),
+            [
+                "/home/dev/.local/bin/mise",
+                "/opt/homebrew/bin/mise",
+                // Homebrew on an Intel Mac.
+                "/usr/local/bin/mise",
+                "/home/linuxbrew/.linuxbrew/bin/mise",
+            ]
+            .map(PathBuf::from)
+        );
+        assert_eq!(mise_locations(None).len(), 3);
     }
 }

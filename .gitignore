@@ -21,11 +21,16 @@
 .env.*
 !.env.example
 
-# Test & quality output: cargo-llvm-cov and cargo-mutants.
+# Test & quality output: cargo-llvm-cov and cargo-mutants. The gates write
+# under lablet/target/xtask; these are for runs by hand. `coverage/` is
+# anchored to where such a run puts it, so that a source directory of that
+# name (xtask/src/coverage/, a docs page) is never ignored without a word.
+# For the same reason no source directory may be called `target`.
 *.profdata
 *.profraw
 lcov.info
-coverage/
+/coverage/
+/lablet/coverage/
 mutants.out*/
 
 # Run output. The OTLP/JSON file exporter writes one file per run into the

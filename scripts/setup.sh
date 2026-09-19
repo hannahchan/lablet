@@ -32,10 +32,12 @@ fi
 cd "$REPO_ROOT"
 
 # The toolchain comes first because mise's cargo backend needs a working cargo.
-# `show active-toolchain` installs the pin from rust-toolchain.toml when it is
-# absent; the fallback covers RUSTUP_AUTO_INSTALL=0 and needs rustup 1.28+.
+# `rustup toolchain install` with no argument installs what rust-toolchain.toml
+# names and needs rustup 1.28+. The fallback is for an older rustup, where
+# `show active-toolchain` installs the pin as a side effect; newer ones
+# deprecate that and warn.
 echo "[..] Rust toolchain (rust-toolchain.toml)"
-rustup show active-toolchain || rustup toolchain install
+rustup toolchain install || rustup show active-toolchain
 echo "[ok] Rust toolchain"
 
 # mise reads a project's mise.toml only once it is trusted; running this
@@ -49,4 +51,4 @@ echo "[ok] gate tools"
 
 echo
 echo "Setup complete. Run the full local gate with:"
-echo "  mise exec -- cargo xtask pre-push"
+echo "  cargo xtask pre-push"

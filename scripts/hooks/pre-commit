@@ -3,8 +3,8 @@
 set -euo pipefail
 
 # Git runs hooks from whatever started it (an IDE, an agent), and that shell's
-# PATH may lack cargo and mise, so add the usual install locations. HOME may be
-# unset there as well, hence the empty defaults.
+# PATH may lack cargo, so add the usual install locations. HOME may be unset
+# there as well, hence the empty defaults.
 for dir in /opt/homebrew/bin "${HOME:-}/.local/bin" "${CARGO_HOME:-${HOME:-}/.cargo}/bin"; do
   if [[ -d "$dir" ]]; then
     PATH="$dir:$PATH"
@@ -16,10 +16,8 @@ export PATH
 # finds from the repository root or below.
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
-# `mise exec` puts the versions pinned in mise.toml on PATH without needing
-# shell activation. Without mise the gate still runs and names any tool it
-# cannot find.
-if command -v mise >/dev/null 2>&1; then
-  exec mise exec -- cargo xtask pre-commit
-fi
+# xtask puts the tools pinned in mise.toml on PATH itself, finds mise where
+# installers put it, and names any tool it cannot find (xtask/src/process.rs).
+# No `mise exec` here: run from a hook it trusts mise.toml and installs every
+# missing pin on the spot, which is scripts/setup.sh's decision to make.
 exec cargo xtask pre-commit

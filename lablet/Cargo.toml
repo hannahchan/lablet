@@ -34,10 +34,11 @@ repository = "https://github.com/hannahchan/lablet"
 
 # Every third-party version below is an exact pin ("=x.y.z"), checked against
 # crates.io on 2026-09-19. A bump is its own dedicated commit, never mixed with
-# feature work (spec §8). Members take an entry with `<name>.workspace = true`
-# and cannot narrow its features or re-enable defaults turned off here, so the
-# feature lists are the union of what the build plan's phases need. Every entry
-# carries a one-line comment saying why it is there (`cargo xtask
+# feature work (spec §8). Members take an entry with `<name>.workspace = true`.
+# Cargo features are additive, so a member cannot narrow a list below; each
+# list is the base every user of the crate needs, and a member that needs more
+# writes `{ workspace = true, features = [...] }` with its own comment. Every
+# entry carries a one-line comment saying why it is there (`cargo xtask
 # lint-manifests`).
 [workspace.dependencies]
 # Internal
@@ -69,7 +70,7 @@ lablet-conformance = { path = "tests/conformance", version = "0.1.0" }
 
 # Ports and errors
 
-# async fn in the port traits (ModelProvider, ToolExecutor, RunObserver) so they stay dyn-compatible; phase 3 onward
+# async fn in the async port traits (ModelProvider, ToolExecutor, RunObserver, Clock) so they stay dyn-compatible; phase 3 onward
 async-trait = "=0.1.92"
 # One error enum per port or boundary, as contributing requires; every phase from 2
 thiserror = "=2.0.20"
@@ -80,7 +81,7 @@ thiserror = "=2.0.20"
 serde = { version = "=1.0.229", features = ["derive"] }
 # Transcript, tool inputs, OTLP/JSON file lines, and the raw config tree that --set edits; phase 2 onward
 serde_json = "=1.0.151"
-# YAML config and fake-provider scripts; replaces the deprecated serde_yaml the build plan names; phases 4 and 5
+# YAML config and fake-provider scripts; serde_yaml is archived (decisions.md); phases 4 and 5
 serde-saphyr = "=1.3.0"
 
 # Async runtime
@@ -92,19 +93,19 @@ tokio = { version = "=1.53.1", features = ["rt-multi-thread", "macros", "time", 
 
 # HTTP client for the Anthropic and OpenAI-compatible provider adapters on rustls; shared with rmcp and the OTLP HTTP exporter
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "json", "http2"] }
-# Official MCP SDK: client role, stdio child-process transport, streamable HTTP client on reqwest with rustls; phase 8
+# Official MCP SDK: client role, stdio child-process transport, streamable HTTP client on reqwest with rustls; phase 8 (lablet-test-mcp-server adds `server`, `macros`, `transport-io` in its own manifest)
 rmcp = { version = "=3.4.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest"] }
 
 # OpenTelemetry (one 0.33 line; tonic and prost are the lines it requires)
 
-# OTel API for spans and log records in telemetry-otel; phase 4
-opentelemetry = { version = "=0.33.0", default-features = false, features = ["trace", "logs"] }
+# OTel API for spans and log records in telemetry-otel; phase 4 (`internal-logs` on all three: without it the SDK's batch threads drop export failures instead of sending them to `tracing`, and spec §5 wants them in the diagnostic log)
+opentelemetry = { version = "=0.33.0", default-features = false, features = ["trace", "logs", "internal-logs"] }
 # Tracer and logger providers, batch processors, and the exporter traits the file exporter implements; phase 4
-opentelemetry_sdk = { version = "=0.33.0", default-features = false, features = ["trace", "logs"] }
+opentelemetry_sdk = { version = "=0.33.0", default-features = false, features = ["trace", "logs", "internal-logs"] }
 # OTLP message types with serde for the OTLP/JSON file exporter and its reader; phase 4 (not the default `full`)
 opentelemetry-proto = { version = "=0.33.0", default-features = false, features = ["gen-tonic-messages", "trace", "logs", "with-serde"] }
 # OTLP network exporter over gRPC and HTTP/protobuf on rustls with the aws-lc provider; phase 6
-opentelemetry-otlp = { version = "=0.33.0", default-features = false, features = ["grpc-tonic", "http-proto", "reqwest-blocking-client", "reqwest-rustls", "tls-aws-lc", "tls-roots", "trace", "logs"] }
+opentelemetry-otlp = { version = "=0.33.0", default-features = false, features = ["grpc-tonic", "http-proto", "reqwest-blocking-client", "reqwest-rustls", "tls-aws-lc", "tls-roots", "trace", "logs", "internal-logs"] }
 # Decodes and encodes OTLP protobuf bodies in the in-process HTTP receiver; phase 6 (opentelemetry-proto 0.33 needs ^0.14)
 prost = "=0.14.4"
 # In-process OTLP gRPC receiver in lablet-conformance; phase 6 (opentelemetry-otlp 0.33 needs ^0.14.1)
@@ -139,11 +140,6 @@ wiremock = "=0.6.5"
 # Benchmarks behind `cargo xtask bench`; defaults dropped to avoid plotters and rayon; phase 11
 criterion = { version = "=0.8.2", default-features = false, features = ["cargo_bench_support"] }
 
-# Gates
-
-# xtask reads Cargo manifests with it (xtask is its own workspace; recorded here so the pin has one home); phase 0
-toml = "=1.1.6"
-
 # The lint set from contributing/README.md "Code conventions". Every level is
 # "warn": `cargo xtask clippy` denies warnings, so each is a gate failure there
 # while a plain `cargo check` stays usable mid-edit. Nursery is not enabled.
@@ -175,8 +171,10 @@ unimplemented = "warn"
 unwrap_used = "warn"
 expect_used = "warn"
 
-# Suppress with #[expect(..., reason = "...")]; #[allow] is itself a failure
+# Suppress with #[expect(..., reason = "...")]; #[allow] is itself a failure,
+# and so is an #[expect] that gives no reason
 allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
 
 # Workspace members keep file and line info, so backtraces into our own code
 # stay intact, without the variable- and type-level DWARF a debugger needs.

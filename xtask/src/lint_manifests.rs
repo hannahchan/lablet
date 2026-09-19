@@ -1,16 +1,25 @@
-//! Manifest rules (contributing "Code conventions" and "Versioning", spec §8).
+//! Manifest rules (contributing "Architecture rules", "Code conventions" and
+//! "Versioning", spec §8).
 //!
 //! - Every member opts into `[workspace.lints]` with `[lints] workspace = true`.
 //!   A crate that omits the table still compiles clean under a gate that lints
 //!   every other crate, so the omission would stay invisible.
 //! - Every member inherits `version`, `edition`, `rust-version`, and `license`
 //!   from `[workspace.package]`: one workspace version, one MSRV, one licence.
+//! - Every member's package is named after its directory, and its integration
+//!   tests are the one target `tests/it/main.rs`.
 //! - Every third-party dependency of a member is `workspace = true`, and every
-//!   third-party entry of `[workspace.dependencies]` is an exact `=x.y.z` pin,
-//!   so a version lives in one place and moves only in a dedicated commit.
+//!   third-party entry of `[workspace.dependencies]` is an exact `=x.y.z` pin
+//!   from crates.io, so a version lives in one place and moves only in a
+//!   dedicated commit. A `path` entry is internal only when the path is a
+//!   listed member's directory; anywhere else it is held to the same rules.
+//! - Nothing replaces a pinned crate behind the pin: no `[patch]` or
+//!   `[replace]` table in a manifest, no `patch`, `paths`, or `source` in the
+//!   repository's cargo configuration.
+//! - No crate depends directly on `anyhow` or a mocking framework.
 //! - Every dependency carries a comment saying why it is there: on the line
 //!   above it, above the run of dependency lines it belongs to (a group
-//!   header), or at the end of its own line.
+//!   header), or at the end of one of its own lines.
 //! - `xtask/` is its own workspace and cannot inherit, so its `[lints]` must
 //!   equal `[workspace.lints]` with the two print lints allowed, its
 //!   dependencies follow the same pin and comment rules, and a crate it shares
@@ -20,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
-use crate::workspace::{DependencySpec, Manifest, Workspace};
+use crate::workspace::{DependencySpec, Manifest, Member, Workspace, normalise};
 
 /// The rule a finding breaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,10 +38,18 @@ pub enum Rule {
     LintsInherited,
     /// A `[package]` key is not inherited from `[workspace.package]`.
     PackageInherited,
+    /// A package is not named after its directory.
+    PackageName,
+    /// A crate has an integration test target other than `tests/it/main.rs`.
+    IntegrationTarget,
     /// A third-party dependency of a member carries its own version or source.
     DependencyInherited,
-    /// A third-party dependency is not pinned to an exact version.
+    /// A third-party dependency is not an exact pin from crates.io.
     ExactPin,
+    /// A table or setting that swaps a pinned crate for other code.
+    SourceOverride,
+    /// A direct dependency contributing/README.md rules out by name.
+    BannedDependency,
     /// A dependency has no comment saying why it is there.
     DependencyComment,
     /// xtask's copy of the lint set has drifted from the workspace's.
@@ -45,12 +62,16 @@ pub enum Rule {
 
 impl Rule {
     /// Every rule, in reporting order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 12] = [
         Self::Unreadable,
         Self::LintsInherited,
         Self::PackageInherited,
+        Self::PackageName,
+        Self::IntegrationTarget,
         Self::DependencyInherited,
         Self::ExactPin,
+        Self::SourceOverride,
+        Self::BannedDependency,
         Self::DependencyComment,
         Self::XtaskLints,
         Self::XtaskPin,
@@ -62,10 +83,16 @@ impl Rule {
             Self::Unreadable => "Manifests that could not be read:",
             Self::LintsInherited => "Members not inheriting [workspace.lints]:",
             Self::PackageInherited => "Package keys not inherited from [workspace.package]:",
+            Self::PackageName => "Packages not named after their directory:",
+            Self::IntegrationTarget => {
+                "Integration tests outside the one `tests/it/main.rs` target:"
+            }
             Self::DependencyInherited => {
                 "Third-party dependencies not inherited from the workspace:"
             }
-            Self::ExactPin => "Third-party dependencies not pinned to an exact version:",
+            Self::ExactPin => "Third-party dependencies not pinned to an exact crates.io version:",
+            Self::SourceOverride => "Settings that replace a pinned crate with other code:",
+            Self::BannedDependency => "Dependencies contributing/README.md rules out:",
             Self::DependencyComment => "Dependencies without a comment saying why:",
             Self::XtaskLints => "xtask's copy of the workspace lint set has drifted:",
             Self::XtaskPin => "xtask pins that differ from the workspace's pin of the same crate:",
@@ -76,23 +103,34 @@ impl Rule {
 /// One finding: the manifest, the rule, and what to change.
 #[derive(Debug)]
 pub struct Violation {
-    /// The manifest at fault, relative to the repository where possible.
+    /// The file at fault, relative to the repository where possible.
     pub manifest: String,
+    /// The 1-based line the finding is about, when it has one.
+    pub line: Option<usize>,
     /// The rule broken.
     pub rule: Rule,
     /// What is wrong and how to fix it.
     pub detail: String,
 }
 
+impl Violation {
+    fn new(manifest: &str, rule: Rule, detail: String) -> Self {
+        Self {
+            manifest: manifest.to_owned(),
+            line: None,
+            rule,
+            detail,
+        }
+    }
+}
+
 impl fmt::Display for Violation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // A comment finding leads with its line number: `Cargo.toml:12: ...`.
-        let separator = if self.rule == Rule::DependencyComment {
-            ":"
-        } else {
-            ": "
-        };
-        write!(f, "{}{separator}{}", self.manifest, self.detail)
+        f.write_str(&self.manifest)?;
+        if let Some(line) = self.line {
+            write!(f, ":{line}")?;
+        }
+        write!(f, ": {}", self.detail)
     }
 }
 
@@ -103,8 +141,41 @@ const INHERITED_PACKAGE_KEYS: [&str; 4] = ["version", "edition", "rust-version",
 /// xtask's job.
 const XTASK_ALLOWED_LINTS: [&str; 2] = ["print_stdout", "print_stderr"];
 
-/// Every finding over the workspace's manifests and xtask's.
-pub fn lint(workspace: &Workspace, xtask_manifest: &Path) -> Vec<Violation> {
+/// The members whose package is not `lablet-<directory name>` (spec §2).
+const PACKAGE_NAME_EXCEPTIONS: [(&str, &str); 3] = [
+    ("apps/lablet", "lablet"),
+    ("tests/conformance", "lablet-conformance"),
+    ("tests/mcp-server", "lablet-test-mcp-server"),
+];
+
+/// Crates no manifest may depend on directly, with the rule each breaks
+/// (contributing "Code conventions"). Direct dependencies only: what an
+/// upstream crate uses inside is its own business (`prost-derive` uses
+/// `anyhow`). HTTP fakes such as `wiremock` are servers, not mocking
+/// frameworks.
+const BANNED_DEPENDENCIES: [(&[&str], &str); 2] = [
+    (
+        &["anyhow", "eyre", "color-eyre"],
+        "errors are `thiserror` enums, one per port or boundary; no `anyhow`",
+    ),
+    (
+        &[
+            "mockall",
+            "mockall_double",
+            "mockiato",
+            "mocktopus",
+            "faux",
+            "unimock",
+            "mry",
+            "double",
+        ],
+        "test doubles are hand-written fakes in the consuming crate; no mocking framework",
+    ),
+];
+
+/// Every finding over the workspace's manifests, xtask's, and the cargo
+/// configuration files of the repository at `repo`.
+pub fn lint(workspace: &Workspace, repo: &Path) -> Vec<Violation> {
     let prefix = workspace
         .root
         .file_name()
@@ -113,35 +184,61 @@ pub fn lint(workspace: &Workspace, xtask_manifest: &Path) -> Vec<Violation> {
     let mut violations =
         check_workspace_dependencies(&format!("{prefix}Cargo.toml"), &workspace.text, workspace);
     for member in &workspace.members {
+        let directory = if member.path.is_empty() {
+            prefix.clone()
+        } else {
+            format!("{prefix}{}/", member.path)
+        };
+        let label = format!("{directory}Cargo.toml");
         violations.extend(check_member(
-            &format!("{prefix}{}/Cargo.toml", member.path),
+            &label,
             &member.text,
             &member.manifest,
+            &|path| workspace.member_at(&member.path, path).is_some(),
         ));
+        violations.extend(check_layout(&label, &workspace.root, member));
     }
     let label = "xtask/Cargo.toml";
-    match std::fs::read_to_string(xtask_manifest) {
+    let xtask_manifest = repo.join("xtask").join("Cargo.toml");
+    match std::fs::read_to_string(&xtask_manifest) {
         Ok(text) => violations.extend(check_xtask(label, &text, &workspace.document)),
-        Err(e) => violations.push(Violation {
-            manifest: label.to_owned(),
-            rule: Rule::Unreadable,
-            detail: format!("could not read {}: {e}", xtask_manifest.display()),
-        }),
+        Err(e) => violations.push(Violation::new(
+            label,
+            Rule::Unreadable,
+            format!("could not read {}: {e}", xtask_manifest.display()),
+        )),
+    }
+    // Cargo reads a `.cargo/config.toml` from the directory it starts in and
+    // every one above it; these two are the repository's.
+    for (label, path) in [
+        (
+            ".cargo/config.toml".to_owned(),
+            repo.join(".cargo/config.toml"),
+        ),
+        (
+            format!("{prefix}.cargo/config.toml"),
+            workspace.root.join(".cargo/config.toml"),
+        ),
+    ] {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            violations.extend(check_cargo_config(&label, &text));
+        }
     }
     violations
 }
 
 /// The member rules: lint and package inheritance, inherited third-party
-/// dependencies, and a comment on every dependency.
-fn check_member(label: &str, text: &str, manifest: &Manifest) -> Vec<Violation> {
+/// dependencies, and a comment on every dependency. `is_member` says whether
+/// a dependency path, as this manifest writes it, is a workspace member's
+/// directory.
+fn check_member(
+    label: &str,
+    text: &str,
+    manifest: &Manifest,
+    is_member: &dyn Fn(&str) -> bool,
+) -> Vec<Violation> {
     let mut violations = Vec::new();
-    let mut report = |rule, detail: String| {
-        violations.push(Violation {
-            manifest: label.to_owned(),
-            rule,
-            detail,
-        });
-    };
+    let mut report = |rule, detail: String| violations.push(Violation::new(label, rule, detail));
 
     if !manifest.lints.as_ref().is_some_and(|lints| lints.workspace) {
         report(
@@ -173,74 +270,197 @@ fn check_member(label: &str, text: &str, manifest: &Manifest) -> Vec<Violation> 
     }
 
     for section in manifest.dependency_sections() {
+        let header = &section.header;
         for (key, spec) in section.entries {
-            if !spec.inherits_workspace() && spec.path().is_none() {
-                report(
+            if let Some(rule) = banned(key, spec) {
+                report(Rule::BannedDependency, format!("{header} `{key}`: {rule}"));
+            }
+            if spec.inherits_workspace() {
+                continue;
+            }
+            match spec.path() {
+                Some(path) if is_member(path) => {}
+                Some(path) => report(
                     Rule::DependencyInherited,
                     format!(
-                        "{} `{key}` carries its own version or source; pin it in \
-                         [workspace.dependencies] and write `{key}.workspace = true`",
-                        section.header
+                        "{header} `{key}` is a path dependency on `{path}`, which is not a \
+                         workspace member's directory; an internal crate is listed in \
+                         [workspace] members, and anything else is pinned in \
+                         [workspace.dependencies] and written `{key}.workspace = true`"
                     ),
-                );
+                ),
+                None => report(
+                    Rule::DependencyInherited,
+                    format!(
+                        "{header} `{key}` carries its own version or source; pin it in \
+                         [workspace.dependencies] and write `{key}.workspace = true`"
+                    ),
+                ),
             }
         }
     }
 
-    for line in dependency_lines(text).iter().filter(|line| !line.commented) {
-        report(Rule::DependencyComment, uncommented(line));
+    // A root manifest that is also a package holds [workspace.dependencies],
+    // which `check_workspace_dependencies` reads.
+    let lines: Vec<DependencyLine> = dependency_lines(text)
+        .into_iter()
+        .filter(|line| line.path.first().is_none_or(|scope| scope != "workspace"))
+        .collect();
+    let declared = manifest.dependency_sections();
+    let declared = declared.iter().flat_map(|section| {
+        section.entries.keys().map(move |key| {
+            (
+                section.path.as_slice(),
+                section.header.as_str(),
+                key.as_str(),
+            )
+        })
+    });
+    violations.extend(comment_findings(label, &lines, declared));
+    violations
+}
+
+/// The rules about where a member's files are: the package is named after its
+/// directory, and its integration tests are the one target `tests/it/main.rs`.
+fn check_layout(label: &str, workspace_root: &Path, member: &Member) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    if let Some(expected) = expected_package_name(&member.path)
+        && expected != member.name
+    {
+        violations.push(Violation::new(
+            label,
+            Rule::PackageName,
+            format!(
+                "[package] `name` is \"{}\", but the crate in `{}` is package \"{expected}\": \
+                 directory `foo/bar/` is package `lablet-bar`, apart from the three exceptions \
+                 in spec §2",
+                member.name, member.path
+            ),
+        ));
+    }
+
+    let mut report = |detail: String| {
+        violations.push(Violation::new(label, Rule::IntegrationTarget, detail));
+    };
+    if !member.manifest.test_targets.is_empty() {
+        report(
+            "a `[[test]]` table declares an integration target by hand; the one target is \
+             `tests/it/main.rs`, which cargo finds by itself"
+                .to_owned(),
+        );
+    }
+    let tests = workspace_root.join(&member.path).join("tests");
+    let mut entries: Vec<String> = std::fs::read_dir(&tests)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| !name.starts_with('.'))
+        .collect();
+    entries.sort();
+    for name in &entries {
+        if name != "it" {
+            report(format!(
+                "`tests/{name}` is outside the one integration target; move it under \
+                 `tests/it/` and declare it as a module in `tests/it/main.rs`"
+            ));
+        }
+    }
+    if entries.iter().any(|name| name == "it") && !tests.join("it").join("main.rs").is_file() {
+        report("`tests/it/` has no `main.rs`, so cargo builds no target from it".to_owned());
     }
     violations
 }
 
+/// The package name a member's directory calls for; `None` for a package in
+/// the workspace root, which `lint-layers` reports as in no ring.
+fn expected_package_name(member_path: &str) -> Option<String> {
+    if let Some((_, name)) = PACKAGE_NAME_EXCEPTIONS
+        .iter()
+        .find(|(path, _)| *path == member_path)
+    {
+        return Some((*name).to_owned());
+    }
+    member_path
+        .rsplit('/')
+        .next()
+        .filter(|directory| !directory.is_empty())
+        .map(|directory| format!("lablet-{directory}"))
+}
+
+/// The rule a direct dependency on this crate breaks, if it is ruled out. The
+/// crate is the entry's `package`, or its key.
+fn banned(key: &str, spec: &DependencySpec) -> Option<&'static str> {
+    let name = normalise(spec.package().unwrap_or(key));
+    BANNED_DEPENDENCIES
+        .iter()
+        .find(|(crates, _)| crates.iter().any(|banned| normalise(banned) == name))
+        .map(|(_, rule)| *rule)
+}
+
 /// The `[workspace.dependencies]` rules: every third-party entry is an exact
-/// pin with a comment. Workspace crates (path entries) are exempt from both.
+/// pin with a comment, and the root manifest replaces no crate. Workspace
+/// crates are exempt from the pin and the comment: the entries whose path is
+/// a listed member's directory.
 fn check_workspace_dependencies(label: &str, text: &str, workspace: &Workspace) -> Vec<Violation> {
     let third_party: BTreeMap<&String, &DependencySpec> = workspace
         .table
         .dependencies
         .iter()
-        .filter(|(_, spec)| spec.path().is_none())
+        .filter(|(_, spec)| {
+            spec.path()
+                .is_none_or(|path| workspace.member_at("", path).is_none())
+        })
         .collect();
-    let mut violations = check_pins(label, "[workspace.dependencies]", &third_party);
-    violations.extend(
-        dependency_lines(text)
-            .iter()
-            .filter(|line| !line.commented && third_party.contains_key(&line.key))
-            .map(|line| Violation {
-                manifest: label.to_owned(),
-                rule: Rule::DependencyComment,
-                detail: uncommented(line),
-            }),
-    );
+    let table = "[workspace.dependencies]";
+    let mut violations = check_source_overrides(label, &workspace.document);
+    violations.extend(check_pins(label, table, &third_party));
+    for (key, spec) in &workspace.table.dependencies {
+        if let Some(rule) = banned(key, spec) {
+            violations.push(Violation::new(
+                label,
+                Rule::BannedDependency,
+                format!("{table} `{key}`: {rule}"),
+            ));
+        }
+    }
+    let path = ["workspace".to_owned(), "dependencies".to_owned()];
+    let lines: Vec<DependencyLine> = dependency_lines(text)
+        .into_iter()
+        .filter(|line| line.path == path && third_party.contains_key(&line.key))
+        .collect();
+    let declared = third_party
+        .keys()
+        .map(|key| (path.as_slice(), table, key.as_str()));
+    violations.extend(comment_findings(label, &lines, declared));
     violations
 }
 
-/// The xtask rules: the lint copy, exact pins, and a comment on every
-/// dependency.
+/// The xtask rules: the lint copy, exact pins, a comment on every
+/// dependency, and no replaced crate. xtask has no workspace crates, so every
+/// entry is third-party, a `path` one included.
 fn check_xtask(label: &str, text: &str, workspace_document: &toml::Value) -> Vec<Violation> {
-    let violation = |rule, detail| Violation {
-        manifest: label.to_owned(),
-        rule,
-        detail,
-    };
+    let violation = |rule, detail| Violation::new(label, rule, detail);
     let (document, manifest) = match (toml::from_str::<toml::Value>(text), Manifest::parse(text)) {
         (Ok(document), Ok(manifest)) => (document, manifest),
         (Err(e), _) => return vec![violation(Rule::Unreadable, format!("could not parse: {e}"))],
         (_, Err(e)) => return vec![violation(Rule::Unreadable, format!("could not parse: {e}"))],
     };
-    let mut violations = Vec::new();
+    let mut violations = check_source_overrides(label, &document);
     if let Err(detail) = lint_copy_matches(workspace_document, &document) {
         violations.push(violation(Rule::XtaskLints, detail));
     }
-    for section in manifest.dependency_sections() {
-        let third_party: BTreeMap<&String, &DependencySpec> = section
-            .entries
-            .iter()
-            .filter(|(_, spec)| spec.path().is_none())
-            .collect();
-        violations.extend(check_pins(label, &section.header, &third_party));
-        for (key, spec) in third_party {
+    let sections = manifest.dependency_sections();
+    for section in &sections {
+        let entries: BTreeMap<&String, &DependencySpec> = section.entries.iter().collect();
+        violations.extend(check_pins(label, &section.header, &entries));
+        for (key, spec) in entries {
+            if let Some(rule) = banned(key, spec) {
+                violations.push(violation(
+                    Rule::BannedDependency,
+                    format!("{} `{key}`: {rule}", section.header),
+                ));
+            }
             let workspace_pin = table_at(workspace_document, &["workspace", "dependencies", key])
                 .and_then(|entry| pinned_version(&entry));
             if let (Some(ours), Some(theirs)) = (spec.version(), workspace_pin)
@@ -250,20 +470,76 @@ fn check_xtask(label: &str, text: &str, workspace_document: &toml::Value) -> Vec
                     Rule::XtaskPin,
                     format!(
                         "{} `{key}` is pinned to \"{ours}\", but [workspace.dependencies] pins \
-                         it to \"{theirs}\"; a crate both build has one version",
+                         it to \"{theirs}\"; bump both in the same dedicated commit, so the \
+                         repository reviews one version of a crate both pin",
                         section.header
                     ),
                 ));
             }
         }
     }
-    violations.extend(
-        dependency_lines(text)
-            .iter()
-            .filter(|line| !line.commented)
-            .map(|line| violation(Rule::DependencyComment, uncommented(line))),
-    );
+    let declared = sections.iter().flat_map(|section| {
+        section.entries.keys().map(move |key| {
+            (
+                section.path.as_slice(),
+                section.header.as_str(),
+                key.as_str(),
+            )
+        })
+    });
+    violations.extend(comment_findings(label, &dependency_lines(text), declared));
     violations
+}
+
+/// A finding for each table of a root manifest that swaps a crate for other
+/// code. `[patch]` and `[replace]` leave the pin in `[workspace.dependencies]`
+/// reading as it did while the build uses something else, and cargo-deny's
+/// source check does not look at path sources. Cargo reads both tables from a
+/// workspace root only, which is where this looks.
+fn check_source_overrides(label: &str, document: &toml::Value) -> Vec<Violation> {
+    ["patch", "replace"]
+        .into_iter()
+        .filter(|table| document.get(table).is_some())
+        .map(|table| {
+            Violation::new(
+                label,
+                Rule::SourceOverride,
+                format!(
+                    "`[{table}]` replaces a crate behind its exact pin; remove it, and if a \
+                     dependency really must be patched, make that its own reviewed decision"
+                ),
+            )
+        })
+        .collect()
+}
+
+/// The same for a cargo configuration file, where `patch`, `paths`, and
+/// `source` replacement do what `[patch]` does in a manifest.
+fn check_cargo_config(label: &str, text: &str) -> Vec<Violation> {
+    let document: toml::Value = match toml::from_str(text) {
+        Ok(document) => document,
+        Err(e) => {
+            return vec![Violation::new(
+                label,
+                Rule::Unreadable,
+                format!("could not parse: {e}"),
+            )];
+        }
+    };
+    ["patch", "paths", "source"]
+        .into_iter()
+        .filter(|key| document.get(key).is_some())
+        .map(|key| {
+            Violation::new(
+                label,
+                Rule::SourceOverride,
+                format!(
+                    "`{key}` replaces a crate behind its exact pin, as `[patch]` in a manifest \
+                     would; remove it"
+                ),
+            )
+        })
+        .collect()
 }
 
 /// The version of a raw dependency entry: the string itself, or its `version`.
@@ -274,7 +550,10 @@ fn pinned_version(entry: &toml::Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// A finding for each entry of `table` that is not an exact pin.
+/// A finding for each entry of `table` that is not an exact pin from
+/// crates.io. The source is judged before the version: a git or
+/// alternative-registry entry with `version = "=x.y.z"` beside it is still
+/// not the crates.io artefact the pin names.
 fn check_pins(
     label: &str,
     table: &str,
@@ -283,20 +562,29 @@ fn check_pins(
     third_party
         .iter()
         .filter_map(|(key, spec)| {
-            let found = match spec.version() {
-                Some(version) if is_exact_pin(version) => return None,
-                Some(version) => format!("has the requirement \"{version}\""),
-                None if spec.is_git() => "is a git dependency".to_owned(),
-                None => "has no version".to_owned(),
+            let found = if spec.is_git() {
+                "is a git dependency".to_owned()
+            } else if spec.is_alternative_registry() {
+                "comes from a registry other than crates.io".to_owned()
+            } else if let Some(path) = spec.path() {
+                format!(
+                    "is a path dependency on `{path}`, which is not a workspace member's directory"
+                )
+            } else {
+                match spec.version() {
+                    Some(version) if is_exact_pin(version) => return None,
+                    Some(version) => format!("has the requirement \"{version}\""),
+                    None => "has no version".to_owned(),
+                }
             };
-            Some(Violation {
-                manifest: label.to_owned(),
-                rule: Rule::ExactPin,
-                detail: format!(
-                    "{table} `{key}` {found}; third-party crates are pinned to an exact \
-                     version, written \"=x.y.z\""
+            Some(Violation::new(
+                label,
+                Rule::ExactPin,
+                format!(
+                    "{table} `{key}` {found}; third-party crates come from crates.io, pinned to \
+                     an exact version, written \"=x.y.z\""
                 ),
-            })
+            ))
         })
         .collect()
 }
@@ -321,14 +609,49 @@ fn is_exact_pin(requirement: &str) -> bool {
         && !version.contains([',', ' ', '*'])
 }
 
-/// The finding for a dependency no comment covers, led by its line number so
-/// the whole reads `path/Cargo.toml:12: ...`.
-fn uncommented(line: &DependencyLine) -> String {
-    format!(
-        "{}: {} `{}` has no comment; say why the dependency is there on the line above it, \
-         or put it under a group header comment",
-        line.line, line.table, line.key
-    )
+/// The comment findings of one manifest: each dependency line no comment
+/// covers, then each dependency the parser found (`declared`: table path,
+/// header, key) that the text scan found no line for. The scan reads keys
+/// under a `[...dependencies]` header and dotted keys that reach into one; a
+/// dependency written any other way, such as an inline `dependencies = { .. }`
+/// table, has no line a comment could be checked on, and must not pass unread.
+fn comment_findings<'a>(
+    label: &str,
+    lines: &[DependencyLine],
+    declared: impl Iterator<Item = (&'a [String], &'a str, &'a str)>,
+) -> Vec<Violation> {
+    let mut violations: Vec<Violation> = lines
+        .iter()
+        .filter(|line| !line.commented)
+        .map(|line| Violation {
+            line: Some(line.line),
+            ..Violation::new(
+                label,
+                Rule::DependencyComment,
+                format!(
+                    "{} `{}` has no comment; say why the dependency is there on the line above \
+                     it, under a group header comment, or at the end of its line",
+                    line.table, line.key
+                ),
+            )
+        })
+        .collect();
+    for (path, header, key) in declared {
+        if !lines
+            .iter()
+            .any(|line| line.path == path && line.key == key)
+        {
+            violations.push(Violation::new(
+                label,
+                Rule::DependencyComment,
+                format!(
+                    "{header} `{key}`: could not find this dependency's line to check its \
+                     comment; write it as a key under a `{header}` header"
+                ),
+            ));
+        }
+    }
+    violations
 }
 
 // --- Reading comments, which a TOML parser drops ---
@@ -336,66 +659,64 @@ fn uncommented(line: &DependencyLine) -> String {
 /// One dependency as it is written in a manifest.
 #[derive(Debug, PartialEq, Eq)]
 struct DependencyLine {
-    /// The header of the table the dependency is in, as written.
+    /// The header of the table the dependency is in, as written where the
+    /// header names the table itself.
     table: String,
+    /// The key path of that table: `["target", "cfg(unix)", "dependencies"]`.
+    path: Vec<String>,
     /// The dependency key.
     key: String,
     /// The 1-based line the dependency starts on.
     line: usize,
     /// Whether a comment covers it: one earlier in the same run of non-blank
-    /// lines of its table, or one at the end of its own line.
+    /// lines of its table, or one at the end of a line of its own.
     commented: bool,
 }
 
 /// The names of cargo's dependency tables.
 const DEPENDENCY_TABLES: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
 
-/// What a table header means to the comment check.
-enum Header {
-    /// A dependency table: the key lines under it are dependencies.
-    Table,
-    /// A dependency written as its own table, `[dependencies.foo]`.
-    Entry(String),
-    /// Anything else.
-    Other,
-}
-
-/// Classifies a header's key path. A dependency table is `dependencies` (or
-/// its dev and build forms) at the top level, under `workspace`, or under
-/// `target.<spec>`.
-fn classify_header(path: &[String]) -> Header {
-    let is_scope = |scope: &[String]| match scope {
-        [] => true,
-        [only] => only == "workspace",
-        [first, _] => first == "target",
-        _ => false,
-    };
+/// Where a key path reaches a dependency table: the length of the table's own
+/// path, and the dependency key after it when the path goes that far. A
+/// dependency table is `dependencies` (or its dev and build forms) at the top
+/// level, under `workspace`, or under `target.<spec>`.
+fn dependency_at(path: &[String]) -> Option<(usize, Option<&String>)> {
     let is_table = |name: &String| DEPENDENCY_TABLES.contains(&name.as_str());
-    match path {
-        [scope @ .., table] if is_table(table) && is_scope(scope) => Header::Table,
-        [scope @ .., table, key] if is_table(table) && is_scope(scope) => {
-            Header::Entry(key.clone())
-        }
-        _ => Header::Other,
-    }
+    let table = match path {
+        [table, ..] if is_table(table) => 0,
+        [scope, table, ..] if scope == "workspace" && is_table(table) => 1,
+        [scope, _, table, ..] if scope == "target" && is_table(table) => 2,
+        _ => return None,
+    };
+    Some((table + 1, path.get(table + 1)))
 }
 
 /// Every dependency in a manifest's text, in order, with whether a comment
-/// covers it.
+/// covers it. A dependency is any key path that reaches into a dependency
+/// table, whether the table is the header (`[dependencies]` then `foo = ..`),
+/// the header goes further (`[dependencies.foo]`), or the key does
+/// (`dependencies.foo = ..` under another header or none).
 fn dependency_lines(text: &str) -> Vec<DependencyLine> {
-    let mut found = Vec::new();
+    let mut found: Vec<DependencyLine> = Vec::new();
     let mut scanner = ValueScanner::default();
-    // The header of the dependency table being read, if one is.
-    let mut table: Option<String> = None;
+    // The header being read under: as written, and its key path.
+    let mut header = String::new();
+    let mut header_path: Vec<String> = Vec::new();
     // Whether a comment has been seen in the current run of non-blank lines.
     let mut covered = false;
-    // The last key seen, so `foo.version` and `foo.features` count once.
-    let mut last_key: Option<String> = None;
+    // The dependency whose value the scanner is inside of, as an index.
+    let mut open: Option<usize> = None;
 
     for (index, line) in text.lines().enumerate() {
         let trimmed = line.trim();
         if scanner.inside_value() {
-            scanner.scan(line);
+            // A comment that closes the value is at the end of the dependency.
+            let trailing_comment = scanner.scan(line);
+            if !scanner.inside_value()
+                && let Some(entry) = open.take().and_then(|at| found.get_mut(at))
+            {
+                entry.commented |= trailing_comment;
+            }
         } else if trimmed.is_empty() {
             covered = false;
         } else if trimmed.starts_with('#') {
@@ -405,47 +726,69 @@ fn dependency_lines(text: &str) -> Vec<DependencyLine> {
             let inner = trimmed.trim_start_matches('[');
             let brackets = trimmed.len() - inner.len();
             let (path, end) = key_path(inner, ']');
-            let header = format!(
+            header = format!(
                 "{}{}{}",
                 "[".repeat(brackets),
                 &inner[..end],
                 "]".repeat(brackets)
             );
-            table = None;
-            match classify_header(&path) {
-                Header::Table => table = Some(header),
-                Header::Entry(key) => found.push(DependencyLine {
-                    table: header,
-                    key,
-                    line: index + 1,
-                    commented: covered || inner[end..].contains('#'),
-                }),
-                Header::Other => {}
+            header_path = path;
+            if let Some((table, Some(key))) = dependency_at(&header_path) {
+                sight(
+                    &mut found,
+                    DependencyLine {
+                        table: header.clone(),
+                        path: header_path[..table].to_vec(),
+                        key: key.clone(),
+                        line: index + 1,
+                        commented: covered || inner[end..].contains('#'),
+                    },
+                );
             }
             covered = false;
-            last_key = None;
         } else {
             let trailing_comment = scanner.scan(line);
-            let Some(table) = &table else {
+            let (key, _) = key_path(trimmed, '=');
+            let mut path = header_path.clone();
+            path.extend(key);
+            let Some((table, Some(key))) = dependency_at(&path) else {
                 continue;
             };
-            let (path, _) = key_path(trimmed, '=');
-            let Some(key) = path.into_iter().next() else {
-                continue;
+            let written = if header_path.len() == table {
+                header.clone()
+            } else {
+                format!("[{}]", path[..table].join("."))
             };
-            if last_key.as_ref() == Some(&key) {
-                continue;
+            let at = sight(
+                &mut found,
+                DependencyLine {
+                    table: written,
+                    path: path[..table].to_vec(),
+                    key: key.clone(),
+                    line: index + 1,
+                    commented: covered,
+                },
+            );
+            if let Some(entry) = found.get_mut(at) {
+                entry.commented |= trailing_comment;
             }
-            found.push(DependencyLine {
-                table: table.clone(),
-                key: key.clone(),
-                line: index + 1,
-                commented: covered || trailing_comment,
-            });
-            last_key = Some(key);
+            open = scanner.inside_value().then_some(at);
         }
     }
     found
+}
+
+/// Records a sighting of a dependency, once per table and key, so
+/// `foo.version` and `foo.features` count once wherever they stand, and
+/// returns its index in `found`.
+fn sight(found: &mut Vec<DependencyLine>, entry: DependencyLine) -> usize {
+    let seen = found
+        .iter()
+        .position(|line| line.path == entry.path && line.key == entry.key);
+    seen.unwrap_or_else(|| {
+        found.push(entry);
+        found.len() - 1
+    })
 }
 
 /// Splits a dotted TOML key path, quotes honoured, up to `terminator`. Returns
@@ -493,10 +836,10 @@ impl ValueScanner {
         let mut at = 0;
         while at < bytes.len() {
             if let Some(delimiter) = self.multiline {
-                let Some(close) = line.get(at..).and_then(|rest| rest.find(delimiter)) else {
+                let Some(after) = multiline_close(bytes, at, delimiter) else {
                     return false;
                 };
-                at += close + delimiter.len();
+                at = after;
                 self.multiline = None;
                 continue;
             }
@@ -504,7 +847,7 @@ impl ValueScanner {
                 b'#' => return true,
                 quote @ (b'"' | b'\'') => {
                     let triple = if quote == b'"' { "\"\"\"" } else { "'''" };
-                    if line.get(at..).is_some_and(|rest| rest.starts_with(triple)) {
+                    if bytes[at..].starts_with(triple.as_bytes()) {
                         self.multiline = Some(triple);
                         at += triple.len();
                         continue;
@@ -532,6 +875,34 @@ impl ValueScanner {
         }
         false
     }
+}
+
+/// Where a multi-line string that is open at `from` closes on this line: the
+/// offset just past its closing delimiter, or `None` when it stays open. In a
+/// basic string (`"""`) a backslash escapes the next character, so `\"""`
+/// closes nothing; a literal string (`'''`) has no escapes. TOML also lets up
+/// to two quotes stand directly before the delimiter (`""""` ends a string
+/// with a quote in it), and they belong to the string, not to what follows.
+fn multiline_close(bytes: &[u8], from: usize, delimiter: &str) -> Option<usize> {
+    let quote = delimiter.as_bytes()[0];
+    let escapes = quote == b'"';
+    let mut at = from;
+    while at < bytes.len() {
+        if escapes && bytes[at] == b'\\' {
+            at += 2;
+        } else if bytes[at..].starts_with(delimiter.as_bytes()) {
+            at += delimiter.len();
+            let extra = bytes[at..]
+                .iter()
+                .take(2)
+                .take_while(|byte| **byte == quote)
+                .count();
+            return Some(at + extra);
+        } else {
+            at += 1;
+        }
+    }
+    None
 }
 
 // --- The xtask lint copy ---
@@ -618,6 +989,11 @@ mod tests {
         (text, manifest)
     }
 
+    /// `check_member` for a manifest whose path dependencies are all members.
+    fn check(label: &str, text: &str, manifest: &Manifest) -> Vec<Violation> {
+        check_member(label, text, manifest, &|_| true)
+    }
+
     fn rules(violations: &[Violation]) -> Vec<Rule> {
         violations.iter().map(|v| v.rule).collect()
     }
@@ -631,36 +1007,27 @@ mod tests {
         let (text, manifest) = member(&format!(
             "{LINTS}\n[dependencies]\n# Errors\nthiserror.workspace = true\n"
         ));
-        let violations = check_member("m", &text, &manifest);
+        let violations = check("m", &text, &manifest);
         assert!(violations.is_empty(), "{violations:#?}");
     }
 
     #[test]
     fn a_member_with_no_lints_table_is_reported() {
         let (text, manifest) = member("");
-        assert_eq!(
-            rules(&check_member("m", &text, &manifest)),
-            [Rule::LintsInherited]
-        );
+        assert_eq!(rules(&check("m", &text, &manifest)), [Rule::LintsInherited]);
     }
 
     #[test]
     fn a_lints_table_that_opts_out_is_reported() {
         let (text, manifest) = member("[lints]\nworkspace = false\n");
-        assert_eq!(
-            rules(&check_member("m", &text, &manifest)),
-            [Rule::LintsInherited]
-        );
+        assert_eq!(rules(&check("m", &text, &manifest)), [Rule::LintsInherited]);
     }
 
     #[test]
     fn crate_local_lints_without_the_inheritance_flag_are_reported() {
         // The near-miss the check most needs to catch.
         let (text, manifest) = member("[lints.clippy]\nunwrap_used = \"warn\"\n");
-        assert_eq!(
-            rules(&check_member("m", &text, &manifest)),
-            [Rule::LintsInherited]
-        );
+        assert_eq!(rules(&check("m", &text, &manifest)), [Rule::LintsInherited]);
     }
 
     // --- Package inheritance ---
@@ -672,7 +1039,7 @@ mod tests {
              license = \"MIT\"\n\n{LINTS}"
         );
         let manifest = Manifest::parse(&text).unwrap();
-        let violations = check_member("m", &text, &manifest);
+        let violations = check("m", &text, &manifest);
         assert_eq!(
             rules(&violations),
             [
@@ -696,7 +1063,7 @@ mod tests {
              [dev-dependencies]\n# HTTP fakes\nwiremock = {{ version = \"=0.6.0\" }}\n\n\
              [target.'cfg(unix)'.build-dependencies]\n# Codegen\nprost-build = {{ git = \"https://example.com/prost\" }}\n"
         ));
-        let violations = check_member("m", &text, &manifest);
+        let violations = check("m", &text, &manifest);
         assert_eq!(
             rules(&violations),
             [
@@ -724,7 +1091,78 @@ mod tests {
         let (text, manifest) = member(&format!(
             "{LINTS}\n[dependencies]\n# Domain\nlablet-model = {{ path = \"../../domain/model\" }}\n"
         ));
-        assert!(check_member("m", &text, &manifest).is_empty());
+        assert!(check("m", &text, &manifest).is_empty());
+    }
+
+    #[test]
+    fn a_path_dependency_that_is_not_a_member_is_held_to_the_third_party_rule() {
+        let (text, manifest) = member(&format!(
+            "{LINTS}\n[dev-dependencies]\n# Test helpers\nlablet-testkit = {{ path = \"../../../tests/testkit\" }}\n"
+        ));
+        let violations = check_member("m", &text, &manifest, &|_| false);
+        assert_eq!(rules(&violations), [Rule::DependencyInherited]);
+        assert!(
+            violations[0].detail.contains(
+                "`lablet-testkit` is a path dependency on `../../../tests/testkit`, which is \
+                 not a workspace member's directory"
+            ),
+            "{}",
+            violations[0]
+        );
+    }
+
+    // --- Banned direct dependencies ---
+
+    #[test]
+    fn a_direct_dependency_on_anyhow_or_a_mocking_framework_is_reported_in_every_table() {
+        let (text, manifest) = member(&format!(
+            "{LINTS}\n[dependencies]\n# Quick errors\nanyhow.workspace = true\n\n\
+             [dev-dependencies]\n# Mocks\nmockall.workspace = true\n\
+             doubles = {{ package = \"mockall_double\", workspace = true }}\n\
+             wiremock.workspace = true\n"
+        ));
+        let violations = check("m", &text, &manifest);
+        assert_eq!(
+            rules(&violations),
+            [
+                Rule::BannedDependency,
+                Rule::BannedDependency,
+                Rule::BannedDependency
+            ]
+        );
+        assert!(
+            violations[0]
+                .detail
+                .starts_with("[dependencies] `anyhow`: errors are `thiserror` enums"),
+            "{}",
+            violations[0]
+        );
+        assert!(
+            violations[1].detail.contains("`doubles`"),
+            "{}",
+            violations[1]
+        );
+        assert!(
+            violations[2].detail.contains("no mocking framework"),
+            "{}",
+            violations[2]
+        );
+    }
+
+    #[test]
+    fn a_banned_crate_in_the_workspace_table_or_in_xtask_is_reported() {
+        let workspace = FixtureWorkspace::new(
+            "# Errors\nerrors = { package = \"anyhow\", version = \"=1.0.100\" }\n",
+        )
+        .load();
+        let violations = check_workspace_dependencies("w", &workspace.text, &workspace);
+        assert_eq!(rules(&violations), [Rule::BannedDependency]);
+
+        let xtask = format!(
+            "[package]\nname = \"xtask\"\n\n[dependencies]\n# Errors\ncolor_eyre = \"=0.6.5\"\n{XTASK_LINTS}"
+        );
+        let violations = check_xtask("xtask/Cargo.toml", &xtask, &parse(WORKSPACE_LINTS));
+        assert_eq!(rules(&violations), [Rule::BannedDependency]);
     }
 
     // --- Exact pins ---
@@ -783,6 +1221,230 @@ mod tests {
         assert!(violations[2].detail.contains("`serde` has no comment"));
     }
 
+    #[test]
+    fn a_version_beside_another_source_does_not_make_an_exact_pin() {
+        let workspace = FixtureWorkspace::new(
+            "# Wire types\nprost = { git = \"https://example.com/prost\", branch = \"main\", version = \"=0.14.4\" }\n\
+             # Diagnostics\ntracing = { version = \"=0.1.44\", registry = \"corp\" }\n\
+             # Runtime\ntokio = { version = \"=1.0.0\", registry-index = \"https://example.com/index\" }\n\
+             # A vendored copy\nvendored = { path = \"../vendor/thing\", version = \"=1.0.0\" }\n\
+             # Domain, repointed\nlablet-model = { path = \"../outside/model\", version = \"=0.1.0\" }\n",
+        )
+        .member("crates/domain/model", "lablet-model", "")
+        .load();
+        let violations = check_workspace_dependencies("w", &workspace.text, &workspace);
+        assert!(
+            violations.iter().all(|v| v.rule == Rule::ExactPin),
+            "{violations:#?}"
+        );
+        let details: Vec<&str> = violations.iter().map(|v| v.detail.as_str()).collect();
+        assert_eq!(details.len(), 5, "{details:#?}");
+        assert!(details[0].contains("`lablet-model` is a path dependency on `../outside/model`"));
+        assert!(details[1].contains("`prost` is a git dependency"));
+        assert!(details[2].contains("`tokio` comes from a registry other than crates.io"));
+        assert!(details[3].contains("`tracing` comes from a registry other than crates.io"));
+        assert!(details[4].contains("`vendored` is a path dependency"));
+    }
+
+    // --- Replaced crates ---
+
+    #[test]
+    fn a_patch_or_replace_table_in_a_root_manifest_is_reported() {
+        for (table, body) in [
+            (
+                "patch",
+                "[patch.crates-io]\nthiserror = { path = \"../vendor/thiserror\" }\n",
+            ),
+            (
+                "replace",
+                "[replace]\n\"serde:1.0.229\" = { path = \"../vendor/serde\" }\n",
+            ),
+        ] {
+            let dir = TempDir::new("override");
+            dir.write(
+                "Cargo.toml",
+                &format!("[workspace]\nmembers = []\n\n{body}"),
+            );
+            let workspace = Workspace::load(dir.path()).unwrap();
+            let violations = check_workspace_dependencies("w", &workspace.text, &workspace);
+            assert_eq!(rules(&violations), [Rule::SourceOverride], "{table}");
+            assert!(
+                violations[0]
+                    .detail
+                    .starts_with(&format!("`[{table}]` replaces"))
+            );
+
+            let xtask = format!("[package]\nname = \"xtask\"\n{XTASK_LINTS}\n{body}");
+            let violations = check_xtask("xtask/Cargo.toml", &xtask, &parse(WORKSPACE_LINTS));
+            assert_eq!(rules(&violations), [Rule::SourceOverride], "{table}");
+        }
+    }
+
+    #[test]
+    fn a_cargo_config_that_replaces_a_crate_is_reported() {
+        let alias_only = "[alias]\nxtask = \"run -q --\"\n";
+        assert!(check_cargo_config("c", alias_only).is_empty());
+        for config in [
+            "[patch.crates-io]\nthiserror = { path = \"../vendor/thiserror\" }\n",
+            "paths = [\"../vendor/thiserror\"]\n",
+            "[source.crates-io]\nreplace-with = \"mirror\"\n",
+        ] {
+            let violations = check_cargo_config("c", config);
+            assert_eq!(rules(&violations), [Rule::SourceOverride], "{config}");
+        }
+        assert_eq!(
+            rules(&check_cargo_config("c", "[alias")),
+            [Rule::Unreadable]
+        );
+    }
+
+    // --- Where a member's files are ---
+
+    #[test]
+    fn a_package_is_named_after_its_directory_with_three_exceptions() {
+        for (path, name) in [
+            ("crates/domain/model", "lablet-model"),
+            (
+                "crates/adapters/secondary/shared/telemetry-registry",
+                "lablet-telemetry-registry",
+            ),
+            ("apps/lablet", "lablet"),
+            ("tests/conformance", "lablet-conformance"),
+            ("tests/mcp-server", "lablet-test-mcp-server"),
+        ] {
+            assert_eq!(expected_package_name(path).as_deref(), Some(name));
+        }
+        assert_eq!(expected_package_name(""), None);
+
+        let workspace = FixtureWorkspace::new("")
+            .member(
+                "crates/adapters/secondary/tools-builtin",
+                "builtin_tools",
+                "",
+            )
+            .load();
+        let violations = check_layout("m", &workspace.root, &workspace.members[0]);
+        assert_eq!(rules(&violations), [Rule::PackageName]);
+        assert!(
+            violations[0]
+                .detail
+                .contains("`name` is \"builtin_tools\", but the crate in `crates/adapters/secondary/tools-builtin` is package \"lablet-tools-builtin\""),
+            "{}",
+            violations[0]
+        );
+    }
+
+    #[test]
+    fn integration_tests_are_the_one_target_tests_it_main_rs() {
+        let layout = |files: &[&str], tables: &str| {
+            let dir = TempDir::new("layout");
+            dir.write(
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"crates/domain/model\"]\n",
+            );
+            dir.write(
+                "crates/domain/model/Cargo.toml",
+                &format!("[package]\nname = \"lablet-model\"\n{tables}"),
+            );
+            for file in files {
+                dir.write(&format!("crates/domain/model/{file}"), "");
+            }
+            let workspace = Workspace::load(dir.path()).unwrap();
+            check_layout("m", &workspace.root, &workspace.members[0])
+        };
+        assert!(layout(&["src/lib.rs"], "").is_empty());
+        assert!(
+            layout(
+                &["tests/it/main.rs", "tests/it/stop.rs", "tests/.DS_Store"],
+                ""
+            )
+            .is_empty()
+        );
+
+        let violations = layout(
+            &["tests/it/main.rs", "tests/foo.rs", "tests/bar/main.rs"],
+            "",
+        );
+        assert_eq!(
+            rules(&violations),
+            [Rule::IntegrationTarget, Rule::IntegrationTarget]
+        );
+        assert!(
+            violations[0].detail.starts_with("`tests/bar` is outside"),
+            "{}",
+            violations[0]
+        );
+        assert!(
+            violations[1]
+                .detail
+                .starts_with("`tests/foo.rs` is outside"),
+            "{}",
+            violations[1]
+        );
+
+        let violations = layout(&["tests/it/stop.rs"], "");
+        assert_eq!(rules(&violations), [Rule::IntegrationTarget]);
+        assert!(
+            violations[0].detail.contains("has no `main.rs`"),
+            "{}",
+            violations[0]
+        );
+
+        let violations = layout(
+            &["other/x.rs"],
+            "\n[[test]]\nname = \"x\"\npath = \"other/x.rs\"\n",
+        );
+        assert_eq!(rules(&violations), [Rule::IntegrationTarget]);
+        assert!(
+            violations[0].detail.contains("`[[test]]`"),
+            "{}",
+            violations[0]
+        );
+    }
+
+    /// The MSRV for a pinned toolchain `major.minor[.patch]`: two minor
+    /// versions below it (contributing "Versioning", spec §8).
+    fn msrv_for(channel: &str) -> Option<String> {
+        let mut parts = channel.split('.');
+        let major: u32 = parts.next()?.parse().ok()?;
+        let minor: u32 = parts.next()?.parse().ok()?;
+        Some(format!("{major}.{}", minor.checked_sub(2)?))
+    }
+
+    #[test]
+    fn the_msrv_is_the_pinned_toolchain_minus_two_minor_versions() {
+        assert_eq!(msrv_for("1.98.1").as_deref(), Some("1.96"));
+        assert_eq!(msrv_for("1.98").as_deref(), Some("1.96"));
+        assert_eq!(msrv_for("stable"), None);
+        assert_eq!(msrv_for("1.1.0"), None);
+
+        let root = crate::workspace::repo_root();
+        let read = |path: &str| -> toml::Value {
+            toml::from_str(&std::fs::read_to_string(root.join(path)).unwrap()).unwrap()
+        };
+        let toolchain = read("rust-toolchain.toml");
+        let channel = toolchain["toolchain"]["channel"].as_str().unwrap();
+        let expected = msrv_for(channel);
+        assert!(
+            expected.is_some(),
+            "rust-toolchain.toml pins `{channel}`, not a version"
+        );
+        let workspace = read("lablet/Cargo.toml");
+        assert_eq!(
+            workspace["workspace"]["package"]["rust-version"].as_str(),
+            expected.as_deref(),
+            "lablet/Cargo.toml: `rust-version` is the MSRV, the toolchain pinned in \
+             rust-toolchain.toml ({channel}) minus two minor versions"
+        );
+        if let Some(own) = read("xtask/Cargo.toml")["package"].get("rust-version") {
+            assert_eq!(
+                own.as_str(),
+                expected.as_deref(),
+                "xtask/Cargo.toml: `rust-version`"
+            );
+        }
+    }
+
     // --- Dependency comments ---
 
     fn uncommented_keys(text: &str) -> Vec<String> {
@@ -813,6 +1475,15 @@ mod tests {
         let text = "[dependencies]\nserde.workspace = true # Derives on the model\n\
                     tokio.workspace = true\n";
         assert_eq!(uncommented_keys(text), ["tokio"]);
+    }
+
+    #[test]
+    fn a_trailing_comment_on_the_closing_line_of_a_value_covers_the_dependency() {
+        let text = "[dependencies]\ntokio = { version = \"=1.0.0\", features = [\n  \"rt\",\n] } # Runtime\n\n\
+                    serde = { version = \"=1.0.0\", features = [\n  \"derive\", # not at the end of the dependency\n] }\n\n\
+                    rmcp.version = \"=3.0.0\"\nrmcp.features = [\n  \"client\",\n] # MCP\n\n\
+                    [package.metadata.x]\nlist = [\n] # not a dependency\n";
+        assert_eq!(uncommented_keys(text), ["serde"]);
     }
 
     #[test]
@@ -867,6 +1538,72 @@ mod tests {
         let text =
             "[dependencies]\n# Runtime\ntokio.version = \"=1.0.0\"\ntokio.features = [\"rt\"]\n";
         assert_eq!(dependency_lines(text).len(), 1);
+        // Also with another dependency between them.
+        let text = "[dependencies]\ntokio.version = \"=1.0.0\"\nserde = \"=1.0.0\"\n\
+                    tokio.features = [\"rt\"]\n";
+        let lines: Vec<(usize, String)> = dependency_lines(text)
+            .into_iter()
+            .map(|line| (line.line, line.key))
+            .collect();
+        assert_eq!(lines, [(2, "tokio".to_owned()), (3, "serde".to_owned())]);
+    }
+
+    #[test]
+    fn a_dotted_key_that_reaches_into_a_dependency_table_is_a_dependency() {
+        let text = "dependencies.thiserror.workspace = true\n\n[package]\nname = \"x\"\n\n\
+                    [target.'cfg(unix)']\ndev-dependencies.wiremock.workspace = true\n\n\
+                    [workspace]\n# Errors\ndependencies.anyhow = \"=1.0.0\"\n";
+        let lines = dependency_lines(text);
+        let seen: Vec<(&str, &str, usize, bool)> = lines
+            .iter()
+            .map(|line| {
+                (
+                    line.table.as_str(),
+                    line.key.as_str(),
+                    line.line,
+                    line.commented,
+                )
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("[dependencies]", "thiserror", 1, false),
+                ("[target.cfg(unix).dev-dependencies]", "wiremock", 7, false),
+                ("[workspace.dependencies]", "anyhow", 11, true),
+            ]
+        );
+        assert_eq!(lines[1].path, ["target", "cfg(unix)", "dev-dependencies"]);
+    }
+
+    #[test]
+    fn a_dependency_with_no_line_of_its_own_is_reported_rather_than_passed() {
+        // An inline table: valid TOML that cargo accepts and the scan cannot
+        // put a comment against.
+        let (text, _) = member(LINTS);
+        let text = format!("dev-dependencies = {{ wiremock = {{ workspace = true }} }}\n\n{text}");
+        let manifest = Manifest::parse(&text).unwrap();
+        let violations = check("m", &text, &manifest);
+        assert_eq!(rules(&violations), [Rule::DependencyComment]);
+        assert_eq!(violations[0].line, None);
+        assert!(
+            violations[0].to_string().starts_with(
+                "m: [dev-dependencies] `wiremock`: could not find this dependency's line"
+            ),
+            "{}",
+            violations[0]
+        );
+    }
+
+    #[test]
+    fn every_commented_spelling_the_scan_reads_is_matched_to_its_parsed_dependency() {
+        let (text, manifest) = member(&format!(
+            "{LINTS}\n[target.\"cfg(unix)\".dependencies]\n# Signals\nnix.workspace = true\n\n\
+             # Runtime\n[dependencies.tokio]\nworkspace = true\nfeatures = [\"rt\"]\n\n\
+             [ build-dependencies ]\n# Codegen\n\"prost-build\".workspace = true\n"
+        ));
+        let violations = check("m", &text, &manifest);
+        assert!(violations.is_empty(), "{violations:#?}");
     }
 
     #[test]
@@ -879,11 +1616,41 @@ mod tests {
     }
 
     #[test]
+    fn a_multi_line_string_closes_at_its_real_delimiter() {
+        for description in [
+            // An escaped delimiter inside a basic string.
+            "\"\"\"a \\\"\"\" still\n[dependencies]\nfake = \"1\"\n\"\"\"",
+            // An escaped backslash, then the real close.
+            "\"\"\"a \\\\\"\"\"",
+            // A line-ending backslash, and an escape after a multi-byte character.
+            "\"\"\"a \\\n  b \u{e9}\\\"\"\" c\n[dependencies]\nfake = \"1\"\n\"\"\"",
+            // A literal string has no escapes: the backslash closes nothing off.
+            "'''a \\'''",
+            // Up to two quotes may stand directly before the delimiter.
+            "\"\"\"a\"\"\"\"\"",
+            "'''a''''",
+        ] {
+            let text = format!(
+                "[package]\nname = \"x\"\nmetadata = {{ d = {description} }}\n\n[dependencies]\n# Real\nreal = \"1\"\n"
+            );
+            assert!(
+                toml::from_str::<toml::Value>(&text).is_ok(),
+                "not TOML: {text}"
+            );
+            let keys: Vec<String> = dependency_lines(&text)
+                .into_iter()
+                .map(|line| line.key)
+                .collect();
+            assert_eq!(keys, ["real"], "{text}");
+        }
+    }
+
+    #[test]
     fn an_uncommented_member_dependency_is_reported_with_its_line() {
         let (text, manifest) = member(&format!(
             "{LINTS}\n[dependencies]\nthiserror.workspace = true\n"
         ));
-        let violations = check_member("m", &text, &manifest);
+        let violations = check("m", &text, &manifest);
         assert_eq!(rules(&violations), [Rule::DependencyComment]);
         assert!(
             violations[0]
@@ -892,9 +1659,19 @@ mod tests {
             "{}",
             violations[0]
         );
+        assert!(
+            violations[0].detail.contains("or at the end of its line"),
+            "{}",
+            violations[0]
+        );
     }
 
     // --- The xtask copy ---
+
+    /// A faithful copy of `WORKSPACE_LINTS` for an xtask manifest.
+    const XTASK_LINTS: &str = "\n[lints.rust]\nunsafe_code = \"forbid\"\n\n[lints.clippy]\n\
+                               all = { level = \"warn\", priority = -1 }\nprint_stdout = \"allow\"\n\
+                               print_stderr = \"allow\"\n";
 
     const WORKSPACE_LINTS: &str = r#"
 [workspace]
@@ -1008,9 +1785,10 @@ dbg_macro = "warn"
                 "[dependencies]\nthiserror = \"2\"\n",
             )
             .load();
-        let dir = TempDir::new("xtask-manifest");
-        dir.write("Cargo.toml", "[package]\nname = \"xtask\"\n");
-        let violations = lint(&workspace, &dir.path().join("Cargo.toml"));
+        let repo = TempDir::new("repo");
+        repo.write("xtask/Cargo.toml", "[package]\nname = \"xtask\"\n");
+        repo.write(".cargo/config.toml", "paths = [\"vendor\"]\n");
+        let violations = lint(&workspace, repo.path());
         let model: Vec<Rule> = violations
             .iter()
             .filter(|v| v.manifest.ends_with("/crates/domain/model/Cargo.toml"))
@@ -1024,7 +1802,13 @@ dbg_macro = "warn"
             .map(|v| v.rule)
             .collect();
         assert_eq!(xtask, [Rule::XtaskLints]);
-        assert_eq!(violations.len(), 3, "{violations:#?}");
+        let config: Vec<Rule> = violations
+            .iter()
+            .filter(|v| v.manifest == ".cargo/config.toml")
+            .map(|v| v.rule)
+            .collect();
+        assert_eq!(config, [Rule::SourceOverride]);
+        assert_eq!(violations.len(), 4, "{violations:#?}");
     }
 
     #[test]
@@ -1049,16 +1833,8 @@ dbg_macro = "warn"
 
     #[test]
     fn the_real_manifests_have_no_violations() {
-        let root = crate::workspace::workspace_root();
-        if !root.join("Cargo.toml").is_file() {
-            eprintln!(
-                "skipped: {} does not exist yet, so there are no real manifests to lint",
-                root.join("Cargo.toml").display()
-            );
-            return;
-        }
-        let workspace = Workspace::load(&root).unwrap();
-        let violations = lint(&workspace, &crate::workspace::xtask_manifest());
+        let workspace = Workspace::load(&crate::workspace::workspace_root()).unwrap();
+        let violations = lint(&workspace, &crate::workspace::repo_root());
         let listed: Vec<String> = violations.iter().map(ToString::to_string).collect();
         assert!(
             listed.is_empty(),

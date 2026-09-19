@@ -12,7 +12,7 @@ use std::sync::LazyLock;
 use std::time::Instant;
 
 use crate::report::{self, Row};
-use crate::workspace::{Workspace, workspace_root, xtask_manifest};
+use crate::workspace::{Workspace, repo_root, workspace_root, xtask_manifest};
 use crate::{changelog, coverage, lint_layers, lint_manifests, mutants, process};
 
 /// What an in-process check returns: `Ok(None)` for a plain pass, `Ok(Some)`
@@ -24,6 +24,8 @@ pub type CheckResult = Result<Option<String>, String>;
 pub struct Step {
     label: &'static str,
     action: Action,
+    /// What to run when the step fails, where one command is the remedy.
+    hint: Option<&'static str>,
 }
 
 enum Action {
@@ -42,18 +44,29 @@ impl Step {
         Self::cargo_with_env(label, args, &[])
     }
 
+    /// A cargo step. Every subcommand that resolves dependencies gets
+    /// `--locked` straight after its name, where cargo's own subcommands and
+    /// cargo-deny both take it: a gate judges the committed lockfiles, and
+    /// without the flag cargo would quietly re-resolve a stale one, pass
+    /// against a graph nobody committed, and leave the tree dirty. `cargo fmt`
+    /// resolves nothing and rejects the flag.
     fn cargo_with_env(
         label: &'static str,
         args: &[&str],
         env: &'static [(&'static str, &'static str)],
     ) -> Self {
+        let mut args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+        if args.first().is_some_and(|subcommand| subcommand != "fmt") {
+            args.insert(1, LOCKED.to_owned());
+        }
         Self {
             label,
             action: Action::Command {
                 program: "cargo",
-                args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+                args,
                 env,
             },
+            hint: None,
         }
     }
 
@@ -61,9 +74,18 @@ impl Step {
         Self {
             label,
             action: Action::Check(check),
+            hint: None,
         }
     }
+
+    const fn with_hint(mut self, hint: &'static str) -> Self {
+        self.hint = Some(hint);
+        self
+    }
 }
+
+/// The cargo flag that refuses to touch a lockfile; see [`Step::cargo_with_env`].
+pub const LOCKED: &str = "--locked";
 
 /// xtask's manifest as a cargo argument. Cargo commands run in `lablet/`, so
 /// the passes over xtask itself name its manifest.
@@ -82,11 +104,20 @@ pub fn fmt_steps(fix: bool) -> Vec<Step> {
         workspace.extend(["--", "--check"]);
         xtask.extend(["--", "--check"]);
     }
-    vec![
+    let steps = [
         Step::cargo("fmt", &workspace),
         Step::cargo("fmt (xtask)", &xtask),
-    ]
+    ];
+    if fix {
+        steps.into()
+    } else {
+        // The command a failed check echoes only reports; this one repairs.
+        steps.map(|step| step.with_hint(FMT_HINT)).into()
+    }
 }
+
+/// What a failed formatting check says to run.
+const FMT_HINT: &str = "fix with: cargo xtask fmt --fix";
 
 /// clippy over every target of the workspace and of xtask, warnings denied.
 /// The lint set itself lives in the manifests (`[workspace.lints]`).
@@ -125,7 +156,7 @@ pub fn lint_layers_steps() -> Vec<Step> {
 pub fn lint_manifests_steps() -> Vec<Step> {
     vec![Step::check("lint-manifests", || {
         let workspace = Workspace::load(&workspace_root()).map_err(|e| e.to_string())?;
-        let violations = lint_manifests::lint(&workspace, &xtask_manifest());
+        let violations = lint_manifests::lint(&workspace, &repo_root());
         if violations.is_empty() {
             return Ok(None);
         }
@@ -180,7 +211,10 @@ pub fn deny_steps() -> Vec<Step> {
 }
 
 /// rustdoc over the workspace and xtask, without dependencies, any warning an
-/// error: a broken intra-doc link or a missing doc fails the step.
+/// error: a broken intra-doc link or a missing doc fails the step. This is the
+/// only step that evaluates the `rustdoc` lints; clippy never runs rustdoc.
+/// `cargo doc` documents a package's library and skips a binary of the same
+/// name, so `apps/lablet/src/main.rs` is not covered.
 pub fn doc_steps() -> Vec<Step> {
     const DENY_WARNINGS: &[(&str, &str)] = &[("RUSTDOCFLAGS", "-D warnings")];
     let manifest = xtask_manifest_arg();
@@ -276,6 +310,7 @@ pub fn run(mode: Mode, steps: &[Step]) -> bool {
             }
             Action::Check(check) => check(),
         };
+        let result = result.map_err(|diagnostic| with_hint(diagnostic, step.hint));
         let elapsed = start.elapsed().as_secs_f64();
         if capture && on_terminal() {
             print!("\r");
@@ -352,6 +387,14 @@ fn run_command(program: &str, args: &[&str], env: &[(&str, &str)], capture: bool
             String::from_utf8_lossy(&output).trim_end(),
             failed()
         ))
+    }
+}
+
+/// A failure's diagnostic, closed by the step's hint when it has one.
+fn with_hint(diagnostic: String, hint: Option<&str>) -> String {
+    match hint {
+        Some(hint) => format!("{diagnostic}\n{hint}"),
+        None => diagnostic,
     }
 }
 
@@ -438,6 +481,40 @@ mod tests {
         }
         for step in fmt_steps(true) {
             assert!(!cargo_args(&step).contains(&"--check"), "{}", step.label);
+        }
+    }
+
+    #[test]
+    fn a_failed_formatting_check_says_how_to_fix_it() {
+        for step in fmt_steps(false) {
+            assert_eq!(
+                step.hint,
+                Some("fix with: cargo xtask fmt --fix"),
+                "{}",
+                step.label
+            );
+        }
+        for step in fmt_steps(true) {
+            assert_eq!(step.hint, None, "{}", step.label);
+        }
+        assert_eq!(
+            with_hint("error: command failed".to_owned(), Some(FMT_HINT)),
+            "error: command failed\nfix with: cargo xtask fmt --fix"
+        );
+        assert_eq!(with_hint("error".to_owned(), None), "error");
+    }
+
+    #[test]
+    fn every_cargo_step_that_resolves_dependencies_refuses_to_touch_the_lockfile() {
+        let mut steps = pre_push_steps();
+        steps.extend(fmt_steps(true));
+        for step in &steps {
+            let Action::Command { args, .. } = &step.action else {
+                continue;
+            };
+            let locked = args.get(1).map(String::as_str) == Some("--locked");
+            // `cargo fmt` resolves nothing and rejects the flag.
+            assert_eq!(locked, args[0] != "fmt", "{}: {args:?}", step.label);
         }
     }
 

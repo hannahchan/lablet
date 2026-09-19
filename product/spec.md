@@ -420,7 +420,7 @@ Config digest (`lablet.config.digest`) is a SHA-256 of the canonical JSON form o
 - `lablet-run` is tested end to end with hand-written fakes for every port, including a fake clock. No mocking framework.
 - Provider adapters are tested against `wiremock` with recorded payloads, including error classification and content-block round trips.
 - `lablet-conformance` holds case sets for `ToolExecutor` and `RunObserver`, pulled in as dev-dependencies by each adapter.
-- `lablet-test-mcp-server` is an rmcp stdio binary with tools that echo, sleep for N seconds, and make the server exit after N calls; tests locate it via `CARGO_BIN_EXE_lablet-test-mcp-server`. A `--hang-startup` flag never completes initialisation.
+- `lablet-test-mcp-server` is an rmcp stdio binary with tools that echo, sleep for N seconds, and make the server exit after N calls; cargo sets `CARGO_BIN_EXE_lablet-test-mcp-server` only for the server package's own tests, so how tests in other packages locate the binary is an open question (§10). A `--hang-startup` flag never completes initialisation.
 - One integration test target per crate (`tests/it/main.rs`).
 - A smoke test in `apps/lablet` runs a full loop with `provider-fake` and the OTLP/JSON file exporter and asserts on the spans and log records read back from the file. Cancellation scenarios drive the `Cancellation` port directly.
 
@@ -435,7 +435,7 @@ Recorded here so they are not lost; none block the first build.
 - A `lablet.run` metric set alongside traces, once there is a consumer for it.
 - Validating the `task_complete` argument against `run.completion_schema` rather than only advertising it.
 - A `check --probe` flag that makes one minimal provider call.
-- How `lablet-tools-mcp`'s tests locate the `lablet-test-mcp-server` binary: cargo sets `CARGO_BIN_EXE_<name>` only for tests of the package that defines the binary, so a cross-package mechanism (an artifact dependency, a build through `escargot`, or hosting the MCP scenarios in the server's own package) must be chosen in phase 8.
+- How `lablet-tools-mcp`'s tests locate the `lablet-test-mcp-server` binary: cargo sets `CARGO_BIN_EXE_<name>` only for tests of the package that defines the binary, so a cross-package mechanism (a build through `escargot`, or hosting the MCP scenarios in the server's own package) must be chosen in phase 8. An artifact dependency is not an option on the pinned stable toolchain: cargo rejects it without nightly `-Z bindeps`. Nor is a plain dev-dependency on the server package, which cargo ignores because the package has no library.
 - A `turn` span under `invoke_agent`, if per-turn grouping in trace viewers proves worth an extra span level.
 - The deferred `lablet.*` extensions in the research catalogue (working time, failed-attempt tokens, cache hit ratio, time split, event sequence).
 - Exporting the transcript as an ATIF v1.8 trajectory, planned for phase 10.

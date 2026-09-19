@@ -20,7 +20,7 @@ Explicit architecture. Inside `lablet/`, directory `foo/bar/` is package `lablet
 | Domain | `crates/domain/*` | domain | tokio, reqwest, tracing, opentelemetry, rmcp, tonic, axum, hyper |
 | Application | `crates/application/*` | domain | tokio, reqwest, opentelemetry, rmcp, tonic, axum, hyper |
 | Secondary adapters | `crates/adapters/secondary/*` | application, domain, adapter shared kernel; never a sibling adapter | none |
-| Adapter shared kernel | `crates/adapters/secondary/shared/*` | application, domain | none; may be used by sibling adapters, implements no port |
+| Adapter shared kernel | `crates/adapters/secondary/shared/*` | application, domain, other adapter shared kernels; never an adapter | none; may be used by sibling adapters, implements no port |
 | Composition root | `apps/*` | everything except test support | none |
 | Test support | `tests/*` | anything, dev-only | none |
 
@@ -35,7 +35,7 @@ Explicit architecture. Inside `lablet/`, directory `foo/bar/` is package `lablet
 ## Code conventions
 
 - `thiserror` for errors. No `anyhow`. One error enum per port or boundary, owned by the layer that defines it. Variants carry `String`, not foreign error types.
-- Workspace lints, all enforced by `cargo xtask clippy` with warnings denied: `unsafe_code = "forbid"`, `missing_docs`, clippy `all` and `pedantic`, and `unwrap_used`, `expect_used`, `todo`, `unimplemented`, `dbg_macro`, `print_stdout`, `print_stderr`, `allow_attributes`, plus `rust_2018_idioms` and rustdoc `broken_intra_doc_links`, `private_intra_doc_links`, `redundant_explicit_links` at deny. Nursery is not enabled and pedantic has no relaxations, so every public function returning `Result` needs an `# Errors` section and every one that can panic a `# Panics` section. Suppress a lint with `#[expect(..., reason = "...")]`; `#[allow]` is itself a lint failure.
+- Workspace lints. Enforced by `cargo xtask clippy` with warnings denied (pre-commit): `unsafe_code = "forbid"`, `missing_docs`, `rust_2018_idioms`, clippy `all` and `pedantic`, and `unwrap_used`, `expect_used`, `todo`, `unimplemented`, `dbg_macro`, `print_stdout`, `print_stderr`, `allow_attributes`, `allow_attributes_without_reason`. Enforced by `cargo xtask doc` with warnings denied (pre-push and CI), because clippy never runs rustdoc: rustdoc `broken_intra_doc_links`, `private_intra_doc_links`, `redundant_explicit_links` at deny. Nursery is not enabled and pedantic has no relaxations, so every public function returning `Result` needs an `# Errors` section and every one that can panic a `# Panics` section. Suppress a lint with `#[expect(..., reason = "...")]`; `#[allow]` is itself a lint failure.
 - Tests may `unwrap`: the root `clippy.toml` allows it inside `#[test]` functions and `#[cfg(test)]` modules, for both the workspace and `xtask`. In an integration target, declare every module in `tests/it/main.rs` as `#[cfg(test)] mod name;` so shared helpers are covered too.
 - The outcome print in `main.rs` is the one `print_stdout`, marked with `#[expect]`.
 - `clap` derive API in the binary.

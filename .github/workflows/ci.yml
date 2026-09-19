@@ -24,10 +24,15 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same ref supersedes the run in progress: the newer commit
-# contains the older one, so the older result is no longer of interest.
+# On a branch, a newer push supersedes the run in progress: the newer commit
+# contains the older one, so the older result is no longer of interest. Not on
+# `main`: there the changelog gate judges each push over its own before..after
+# range (see "Select the changelog base"), so a cancelled or replaced run is a
+# range nobody checked, and only `main` saves the build cache. Each commit on
+# `main` gets a group of its own, so its runs neither cancel nor queue behind
+# one another.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || 'branch' }}
   cancel-in-progress: true
 
 jobs:
@@ -41,7 +46,12 @@ jobs:
       fail-fast: false
       matrix:
         task: [ci, coverage, mutants]
-    runs-on: ubuntu-latest
+        # The runner image is a pin like any other, bumped in its own commit.
+        # `ubuntu-latest` moves between images over weeks, and the build
+        # cache below does not notice: artefacts linked against one image's
+        # system libraries get restored onto another.
+        os: [ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
       # Incremental artefacts are useless on a fresh runner and bloat the
@@ -51,19 +61,28 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       # Full history: the changelog gate diffs the contract files against a
-      # base commit, which a shallow clone does not have.
-      - uses: actions/checkout@v7
+      # base commit, which a shallow clone does not have. Nothing after this
+      # step talks to the remote, so the token is not kept where every later
+      # process (build scripts, tests, mutants) could read it. The actions
+      # are pinned to the commits their major tags named when this was
+      # written; a tag can be moved, a commit cannot. Bump one in its own
+      # commit, like any other pin.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # The changelog gate compares against `main` (spec §8): xtask's default
       # base is the merge-base with origin/main, so a branch stays red until
       # its contract change has an entry, however many pushes it takes. On
       # `main` itself that merge-base is the pushed commit, which compares
       # nothing, so there the base is the commit `main` pointed at before the
-      # push. A force push can leave a `before` that is no longer in the
-      # repository, and the first push has an all-zero one; then the variable
-      # stays unset and xtask says which base it used. The value goes through
+      # push. That makes the check on `main` per push: a red run is the only
+      # signal, and the next unrelated push is green again. A force push can
+      # leave a `before` that is no longer in the repository, the first push
+      # has an all-zero one, and a manual run has none; then the variable
+      # stays unset and xtask's note says that the base was HEAD and no commit
+      # was compared. The value goes through
       # `env` so the script never interpolates event data.
       - name: Select the changelog base
         if: matrix.task == 'ci' && github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -74,25 +93,29 @@ jobs:
             echo "LABLET_CHANGELOG_BASE=$BEFORE" >> "$GITHUB_ENV"
           fi
 
-      # rustup is preinstalled on the runner and reads rust-toolchain.toml, so
-      # the pin has one home. `show active-toolchain` installs it when absent;
-      # the fallback covers a runner image with RUSTUP_AUTO_INSTALL=0. This
-      # comes before mise because mise's cargo backend needs a working cargo.
+      # rustup is preinstalled on the runner. `rustup toolchain install` with
+      # no argument installs what rust-toolchain.toml names, components
+      # included, so the pin has one home. It is the explicit form: installing
+      # as a side effect of another rustup command is deprecated and warns.
+      # This comes before mise because mise's cargo backend needs a working
+      # cargo.
       - name: Install the pinned Rust toolchain
-        run: rustup show active-toolchain || rustup toolchain install
+        run: rustup toolchain install
 
       # After the toolchain, because the cache key includes the rustc version.
       # Only `main` writes the cache. Branches restore it read-only, so
       # per-branch target/ caches cannot fill the 10 GB quota and evict main's.
       # The key names the task: the three jobs build different artefacts
       # (coverage instruments, mutants builds in its own directories) and the
-      # automatic key does not tell matrix legs apart.
-      - uses: Swatinem/rust-cache@v2
+      # automatic key does not tell matrix legs apart. It names the image too:
+      # the automatic key holds only "Linux-x64", and a branch still on the
+      # old image must not restore what `main` built on the new one.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: |
             lablet
             xtask
-          key: ${{ matrix.task }}
+          key: ${{ matrix.task }}-${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Installs the mise.toml tools and puts them on PATH for later steps,
@@ -100,7 +123,7 @@ jobs:
       # is committed, the action installs with --locked and verifies checksums.
       # The mise version is pinned like everything else; it is the version the
       # lockfile was written with. Bump it together with mise.toml.
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           version: 2026.9.7
           cache: true
