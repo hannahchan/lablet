@@ -4,7 +4,7 @@
 
 ## The problem
 
-Optimising the things around an agent (an MCP server's tool surface, a skill, a system prompt, a model choice) needs a fast, repeatable way to answer "how many tokens and tool calls did it take to finish this task, and where did they go?". Full agent products bundle the loop with a harness, opinions, and telemetry you cannot shape. Eval frameworks are heavy and own the whole run.
+Optimising the things around an agent (an MCP server's tool surface, a skill, a system prompt, a model choice) needs a fast, repeatable way to answer "how many tokens and tool calls did it take to finish this task, and where did they go?" Full agent products bundle the loop with a harness, opinions, and telemetry you can't shape. Eval frameworks are heavy and own the whole run.
 
 ## The idea
 
@@ -18,7 +18,7 @@ A lablet is one program that runs one agent loop. You give it:
 
 It runs the loop to completion inside whatever execution environment it was started in (a container, a sandbox, a laptop) and emits standardised OpenTelemetry traces and logs following the GenAI semantic conventions over OTLP. The final result goes to stdout as JSON.
 
-That is all it does. Containers, task suites, grading, repetition, and analysis belong to the larger framework that composes lablets. A grader is just another lablet with a different config.
+That's all it does. Containers, task suites, grading, repetition, and analysis belong to the larger framework that composes lablets. A grader is just another lablet with a different config.
 
 ## Example use case
 

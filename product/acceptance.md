@@ -28,7 +28,7 @@ Lablet is done when every scenario below is green in CI and the release checklis
 | E5 | a script injecting a fatal error | run | `provider_error`, `error` populated | 3 |
 | E6 | a script injecting a malformed payload then success | run | treated as retryable, `completed` | 3 |
 | E7 | a tool that always errors, `max_consecutive_tool_errors: 3` | run | `tool_errors_exhausted` after the 3rd error result with no further provider call; a success between them resets the count | 3 |
-| E8 | a script calling a tool name that is not listed | run | the model receives an error result; it counts toward the cap | 3 |
+| E8 | a script calling a tool name that's not listed | run | the model receives an error result; it counts toward the cap | 3 |
 | E9 | a script calling `bash` with `sleep` past `tool_timeout` | run | the model receives an error result with kind `timeout`; the run continues | 4 |
 
 ### Tools
@@ -83,7 +83,7 @@ Lablet is done when every scenario below is green in CI and the release checklis
 | P3 | OpenAI-compatible function call response with `usage` and `reasoning_content` | complete | `ToolUse`, `Thinking`, and `Usage` mapped; tool results sent back as `tool` role messages, one per result | 9 |
 | P4 | OpenAI-compatible `context_length_exceeded`, and invalid JSON in `arguments` | complete | context exhausted; malformed | 9 |
 | P5 | the same task config, provider swapped to a local Ollama model | run (manual) | `completed` | 9 |
-| P6 | `cache: true` | complete | the request carries `cache_control` on the system prompt and the last tool spec; with `cache: false` it does not | 7 |
+| P6 | `cache: true` | complete | the request carries `cache_control` on the system prompt and the last tool spec; with `cache: false` it doesn't | 7 |
 | P7 | a server rejecting `max_completion_tokens` | complete | the adapter retries once with `max_tokens` | 9 |
 
 ### Skills and pricing
@@ -93,7 +93,7 @@ Lablet is done when every scenario below is green in CI and the release checklis
 | S1 | two `SKILL.md` paths in `prompt.skills` | run | the system prompt sent to the provider ends with both, in order; `lablet.skills.count` = 2 | 10 |
 | S2 | `pricing` set | run | `lablet.run.cost_usd` equals the policy's arithmetic on the wide event's usage | 10 |
 | S3 | `pricing` unset | run | `lablet.run.cost_usd` absent | 10 |
-| S4 | an `Opaque` block in a fake script | run | it is replayed unchanged in the next request | 10 |
+| S4 | an `Opaque` block in a fake script | run | it's replayed unchanged in the next request | 10 |
 
 ## Traceability
 
@@ -121,9 +121,9 @@ Every normative statement in the spec is held by a scenario above, a gate, or a 
 
 ## Release checklist
 
-Run before tagging a release and recorded in the release notes. These cannot be automated.
+Run before tagging a release and recorded in the release notes. These can't be automated.
 
-- [ ] Someone who did not write the docs follows `lablet/docs/getting-started.md` from clone to a traced run in under five minutes.
+- [ ] Someone who didn't write the docs follows `lablet/docs/getting-started.md` from clone to a traced run in under five minutes.
 - [ ] A fake-provider run's traces and wide event look right in Jaeger, Grafana Tempo, Honeycomb, and Langfuse.
 - [ ] P5 passes against a local Ollama model.
 - [ ] A real Anthropic run against a public MCP server over stdio completes and its trace passes live-check.

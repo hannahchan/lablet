@@ -35,12 +35,13 @@ Explicit architecture. Inside `lablet/`, directory `foo/bar/` is package `lablet
 ## Code conventions
 
 - `thiserror` for errors. No `anyhow` (banned in `lablet/deny.toml`, so `cargo xtask deny` refuses it). One error enum per port or boundary, owned by the layer that defines it. Variants carry `String`, not foreign error types.
-- Workspace lints. Enforced by `cargo xtask clippy` with warnings denied (pre-commit): `unsafe_code = "forbid"`, `missing_docs`, `rust_2018_idioms`, clippy `all` and `pedantic`, and `unwrap_used`, `expect_used`, `todo`, `unimplemented`, `dbg_macro`, `print_stdout`, `print_stderr`, `allow_attributes`, `allow_attributes_without_reason`. Enforced by `cargo xtask doc` with warnings denied (pre-push and CI), because clippy never runs rustdoc: rustdoc `broken_intra_doc_links`, `private_intra_doc_links`, `redundant_explicit_links` at deny. Nursery is not enabled and pedantic has no relaxations, so every public function returning `Result` needs an `# Errors` section and every one that can panic a `# Panics` section. Suppress a lint with `#[expect(..., reason = "...")]`; `#[allow]` is itself a lint failure.
+- Workspace lints. Enforced by `cargo xtask clippy` with warnings denied (pre-commit): `unsafe_code = "forbid"`, `missing_docs`, `rust_2018_idioms`, clippy `all` and `pedantic`, and `unwrap_used`, `expect_used`, `todo`, `unimplemented`, `dbg_macro`, `print_stdout`, `print_stderr`, `allow_attributes`, `allow_attributes_without_reason`. Enforced by `cargo xtask doc` with warnings denied (pre-push and CI), because clippy never runs rustdoc: rustdoc `broken_intra_doc_links`, `private_intra_doc_links`, `redundant_explicit_links` at deny. Nursery isn't enabled and pedantic has no relaxations, so every public function returning `Result` needs an `# Errors` section and every one that can panic a `# Panics` section. Suppress a lint with `#[expect(..., reason = "...")]`; `#[allow]` is itself a lint failure.
 - Tests may `unwrap`: the root `clippy.toml` allows it inside `#[test]` functions and `#[cfg(test)]` modules, for both the workspace and `xtask`. In an integration target, declare every module in `tests/it/main.rs` as `#[cfg(test)] mod name;` so shared helpers are covered too.
 - The outcome print in `main.rs` is the one `print_stdout`, marked with `#[expect]`.
 - `clap` derive API in the binary.
-- Every dependency is declared once, in `[workspace.dependencies]`, with a comment on the line directly above it saying why it is there. The gate checks that the line above is a comment: a comment block counts, a trailing comment or a comment above a blank line does not. It cannot tell a group header from a reason, so a header is followed by a blank line and never stands in for an entry's own comment. A third-party entry is an exact `=x.y.z` pin from crates.io; an internal entry is `{ path, version }` with the path exactly as `[workspace] members` lists it. A member's manifest only inherits: `name.workspace = true`, or `{ workspace = true }` with `features`, `optional`, or `default-features` beside it, in every dependency table, and no version, path, git, registry, or package key of its own. So it needs no comments; the reason lives in the workspace table. `xtask/Cargo.toml` follows the same pin and comment rules. `cargo xtask lint-manifests` checks all of this. Grouping under `# Domain`, `# Application`, `# Adapters`, `# External` headers, the blank line after a header, and what a comment says are review conventions, not gates.
+- Every dependency is declared once, in `[workspace.dependencies]`, with a comment on the line directly above it saying why it's there. The gate checks that the line above is a comment: a comment block counts, a trailing comment or a comment above a blank line doesn't. It can't tell a group header from a reason, so a header is followed by a blank line and never stands in for an entry's own comment. A third-party entry is an exact `=x.y.z` pin from crates.io; an internal entry is `{ path, version }` with the path exactly as `[workspace] members` lists it. A member's manifest only inherits: `name.workspace = true`, or `{ workspace = true }` with `features`, `optional`, or `default-features` beside it, in every dependency table, and no version, path, git, registry, or package key of its own. So it needs no comments; the reason lives in the workspace table. `xtask/Cargo.toml` follows the same pin and comment rules. `cargo xtask lint-manifests` checks all of this. Grouping under `# Domain`, `# Application`, `# Adapters`, `# External` headers, the blank line after a header, and what a comment says are review conventions, not gates.
 - The lints model only the Cargo features lablet uses. Member globs, `[workspace] exclude` or `default-members`, a `[package]` in the workspace root, `[patch]` or `[replace]`, and `patch`, `paths`, or `source` in a `.cargo/config.toml` fail the gates as unsupported. Using one means extending `xtask` deliberately, not working around the message.
+- A comment says why something non-obvious is the way it's written, or states a contract a caller relies on. Nothing else. Don't narrate how the code came to be, don't record facts that drift (versions, dates, counts, build phases), and don't restate the code or these docs. Doc comments stay on public items because `missing_docs` is enforced; one sentence where one will do. This is a review convention.
 - Test names are sentences: `a_tool_error_does_not_consume_the_retry_budget`. This is a review convention, not a gate.
 - In the crates with a coverage floor (`lablet-model`, `lablet-policy`, `lablet-run`), unit tests live in a sibling file declared as `#[cfg(test)] mod tests;`: `src/foo.rs` and `src/foo/tests.rs`, or `src/tests.rs`, with helper modules below that file. Never an inline `mod tests { ... }`, and no other attribute that mentions `test` in a production file: no bare `#[test]` or `#[tokio::test]` function, no `#[cfg(test)]` on another item or on a `#[path]` module, no `#[cfg(all(test, ...))]`, `#[cfg_attr(test, ...)]`, or `#[cfg(not(test))]`. Coverage tells test code from production code by file name (`tests.rs` files and `tests/` directories are left out), so test code anywhere else would count as covered production lines; `cargo xtask coverage`, `cargo xtask mutants`, and an `xtask` test (pre-push) fail on such an attribute. The check reads lines that start with `#[` or `#![`; an attribute rustfmt has wrapped over several lines is left to review. Other crates may keep unit tests inline.
 - One integration test target per crate: `tests/it/main.rs` declaring modules. This is a review convention, not a gate.
@@ -48,7 +49,7 @@ Explicit architecture. Inside `lablet/`, directory `foo/bar/` is package `lablet
 
 ## Telemetry is contract-first
 
-Every span, event, and attribute is declared in the Weaver registry under `lablet/telemetry/registry/` before it is emitted. The `telemetry-registry` crate (attribute name constants, enums, per-signal key lists) and `lablet/docs/telemetry/` are generated from it and checked in. Do not hand-edit generated files and do not write attribute names as string literals in adapters; add to the registry, regenerate, then use the generated constants.
+Every span, event, and attribute is declared in the Weaver registry under `lablet/telemetry/registry/` before it's emitted. The `telemetry-registry` crate (attribute name constants, enums, per-signal key lists) and `lablet/docs/telemetry/` are generated from it and checked in. Don't hand-edit generated files and don't write attribute names as string literals in adapters; add to the registry, regenerate, then use the generated constants.
 
 ```bash
 cargo xtask weaver generate    # regenerate the crate and docs after editing the registry
@@ -56,21 +57,38 @@ cargo xtask weaver generate    # regenerate the crate and docs after editing the
 
 ## Gates
 
-Every rule on this page is enforced by a gate. If it is not enforced, it is a suggestion, not a rule.
+Every rule on this page is enforced by a gate. If it's not enforced, it's a suggestion, not a rule.
 
 ```bash
-cargo xtask pre-commit    # fmt, clippy, lint-layers, lint-manifests; from phase 1 also weaver check and generated files up to date
+cargo xtask pre-commit    # fmt, clippy, lint-layers, lint-manifests, lint-prose; from phase 1 also weaver check and generated files up to date
 ```
 
 ```bash
-cargo xtask pre-push      # pre-commit plus tests, rustdoc without warnings, cargo deny, changelog
+cargo xtask pre-push      # pre-commit plus cargo deny, changelog, rustdoc without warnings, tests
 ```
 
-CI runs on every pushed branch as a matrix of `cargo xtask ci` (the pre-push list), `cargo xtask coverage` (floor: 90% lines on `lablet-model`, `lablet-policy`, `lablet-run`), and `cargo xtask mutants` (floor: 80% caught on the same crates). A floor crate may measure nothing only while its `src/` defines no function; after that, a run with no lines or no mutants for it fails. A trait method without a body counts as a function, so the first function with a body lands with its test in the same push as the first port. Later phases add `cargo xtask weaver live-check` (phase 6), `cargo xtask bench` with a 20% regression threshold, and the release builds (phase 11). `xtask` is a root-level crate reached through the alias, which is defined twice, in `.cargo/config.toml` and `lablet/.cargo/config.toml`; an xtask test keeps the two in step. It does not work from a crate directory below `lablet/`.
+Run `cargo xtask help` for every task, grouped in the order a developer works: development, quality checks, quality gates, analysis, project. A green gate prints one closing line; the step table appears only when something failed.
+
+CI runs on every pushed branch as a matrix of `cargo xtask ci` (the pre-push list), `cargo xtask coverage` (floor: 90% lines on `lablet-model`, `lablet-policy`, `lablet-run`), and `cargo xtask mutants` (floor: 80% caught on the same crates). A floor crate may measure nothing only while its `src/` defines no function; after that, a run with no lines or no mutants for it fails. A trait method without a body counts as a function, so the first function with a body lands with its test in the same push as the first port. Later phases add `cargo xtask weaver live-check` (phase 6), `cargo xtask bench` with a 20% regression threshold, and the release builds (phase 11). `xtask` is a root-level crate reached through the alias, which is defined twice, in `.cargo/config.toml` and `lablet/.cargo/config.toml`; an xtask test keeps the two in step. It doesn't work from a crate directory below `lablet/`.
+
+## Prose
+
+`cargo xtask lint-prose` runs Vale with the Microsoft writing style package over `README.md`, `CLAUDE.md`, `CHANGELOG.md`, `contributing/`, `product/` (not `product/research/`), `lablet/README.md`, and `lablet/docs/`. The gate fails on errors only; `cargo xtask lint-prose --all` also shows warnings and suggestions. The package is vendored under `.vale/styles/Microsoft/` so the gate runs offline at a pinned version. A legitimate technical term that Vale flags as a misspelling goes in `.vale/styles/config/vocabularies/Lablet/accept.txt`, one per line, sorted. Fix an ordinary misspelling in the text. If a rule makes the docs worse, turn that one rule down in `.vale.ini` with a one-line reason.
+
+## Reviews
+
+A phase-end review is scaled to risk and has a budget.
+
+- Scaffolding, configuration, and generated code get the gates, the builder's own read of the diff, and one reviewer. Logic-heavy code (the loop, policy, exporters, adapters) gets two or three focused reviewers.
+- Each reviewer reports at most five findings, high and medium severity only.
+- The builder sorts the findings before anything is verified or fixed. A finding that isn't worth handling in a lightweight project is dropped, or the fix is to reject the input rather than to model it.
+- One verifier for each surviving finding, reasoning from the code first. Reproduce only when the claim is disputed or cheap to run.
+- Each phase states a review budget of about 10 to 15 percent of the build's token cost, and the phase report gives the actual figure.
+- Every gate or feature is exercised once with real input on a cold clone before the phase closes.
 
 ## Versioning
 
-One workspace version. Keep-a-changelog format in `CHANGELOG.md`. A change to `lablet/schema.json`, `lablet/telemetry/registry/`, or `lablet/tests/fixtures/outcome.json` without an `Unreleased` entry fails `cargo xtask changelog`; CI checks out full history for it. Third-party crates are pinned to exact versions in `[workspace.dependencies]` and bumped only in dedicated commits; a crate `xtask` pins too carries the same version in both places. MSRV is `rust-version` in the workspace manifest: the pinned toolchain minus two minor versions, raised only in a minor release. Windows is not supported.
+One workspace version. Keep-a-changelog format in `CHANGELOG.md`. A change to `lablet/schema.json`, `lablet/telemetry/registry/`, or `lablet/tests/fixtures/outcome.json` without an `Unreleased` entry fails `cargo xtask changelog`; CI checks out full history for it. Third-party crates are pinned to exact versions in `[workspace.dependencies]` and bumped only in dedicated commits; a crate `xtask` pins too carries the same version in both places. MSRV is `rust-version` in the workspace manifest: the pinned toolchain minus two minor versions, raised only in a minor release. Windows isn't supported.
 
 On a fresh clone run `scripts/setup.sh` once: it installs the pinned Rust toolchain, trusts and installs the `mise.toml` tools, and installs the git hooks (`scripts/install-hooks.sh` does only the last step). Plain cargo commands run from `lablet/`.
 
@@ -84,5 +102,5 @@ Lablet is dual licensed under MIT OR Apache-2.0. Every crate's `Cargo.toml` sets
 - CI runs after the push. Check it; a red `main` is fixed forward before anything else lands.
 - One logical change per commit. Moves and content edits in separate commits.
 - A spec clarification (filling a gap, fixing an inconsistency, adding a missing test) goes in the same commit series with a note in the message.
-- Architectural decisions may be made by whoever is building. Each gets an entry in `product/decisions.md` when it is made and is listed in the end-of-phase report for human review.
-- Each build phase ends with a multi-agent code review of its diff, then a stop for human review. The next phase starts only on an explicit go-ahead.
+- Architectural decisions may be made by whoever is building. Each gets an entry in `product/decisions.md` when it's made and is listed in the end-of-phase report for human review.
+- Each build phase ends with a review of its diff, then a stop for human review. The next phase starts only on an explicit go-ahead.

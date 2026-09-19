@@ -8,7 +8,7 @@ Rust, to stay close to the Apache Arrow and DataFusion ecosystem the analysis si
 
 ## 2026-09-17 Own agent loop
 
-Hand-rolled loop on provider HTTP APIs rather than wrapping an agent SDK. Instrumentation is the product; a black-box loop cannot be instrumented on our terms.
+Hand-rolled loop on provider HTTP APIs rather than wrapping an agent SDK. Instrumentation is the product; a black-box loop can't be instrumented on our terms.
 
 ## 2026-09-17 Explicit architecture, UsefulBytes shape
 
@@ -28,7 +28,7 @@ A lablet is one loop in one process. A grader is another lablet. The larger fram
 
 ## 2026-09-17 `serde_json::Value` allowed in domain
 
-Tool inputs and outputs are JSON by definition, so the domain needs a JSON value type. serde derives stay out of domain and application; wire forms belong to adapters and the composition root. Superseded on 2026-09-18 by "serde derives allowed in the domain".
+Tool inputs and outputs are JSON by definition, so the domain needs a JSON value type. serde derives stay out of domain and application; wire forms belong to adapters and the composition root. Superseded on 2026-09-18 by "serde derives allowed in the domain."
 
 ## 2026-09-17 Documentation is three areas, four product files
 
@@ -40,7 +40,7 @@ Every run ends with a single wide event carrying the whole run summary, emitted 
 
 ## 2026-09-18 Failure modes are distinct stop reasons
 
-Truncated output, context exhaustion, and token budget are their own stop reasons rather than folded into `provider_error` or `completed`. They are the findings a benchmark exists to surface.
+Truncated output, context exhaustion, and token budget are their own stop reasons rather than folded into `provider_error` or `completed`. They're the findings a benchmark exists to surface.
 
 ## 2026-09-18 Transcript is separate from telemetry
 
@@ -52,15 +52,15 @@ Telemetry export is buffered and its failures go to the diagnostic log. Measured
 
 ## 2026-09-18 Contract-first telemetry with OpenTelemetry Weaver
 
-Every attribute, span, event, and the wide event is declared in a Weaver registry before it is emitted. Rust constants and builders and the telemetry docs are generated from it, and emitted telemetry is validated against it in CI. The telemetry surface is a product contract, so it needs a source of truth that is not the code. This is an experiment with Weaver; if the tooling does not hold up, the registry stays and the codegen is replaced.
+Every attribute, span, event, and the wide event is declared in a Weaver registry before it's emitted. Rust constants and builders and the telemetry docs are generated from it, and emitted telemetry is validated against it in CI. The telemetry surface is a product contract, so it needs a source of truth that's not the code. This is an experiment with Weaver; if the tooling doesn't hold up, the registry stays and the codegen is replaced.
 
 ## 2026-09-18 The fake provider is a product feature
 
-`provider-fake` ships as a supported adapter so users can test frameworks built on lablet without spending tokens. It is also what lablet's own smoke tests and docs run on, so it cannot rot.
+`provider-fake` ships as a supported adapter so users can test frameworks built on lablet without spending tokens. It's also what lablet's own smoke tests and docs run on, so it can't rot.
 
 ## 2026-09-18 Quality bar is a document with gates behind it
 
-`product/quality-bar.md` lists commitments that are either user-verifiable or enforced by `cargo xtask`. Anything that cannot be one or the other does not go on the page.
+`product/quality-bar.md` lists commitments that are either user-verifiable or enforced by `cargo xtask`. Anything that can't be one or the other doesn't go on the page.
 
 ## 2026-09-18 serde derives allowed in the domain
 
@@ -88,7 +88,7 @@ The GenAI semantic conventions moved to their own repository with no tagged rele
 
 ## 2026-09-18 Semantic conventions first, extensions last
 
-A GenAI or core semantic-convention attribute is used wherever one exists. A `lablet.*` attribute is added only when the run cannot be described without it, with a one-line justification in the registry. Extensions considered and deferred live in the research catalogue. This keeps the registry small and every extension a visible decision.
+A GenAI or core semantic-convention attribute is used wherever one exists. A `lablet.*` attribute is added only when the run can't be described without it, with a one-line justification in the registry. Extensions considered and deferred live in the research catalogue. This keeps the registry small and every extension a visible decision.
 
 ## 2026-09-18 Root-span usage totals reuse `gen_ai.usage.*`
 
@@ -104,11 +104,11 @@ The conventions define no turn span and the idiomatic tree is `invoke_agent` wit
 
 ## 2026-09-18 Redacted content is omitted
 
-Idiomatic OpenTelemetry omits an attribute it is not populating. Byte-count attributes are always present so dashboards keep a stable column.
+Idiomatic OpenTelemetry omits an attribute it's not populating. Byte-count attributes are always present so dashboards keep a stable column.
 
 ## 2026-09-18 ATIF export in phase 7
 
-Harbor's Agent Trajectory Interchange Format is the idiomatic trajectory format for eval frameworks, but it is not an OpenTelemetry concern and would grow phase 3a. The phase 1 transcript model is designed to map to it losslessly.
+Harbor's Agent Trajectory Interchange Format is the idiomatic trajectory format for eval frameworks, but it's not an OpenTelemetry concern and would grow phase 3a. The phase 1 transcript model is designed to map to it losslessly.
 
 ## 2026-09-18 Spec corrected to current semantic conventions
 
@@ -120,7 +120,7 @@ The Rust ecosystem convention. Apache-2.0 brings the patent grant and contributi
 
 ## 2026-09-18 Build plan restructured to twelve phases
 
-The telemetry contract is its own phase so the Weaver templates cannot stall the scaffold; the composition root is split into library and CLI; OpenTelemetry moves before the first real provider because a wrong span shape costs more to fix late than a wrong provider mapping; features and hardening are separate phases so "done" is unambiguous. Phase numbers in earlier entries refer to the previous numbering.
+The telemetry contract is its own phase so the Weaver templates can't stall the scaffold; the composition root is split into library and CLI; OpenTelemetry moves before the first real provider because a wrong span shape costs more to fix late than a wrong provider mapping; features and hardening are separate phases so "done" is unambiguous. Phase numbers in earlier entries refer to the previous numbering.
 
 ## 2026-09-18 Trace context reaches MCP through the observer
 
@@ -136,7 +136,7 @@ Weaver is experimental. A dedicated research document and spike under `product/r
 
 ## 2026-09-19 Weaver approach fixed by the spike
 
-Registry in v2 syntax with lablet-owned spans and events that reference `gen_ai.*` keys, dependencies and weaver-packages vendored under `deps/` with relative paths (Weaver has no dependency cache), constants-only Rust codegen from the spike templates, docs from the vendored markdown templates, and live-check run without `--v2` because the v2 index ignores dependency attributes. Weaver is pinned at v0.26.1 and upgraded only in a dedicated PR. Span names and required span attributes are held by unit tests because live-check does not match spans to definitions. The fallback keeps the registry and replaces codegen with an xtask step over the resolved JSON.
+Registry in v2 syntax with lablet-owned spans and events that reference `gen_ai.*` keys, dependencies and weaver-packages vendored under `deps/` with relative paths (Weaver has no dependency cache), constants-only Rust codegen from the spike templates, docs from the vendored markdown templates, and live-check run without `--v2` because the v2 index ignores dependency attributes. Weaver is pinned at v0.26.1 and upgraded only in a dedicated PR. Span names and required span attributes are held by unit tests because live-check doesn't match spans to definitions. The fallback keeps the registry and replaces codegen with an xtask step over the resolved JSON.
 
 ## 2026-09-19 Raw data, never reports
 
@@ -148,19 +148,19 @@ A Parquet or Arrow writer would help developers without a collector and fits as 
 
 ## 2026-09-19 One telemetry observer, pluggable exporters, OTLP/JSON file
 
-Supersedes the JSONL observer. `telemetry-otel` maps events to OTel spans and log records once; exporters below it are the SDK's pluggable traits. The file output is OTLP/JSON, the Collector's own file format, so the file and the network carry identical data including the full resource, the file can be replayed into a collector, and lablet maintains no envelope of its own. A flat lablet line format was rejected as a second rendering of the same contract. The Parquet exporter, if added, is a third exporter in the same slot. This withdraws the "fourth stable contract" clause of the raw-data entry: the file format is the Collector's, not lablet's, and the quality bar now reads "three contracts, one borrowed".
+Supersedes the JSONL observer. `telemetry-otel` maps events to OTel spans and log records once; exporters below it are the SDK's pluggable traits. The file output is OTLP/JSON, the Collector's own file format, so the file and the network carry identical data including the full resource, the file can be replayed into a collector, and lablet maintains no envelope of its own. A flat lablet line format was rejected as a second rendering of the same contract. The Parquet exporter, if added, is a third exporter in the same slot. This withdraws the "fourth stable contract" clause of the raw-data entry: the file format is the Collector's, not lablet's, and the quality bar now reads "three contracts, one borrowed."
 
 ## 2026-09-19 Composer resource attributes stay on the Resource
 
-`telemetry.resource` keys are chosen by the composer and cannot be declared in the registry, and live-check reports undeclared span attributes as violations. They live on the OTel Resource only, which every export batch carries. The join keys duplicated onto spans and the wide event are `gen_ai.conversation.id`, `session.id`, and `lablet.config.digest`.
+`telemetry.resource` keys are chosen by the composer and can't be declared in the registry, and live-check reports undeclared span attributes as violations. They live on the OTel Resource only, which every export batch carries. The join keys duplicated onto spans and the wide event are `gen_ai.conversation.id`, `session.id`, and `lablet.config.digest`.
 
-## 2026-09-19 `opentelemetry-semantic-conventions` is not a dependency
+## 2026-09-19 `opentelemetry-semantic-conventions` isn't a dependency
 
 The generated `telemetry-registry` crate already holds every `gen_ai.*` and core name at the vendored versions. A second semconv version in the workspace is the drift the registry exists to prevent.
 
 ## 2026-09-19 Delivery process for the build
 
-Supersedes "Small pull requests, human merges". Branches, fast-forward to `main` and push when a logical piece lands, no pull requests for now. `cargo xtask pre-push` passes locally before every merge and CI is checked after. One phase per explicit go-ahead; the builder goes as far as it can and stops where a human is needed. Each phase ends with a multi-agent code review, a phase report, and a stop. The builder may make architectural decisions, recording each here and reporting them at the phase end. Expected to be adjusted as the process is learned.
+Supersedes "Small pull requests, human merges." Branches, fast-forward to `main` and push when a logical piece lands, no pull requests for now. `cargo xtask pre-push` passes locally before every merge and CI is checked after. One phase per explicit go-ahead; the builder goes as far as it can and stops where a human is needed. Each phase ends with a multi-agent code review, a phase report, and a stop. The builder may make architectural decisions, recording each here and reporting them at the phase end. Expected to be adjusted as the process is learned.
 
 ## 2026-09-19 Phase 0 decisions made by the builder
 
@@ -168,17 +168,17 @@ Supersedes "Small pull requests, human merges". Branches, fast-forward to `main`
 - **`serde-saphyr` instead of `serde_yaml`.** `serde_yaml` is archived at `0.9.34+deprecated`. `serde-saphyr` is pure Rust and reads and writes externally tagged enums in map form, the same shape as the JSON serde form, so fake-provider scripts work in YAML or JSON with plain derives. The `serde_yaml` forks need `singleton_map_recursively` attributes on the model, which the domain may not carry. It has no `Value` type, so the raw config tree that `--set` edits is `serde_json::Value`.
 - **OpenTelemetry 0.33.0**, published the day before pinning, because its SDK fixes a batch-processor race with `force_flush` that the "file is complete when `run` returns" guarantee depends on. Falling back to 0.32 changes no other pin.
 - **The layer lint forbids more than the first draft listed**: `tonic`, `axum`, and `hyper` join the inward-forbidden set, names match by family, and no shipped crate may depend on a `tests/` crate. The spec and contributing tables now say so.
-- **No pedantic relaxations.** UsefulBytes allows `missing_errors_doc` and `missing_panics_doc`; lablet does not, so `# Errors` and `# Panics` sections are gate-enforced.
+- **No pedantic relaxations.** UsefulBytes allows `missing_errors_doc` and `missing_panics_doc`; lablet doesn't, so `# Errors` and `# Panics` sections are gate-enforced.
 - **One root `clippy.toml`** covers both workspaces and lets tests `unwrap`. Integration targets declare modules as `#[cfg(test)] mod name;` so helpers are covered.
-- **mise backends.** Weaver and cargo-llvm-cov come from GitHub releases with checksums in `mise.lock`; the `ubi` backend the Weaver research used is deprecated. cargo-mutants is compiled from source because upstream ships no arm64 macOS binary and the x86_64 fallback cannot link under Rosetta.
-- **CI runs on every pushed branch** as a matrix of `ci`, `coverage`, and `mutants`, since there are no pull requests. On `main` the changelog base is the commit before the push; on branches it is the merge-base with `origin/main`.
+- **mise backends.** Weaver and cargo-llvm-cov come from GitHub releases with checksums in `mise.lock`; the `ubi` backend the Weaver research used is deprecated. cargo-mutants is compiled from source because upstream ships no arm64 macOS binary and the x86_64 fallback can't link under Rosetta.
+- **CI runs on every pushed branch** as a matrix of `ci`, `coverage`, and `mutants`, since there are no pull requests. On `main` the changelog base is the commit before the push; on branches it's the merge-base with `origin/main`.
 - **`scripts/setup.sh`** is the one command for a fresh clone.
 
-## 2026-09-19 The lints reject what lablet does not use
+## 2026-09-19 The lints reject what lablet doesn't use
 
-After the phase 0 review taught the xtask to model exotic Cargo features and grew it past 6,400 lines, it was reworked to refuse them instead: member globs, `.` and `..` or absolute member paths, `[workspace] exclude` and `default-members`, a root `[package]`, `[patch]`, `[replace]`, and cargo-config `patch`, `paths`, and `source` are each one diagnostic saying the lints do not support it. Every dependency in a member manifest is exactly `workspace = true`; versions, paths, sources, and renames live only in `[workspace.dependencies]`. This closes the name-collision, implicit-member, and git-pin holes with one rule. The xtask is about 4,500 lines, half of them tests. A lightweight project's gates should be small enough to read.
+After the phase 0 review taught the xtask to model exotic Cargo features and grew it past 6,400 lines, it was reworked to refuse them instead: member globs, `.` and `..` or absolute member paths, `[workspace] exclude` and `default-members`, a root `[package]`, `[patch]`, `[replace]`, and cargo-config `patch`, `paths`, and `source` are each one diagnostic saying the lints don't support it. Every dependency in a member manifest is exactly `workspace = true`; versions, paths, sources, and renames live only in `[workspace.dependencies]`. This closes the name-collision, implicit-member, and git-pin holes with one rule. The xtask is about 4,500 lines, half of them tests. A lightweight project's gates should be small enough to read.
 
-- **Why-comments live in `[workspace.dependencies]` only**, as a comment on the line directly above each entry. Member manifests need none. Trailing comments and group headers do not count.
+- **Why-comments live in `[workspace.dependencies]` only**, as a comment on the line directly above each entry. Member manifests need none. Trailing comments and group headers don't count.
 - **`anyhow`, `eyre`, and mocking frameworks are banned in `lablet/deny.toml`**, not in xtask code. The ban is graph-wide, so an upstream crate that pulls one in must be listed under `wrappers` with a reason.
 - **Unit tests live in sibling `tests.rs` files**, and coverage ignores them by file name rather than parsing Rust. Enforced in the three floor crates. A floor crate passes with nothing to measure only while it defines no function, so a floor crate's first function lands with its test.
 - **One integration target per crate and no symlinked members are review conventions**, not gates.
@@ -186,3 +186,10 @@ After the phase 0 review taught the xtask to model exotic Cargo features and gre
 ## 2026-09-19 Review workflows judge worth, not only truth
 
 The phase 0 review accepted any finding that could be reproduced, and the fix pass modelled every one. From phase 1 the review adds a judgement before fixing: is this worth handling in a lightweight project, or should the input be rejected, or the finding dropped.
+
+## 2026-09-19 Phase 0 retrospective changes
+
+- **Reviews are scaled to risk and budgeted.** The phase 0 review used 109 agents on scaffolding and cost about ten times the build, because every reproducible finding survived and was fixed. Reviews now cap findings, triage before verifying, verify cheaply, and carry a budget of about 10 to 15 percent of the build cost. The rules are in `contributing/README.md`.
+- **Comments say why, and nothing else.** No narration, no facts that drift, no restating code or docs.
+- **`cargo xtask` follows the developer's workflow**, grouped as UsefulBytes groups it, with the everyday tasks (`check`, `build`, `run`, `fix`, `setup`, `clean`) added, `fmt` formatting by default, cheap steps first in the gates, and a quiet green gate.
+- **Prose is linted with Vale and the Microsoft writing style package**, vendored at a pinned version, gating on errors in pre-commit. Research inventories are excluded because they quote other projects' identifiers.

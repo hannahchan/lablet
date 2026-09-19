@@ -1,0 +1,7 @@
+Source:  https://github.com/errata-ai/Microsoft (now redirects to https://github.com/vale-cli/Microsoft)
+Version: v0.15.1 (Microsoft.zip from the release, sha256 0b37660b244a9399d7f10225895773291d27b2967ed0d239a1d379b633e8cd16)
+Fetched: 2026-09-19, with `vale sync` (vale 3.22.0)
+Licence: MIT
+
+Vendored unmodified. To update: add `Packages = Microsoft` to .vale.ini, run
+`vale sync`, remove the line again, and update this file.
