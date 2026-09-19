@@ -11,9 +11,15 @@ fn docs_server() -> ToolSource {
 // The literal spellings are the members of `lablet.tool.source` in the
 // telemetry registry, which this crate can't depend on.
 #[test]
-fn a_tool_source_prints_the_telemetry_spelling_of_its_variant() {
+fn as_str_is_the_telemetry_spelling_of_the_variant_without_the_server() {
+    assert_eq!(ToolSource::Builtin.as_str(), "builtin");
+    assert_eq!(docs_server().as_str(), "mcp");
+}
+
+#[test]
+fn a_tool_source_prints_the_server_of_an_mcp_tool() {
     assert_eq!(ToolSource::Builtin.to_string(), "builtin");
-    assert_eq!(docs_server().to_string(), "mcp");
+    assert_eq!(docs_server().to_string(), "mcp:docs");
 }
 
 #[test]

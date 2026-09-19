@@ -42,6 +42,16 @@ impl ToolSource {
     }
 }
 
+/// For people: an MCP tool's source names its server, as `mcp:docs`.
+impl core::fmt::Display for ToolSource {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Builtin => f.write_str(self.as_str()),
+            Self::Mcp { server } => write!(f, "{}:{server}", self.as_str()),
+        }
+    }
+}
+
 /// A W3C trace context as header strings, so no OpenTelemetry type enters the
 /// domain.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -91,7 +101,7 @@ impl NetworkTransport {
     }
 }
 
-display_as_str!(ToolSource, NetworkTransport);
+display_as_str!(NetworkTransport);
 
 #[cfg(test)]
 mod tests;

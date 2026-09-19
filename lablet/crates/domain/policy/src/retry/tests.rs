@@ -5,15 +5,15 @@ const fn ms(millis: u64) -> Duration {
 }
 
 /// 100 ms doubling to a cap of 10 s.
-fn doubling(max_attempts: u32) -> RetryPolicy {
-    RetryPolicy::new(max_attempts, ms(100), ms(10_000), 2.0).unwrap()
+fn doubling(max_retries: u32) -> RetryPolicy {
+    RetryPolicy::new(max_retries, ms(100), ms(10_000), 2.0).unwrap()
 }
 
 // Exhaustion
 
 #[test]
-fn the_failure_of_the_last_allowed_attempt_exhausts_the_call() {
-    let policy = doubling(3);
+fn the_failure_of_the_attempt_after_the_last_retry_exhausts_the_call() {
+    let policy = doubling(2);
 
     assert_eq!(policy.delay(1), Some(ms(100)));
     assert_eq!(policy.delay(2), Some(ms(200)));
@@ -22,14 +22,24 @@ fn the_failure_of_the_last_allowed_attempt_exhausts_the_call() {
 }
 
 #[test]
-fn a_policy_of_one_attempt_never_retries() {
-    assert_eq!(doubling(1).delay(1), None);
+fn three_retries_allow_four_attempts() {
+    let policy = doubling(3);
+
+    assert_eq!(policy.delay(3), Some(ms(400)));
+    assert_eq!(policy.delay(4), None);
+}
+
+#[test]
+fn a_policy_of_no_retries_is_valid_and_never_retries() {
+    assert_eq!(doubling(0).delay(1), None);
+    assert_eq!(doubling(0).delay(2), None);
 }
 
 #[test]
 fn attempt_zero_is_read_as_the_first_attempt() {
-    assert_eq!(doubling(3).delay(0), Some(ms(100)));
-    assert_eq!(doubling(1).delay(0), None);
+    assert_eq!(doubling(2).delay(0), Some(ms(100)));
+    assert_eq!(doubling(1).delay(0), Some(ms(100)));
+    assert_eq!(doubling(0).delay(0), None);
 }
 
 // Growth and the cap
@@ -92,10 +102,10 @@ fn the_same_attempt_always_gives_the_same_wait() {
 fn an_attempt_number_whose_wait_overflows_gives_the_cap() {
     let policy = doubling(u32::MAX);
 
-    for attempt in [64, 1_100, 1 << 31, u32::MAX - 1] {
+    for attempt in [64, 1_100, 1 << 31, u32::MAX] {
         assert_eq!(policy.delay(attempt), Some(ms(10_000)), "{attempt}");
     }
-    assert_eq!(policy.delay(u32::MAX), None);
+    assert_eq!(doubling(u32::MAX - 1).delay(u32::MAX), None);
 }
 
 #[test]
@@ -125,14 +135,6 @@ fn the_longest_durations_are_a_valid_policy() {
 }
 
 // Validation
-
-#[test]
-fn a_policy_of_zero_attempts_is_refused() {
-    assert_eq!(
-        RetryPolicy::new(0, ms(100), ms(10_000), 2.0),
-        Err(RetryPolicyError::NoAttempts)
-    );
-}
 
 #[test]
 fn a_base_longer_than_the_cap_is_refused_and_one_equal_to_it_is_not() {
@@ -179,10 +181,6 @@ fn a_factor_that_is_not_a_finite_number_is_refused() {
 fn the_first_broken_rule_in_argument_order_is_the_one_reported() {
     assert_eq!(
         RetryPolicy::new(0, ms(2), ms(1), f64::NAN),
-        Err(RetryPolicyError::NoAttempts)
-    );
-    assert_eq!(
-        RetryPolicy::new(3, ms(2), ms(1), f64::NAN),
         Err(RetryPolicyError::BaseAboveMax {
             base: ms(2),
             max: ms(1),
@@ -192,10 +190,6 @@ fn the_first_broken_rule_in_argument_order_is_the_one_reported() {
 
 #[test]
 fn each_error_says_what_was_wrong() {
-    assert_eq!(
-        RetryPolicyError::NoAttempts.to_string(),
-        "max attempts is 0; 1 means a failed call isn't retried"
-    );
     assert_eq!(
         RetryPolicyError::Factor(0.5).to_string(),
         "backoff factor 0.5 isn't a finite number of at least 1"

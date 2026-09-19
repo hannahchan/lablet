@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use super::*;
-use crate::{ContentBlock, Role};
+use crate::{ToolCallId, ToolName};
 
 const fn usage(input: u64, output: u64, cache_read: u64, cache_write: u64) -> Usage {
     Usage {
@@ -75,21 +75,106 @@ fn usage_serialises_all_four_fields_and_reads_a_missing_one_as_zero() {
 }
 
 #[test]
-fn a_finish_reason_prints_what_it_serialises_as() {
-    for (reason, spelling) in [
+fn from_inclusive_takes_the_input_count_as_it_is() {
+    assert_eq!(
+        Usage::from_inclusive(1000, 200, 700, 100),
+        usage(1000, 200, 700, 100)
+    );
+}
+
+#[test]
+fn from_uncached_adds_both_cache_counts_into_the_input() {
+    assert_eq!(
+        Usage::from_uncached(200, 50, 700, 100),
+        usage(1000, 50, 700, 100)
+    );
+    assert_eq!(
+        Usage::from_uncached(200, 50, 700, 100).uncached_input_tokens(),
+        200
+    );
+    assert_eq!(
+        Usage::from_uncached(u64::MAX, 0, 1, 1).input_tokens,
+        u64::MAX
+    );
+}
+
+#[test]
+fn a_misspelt_usage_field_is_an_error_not_a_silent_zero() {
+    let error = serde_json::from_value::<Usage>(json!({ "input_token": 12, "output_tokens": 3 }))
+        .unwrap_err();
+
+    assert!(error.to_string().contains("input_token"), "{error}");
+}
+
+fn finish_reasons() -> [(FinishReason, &'static str); 6] {
+    [
         (FinishReason::EndTurn, "end_turn"),
         (FinishReason::ToolUse, "tool_use"),
         (FinishReason::MaxTokens, "max_tokens"),
-        (
-            FinishReason::Other("content_filter".to_owned()),
-            "content_filter",
-        ),
-    ] {
+        (FinishReason::ContextWindow, "context_window"),
+        (FinishReason::Refusal, "refusal"),
+        (FinishReason::Other("pause_turn".to_owned()), "pause_turn"),
+    ]
+}
+
+#[test]
+fn a_finish_reason_prints_what_it_serialises_as_and_reads_back_as_itself() {
+    for (reason, spelling) in finish_reasons() {
         assert_eq!(reason.to_string(), spelling);
+        assert_eq!(String::from(reason.clone()), spelling);
         assert_eq!(serde_json::to_value(&reason).unwrap(), json!(spelling));
         assert_eq!(
             serde_json::from_value::<FinishReason>(json!(spelling)).unwrap(),
             reason
+        );
+    }
+}
+
+#[test]
+fn every_provider_spelling_of_a_known_reason_gives_that_reason() {
+    for (spelling, reason) in [
+        ("end_turn", FinishReason::EndTurn),
+        ("stop", FinishReason::EndTurn),
+        ("stop_sequence", FinishReason::EndTurn),
+        ("tool_use", FinishReason::ToolUse),
+        ("tool_calls", FinishReason::ToolUse),
+        ("max_tokens", FinishReason::MaxTokens),
+        ("length", FinishReason::MaxTokens),
+        ("context_window", FinishReason::ContextWindow),
+        ("model_context_window_exceeded", FinishReason::ContextWindow),
+        ("refusal", FinishReason::Refusal),
+        ("content_filter", FinishReason::Refusal),
+    ] {
+        assert_eq!(
+            FinishReason::from(spelling.to_owned()),
+            reason,
+            "{spelling}"
+        );
+        assert_eq!(
+            serde_json::from_value::<FinishReason>(json!(spelling)).unwrap(),
+            reason,
+            "{spelling}"
+        );
+    }
+}
+
+#[test]
+fn only_a_string_that_spells_no_known_reason_is_kept_as_other() {
+    assert_eq!(
+        FinishReason::from("pause_turn".to_owned()),
+        FinishReason::Other("pause_turn".to_owned())
+    );
+    assert_eq!(
+        FinishReason::from(String::new()),
+        FinishReason::Other(String::new())
+    );
+    for (_, spelling) in finish_reasons().into_iter().take(5) {
+        assert!(
+            !matches!(
+                FinishReason::from(spelling.to_owned()),
+                FinishReason::Other(_)
+            ),
+            "{spelling}"
         );
     }
 }
@@ -130,11 +215,28 @@ fn an_effort_prints_what_it_serialises_as_and_xhigh_is_one_word() {
 
 #[test]
 fn thinking_defaults_to_the_providers_own_behaviour() {
-    let thinking = Thinking::default();
+    assert_eq!(Thinking::default(), Thinking::ProviderDefault);
+}
 
-    assert_eq!(thinking.mode, ThinkingMode::Default);
-    assert_eq!(thinking.budget, None);
-    assert_eq!(thinking.effort, None);
+#[test]
+fn thinking_has_a_form_a_person_can_write() {
+    for (thinking, form) in [
+        (Thinking::ProviderDefault, json!("provider_default")),
+        (Thinking::Adaptive, json!("adaptive")),
+        (
+            Thinking::Budget(NonZeroU32::new(2048).unwrap()),
+            json!({ "budget": 2048 }),
+        ),
+        (Thinking::Disabled, json!("disabled")),
+    ] {
+        assert_eq!(serde_json::to_value(thinking).unwrap(), form);
+        assert_eq!(serde_json::from_value::<Thinking>(form).unwrap(), thinking);
+    }
+}
+
+#[test]
+fn a_thinking_budget_of_zero_is_refused() {
+    assert!(serde_json::from_value::<Thinking>(json!({ "budget": 0 })).is_err());
 }
 
 #[test]
@@ -142,17 +244,15 @@ fn request_defaults_have_one_json_form() {
     let request = RequestDefaults {
         max_tokens: 4096,
         temperature: Some(0.5),
-        thinking: Thinking {
-            mode: ThinkingMode::Enabled,
-            budget: Some(1024),
-            effort: Some(Effort::High),
-        },
+        thinking: Thinking::Budget(NonZeroU32::new(1024).unwrap()),
+        effort: Some(Effort::High),
         seed: Some(7),
     };
     let expected = json!({
         "max_tokens": 4096,
         "temperature": 0.5,
-        "thinking": { "mode": "enabled", "budget": 1024, "effort": "high" },
+        "thinking": { "budget": 1024 },
+        "effort": "high",
         "seed": 7,
     });
 
@@ -160,10 +260,6 @@ fn request_defaults_have_one_json_form() {
     assert_eq!(
         serde_json::from_value::<RequestDefaults>(expected).unwrap(),
         request
-    );
-    assert_eq!(
-        serde_json::to_value(ThinkingMode::Disabled).unwrap(),
-        json!("disabled")
     );
 }
 
@@ -177,18 +273,23 @@ fn a_cost_is_a_bare_number_of_dollars() {
     assert!(Cost::new(1.0) < Cost::new(2.0));
 }
 
+fn bash(id: &str) -> ContentBlock {
+    ContentBlock::ToolUse(ToolUse {
+        id: ToolCallId::new(id).unwrap(),
+        name: ToolName::new("bash").unwrap(),
+        input: json!({}),
+    })
+}
+
 #[test]
 fn a_completion_reads_from_the_form_a_script_would_hold() {
     let script = json!({
-        "message": { "role": "assistant", "content": [{ "text": "done" }] },
+        "content": [{ "text": "done" }],
         "usage": { "input_tokens": 12, "output_tokens": 3 },
-        "finish": "end_turn",
+        "finish": "stop",
     });
     let completion = Completion {
-        message: Message {
-            role: Role::Assistant,
-            content: vec![ContentBlock::Text("done".to_owned())],
-        },
+        content: vec![ContentBlock::Text("done".to_owned())],
         usage: usage(12, 3, 0, 0),
         finish: FinishReason::EndTurn,
         response_id: None,
@@ -202,7 +303,7 @@ fn a_completion_reads_from_the_form_a_script_would_hold() {
     assert_eq!(
         serde_json::to_value(&completion).unwrap(),
         json!({
-            "message": { "role": "assistant", "content": [{ "text": "done" }] },
+            "content": [{ "text": "done" }],
             "usage": {
                 "input_tokens": 12,
                 "output_tokens": 3,
@@ -214,6 +315,82 @@ fn a_completion_reads_from_the_form_a_script_would_hold() {
             "response_model": null,
         })
     );
+}
+
+#[test]
+fn a_completion_without_usage_used_no_tokens() {
+    let completion = serde_json::from_value::<Completion>(json!({
+        "content": [],
+        "finish": "end_turn",
+        "response_id": "msg_1",
+        "response_model": "model-2026",
+    }))
+    .unwrap();
+
+    assert_eq!(completion.usage, Usage::default());
+    assert_eq!(completion.response_id.as_deref(), Some("msg_1"));
+    assert_eq!(completion.response_model.as_deref(), Some("model-2026"));
+}
+
+#[test]
+fn a_script_cannot_give_a_completion_a_role_or_a_misspelt_field() {
+    for script in [
+        json!({ "role": "user", "content": [], "finish": "end_turn" }),
+        json!({ "message": { "role": "user", "content": [] }, "finish": "end_turn" }),
+        json!({ "content": [], "finish": "end_turn", "usage": { "input_token": 12 } }),
+        json!({ "content": [], "finish": "end_turn", "reponse_id": "msg_1" }),
+    ] {
+        assert!(
+            serde_json::from_value::<Completion>(script.clone()).is_err(),
+            "{script}"
+        );
+    }
+}
+
+#[test]
+fn a_completion_is_held_to_the_rules_of_an_assistant_message() {
+    let valid = Completion {
+        content: vec![bash("a"), bash("b")],
+        usage: Usage::default(),
+        finish: FinishReason::ToolUse,
+        response_id: None,
+        response_model: None,
+    };
+    let repeated = Completion {
+        content: vec![bash("a"), bash("a")],
+        ..valid.clone()
+    };
+
+    assert_eq!(valid.validate(), Ok(()));
+    assert_eq!(
+        repeated.validate(),
+        Err(MessageError::DuplicateToolUse { id: "a".to_owned() })
+    );
+    assert!(
+        serde_json::from_value::<Completion>(serde_json::to_value(&repeated).unwrap()).is_err()
+    );
+    let result = json!({
+        "content": [{ "tool_result": { "call_id": "a", "content": [] } }],
+        "finish": "end_turn",
+    });
+    assert!(serde_json::from_value::<Completion>(result).is_err());
+}
+
+#[test]
+fn a_completions_tool_uses_are_its_calls_in_order() {
+    let completion = Completion {
+        content: vec![ContentBlock::Text("on it".to_owned()), bash("a"), bash("b")],
+        usage: Usage::default(),
+        finish: FinishReason::ToolUse,
+        response_id: None,
+        response_model: None,
+    };
+
+    let ids: Vec<&str> = completion
+        .tool_uses()
+        .map(|call| call.id.as_str())
+        .collect();
+    assert_eq!(ids, ["a", "b"]);
 }
 
 #[test]

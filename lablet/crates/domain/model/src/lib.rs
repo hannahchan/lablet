@@ -21,17 +21,22 @@ mod conversation;
 mod id;
 mod provider;
 mod run;
+mod tally;
 mod tool;
 mod transcript;
 
-pub use conversation::{ContentBlock, Message, MessageError, Role, ToolResultContent};
+pub use conversation::{
+    ContentBlock, Message, MessageError, Role, ToolResult, ToolResultContent, ToolUse,
+};
 pub use id::{IdError, RunId, ToolCallId, ToolName};
 pub use provider::{
     Completion, Cost, Effort, Endpoint, FinishReason, ModelRef, ProviderKind, RequestDefaults,
-    Thinking, ThinkingMode, Usage,
+    Thinking, Usage,
 };
 pub use run::{
-    CompletionMode, RunContext, RunOutcome, RunResult, RunSummary, StopReason, ToolStats,
+    CompletionMode, FinishedRun, RunContext, RunOutcome, RunResult, RunSummary, StopReason,
+    ToolStats,
 };
+pub use tally::{Progress, RunSetup, RunTally};
 pub use tool::{McpCallMeta, NetworkTransport, ToolSource, ToolSpec, TraceContext};
-pub use transcript::{Step, Transcript, TurnRecord};
+pub use transcript::{Transcript, Turn, TurnRecord};

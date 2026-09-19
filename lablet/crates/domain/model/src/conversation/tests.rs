@@ -2,20 +2,28 @@ use serde_json::json;
 
 use super::*;
 
-fn tool_use(id: &str) -> ContentBlock {
-    ContentBlock::ToolUse {
+fn bash(id: &str) -> ToolUse {
+    ToolUse {
         id: ToolCallId::new(id).unwrap(),
         name: ToolName::new("bash").unwrap(),
         input: json!({ "command": "ls" }),
     }
 }
 
-fn tool_result(call_id: &str, text: &str) -> ContentBlock {
-    ContentBlock::ToolResult {
+fn tool_use(id: &str) -> ContentBlock {
+    ContentBlock::ToolUse(bash(id))
+}
+
+fn output(call_id: &str, text: &str) -> ToolResult {
+    ToolResult {
         call_id: ToolCallId::new(call_id).unwrap(),
         content: vec![ToolResultContent::Text(text.to_owned())],
         is_error: false,
     }
+}
+
+fn tool_result(call_id: &str, text: &str) -> ContentBlock {
+    ContentBlock::ToolResult(output(call_id, text))
 }
 
 fn text(text: &str) -> ContentBlock {
@@ -25,7 +33,7 @@ fn text(text: &str) -> ContentBlock {
 fn thinking() -> ContentBlock {
     ContentBlock::Thinking {
         text: "hm".to_owned(),
-        signature: "sig".to_owned(),
+        signature: Some("sig".to_owned()),
     }
 }
 
@@ -181,9 +189,77 @@ fn tool_result_finds_the_block_that_answers_a_call() {
 
     assert_eq!(
         message.tool_result(&ToolCallId::new("b").unwrap()),
-        Some(&tool_result("b", "two"))
+        Some(&output("b", "two"))
     );
     assert_eq!(message.tool_result(&ToolCallId::new("c").unwrap()), None);
+}
+
+#[test]
+fn tool_uses_and_tool_results_yield_their_blocks_in_order_and_nothing_else() {
+    let assistant = Message {
+        role: Role::Assistant,
+        content: vec![thinking(), tool_use("a"), text("and"), tool_use("b")],
+    };
+    let user = Message {
+        role: Role::User,
+        content: vec![
+            tool_result("b", "two"),
+            text("note"),
+            tool_result("a", "one"),
+        ],
+    };
+
+    assert_eq!(
+        assistant.tool_uses().collect::<Vec<_>>(),
+        [&bash("a"), &bash("b")]
+    );
+    assert_eq!(assistant.tool_results().count(), 0);
+    assert_eq!(
+        user.tool_results().collect::<Vec<_>>(),
+        [&output("b", "two"), &output("a", "one")]
+    );
+    assert_eq!(user.tool_uses().count(), 0);
+}
+
+#[test]
+fn input_bytes_is_the_length_of_the_input_as_compact_json() {
+    let call = ToolUse {
+        input: json!({ "command": "ls", "n": 2 }),
+        ..bash("a")
+    };
+
+    assert_eq!(call.input.to_string(), r#"{"command":"ls","n":2}"#);
+    assert_eq!(call.input_bytes(), 22);
+    assert_eq!(
+        ToolUse {
+            input: json!({}),
+            ..bash("a")
+        }
+        .input_bytes(),
+        2
+    );
+}
+
+#[test]
+fn content_bytes_sums_the_text_of_a_result_in_bytes_not_characters() {
+    let result = ToolResult {
+        content: vec![
+            ToolResultContent::Text("exit 1".to_owned()),
+            ToolResultContent::Text("caf\u{e9}".to_owned()),
+        ],
+        ..output("a", "")
+    };
+
+    assert_eq!(result.content_bytes(), 6 + 5);
+    assert_eq!(output("a", "").content_bytes(), 0);
+}
+
+#[test]
+fn omitted_content_is_worded_one_way() {
+    assert_eq!(
+        ToolResultContent::omitted("image", "image/png", 48_213),
+        ToolResultContent::Text("[image omitted: image/png, 48213 bytes]".to_owned())
+    );
 }
 
 #[test]
@@ -235,21 +311,21 @@ fn a_message_has_one_json_form() {
 fn a_tool_result_has_one_json_form() {
     let message = Message {
         role: Role::User,
-        content: vec![ContentBlock::ToolResult {
+        content: vec![ContentBlock::ToolResult(ToolResult {
             call_id: ToolCallId::new("a").unwrap(),
             content: vec![
                 ToolResultContent::Text("exit 1".to_owned()),
-                ToolResultContent::Json(json!({ "code": 1 })),
+                ToolResultContent::Text("no such file".to_owned()),
             ],
             is_error: true,
-        }],
+        })],
     };
     let expected = json!({
         "role": "user",
         "content": [{
             "tool_result": {
                 "call_id": "a",
-                "content": [{ "text": "exit 1" }, { "json": { "code": 1 } }],
+                "content": [{ "text": "exit 1" }, { "text": "no such file" }],
                 "is_error": true,
             },
         }],
@@ -260,6 +336,94 @@ fn a_tool_result_has_one_json_form() {
         serde_json::from_value::<Message>(expected).unwrap(),
         message
     );
+}
+
+#[test]
+fn the_tool_blocks_serialise_to_these_exact_bytes() {
+    assert_eq!(
+        serde_json::to_string(&tool_use("a")).unwrap(),
+        r#"{"tool_use":{"id":"a","name":"bash","input":{"command":"ls"}}}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&tool_result("a", "ok")).unwrap(),
+        r#"{"tool_result":{"call_id":"a","content":[{"text":"ok"}],"is_error":false}}"#
+    );
+}
+
+#[test]
+fn a_tool_result_without_is_error_reads_as_a_success() {
+    let block = json!({ "tool_result": { "call_id": "a", "content": [{ "text": "ok" }] } });
+
+    assert_eq!(
+        serde_json::from_value::<ContentBlock>(block).unwrap(),
+        tool_result("a", "ok")
+    );
+}
+
+#[test]
+fn a_misspelt_field_of_a_tool_block_is_an_error() {
+    let result = json!({ "tool_result": { "call_id": "a", "content": [], "is_eror": true } });
+    let call = json!({ "tool_use": { "id": "a", "name": "bash", "input": {}, "args": {} } });
+
+    assert!(serde_json::from_value::<ContentBlock>(result).is_err());
+    assert!(serde_json::from_value::<ContentBlock>(call).is_err());
+}
+
+#[test]
+fn a_structured_tool_result_is_not_a_form_the_model_reads() {
+    let block = json!({
+        "tool_result": { "call_id": "a", "content": [{ "json": { "code": 1 } }] },
+    });
+
+    assert!(serde_json::from_value::<ContentBlock>(block).is_err());
+}
+
+#[test]
+fn thinking_without_a_signature_is_null_not_an_empty_string() {
+    let block = ContentBlock::Thinking {
+        text: "hm".to_owned(),
+        signature: None,
+    };
+    let expected = json!({ "thinking": { "text": "hm", "signature": null } });
+
+    assert_eq!(serde_json::to_value(&block).unwrap(), expected);
+    assert_eq!(
+        serde_json::from_value::<ContentBlock>(json!({ "thinking": { "text": "hm" } })).unwrap(),
+        block
+    );
+}
+
+#[test]
+fn reading_a_message_validates_it() {
+    let from_user = json!({
+        "role": "user",
+        "content": [{ "tool_use": { "id": "a", "name": "bash", "input": {} } }],
+    });
+    let repeated = json!({
+        "role": "assistant",
+        "content": [
+            { "tool_use": { "id": "a", "name": "bash", "input": {} } },
+            { "tool_use": { "id": "a", "name": "bash", "input": {} } },
+        ],
+    });
+
+    let error = serde_json::from_value::<Message>(from_user).unwrap_err();
+    assert!(
+        error.to_string().contains("is in a user message"),
+        "{error}"
+    );
+    let error = serde_json::from_value::<Message>(repeated).unwrap_err();
+    assert!(
+        error.to_string().contains("more than one tool-use block"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_message_with_a_field_it_does_not_have_is_refused() {
+    let message = json!({ "role": "user", "content": [], "name": "sam" });
+
+    assert!(serde_json::from_value::<Message>(message).is_err());
 }
 
 #[test]

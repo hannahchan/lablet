@@ -20,6 +20,7 @@ const fn registry_stop_reason(reason: StopReason) -> LabletRunStopReason {
         StopReason::ToolErrorsExhausted => LabletRunStopReason::ToolErrorsExhausted,
         StopReason::Cancelled => LabletRunStopReason::Cancelled,
         StopReason::ProviderError => LabletRunStopReason::ProviderError,
+        StopReason::Refused => LabletRunStopReason::Refused,
     }
 }
 
@@ -36,6 +37,7 @@ const fn model_stop_reason(reason: LabletRunStopReason) -> StopReason {
         LabletRunStopReason::ToolErrorsExhausted => StopReason::ToolErrorsExhausted,
         LabletRunStopReason::Cancelled => StopReason::Cancelled,
         LabletRunStopReason::ProviderError => StopReason::ProviderError,
+        LabletRunStopReason::Refused => StopReason::Refused,
     }
 }
 
@@ -53,6 +55,7 @@ fn every_stop_reason_is_spelled_as_the_registry_spells_it() {
         StopReason::ToolErrorsExhausted,
         StopReason::Cancelled,
         StopReason::ProviderError,
+        StopReason::Refused,
     ] {
         let registry = registry_stop_reason(reason);
         assert_eq!(reason.as_str(), registry.as_str());

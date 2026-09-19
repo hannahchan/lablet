@@ -2,18 +2,25 @@
 
 use std::time::Duration;
 
-use lablet_model::{CompletionMode, FinishReason, StopReason};
+use lablet_model::{CompletionMode, FinishReason, Progress, StopReason};
 
 /// The limits of one run and how it completes.
 ///
 /// Every value is meaningful, so the fields are public and nothing is
-/// validated. A limit is met when the state reaches it, not when it passes it.
+/// validated. A limit is met when the run reaches it, not when it passes it.
+///
+/// When several conditions hold at one point, the first in the order its
+/// method documents is the reason, so one input always gives one answer. Four
+/// stop reasons aren't decided here: `cancelled` comes from the loop's
+/// cancellation poll, which comes before it asks the policy, and
+/// `retries_exhausted`, `context_exhausted` for a rejected request, and
+/// `provider_error` from a failed provider call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StopPolicy {
     /// How the run decides that the model has finished.
     pub completion: CompletionMode,
-    /// The turn after whose tool phase the run stops. The cap is only read
-    /// after a tool phase, so `0` acts as `1`.
+    /// The number of turns after whose tool phase the run stops. The cap is
+    /// only read after a tool phase, so `0` acts as `1`.
     pub max_turns: u32,
     /// The elapsed time at which the run stops. Zero stops it before the first
     /// provider call.
@@ -25,82 +32,89 @@ pub struct StopPolicy {
     pub max_consecutive_tool_errors: u32,
 }
 
-/// What the loop knows when it asks whether to stop.
-///
-/// Cancellation isn't here: the loop polls its own port for it, before it asks
-/// the policy, so a cancelled run reports `cancelled` whatever else holds.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RunState {
-    /// The one-based number of the current turn.
-    pub turn: u32,
-    /// The time since the run started.
-    pub elapsed: Duration,
-    /// Input plus output tokens of every completion so far, as `Usage::total` counts them.
-    pub total_tokens: u64,
-    /// Tool error results since the last successful tool call.
-    pub consecutive_tool_errors: u32,
-    /// The finish reason of the latest response; `None` before the first.
-    pub last_finish: Option<FinishReason>,
-    /// Whether the latest response held a tool call, `task_complete` included.
-    pub last_had_tool_use: bool,
-    /// Whether the latest response called `task_complete`. Only explicit mode reads it.
-    pub task_complete_called: bool,
-}
-
-/// Where in a turn the loop asks.
+/// The tool calls of a response, as far as completion reads them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StopPoint {
-    /// Before each provider call. Reads the timeout and the token budget.
-    BeforeProviderCall,
-    /// After a provider response and before any tool runs. Reads only the
-    /// response, so a response that finishes the task completes the run even
-    /// when it also used up a limit.
-    AfterProviderResponse,
-    /// After the tool results of a turn are in. Reads the tool-error cap and
-    /// the turn cap, then what [`StopPoint::BeforeProviderCall`] reads.
-    AfterToolPhase,
+pub enum Calls {
+    /// The response called no tool.
+    None,
+    /// The response called tools, and `task_complete` wasn't one of them.
+    Tools,
+    /// The response called `task_complete`, alone or among other tools.
+    /// Natural mode has no such tool and reads this as [`Calls::Tools`].
+    TaskComplete,
 }
 
 impl StopPolicy {
-    /// The reason to stop at `at`, or `None` to go on.
-    ///
-    /// When several conditions hold at one point, the first in this order is
-    /// the reason, so one state always gives one answer:
-    ///
-    /// - [`StopPoint::BeforeProviderCall`]: `timeout`, then `max_total_tokens`.
-    /// - [`StopPoint::AfterProviderResponse`]: when explicit mode's
-    ///   `task_complete` was called, `output_truncated` if the finish reason is
-    ///   `max_tokens` and `completed` otherwise, whatever else the response
-    ///   holds; otherwise no stop when the response has tool calls, whatever
-    ///   its finish reason;
-    ///   otherwise `output_truncated` when the finish reason is `max_tokens`;
-    ///   otherwise `completed` in natural mode and `ended_without_completion`
-    ///   in explicit mode.
-    /// - [`StopPoint::AfterToolPhase`]: `tool_errors_exhausted`, then
-    ///   `max_turns`, then `timeout`, then `max_total_tokens`. The tool-error
-    ///   cap leads because it alone says the run was failing, not merely long.
-    ///
-    /// The other stop reasons aren't decided here: `cancelled` comes from the
-    /// loop's cancellation poll, and `retries_exhausted`, `context_exhausted`,
-    /// and `provider_error` from a failed provider call.
+    /// The reason to stop before a provider call, or `None` to make it:
+    /// `timeout`, then `max_total_tokens`.
     #[must_use]
-    pub fn evaluate(&self, at: StopPoint, state: &RunState) -> Option<StopReason> {
-        match at {
-            StopPoint::BeforeProviderCall => self.limit_reached(state),
-            StopPoint::AfterProviderResponse => self.response_ends_run(state),
-            StopPoint::AfterToolPhase => self
-                .cap_reached(state)
-                .or_else(|| self.limit_reached(state)),
+    pub fn before_call(&self, progress: &Progress) -> Option<StopReason> {
+        self.limit_reached(progress)
+    }
+
+    /// The reason to stop after a provider response and before any tool runs,
+    /// or `None` to run the response's tool calls.
+    ///
+    /// It reads only the response, so a response that finishes the task
+    /// completes the run even when it also used up a limit. The finish reason
+    /// is read before the calls:
+    ///
+    /// - [`FinishReason::Refusal`] is `refused`.
+    /// - [`FinishReason::MaxTokens`] is `output_truncated` and
+    ///   [`FinishReason::ContextWindow`] is `context_exhausted`, whatever the
+    ///   response called. A response that was cut short can end inside a
+    ///   call's arguments, and a cut-off input can still parse as a valid,
+    ///   smaller one, so none of its calls may run and a `task_complete` among
+    ///   them doesn't complete the run.
+    /// - Otherwise the calls decide. `task_complete` in explicit mode is
+    ///   `completed`; any other call goes on; no call is `completed` in
+    ///   natural mode and `ended_without_completion` in explicit mode.
+    ///
+    /// [`FinishReason::Other`] with no call therefore completes a natural-mode
+    /// run. A reason lablet doesn't know, from an OpenAI-compatible server, is
+    /// usually that server's word for a normal end, and the wide event carries
+    /// every finish reason for whoever needs to tell.
+    #[must_use]
+    pub fn after_response(&self, finish: &FinishReason, calls: Calls) -> Option<StopReason> {
+        match finish {
+            FinishReason::Refusal => return Some(StopReason::Refused),
+            FinishReason::MaxTokens => return Some(StopReason::OutputTruncated),
+            FinishReason::ContextWindow => return Some(StopReason::ContextExhausted),
+            FinishReason::EndTurn | FinishReason::ToolUse | FinishReason::Other(_) => {}
+        }
+        match (self.completion, calls) {
+            (CompletionMode::Explicit, Calls::TaskComplete)
+            | (CompletionMode::Natural, Calls::None) => Some(StopReason::Completed),
+            (CompletionMode::Explicit, Calls::None) => Some(StopReason::EndedWithoutCompletion),
+            (CompletionMode::Natural, Calls::TaskComplete) | (_, Calls::Tools) => None,
         }
     }
 
+    /// The reason to stop after the tool results of a turn are in, or `None`
+    /// to go on to the next turn: `tool_errors_exhausted`, then `max_turns`,
+    /// then `timeout`, then `max_total_tokens`. The tool-error cap leads
+    /// because it alone says the run was failing, not merely long.
+    #[must_use]
+    pub fn after_tools(&self, progress: &Progress) -> Option<StopReason> {
+        self.cap_reached(progress)
+            .or_else(|| self.limit_reached(progress))
+    }
+
+    /// Whether a backoff of `wait`, begun `elapsed` into the run, ends before
+    /// the run timeout. When it doesn't, the run stops with `timeout` now
+    /// instead of sleeping up to a limit it's known to reach.
+    #[must_use]
+    pub fn allows_wait(&self, elapsed: Duration, wait: Duration) -> bool {
+        elapsed.saturating_add(wait) < self.timeout
+    }
+
     /// The limits that grow during a provider call as well as a tool phase.
-    fn limit_reached(&self, state: &RunState) -> Option<StopReason> {
-        if state.elapsed >= self.timeout {
+    fn limit_reached(&self, progress: &Progress) -> Option<StopReason> {
+        if progress.elapsed >= self.timeout {
             Some(StopReason::Timeout)
         } else if self
             .max_total_tokens
-            .is_some_and(|budget| state.total_tokens >= budget)
+            .is_some_and(|budget| progress.usage.total() >= budget)
         {
             Some(StopReason::MaxTotalTokens)
         } else {
@@ -109,35 +123,13 @@ impl StopPolicy {
     }
 
     /// The caps that only a finished tool phase can reach.
-    fn cap_reached(&self, state: &RunState) -> Option<StopReason> {
-        if state.consecutive_tool_errors >= self.max_consecutive_tool_errors.max(1) {
+    fn cap_reached(&self, progress: &Progress) -> Option<StopReason> {
+        if progress.consecutive_tool_errors >= self.max_consecutive_tool_errors.max(1) {
             Some(StopReason::ToolErrorsExhausted)
-        } else if state.turn >= self.max_turns {
+        } else if progress.turns >= self.max_turns {
             Some(StopReason::MaxTurns)
         } else {
             None
-        }
-    }
-
-    fn response_ends_run(&self, state: &RunState) -> Option<StopReason> {
-        let explicit = self.completion == CompletionMode::Explicit;
-        let truncated = state.last_finish == Some(FinishReason::MaxTokens);
-        if explicit && state.task_complete_called {
-            // A response cut off at `max_tokens` can end inside the call's
-            // arguments, and a run must not complete on a partial result.
-            Some(if truncated {
-                StopReason::OutputTruncated
-            } else {
-                StopReason::Completed
-            })
-        } else if state.last_had_tool_use {
-            None
-        } else if truncated {
-            Some(StopReason::OutputTruncated)
-        } else if explicit {
-            Some(StopReason::EndedWithoutCompletion)
-        } else {
-            Some(StopReason::Completed)
         }
     }
 }
