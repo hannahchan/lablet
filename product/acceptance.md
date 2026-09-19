@@ -6,23 +6,23 @@ Lablet is done when every scenario below is green in CI and the release checklis
 
 ### Loop and completion
 
-| #  | Given                                                          | When | Then                                                                                                | Phase |
-| -- | -------------------------------------------------------------- | ---- | --------------------------------------------------------------------------------------------------- | ----- |
-| L1 | natural mode, a script that calls a tool then ends             | run  | `completed`, `turns` = 2, `tool_calls` = 1                                                          | 3     |
-| L2 | explicit mode, a script that calls `task_complete` with JSON   | run  | `completed`, `result.structured` equals the argument, `tool_calls` = 0, no `ToolCallStarted` for it | 3     |
-| L3 | explicit mode, a script that ends without `task_complete`      | run  | `ended_without_completion`                                                                          | 3     |
-| L4 | `max_turns: 2`, a script that keeps calling tools              | run  | `max_turns` after turn 2, exactly 2 provider calls                                                  | 3     |
-| L5 | `max_total_tokens` below the script's cumulative usage         | run  | `max_total_tokens`, no further provider call                                                        | 3     |
-| L6 | a script whose finish reason is `max_tokens` with no tool call | run  | `output_truncated`                                                                                  | 3     |
-| L7 | a script whose finish reason is `max_tokens` with a tool call  | run  | the tool runs and the loop continues                                                                | 3     |
-| L8 | `timeout: 1s`, a fake clock advancing 2s per call              | run  | `timeout`, no provider call after the overrun                                                       | 3     |
+| #  | Given                                                                                  | When | Then                                                                                                | Phase |
+| -- | -------------------------------------------------------------------------------------- | ---- | --------------------------------------------------------------------------------------------------- | ----- |
+| L1 | natural mode, a script that calls a tool then ends                                     | run  | `completed`, `turns` = 2, `tool_calls` = 1                                                          | 3     |
+| L2 | explicit mode, a script that calls `task_complete` with JSON                           | run  | `completed`, `result.structured` equals the argument, `tool_calls` = 0, no `ToolCallStarted` for it | 3     |
+| L3 | explicit mode, a script that ends without `task_complete`                              | run  | `ended_without_completion`                                                                          | 3     |
+| L4 | `max_turns: 2`, a script that keeps calling tools                                      | run  | `max_turns` after turn 2, exactly 2 provider calls                                                  | 3     |
+| L5 | a script that keeps calling tools; `max_total_tokens` reached before its last response | run  | `max_total_tokens`, no further provider call                                                        | 3     |
+| L6 | a script whose finish reason is `max_tokens` with no tool call                         | run  | `output_truncated`                                                                                  | 3     |
+| L7 | a script whose finish reason is `max_tokens` with a tool call                          | run  | the tool runs and the loop continues                                                                | 3     |
+| L8 | `timeout: 1s`, a script that keeps calling tools, a fake clock advancing 2s per call   | run  | `timeout`, no provider call after the overrun                                                       | 3     |
 
 ### Errors and retries
 
 | #  | Given                                                                      | When | Then                                                                                                                      | Phase |
 | -- | -------------------------------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------- | ----- |
 | E1 | a script injecting 2 retryable errors then success, `max_retries: 3`       | run  | `completed`, `provider.retries` = 2, backoff delays follow the policy on the fake clock                                   | 3     |
-| E2 | a script injecting 3 retryable errors on one call, `max_retries: 3`        | run  | `retries_exhausted`                                                                                                       | 3     |
+| E2 | a script injecting 4 retryable errors on one call, `max_retries: 3`        | run  | `retries_exhausted` after four attempts; with `max_retries: 0` the first error exhausts it                                | 3     |
 | E3 | a script injecting 2 retryable errors on each of 3 calls, `max_retries: 3` | run  | `completed`; the budget is per call                                                                                       | 3     |
 | E4 | a script injecting a context-exhausted error                               | run  | `context_exhausted`, wide event still emitted                                                                             | 3     |
 | E5 | a script injecting a fatal error                                           | run  | `provider_error`, `error` populated                                                                                       | 3     |
@@ -101,10 +101,10 @@ Every normative statement in the spec is held by a scenario above, a gate, or a 
 
 | Spec                              | Held by                                                                     |
 | --------------------------------- | --------------------------------------------------------------------------- |
-| §1 loop and stop points           | L4, L5, L8, E7, C8                                                          |
+| §1 loop and stop points           | L4, L5, L8, E7, C8, `lablet-policy` unit tests                              |
 | §1 completion modes, stop reasons | L1 to L8, E2, E4, E5, E7                                                    |
 | §1 retries                        | E1 to E3, E6, E8, E9, `lablet-policy` unit tests                            |
-| §1 outcome and exit codes         | L1, L3, C1, T6                                                              |
+| §1 outcome and exit codes         | L1, L3, C1, T6, the `outcome.json` fixture test in `lablet-model`           |
 | §1 wide event and aggregatability | O1, O2, O7, O9, S2, S3                                                      |
 | §1 transcript                     | O8, C8                                                                      |
 | §2 layer rules                    | `cargo xtask lint-layers`                                                   |

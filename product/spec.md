@@ -13,8 +13,7 @@ loop:
     if cancelled or stop policy says stop (timeout, tokens): break          # point A
     response = provider.complete(system, messages, tool specs)              # retried per call on transient error
     messages += response.message
-    if response has no tool calls: break with completed | ended_without_completion | output_truncated
-    if explicit mode and response calls task_complete: record its argument; break with completed   # intercepted, never executed
+    if stop policy says stop (completed, ended_without_completion, output_truncated): break   # point R; a task_complete call is recorded here, never executed
     results = []
     for each tool_use block in response: results += tools.execute(call)     # errors become error results
     messages += user(results)                                                # all results of a turn in ONE user message
@@ -23,7 +22,19 @@ loop:
 emit outcome
 ```
 
-The stop policy is evaluated at two points: before each provider call (point A) and after each tool phase (point B). Cancellation, the run timeout, and the token budget are checked at both; the turn cap and the consecutive tool error cap at point B only. A run therefore never makes a provider call after the condition that should have stopped it.
+The stop policy is evaluated at three points: before each provider call (point A), after each provider response and before any tool runs (point R), and after each tool phase (point B). Cancellation, the run timeout, and the token budget are checked at A and B; the turn cap and the consecutive tool error cap at point B only. A run therefore never makes a provider call after the condition that should have stopped it. Point R reads only the response, so a response that finishes the task completes the run even when it also used up the timeout or the token budget.
+
+When several conditions hold at one point, the first in this order is the stop reason, so one state always gives one reason:
+
+| Point | Order                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A     | `cancelled`, `timeout`, `max_total_tokens`                                                                                                                                                                                                                                                                                                                                                                                                            |
+| R     | explicit mode and `task_complete` called: `output_truncated` when the finish reason is `max_tokens`, because the call's arguments may be cut short, and `completed` otherwise, whatever else the response holds. Otherwise any tool call: the run goes on, whatever the finish reason. Otherwise finish reason `max_tokens`: `output_truncated`, in both modes. Otherwise `completed` in natural mode and `ended_without_completion` in explicit mode |
+| B     | `cancelled`, `tool_errors_exhausted`, `max_turns`, `timeout`, `max_total_tokens`                                                                                                                                                                                                                                                                                                                                                                      |
+
+Cancellation leads because the loop polls its port before it asks the policy, which doesn't see cancellation at all. The tool error cap comes next at B because it alone says the run was failing, not merely long.
+
+Every limit is met when the run reaches it, not when it passes it. With `max_turns: 2` the run stops after the tool phase of turn 2, having made two provider calls; a response on turn 2 that finishes the task still completes the run, because point R comes first. The run stops with `timeout` once the elapsed time equals `run.timeout`, with `max_total_tokens` once input plus output tokens equal the budget, and with `tool_errors_exhausted` on the third consecutive error result when the cap is 3.
 
 Every provider call, tool call, retry, and stop decision is reported to an observer, which is how telemetry leaves the process.
 
@@ -40,8 +51,8 @@ Every provider call, tool call, retry, and stop decision is reported to an obser
 
 ### Retries
 
-- **Provider errors** are classified by the adapter as retryable (transport failure, rate limit, 5xx, overloaded, per-call timeout), context exhausted (the provider's context-length error), or fatal (auth, bad request, unknown model). Retryable errors are retried with exponential backoff up to `run.max_retries` attempts **per provider call**; the counter resets on success. Exhausting it stops the run with `retries_exhausted`.
-- **Malformed provider responses** (the adapter can't map the payload to the domain model, including a tool call whose arguments aren't valid JSON) count as retryable.
+- **Provider errors** are classified by the adapter as retryable (transport failure, rate limit, 5xx, overloaded, per-call timeout), context exhausted (the provider's context-length error), or fatal (auth, bad request, unknown model). Retryable errors are retried with exponential backoff up to `run.max_retries` times **per provider call**; the counter resets on success. `max_retries` counts retries, not attempts: `3` allows four attempts, and `0` never retries. The loop builds its `RetryPolicy` with `max_attempts = max_retries + 1`. Attempts are numbered from 1, as `lablet.attempt` reports them. When attempt `n` fails and `n` is at most `run.max_retries`, the loop waits and tries again; otherwise the run stops with `retries_exhausted`. So with `max_retries: 3`, two failures and a success is a completed call with two retries, and four failures exhaust it. Before each wait the loop checks the run timeout, so backoff can't carry a run far past it: if the elapsed time plus the wait reaches `run.timeout`, the run stops with `timeout` instead of sleeping. The wait after attempt `n` is `base * factor^(n - 1)` capped at `max`, with no jitter, so the same attempt always waits the same time. `base` and `max` come from `run.retry_backoff_base` and `run.retry_backoff_max`; `factor` is 2.
+- **Malformed provider responses** (the adapter can't map the payload to the domain model, including a tool call whose arguments aren't valid JSON, or whose name or id isn't a valid `ToolName` or `ToolCallId`) count as retryable. That differs from a well-formed name that no tool has, which is an error result for the model. An OpenAI-compatible server that sends an empty or repeated call id gets a synthesised unique one from the adapter, not a `Malformed`.
 - **Tool errors** aren't retried by lablet. The error is returned to the model as an error tool result. A call to a tool name that's not in `specs()` is also an error result. After `run.max_consecutive_tool_errors` consecutive error results the run stops with `tool_errors_exhausted` at point B. A successful tool call resets the counter.
 - **Tool timeouts** (`run.tool_timeout`) are tool errors.
 - **Provider timeouts** (`run.provider_timeout`) are enforced per call by the adapter's HTTP client via the deadline on the request. The run-level `run.timeout` is checked at points A and B only, so a run may overrun it by at most one provider or tool call.
@@ -52,7 +63,7 @@ Cancellation is polled at points A and B via the `Cancellation` port; the CLI wi
 
 ### Transcript
 
-When `run.transcript_path` is set, the full message list (system prompt, every message, every tool result) is written there as JSON when the run ends, whatever the stop reason. This is independent of telemetry and `capture_content`; it's how a grader lablet or an outer framework gets the conversation.
+When `run.transcript_path` is set, the full message list (system prompt, every message, every tool result) is written there as JSON when the run ends, whatever the stop reason. The document is the serde form of `Transcript` (§3): `system`, `messages`, and `turns`, which holds the usage and response model of the completion behind each assistant message, in order. This is independent of telemetry and `capture_content`; it's how a grader lablet or an outer framework gets the conversation.
 
 ### Outcome
 
@@ -79,7 +90,7 @@ Written to stdout as one JSON document when the run ends, whatever the stop reas
 }
 ```
 
-`result.text` is the concatenated `Text` blocks of the last assistant message, or `""` if there is none. `error` is `null` or a string. `usage` totals are summed over every successful provider call; a failed attempt reports no usage (`ProviderError` carries none), and `lablet.provider.calls` counts successful completions while `lablet.provider.retries` counts failed attempts, so chat spans number `calls + retries`. `input_tokens` **includes** cached tokens, as the GenAI semantic conventions require; `cache_read_tokens` and `cache_write_tokens` are subsets of it, so consumers that want uncached input subtract them.
+`result.text` is the concatenated `Text` blocks of the last assistant message, or `""` if there is none. `result.structured` is always present: the `task_complete` argument when the run completed in explicit mode, `null` otherwise, natural mode included. `error` is `null` or a string, and is likewise always present. `duration_ms` is a whole number of milliseconds. The document is the derived serde form of `RunOutcome` (§3), and `lablet/tests/fixtures/outcome.json` holds one example that a `lablet-model` test reads, compares with a value built in code, and writes back unchanged. `usage` totals are summed over every successful provider call; a failed attempt reports no usage (`ProviderError` carries none), and `lablet.provider.calls` counts successful completions while `lablet.provider.retries` counts failed attempts, so chat spans number `calls + retries`. `input_tokens` **includes** cached tokens, as the GenAI semantic conventions require; `cache_read_tokens` and `cache_write_tokens` are subsets of it, so consumers that want uncached input subtract them.
 
 Exit codes: `0` completed, `2` ended with any other stop reason, `1` the run never started (config error, MCP server failed to start, provider rejected the credentials on the first call before any `RunStarted` event is emitted).
 
@@ -148,14 +159,25 @@ Windows isn't supported. Paths, the `bash` tool, and the musl release build assu
 
 ## 3. Domain model (`lablet-model`)
 
-Pure types with serde derives. `serde_json::Value` is the JSON data currency.
+Pure types with serde derives. `serde_json::Value` is the JSON data currency. Every field is public except the one inside an identifier or `Cost`, which a constructor guards.
 
 ```rust
-pub struct RunId(String);                 // ULID, generated by the composition root
-pub struct ModelRef { pub provider: ProviderKind, pub name: String }
-pub enum ProviderKind { Anthropic, Openai, Fake }
+// Identifiers: validated by `new` and, through serde `try_from`, on deserialisation. Each serialises as a bare string.
+pub struct RunId(String);                 // non-empty, no surrounding whitespace; by convention a ULID, generated by the composition root
+pub struct ToolCallId(String);            // non-empty, no surrounding whitespace; the provider's id for the call
+pub struct ToolName(String);              // the above, and 1 to 64 of [a-zA-Z0-9_-], which is what both provider APIs accept
+pub enum IdError { Empty { kind: &'static str }, SurroundingWhitespace { kind: &'static str, value: String }, ToolNameCharacter { value: String }, ToolNameTooLong { value: String } }
+
+// Conversation
 pub enum Role { User, Assistant }
 pub struct Message { pub role: Role, pub content: Vec<ContentBlock> }
+impl Message {
+    pub fn new(role: Role, content: Vec<ContentBlock>) -> Result<Message, MessageError>;   // validates
+    pub fn validate(&self) -> Result<(), MessageError>;                                    // first violation in block order
+    pub fn text(&self) -> String;                                                          // the Text blocks, concatenated
+    pub fn tool_result(&self, call_id: &ToolCallId) -> Option<&ContentBlock>;
+}
+pub enum MessageError { DuplicateToolUse { id: String }, DuplicateToolResult { id: String }, ToolUseFromUser { id: String }, ToolResultFromAssistant { id: String } }
 pub enum ContentBlock {
     Text(String),
     Thinking { text: String, signature: String },                     // Anthropic: text may be empty (display omitted); signature always present
@@ -165,29 +187,61 @@ pub enum ContentBlock {
     Opaque { provider: ProviderKind, payload: serde_json::Value },   // any other provider-specific block, replayed unchanged
 }
 pub enum ToolResultContent { Text(String), Json(serde_json::Value) }
-pub struct ToolSpec { pub name: ToolName, pub description: String, pub input_schema: serde_json::Value, pub source: ToolSource }
-pub enum ToolSource { Builtin, Mcp { server: String } }
-pub struct Usage { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens }   // u64, Add impl, total()
+pub struct Transcript { pub system: String, pub messages: Vec<Message>, pub turns: Vec<TurnRecord> }   // turns[n] belongs to the n-th assistant message
+pub struct TurnRecord { pub usage: Usage, pub response_model: Option<String> }
+pub struct Step<'a> { pub message: &'a Message, pub record: Option<&'a TurnRecord>, pub observation: Option<&'a Message> }
+impl Transcript {
+    pub fn new(system: String) -> Transcript;
+    pub fn push_user(&mut self, content: Vec<ContentBlock>);
+    pub fn push_assistant(&mut self, content: Vec<ContentBlock>, record: TurnRecord);
+    pub fn steps(&self) -> Vec<Step<'_>>;                             // one per assistant message
+}
+impl Step<'_> { pub fn result_of(&self, call_id: &ToolCallId) -> Option<&ContentBlock>; }
+
+// Provider
+pub enum ProviderKind { Anthropic, Openai, Fake }
+pub struct ModelRef { pub provider: ProviderKind, pub name: String }
+pub struct Endpoint { pub host: String, pub port: u16 }
+pub struct Usage { pub input_tokens: u64, pub output_tokens: u64, pub cache_read_tokens: u64, pub cache_write_tokens: u64 }
+impl Usage { pub fn total(&self) -> u64; pub fn uncached_input_tokens(&self) -> u64; }   // and Add, AddAssign, Default; all saturating
 pub struct Completion { pub message: Message, pub usage: Usage, pub finish: FinishReason, pub response_id: Option<String>, pub response_model: Option<String> }
 pub enum FinishReason { EndTurn, ToolUse, MaxTokens, Other(String) }
-pub enum StopReason { Completed, EndedWithoutCompletion, MaxTurns, Timeout, MaxTotalTokens, OutputTruncated, ContextExhausted, RetriesExhausted, ToolErrorsExhausted, Cancelled, ProviderError }
-pub struct Cost(f64);                     // USD
-pub struct RunOutcome { run_id, stop_reason, turns, usage, tool_calls, duration, result: RunResult, error: Option<String> }
-pub struct RunResult { text: String, structured: Option<serde_json::Value> }
-pub struct RunContext { run_id, config_digest, agent_version, resource: Vec<(String, String)>, transcript_path: Option<PathBuf>, skills_count: u32, mcp_servers: Vec<String>, completion: CompletionMode, max_turns: u32, timeout: Duration, request: RequestDefaults }
-pub struct RequestDefaults { max_tokens: u32, temperature: Option<f32>, thinking: Thinking, seed: Option<u64> }
-pub struct Endpoint { host: String, port: u16 }
-pub struct TraceContext { traceparent: String, tracestate: Option<String> }   // W3C strings; no OpenTelemetry types in the domain
-pub struct McpCallMeta { method: String, session_id: Option<String>, protocol_version: Option<String>, jsonrpc_request_id: Option<String>, rpc_status_code: Option<String>, transport: NetworkTransport }
+pub struct Cost(f64);                     // USD; Cost::new(usd), usd()
+pub struct RequestDefaults { pub max_tokens: u32, pub temperature: Option<f32>, pub thinking: Thinking, pub seed: Option<u64> }
+pub struct Thinking { pub mode: ThinkingMode, pub budget: Option<u32>, pub effort: Option<Effort> }
+pub enum ThinkingMode { Default, Enabled, Disabled }
+pub enum Effort { Low, Medium, High, XHigh, Max }
+
+// Tools
+pub struct ToolSpec { pub name: ToolName, pub description: String, pub input_schema: serde_json::Value, pub source: ToolSource }
+pub enum ToolSource { Builtin, Mcp { server: String } }
+pub struct TraceContext { pub traceparent: String, pub tracestate: Option<String> }   // W3C strings; no OpenTelemetry types in the domain
+pub struct McpCallMeta { pub method: String, pub session_id: Option<String>, pub protocol_version: Option<String>, pub jsonrpc_request_id: Option<String>, pub rpc_status_code: Option<String>, pub transport: NetworkTransport }
 pub enum NetworkTransport { Pipe, Tcp }   // stdio and HTTP; the values of `network.transport`
+
+// Run
 pub enum CompletionMode { Natural, Explicit }
-pub struct ToolStats { calls: u64, errors: u64, latency: Duration }   // one tool's share of the run; the `lablet.tool.*.<name>` templates
-pub struct RunSummary { model, tools: Vec<ToolName>, prompt_system_bytes, prompt_user_bytes, provider_calls, provider_retries, provider_latency_total, provider_latency_max, usage, finish_reasons: Vec<FinishReason>, tool_calls_total, tool_calls_errors, tool_latency_total, tool_input_bytes, tool_output_bytes, per_tool: BTreeMap<ToolName, ToolStats>, cost: Option<Cost>, outcome: RunOutcome }
+pub enum StopReason { Completed, EndedWithoutCompletion, MaxTurns, Timeout, MaxTotalTokens, OutputTruncated, ContextExhausted, RetriesExhausted, ToolErrorsExhausted, Cancelled, ProviderError }
+pub struct RunOutcome { pub run_id: RunId, pub stop_reason: StopReason, pub turns: u32, pub usage: Usage, pub tool_calls: u64, pub duration_ms: u64, pub result: RunResult, pub error: Option<String> }
+pub struct RunResult { pub text: String, pub structured: Option<serde_json::Value> }
+pub struct RunContext { pub run_id: RunId, pub config_digest: String, pub agent_version: String, pub resource: Vec<(String, String)>, pub transcript_path: Option<PathBuf>, pub skills_count: u32, pub mcp_servers: Vec<String>, pub completion: CompletionMode, pub max_turns: u32, pub timeout_ms: u64, pub request: RequestDefaults, pub capture_content: bool }
+pub struct ToolStats { pub calls: u64, pub errors: u64, pub latency_ms: u64 }   // one tool's share of the run; the `lablet.tool.*.<name>` templates
+pub struct RunSummary { pub model: ModelRef, pub tools: Vec<ToolName>, pub prompt_system_bytes: u64, pub prompt_user_bytes: u64, pub provider_calls: u64, pub provider_retries: u64, pub provider_latency_total_ms: u64, pub provider_latency_max_ms: u64, pub finish_reasons: Vec<FinishReason>, pub tool_calls_errors: u64, pub tool_latency_total_ms: u64, pub tool_input_bytes: u64, pub tool_output_bytes: u64, pub per_tool: BTreeMap<ToolName, ToolStats>, pub cost: Option<Cost>, pub outcome: RunOutcome }
 ```
 
-`RunContext` is composition-root knowledge handed to the loop. `RunSummary` is accumulated by the loop, not reconstructed by observers, so every observer reports identical numbers. The wide event is the two flattened together.
+`RunContext` is composition-root knowledge handed to the loop. `RunSummary` is accumulated by the loop, not reconstructed by observers, so every observer reports identical numbers. The wide event is the two flattened together. `RunSummary` doesn't repeat what its `outcome` already holds: `gen_ai.usage.*` comes from `outcome.usage`, `lablet.tool_calls.total` from `outcome.tool_calls`, `lablet.run.turns` from `outcome.turns`, `lablet.run.duration_ms` from `outcome.duration_ms`, and `lablet.run.stop_reason` and `lablet.run.error` from the fields of the same name, so no two fields can disagree.
 
-Cache-related fields are zero for providers that don't report them. Replaying `Thinking`, `RedactedThinking`, and `Opaque` blocks unchanged and in order is required for Anthropic, which rejects modified thinking blocks in the latest assistant turn.
+**Usage.** `input_tokens` includes the cached tokens; `cache_read_tokens` and `cache_write_tokens` are subsets of it. `total()` is `input_tokens + output_tokens` and is what `run.max_total_tokens` counts; `uncached_input_tokens()` is `input_tokens` less both cache fields. An adapter whose provider reports uncached input separately, as Anthropic does, adds the cache counts in before it builds a `Usage`. Cache-related fields are zero for providers that don't report them.
+
+**Durations.** A duration that reaches telemetry as a `*_ms` attribute is stored as whole milliseconds in a `u64` field named `*_ms` (`duration_ms`, `timeout_ms`, the latency fields). The loop converts once, where it reads the clock, so no observer rounds for itself. The model holds no `Duration`.
+
+**Serde form.** Derives only. Enums are externally tagged with `snake_case` names: a `ContentBlock` is `{"text": "..."}`, `{"tool_use": {"id": "...", "name": "...", "input": {}}}`, or `{"tool_result": {"call_id": "...", "content": [{"text": "..."}], "is_error": false}}`, and the other variants follow the same pattern; a `ToolSource` is `"builtin"` or `{"mcp": {"server": "docs"}}`. `FinishReason::Other` is untagged, so it's written as the provider's own string, and a string that spells a known reason always reads back as that reason. `Effort::XHigh` is `xhigh`. `Cost` is a bare number. An `Option` that's `None` is written as `null`, never left out. A `Usage` field left out of the input reads as zero. `StopReason`, `CompletionMode`, `ToolSource` (the variant only), `FinishReason`, `ProviderKind`, `Effort`, and `NetworkTransport` each have an `as_str` and a `Display` that print the serde spelling; a unit test in the model pins the wire spellings, and a test in `lablet-conformance`, which may depend on both crates, compares `StopReason`, `CompletionMode`, and `ToolSource` with the generated registry enums through exhaustive matches, so a variant added on either side doesn't compile until the other has it.
+
+**Message validation.** `Message::new` and `Message::validate` hold the rules both provider APIs impose: tool-use blocks only in assistant messages with ids unique within the message, tool-result blocks only in user messages with one result for each call id. The first violation in block order is reported. The fields are public and deserialisation doesn't validate, so an adapter validates the message it builds from a response and reports a failure as `Malformed`.
+
+**Transcript.** `Transcript` is the conversation of one run and the loop's working state: `messages` is the slice a provider call sends, and `push_assistant` stores the completion's `Usage` and response model beside the message it produced. It maps onto an ATIF v1.8 trajectory without a model change: `steps()` yields one `Step` for each assistant message, its `observation` is the following user message when that message holds tool results, `result_of` joins a result to its call by call id within that step (so an id a fake script repeats across turns still joins correctly), and a step's metrics are `prompt_tokens = input_tokens`, `completion_tokens = output_tokens`, `cached_tokens = cache_read_tokens`, which agrees with ATIF's rule that cached tokens are a subset of prompt tokens. The push methods take content rather than a `Message` so the role, and with it the pairing of `turns` with assistant messages, can't be wrong.
+
+Replaying `Thinking`, `RedactedThinking`, and `Opaque` blocks unchanged and in order is required for Anthropic, which rejects modified thinking blocks in the latest assistant turn.
 
 ## 4. Domain policy (`lablet-policy`)
 
@@ -195,14 +249,30 @@ Pure functions over plain state, fully unit-testable without async:
 
 ```rust
 pub struct StopPolicy { pub completion: CompletionMode, pub max_turns: u32, pub timeout: Duration, pub max_total_tokens: Option<u64>, pub max_consecutive_tool_errors: u32 }
-pub struct RunState { pub turn: u32, pub elapsed: Duration, pub total_tokens: u64, pub consecutive_tool_errors: u32, pub last_finish: Option<FinishReason>, pub last_had_tool_use: bool, pub task_complete_called: bool }
-pub enum StopPoint { BeforeProviderCall, AfterToolPhase }
+pub struct RunState { pub turn: u32, pub elapsed: Duration, pub total_tokens: u64, pub consecutive_tool_errors: u32, pub last_finish: Option<FinishReason>, pub last_had_tool_use: bool, pub task_complete_called: bool }   // turn is one-based; Default
+pub enum StopPoint { BeforeProviderCall, AfterProviderResponse, AfterToolPhase }   // points A, R, and B of §1
 impl StopPolicy { pub fn evaluate(&self, at: StopPoint, state: &RunState) -> Option<StopReason> }
-pub struct RetryPolicy { pub max_attempts: u32, pub base: Duration, pub max: Duration, pub factor: f64 }
-impl RetryPolicy { pub fn delay(&self, attempt: u32) -> Option<Duration> }   // None when exhausted
-pub struct Pricing { per-million input, output, cache read, cache write }
-impl Pricing { pub fn cost(&self, usage: &Usage) -> Cost }
+
+pub struct RetryPolicy { max_attempts: u32, base: Duration, max: Duration, factor: f64 }
+impl RetryPolicy {
+    pub fn new(max_attempts: u32, base: Duration, max: Duration, factor: f64) -> Result<RetryPolicy, RetryPolicyError>;
+    pub fn delay(&self, attempt: u32) -> Option<Duration>;   // the wait after one-based attempt `attempt` failed; None when it was the last one allowed
+}
+pub enum RetryPolicyError { NoAttempts, BaseAboveMax { base: Duration, max: Duration }, Factor(f64) }
+
+pub struct Pricing { input: f64, output: f64, cache_read: f64, cache_write: f64 }   // USD per million tokens
+impl Pricing {
+    pub fn new(input: f64, output: f64, cache_read: f64, cache_write: f64) -> Result<Pricing, PricingError>;
+    pub fn cost(&self, usage: &Usage) -> Cost;
+}
+pub enum PricingError { Rate { name: &'static str, value: f64 } }
 ```
+
+**Stop policy.** `evaluate` holds the order and the boundaries §1 gives for each point, and decides seven of the stop reasons. The other four aren't its to decide: `cancelled` comes from the loop's poll of the `Cancellation` port, and `retries_exhausted`, `context_exhausted`, and `provider_error` from a failed provider call (`RetryPolicy::delay` returning `None`, and the `ProviderError` variant). Completion is a `StopPoint` and not a function of its own because `RunState` already carries what it reads (`last_finish`, `last_had_tool_use`, `task_complete_called`), so the loop has one shape at all three points: update the state, then ask. Natural mode doesn't read `task_complete_called`. Every `StopPolicy` value is meaningful, so its fields are public and nothing is validated: `max_turns: 0` and `max_consecutive_tool_errors: 0` act as 1, and a zero `timeout` or token budget stops the run at the first point A.
+
+**Retry policy.** `max_attempts` is `run.max_retries`. `new` refuses a `max_attempts` of 0 (1 means a failed call isn't retried), a `base` longer than `max`, and a `factor` that isn't a finite number of at least 1. `delay` is total: attempt 0 is read as 1, and an attempt number or a factor large enough to overflow gives `max`, never a panic or a NaN.
+
+**Pricing.** `new` refuses a rate that isn't a finite number of at least 0. `cost` prices `Usage::uncached_input_tokens()` at the input rate and each cache field once, at its own rate, because `input_tokens` already includes both (§3); pricing `input_tokens` whole and adding the cache fields would bill the cached tokens twice. A cost is never negative and never NaN.
 
 ## 5. Application (`lablet-run`)
 
@@ -214,10 +284,7 @@ impl Pricing { pub fn cost(&self, usage: &Usage) -> Cost }
     fn endpoint(&self) -> Option<Endpoint>;                     // server.address and server.port; None for fake
     async fn complete(&self, req: CompletionRequest<'_>) -> Result<Completion, ProviderError>;
 }
-pub struct CompletionRequest<'a> { system: &'a str, messages: &'a [Message], tools: &'a [ToolSpec], max_tokens: u32, temperature: Option<f32>, thinking: Thinking, seed: Option<u64>, deadline: Duration }
-pub struct Thinking { mode: ThinkingMode, budget: Option<u32>, effort: Option<Effort> }
-pub enum ThinkingMode { Default, Enabled, Disabled }
-pub enum Effort { Low, Medium, High, XHigh, Max }
+pub struct CompletionRequest<'a> { system: &'a str, messages: &'a [Message], tools: &'a [ToolSpec], max_tokens: u32, temperature: Option<f32>, thinking: Thinking, seed: Option<u64>, deadline: Duration }   // Thinking is a model type (§3), because RequestDefaults holds one
 pub enum ProviderError { Retryable(String), ContextExhausted(String), Fatal(String), Malformed(String) }
 
 #[async_trait] pub trait ToolExecutor: Send + Sync {
@@ -275,7 +342,7 @@ Tool calls within one turn are executed sequentially. Parallel execution is a la
 
 ### `provider-anthropic`
 
-Messages API via `reqwest` with `rustls`. Maps `ContentBlock` both ways, including `thinking`, `redacted_thinking`, and cache-control (applied to the system prompt and tool specs when `model.cache: true`). Reads `cache_read_input_tokens` and `cache_creation_input_tokens` into `Usage`; the latter is reported as `gen_ai.usage.cache_write.input_tokens`, the semantic-convention name, not Anthropic's. Thinking: `Default` sends nothing (current models think adaptively by default), `Enabled` sends `thinking: {type: enabled, budget_tokens}`, `Disabled` sends `type: disabled`; `effort` maps to `output_config.effort` and is reported as `gen_ai.request.reasoning.level`. `temperature` is sent only when set; the build step warns that models from Opus 4.7 and Sonnet 5 onward reject a non-default value. Validates `budget < max_tokens` at build. Classifies 429, 529, 5xx, transport errors, and per-call timeouts as retryable, the `prompt is too long` invalid-request error as context exhausted, and 401 and 403 as fatal. Ignores `seed`.
+Messages API via `reqwest` with `rustls`. Maps `ContentBlock` both ways, including `thinking`, `redacted_thinking`, and cache-control (applied to the system prompt and tool specs when `model.cache: true`). Reads `cache_read_input_tokens` and `cache_creation_input_tokens` into `Usage`; the latter is reported as `gen_ai.usage.cache_write.input_tokens`, the semantic-convention name, not Anthropic's. Anthropic's own `input_tokens` leaves both out, so the adapter adds them to it: `Usage.input_tokens` includes cached tokens (§3). Thinking: `Default` sends nothing (current models think adaptively by default), `Enabled` sends `thinking: {type: enabled, budget_tokens}`, `Disabled` sends `type: disabled`; `effort` maps to `output_config.effort` and is reported as `gen_ai.request.reasoning.level`. `temperature` is sent only when set; the build step warns that models from Opus 4.7 and Sonnet 5 onward reject a non-default value. Validates `budget < max_tokens` at build. Classifies 429, 529, 5xx, transport errors, and per-call timeouts as retryable, the `prompt is too long` invalid-request error as context exhausted, and 401 and 403 as fatal. Ignores `seed`.
 
 ### `provider-openai`
 
@@ -291,7 +358,7 @@ Each tool is a small struct; the executor holds only those enabled in config. In
 
 ### `tools-mcp`
 
-One `rmcp` client per configured server (version pinned in the workspace `Cargo.toml`). Tool names are exposed exactly as the server reports them, so measurements reflect the server as-is. A name collision across servers is a build error; a server with `prefix_tools: true` has its tools renamed `<server>__<tool>`, which is the escape hatch. `execute` forwards the call and maps `isError` results to `is_error: true`. It injects the `ToolCall`'s `trace_context` into the request's `params._meta` as unprefixed `traceparent` and `tracestate`, per MCP SEP-414, and fills `McpCallMeta` (method, session id, protocol version, JSON-RPC request id, RPC status code on error, transport `pipe` for stdio or `tcp` for HTTP) on the output or error so the OTel observer can put `mcp.*`, `jsonrpc.*`, `rpc.*`, and `network.transport` on the `execute_tool` span; the conventions want one span carrying both `gen_ai.tool.*` and `mcp.*`, not a nested MCP span. Servers are started when the `Lablet` is built, with `tools.mcp[].startup_timeout`, live for the lifetime of the `Lablet` across runs, and are shut down by `Lablet::shutdown`. A stdio server's stderr is forwarded line by line to the diagnostic log at `debug`. HTTP servers receive `headers` verbatim. If a server exits or its transport breaks mid-run, every call to its tools returns a tool error naming the server, so the consecutive error cap ends the run; its tools stay listed so the model's behaviour is observable.
+One `rmcp` client per configured server (version pinned in the workspace `Cargo.toml`). Tool names are exposed exactly as the server reports them, so measurements reflect the server as-is. A reported name, or a prefixed one, that isn't a valid `ToolName` (1 to 64 of `[a-zA-Z0-9_-]`, which is what both provider APIs accept) is a build error with the `mcp:` prefix naming the server and the tool, since no provider would accept it. A name collision across servers is a build error; a server with `prefix_tools: true` has its tools renamed `<server>__<tool>`, which is the escape hatch. `execute` forwards the call and maps `isError` results to `is_error: true`. It injects the `ToolCall`'s `trace_context` into the request's `params._meta` as unprefixed `traceparent` and `tracestate`, per MCP SEP-414, and fills `McpCallMeta` (method, session id, protocol version, JSON-RPC request id, RPC status code on error, transport `pipe` for stdio or `tcp` for HTTP) on the output or error so the OTel observer can put `mcp.*`, `jsonrpc.*`, `rpc.*`, and `network.transport` on the `execute_tool` span; the conventions want one span carrying both `gen_ai.tool.*` and `mcp.*`, not a nested MCP span. Servers are started when the `Lablet` is built, with `tools.mcp[].startup_timeout`, live for the lifetime of the `Lablet` across runs, and are shut down by `Lablet::shutdown`. A stdio server's stderr is forwarded line by line to the diagnostic log at `debug`. HTTP servers receive `headers` verbatim. If a server exits or its transport breaks mid-run, every call to its tools returns a tool error naming the server, so the consecutive error cap ends the run; its tools stay listed so the model's behaviour is observable.
 
 ### Telemetry contract (`lablet/telemetry/`)
 
@@ -365,7 +432,9 @@ run:
   max_turns: 30
   timeout: 10m
   max_total_tokens: null # input + output across the run (input already includes cached tokens); null means unlimited
-  max_retries: 3 # per provider call
+  max_retries: 3 # retries per provider call, so four attempts; 0 never retries
+  retry_backoff_base: 500ms # the wait after the first failed attempt; it doubles each time
+  retry_backoff_max: 30s
   max_consecutive_tool_errors: 3
   tool_timeout: 60s
   provider_timeout: 120s
