@@ -1,0 +1,21 @@
+{
+  "run_id": "01K5F3Z8Q4X9T2M7B6W1R0VNEC",
+  "stop_reason": "completed",
+  "turns": 7,
+  "usage": {
+    "input_tokens": 48211,
+    "output_tokens": 1840,
+    "cache_read_tokens": 39104,
+    "cache_write_tokens": 6144
+  },
+  "tool_calls": 5,
+  "duration_ms": 12345,
+  "result": {
+    "text": "The failing test is fixed.",
+    "structured": {
+      "passed": true,
+      "files_changed": ["src/lib.rs"]
+    }
+  },
+  "error": null
+}

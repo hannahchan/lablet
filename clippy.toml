@@ -3,6 +3,7 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 
-# A proper noun in the semantic-convention briefs that become doc comments in
-# the generated telemetry-registry crate. `..` keeps clippy's own list.
-doc-valid-idents = ["..", "GenAI"]
+# Proper nouns clippy would want in backticks: `GenAI` is in the
+# semantic-convention briefs that become doc comments in the generated
+# telemetry-registry crate, `OpenAI` names a provider. `..` keeps clippy's own list.
+doc-valid-idents = ["..", "GenAI", "OpenAI"]

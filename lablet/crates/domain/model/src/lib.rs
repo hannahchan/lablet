@@ -1,2 +1,37 @@
 //! The domain model: conversation, tools, usage, stop reasons, run identity, and
-//! the run summary, as plain types with serde derives and no async code.
+//! the run summary, as plain types and pure functions with serde derives.
+//!
+//! The derived serde form of these types is the one JSON form of a
+//! conversation: the transcript, the outcome document, and the fake provider's
+//! scripts all reuse it.
+
+/// Implements `Display` through the type's `as_str`, so what a type prints is
+/// what it serialises as.
+macro_rules! display_as_str {
+    ($($name:ty),+ $(,)?) => {$(
+        impl core::fmt::Display for $name {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+    )+};
+}
+
+mod conversation;
+mod id;
+mod provider;
+mod run;
+mod tool;
+mod transcript;
+
+pub use conversation::{ContentBlock, Message, MessageError, Role, ToolResultContent};
+pub use id::{IdError, RunId, ToolCallId, ToolName};
+pub use provider::{
+    Completion, Cost, Effort, Endpoint, FinishReason, ModelRef, ProviderKind, RequestDefaults,
+    Thinking, ThinkingMode, Usage,
+};
+pub use run::{
+    CompletionMode, RunContext, RunOutcome, RunResult, RunSummary, StopReason, ToolStats,
+};
+pub use tool::{McpCallMeta, NetworkTransport, ToolSource, ToolSpec, TraceContext};
+pub use transcript::{Step, Transcript, TurnRecord};
