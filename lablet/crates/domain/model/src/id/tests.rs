@@ -185,3 +185,13 @@ fn a_tool_name_is_a_json_map_key() {
             .is_err()
     );
 }
+
+/// The loop builds this name without an error path, so the rule this module
+/// holds and the constant the completion mode names must agree.
+#[test]
+fn the_completion_tools_name_is_one_this_module_would_accept() {
+    assert_eq!(
+        ToolName::task_complete(),
+        ToolName::new(crate::CompletionMode::TASK_COMPLETE).unwrap()
+    );
+}

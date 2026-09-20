@@ -99,6 +99,17 @@ id! {
 impl ToolName {
     /// The longest tool name both provider APIs accept.
     pub const MAX_LEN: usize = 64;
+
+    /// The tool a run in [`crate::CompletionMode::Explicit`] ends by calling.
+    ///
+    /// Built here rather than validated at the call site: this module owns
+    /// the rule and can see that the name keeps it, so the loop needs no
+    /// error path for a name that can't be refused. A test holds the two to
+    /// each other.
+    #[must_use]
+    pub fn task_complete() -> Self {
+        Self(crate::CompletionMode::TASK_COMPLETE.to_owned())
+    }
 }
 
 display_as_str!(RunId, ToolCallId, ToolName);
