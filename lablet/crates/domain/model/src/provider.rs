@@ -554,8 +554,10 @@ pub struct RequestParams {
     pub thinking: Thinking,
     /// The reasoning effort, for providers that take a level.
     pub effort: Option<Effort>,
-    /// The sampling seed, for providers that take one.
-    pub seed: Option<u64>,
+    /// The sampling seed, for providers that take one. An `i64` because
+    /// that's what `gen_ai.request.seed` carries; a `u64` above `i64::MAX`
+    /// would reach telemetry as some other number.
+    pub seed: Option<i64>,
 }
 
 /// How the model is asked to reason before it answers.

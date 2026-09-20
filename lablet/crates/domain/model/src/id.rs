@@ -79,6 +79,8 @@ macro_rules! id {
 id! {
     /// Identifies one run. By convention a ULID, which the composition root
     /// generates; the domain only requires it to be non-empty and trimmed.
+    /// The leniency is for [`ToolCallId`], whose value a provider chooses; a
+    /// run id is lablet's own and is always a ULID in practice.
     RunId, run_id
 }
 

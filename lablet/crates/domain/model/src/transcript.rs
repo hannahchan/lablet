@@ -23,6 +23,11 @@
 //!
 //! Redacted thinking and opaque blocks are replay material for the provider
 //! that sent them and have no place in a trajectory.
+//!
+//! A [`Turn`] here is one model response. Anthropic's documentation uses
+//! "assistant turn" for the whole tool-use loop, so a rule it states per turn,
+//! such as where a thinking block must appear, spans several turns of this
+//! transcript.
 
 use std::time::Duration;
 
