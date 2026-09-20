@@ -265,16 +265,25 @@ impl Transcript {
     /// Makes `outcomes` those of the last turn. See
     /// [`crate::Run::tool_calls`] for the contract.
     pub(crate) fn answer(&mut self, outcomes: Vec<ToolCallOutcome>) -> Result<(), TranscriptError> {
-        if self
-            .turns
-            .last()
-            .is_some_and(|turn| !turn.tool_calls.is_empty())
-        {
-            return Err(TranscriptError::AlreadyAnswered {
-                turn: self.turns.len(),
-            });
+        // The last turn is taken once, mutably, and every refusal is decided
+        // against it. Asking for it again after the checks have passed would
+        // be a branch that can't be taken and so can't be covered.
+        let number = self.turns.len();
+        let Some(turn) = self.turns.last_mut() else {
+            return if outcomes.is_empty() {
+                // No turn made a call, so an empty set of outcomes answers it.
+                Ok(())
+            } else {
+                Err(TranscriptError::OutcomesDontAnswerCalls {
+                    calls: Vec::new(),
+                    outcomes: ids(outcomes.iter().map(|outcome| &outcome.call_id)),
+                })
+            };
+        };
+        if !turn.tool_calls.is_empty() {
+            return Err(TranscriptError::AlreadyAnswered { turn: number });
         }
-        let calls = self.turns.last().map(Turn::call_ids).unwrap_or_default();
+        let calls = turn.call_ids();
         if outcomes.is_empty() && calls.is_empty() {
             return Ok(());
         }
@@ -286,9 +295,7 @@ impl Transcript {
                 outcomes: answered,
             });
         }
-        if let Some(turn) = self.turns.last_mut() {
-            turn.tool_calls = outcomes;
-        }
+        turn.tool_calls = outcomes;
         Ok(())
     }
 

@@ -329,6 +329,18 @@ fn a_transport_prints_the_value_its_attribute_takes() {
     assert_eq!(crate::NetworkTransport::Tcp.as_str(), "tcp");
 }
 
+/// The loop resolves a name before it reaches an executor, so its own routing
+/// never returns this kind. An executor may, and the port says what it means:
+/// no tool ran, so the call has no ending.
+#[test]
+fn only_the_two_kinds_that_mean_a_tool_ran_have_an_ending() {
+    use lablet_model::ToolCallEnd;
+
+    assert_eq!(ToolErrorKind::Unknown.ended(), None);
+    assert_eq!(ToolErrorKind::Timeout.ended(), Some(ToolCallEnd::Timeout));
+    assert_eq!(ToolErrorKind::Failed.ended(), Some(ToolCallEnd::Failed));
+}
+
 /// The loop intercepts this name rather than routing it, so an executor that
 /// also serves it would be offered twice — which every provider rejects — and
 /// its own tool could never run.

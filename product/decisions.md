@@ -480,3 +480,22 @@ What stands between the domain and application crates and 100% regions, as of th
 - `service.rs`, `ToolInput::Unparsed` in `task_complete_argument`, and `tool.rs`, `ToolErrorKind::Unknown` in `ended`. The first is reachable and untested; the second can't be reached through `settle`, which resolves the name before it calls an executor.
 
 All but one are a branch for a state the caller has already excluded, which is the reading the human gave this gate: coverage falling in these layers is a design signal. Raising the floor to 100% would mean making those states unrepresentable rather than guarded, and is left as its own decision.
+
+## 2026-09-21 The domain crates are held to every line and every region
+
+A trial, asked for after the region floor landed: remove the branches nothing can reach, then raise the floors to 100 and see what holds. `lablet-model` and `lablet-policy` now hold at 100% lines and 100% regions. `lablet-run` reached 98.4% regions and stays at 90, which is the open number.
+
+Eighteen uncovered regions went in, seven of them design and four of them tests nobody had written:
+
+- `Transcript::answer` asked for the last turn twice, once to check and once to write, and the second ask couldn't fail. It takes the turn once now, mutably, and decides every refusal against it. The `None` arm that's left is reachable, because outcomes can arrive with no turn to answer, and it's tested.
+- `RunService::settle` took the call's arguments as an `Option` its caller had already matched out of `ToolInput`, so it had to unwrap what couldn't be absent and guard the rest with `unreachable!`. It reads `call.input` itself now and the arm is gone.
+- No scenario ran a tool call with `capture_content` on. Line coverage couldn't see it: the fields were on covered lines and only the closures behind `capture.then(..)` were cold. Two of the loop's four content fields had never once been exercised.
+- Nothing called `ToolErrorKind::Unknown.ended()`, or completed a run with a `task_complete` call whose arguments didn't parse.
+
+The eleven that are left are the loop's two `Stopped::defect` arms and the function they call: `Run::responded` and `Run::tool_calls` returning a `TranscriptError` the loop can't provoke, because the policy stops a turn that called no tool before the next response is recorded.
+
+Those stay, and the reason is worth stating. `Transcript` is read back with `#[serde(try_from = "RawTranscript")]`, and that conversion walks the raw turns through the same `push` and `answer` the run writes through. One rule set, enforced on both paths, which is the convention this repo already holds itself to. Making the loop's calls infallible would mean a second copy of those rules for the read path, and a second copy is the drift the convention exists to prevent. Eleven uncovered regions is the cheaper side of that trade.
+
+So the hypothesis behind the floor holds, with a boundary: coverage falling in these layers is a design signal, except where the uncovered code is one caller's handling of a failure another caller can genuinely cause. That case is a shared contract, not a guard.
+
+No floor is 100% mutants. An equivalent mutant can't be killed by any test, `lablet-run` carries one already (the default `RunObserver::trace_context` returning `None`, replaced by `None`), and whether a mutant is equivalent isn't decidable, so the number would be a promise about future code that nobody can keep.

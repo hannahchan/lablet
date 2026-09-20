@@ -694,26 +694,72 @@ async fn every_event_carries_the_run_id_and_the_summary_closes_the_stream() {
     assert_eq!(**summary, run.finished.summary);
 }
 
+/// Every content-bearing field of every event, on a run that calls a tool, so
+/// the prompts aren't standing in for the response and the tool call beside
+/// them.
 #[tokio::test]
 async fn content_reaches_an_observer_only_when_the_run_captures_it() {
-    let quiet = Harness::new(vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))])
-        .run()
-        .await;
-    let mut loud = Harness::new(vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))]);
+    let script = || {
+        vec![
+            Answer::now(says("On it.", &["bash"], FinishReason::ToolUse)),
+            Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+        ]
+    };
+    let quiet = Harness::new(script()).run().await;
+    let mut loud = Harness::new(script());
     loud.context.capture_content = true;
     let loud = loud.run().await;
 
     for (run, captured) in [(&quiet, false), (&loud, true)] {
+        let events = run.observer.events();
         let Some(EventKind::RunStarted {
             system_prompt,
             prompt,
             ..
-        }) = run.observer.events().first().map(|e| e.kind.clone())
+        }) = events.first().map(|e| e.kind.clone())
         else {
             panic!("the first event is RunStarted");
         };
-        assert_eq!(system_prompt.is_some(), captured);
-        assert_eq!(prompt.is_some(), captured);
+        assert_eq!(system_prompt.is_some(), captured, "the system prompt");
+        assert_eq!(prompt.is_some(), captured, "the task prompt");
+
+        let present = |carried: Vec<bool>, what: &str| {
+            assert!(!carried.is_empty(), "no event carried {what}");
+            assert!(
+                carried.iter().all(|had| *had == captured),
+                "{what}: {carried:?} with capture {captured}"
+            );
+        };
+        present(
+            events
+                .iter()
+                .filter_map(|event| match &event.kind {
+                    EventKind::ProviderCallFinished { response, .. } => Some(response.is_some()),
+                    _ => None,
+                })
+                .collect(),
+            "the response",
+        );
+        present(
+            events
+                .iter()
+                .filter_map(|event| match &event.kind {
+                    EventKind::ToolCallStarted { input, .. } => Some(input.is_some()),
+                    _ => None,
+                })
+                .collect(),
+            "the call's arguments",
+        );
+        present(
+            events
+                .iter()
+                .filter_map(|event| match &event.kind {
+                    EventKind::ToolCallFinished { output, .. } => Some(output.is_some()),
+                    _ => None,
+                })
+                .collect(),
+            "what the model was sent back",
+        );
     }
 }
 
@@ -1590,6 +1636,31 @@ async fn a_call_whose_arguments_did_not_parse_is_malformed_input_and_never_runs(
         "the model sees its own text: {sent}"
     );
     assert_eq!(run.stop_reason(), StopReason::Completed);
+}
+
+/// A cut-off response can end inside `task_complete`'s own arguments. The call
+/// still completes the run in explicit mode, because the model said it was
+/// done, but nothing parsed, so the result carries no structured value.
+#[tokio::test]
+async fn a_task_complete_call_whose_arguments_did_not_parse_completes_without_a_result() {
+    let mut harness = Harness::new(vec![Answer::now(calls_with_unparsed_input(
+        CompletionMode::TASK_COMPLETE,
+        "{\"passed\": tr",
+    ))]);
+    harness.completion = CompletionMode::Explicit;
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(
+        run.finished.summary.outcome.result().structured,
+        None,
+        "nothing parsed, so there is no argument to report"
+    );
+    assert_eq!(
+        run.finished.summary.outcome.tool_calls, 0,
+        "the completion call is intercepted rather than run"
+    );
 }
 
 /// A response whose only call is unparsed, so `tool_uses` has one entry the

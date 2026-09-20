@@ -33,17 +33,31 @@ pub struct Floor {
 
 /// Every crate with a floor. Changing a number or the list is a decision:
 /// it is stated in contributing/README.md and product/quality-bar.md too.
+///
+/// The two domain crates are held to every line and every region. They have
+/// no unreachable code, and a branch that no test can take is the signal the
+/// floor exists to raise: it means the type allows a state the caller has
+/// already ruled out.
+///
+/// `lablet-run` is held lower, and that number is the open one. Its remaining
+/// uncovered regions are all the loop's handling of a [`TranscriptError`] it
+/// can't receive, and the error can't go away: `Transcript` is deserialised
+/// through the same `push` and `answer` the loop writes through, so the rules
+/// are enforced once for both paths. Making the loop's calls infallible would
+/// mean a second copy of those rules for the read path.
+///
+/// [`TranscriptError`]: https://docs.rs/lablet-model
 pub const FLOORS: &[Floor] = &[
     Floor {
         package: "lablet-model",
-        line_coverage: 90,
-        region_coverage: 90,
+        line_coverage: 100,
+        region_coverage: 100,
         mutants_caught: 80,
     },
     Floor {
         package: "lablet-policy",
-        line_coverage: 90,
-        region_coverage: 90,
+        line_coverage: 100,
+        region_coverage: 100,
         mutants_caught: 80,
     },
     Floor {
@@ -328,12 +342,37 @@ mod tests {
     }
 
     #[test]
-    fn the_floors_are_ninety_and_eighty_on_the_domain_and_application_crates() {
-        let packages: Vec<&str> = FLOORS.iter().map(|floor| floor.package).collect();
-        assert_eq!(packages, ["lablet-model", "lablet-policy", "lablet-run"]);
-        assert!(FLOORS.iter().all(|floor| floor.line_coverage == 90));
-        assert!(FLOORS.iter().all(|floor| floor.region_coverage == 90));
-        assert!(FLOORS.iter().all(|floor| floor.mutants_caught == 80));
+    fn the_domain_crates_are_held_to_every_line_and_region_and_the_loop_is_not_yet() {
+        let coverage: Vec<(&str, u64, u64, u64)> = FLOORS
+            .iter()
+            .map(|floor| {
+                (
+                    floor.package,
+                    floor.line_coverage,
+                    floor.region_coverage,
+                    floor.mutants_caught,
+                )
+            })
+            .collect();
+        assert_eq!(
+            coverage,
+            [
+                ("lablet-model", 100, 100, 80),
+                ("lablet-policy", 100, 100, 80),
+                // The loop's own number, which is the open decision: what it
+                // can't cover is its handling of a refusal only the read path
+                // can produce.
+                ("lablet-run", 90, 90, 80),
+            ]
+        );
+    }
+
+    /// No floor is 100% mutants: an equivalent mutant can't be killed by any
+    /// test, `lablet-run` already carries one, and whether a mutant is
+    /// equivalent isn't decidable.
+    #[test]
+    fn no_crate_is_held_to_catching_every_mutant() {
+        assert!(FLOORS.iter().all(|floor| floor.mutants_caught < 100));
     }
 
     #[test]

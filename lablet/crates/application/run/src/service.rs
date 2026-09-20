@@ -379,7 +379,7 @@ impl RunService {
 
             let began = self.clock.now();
             let trace_context = self.observer.trace_context(&call.id);
-            let settled = self.settle(call, source, input, trace_context).await;
+            let settled = self.settle(call, source, trace_context).await;
             let latency = self.clock.now().saturating_duration_since(began);
 
             let outcome = ToolCallOutcome::measured(
@@ -418,7 +418,6 @@ impl RunService {
         &self,
         call: &ToolUse,
         source: Option<lablet_model::ToolSource>,
-        input: Option<serde_json::Value>,
         trace_context: Option<crate::TraceContext>,
     ) -> Settled {
         use lablet_model::{ToolCallEnd, ToolResultContent};
@@ -429,17 +428,21 @@ impl RunService {
                 format!("no tool named {} is offered by this run", call.name),
             );
         };
-        let Some(input) = input else {
-            let ToolInput::Unparsed(text) = &call.input else {
-                unreachable!("input is None only for arguments that didn't parse")
-            };
-            return Settled::local(
-                ToolCallStatus::MalformedInput,
-                format!(
-                    "the arguments weren't valid JSON, so {} wasn't called: {text}",
-                    call.name
-                ),
-            );
+        // The arguments are read here rather than handed in already unwrapped.
+        // A caller that matched them into an `Option` leaves this function to
+        // unwrap it again, and the arm that can't then happen is a region no
+        // test can reach.
+        let input = match &call.input {
+            ToolInput::Json(value) => value.clone(),
+            ToolInput::Unparsed(text) => {
+                return Settled::local(
+                    ToolCallStatus::MalformedInput,
+                    format!(
+                        "the arguments weren't valid JSON, so {} wasn't called: {text}",
+                        call.name
+                    ),
+                );
+            }
         };
 
         match self
