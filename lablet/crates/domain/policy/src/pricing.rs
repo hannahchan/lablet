@@ -12,9 +12,7 @@ pub struct Pricing {
 }
 
 impl Pricing {
-    /// Prices per million tokens: `input` for input that touched no cache,
-    /// `output` for generated tokens, `cache_read` for input served from the
-    /// prompt cache, and `cache_write` for input written to it.
+    /// Prices per million tokens, `input` for the input that touched no cache.
     ///
     /// # Errors
     ///
@@ -38,9 +36,8 @@ impl Pricing {
     }
 
     /// The cost of `usage`, or `None` when the rates and counts multiply out
-    /// past what an `f64` holds. Rates are finite and counts are exact, so
-    /// that takes rates no real price list has; the run then reports no cost
-    /// rather than one that would reach JSON as `null`.
+    /// past what an `f64` holds, which takes rates no real price list has.
+    /// Such a cost would reach JSON as `null` anyway, so the run reports none.
     ///
     /// `Usage::input_tokens` includes the cached tokens, so the input rate
     /// applies to `Usage::uncached_input_tokens` only and each cache field is
@@ -51,11 +48,9 @@ impl Pricing {
     ///
     /// A provider that reports cache counts above its own input count leaves
     /// no uncached part, so that run is priced for its cached tokens alone and
-    /// the cost comes out low. The alternative is refusing to price a run
-    /// because a provider's arithmetic didn't agree with itself, which is the
-    /// worse failure for a tool whose job is to report what happened: all four
-    /// counts reach the wide event beside the cost, so a consumer can see the
-    /// inconsistency and discount the number.
+    /// comes out low. Refusing to price it would be the worse failure for a
+    /// tool that reports what happened: all four counts reach the wide event
+    /// beside the cost, so a consumer can see the inconsistency.
     #[must_use]
     pub fn cost(&self, usage: &Usage) -> Option<Cost> {
         Cost::new(

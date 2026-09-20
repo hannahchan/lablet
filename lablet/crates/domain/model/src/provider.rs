@@ -85,8 +85,7 @@ pub struct TokenCounts {
 ///
 /// An adapter builds a `Usage` through the constructor named for its
 /// provider's convention, [`Usage::from_inclusive`] or
-/// [`Usage::from_uncached`], so the cache addition can't be forgotten. Both
-/// take a [`TokenCounts`], so no count can be given in another's place.
+/// [`Usage::from_uncached`], so the cache addition can't be forgotten.
 ///
 /// A field is zero for a provider that doesn't report it. A field left out
 /// when deserialising is zero and a field with any other name is an error, so
@@ -98,8 +97,7 @@ pub struct Usage {
     pub input_tokens: u64,
     /// Every token the model generated, reasoning included.
     pub output_tokens: u64,
-    /// The part of `output_tokens` the model spent on reasoning. Both
-    /// providers report it, and both bill it at the output rate.
+    /// The part of `output_tokens` the model spent on reasoning.
     pub reasoning_output_tokens: u64,
     /// The part of `input_tokens` served from the provider's prompt cache.
     pub cache_read_tokens: u64,
@@ -402,7 +400,6 @@ pub(crate) fn distinct_tool_use_ids(content: &[ContentBlock]) -> Result<(), Resp
 
 /// An amount of money in US dollars: finite, and never negative.
 ///
-/// Both rules exist because of what the alternative looks like downstream.
 /// JSON has no infinity or NaN, so serde writes either as `null`, which is
 /// how the wide event and the summary also write "no pricing was configured":
 /// a cost that overflowed would be indistinguishable from one that was never
@@ -458,9 +455,8 @@ impl From<Cost> for f64 {
 /// consumer can recompute the number rather than trust it. A run whose
 /// provider reported cache counts above its own input count is priced for its
 /// cached tokens alone, and the rates are what let a consumer see that.
-/// Reasoning tokens need no rate of their own; both providers bill them at
-/// the output rate, and [`Usage::reasoning_output_tokens`] is already part of
-/// `output_tokens`.
+/// Reasoning tokens need no rate of their own: they're billed at the output
+/// rate and are already part of `output_tokens`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "RawRates", deny_unknown_fields)]
 pub struct Rates {

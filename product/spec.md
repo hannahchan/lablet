@@ -458,8 +458,8 @@ loop:
         ToolCallOutcome::measured(call.id, status, content, max_tool_output_bytes, started, latency)
     run.tool_calls(outcomes)?
     if cancelled: stop cancelled;  if let Some(r) = stop.after_tools(&run.progress(elapsed)): stop r
-cost = pricing.and_then(|p| p.cost(&run.usage()))                          # None when there's no pricing, or the amount overflows
-return run.finish(reason, elapsed, structured, error, cost)                 # FinishedRun { summary, transcript }
+rates = pricing.map(Pricing::rates); cost = pricing.and_then(|p| p.cost(&run.usage()))   # both from one Option<Pricing>; cost is None when the amount overflows
+return run.finish(reason, elapsed, structured, error, rates, cost)         # FinishedRun { summary, transcript }
 ```
 
 The messages are rendered inside the attempt because they borrow the run, which a failed attempt changes; rendering is one allocation and no copy of the conversation. The loop passes `finish` whatever `structured` and `error` it has, and the outcome keeps what the stop reason allows (§3), so the loop has no rule of its own about which stop reason carries which. The two calls marked `?` refuse only a sequence this loop can't produce: a response while the last turn's tool calls are unanswered or when it made none, which point R never lets through, and outcomes that aren't one for each call of the last turn, in order. `lablet-run`'s tests hold that neither is ever refused; if one were, `run` would report the defect on the diagnostic log and end the run with `provider_error` and the refusal's text, because a `FinishedRun` must still come back.

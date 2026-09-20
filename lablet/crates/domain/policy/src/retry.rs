@@ -35,8 +35,7 @@ pub struct RetryPolicy {
 
 impl RetryPolicy {
     /// A policy that tries a failed call again up to `max_retries` times, so
-    /// `0` never retries, and waits `base` after the first failure, `factor`
-    /// times longer after each further one, and never longer than `max`.
+    /// `0` never retries, and backs off as [`RetryPolicy::next`] describes.
     ///
     /// # Errors
     ///

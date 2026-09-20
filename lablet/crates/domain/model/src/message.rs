@@ -16,7 +16,6 @@ pub enum UserContent {
 }
 
 impl UserContent {
-    /// The summed byte length of the text of `content`.
     pub(crate) fn bytes(content: &[Self]) -> u64 {
         content
             .iter()
@@ -71,13 +70,12 @@ pub struct ToolUse {
 
 /// The arguments of a tool call, which the model doesn't always get right.
 ///
-/// A model that can't serialise against an awkward schema produces text that
-/// isn't JSON. That's kept as the model wrote it rather than refused, because
-/// the answer is to show the model its own output and let it try again: the
-/// call is in the transcript, it counts in the tool statistics, and its
-/// outcome is [`crate::ToolCallStatus::MalformedInput`]. Refusing the whole
-/// response instead spends a retry re-rolling the same prompt, and reports a
-/// tool-surface problem as provider flakiness.
+/// Text that isn't JSON is kept as the model wrote it rather than refused,
+/// because the answer is to show the model its own output and let it try
+/// again: the call is in the transcript, it counts in the tool statistics, and
+/// its outcome is [`crate::ToolCallStatus::MalformedInput`]. Refusing the
+/// whole response instead spends a retry re-rolling the same prompt, and
+/// reports a tool-surface problem as provider flakiness.
 ///
 /// Written `{"json": {...}}` or `{"unparsed": "..."}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,7 +179,7 @@ pub enum Message<'a> {
         /// What the user supplied to the turn.
         input: &'a [UserContent],
     },
-    /// A model response, from the assistant.
+    /// A model response.
     Assistant(&'a [ContentBlock]),
 }
 

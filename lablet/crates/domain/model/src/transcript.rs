@@ -102,9 +102,7 @@ impl TryFrom<RawTranscript> for Transcript {
     }
 }
 
-/// What the user supplied, the model's response to it, what the run knows
-/// about the provider call behind the response, and what happened to the tool
-/// calls it made.
+/// One model response, with its input, its record, and its tool call outcomes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Turn {
     input: Vec<UserContent>,
@@ -119,8 +117,7 @@ pub struct TurnRecord {
     /// The tokens the completion used. `input_tokens` includes the cached
     /// tokens; see [`Usage`].
     pub usage: Usage,
-    /// Why the model stopped, so a reader can tell a truncated or refused
-    /// turn from a finished one.
+    /// Why the model stopped.
     pub finish: FinishReason,
     /// The provider's id for the response.
     pub response_id: Option<String>,
@@ -179,7 +176,6 @@ pub enum TranscriptError {
 }
 
 impl Transcript {
-    /// The transcript of a run that has made no provider call yet.
     pub(crate) const fn new(system: String) -> Self {
         Self {
             system,
@@ -224,7 +220,6 @@ impl Transcript {
         self.turns.last().map(Turn::text).unwrap_or_default()
     }
 
-    /// Usage summed over every turn.
     pub(crate) fn usage(&self) -> Usage {
         self.turns
             .iter()
@@ -244,10 +239,9 @@ impl Transcript {
         u32::try_from(errors).unwrap_or(u32::MAX)
     }
 
-    /// Makes `completion` the next turn and takes `input` as its input: the
-    /// completion's content becomes the response and the rest, with the
-    /// timing, the record. When the turn is refused, `input` is left as it
-    /// was. See [`crate::Run::responded`] for the contract.
+    /// Makes `completion` the next turn and takes `input` as its input. When
+    /// the turn is refused, `input` is left as it was. See
+    /// [`crate::Run::responded`] for the contract.
     pub(crate) fn record(
         &mut self,
         input: &mut Vec<UserContent>,
@@ -399,8 +393,7 @@ impl Turn {
         tool_uses(&self.response)
     }
 
-    /// The response's [`ContentBlock::Text`] blocks, concatenated in order;
-    /// empty when it has none.
+    /// The response's [`ContentBlock::Text`] blocks, concatenated in order.
     #[must_use]
     pub fn text(&self) -> String {
         self.response

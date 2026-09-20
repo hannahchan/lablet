@@ -3,9 +3,8 @@
 //!
 //! It keeps the transcript, and beside it only what a transcript doesn't
 //! hold: the input waiting for the next turn, and the provider call attempts
-//! that failed. Every total of the
-//! summary is computed from the two when the run ends, so a total can't
-//! disagree with the turns it sums.
+//! that failed. Every total of the summary is computed from the two when the
+//! run ends, so a total can't disagree with the turns it sums.
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
@@ -124,9 +123,8 @@ impl Run {
 
     /// Records the provider call attempt that returned `response` as the
     /// next turn, and returns it. The attempt started `started` into the run
-    /// and took `latency`; the turn's record counts it and the failed
-    /// attempts since the turn before. The turn's input is what was waiting
-    /// for it, which is the task prompt for the first turn.
+    /// and took `latency`; the record counts it and the failed attempts since
+    /// the turn before. The turn's input is what was waiting for it.
     ///
     /// The turn's response is the response's content without its text
     /// blocks that are empty or only whitespace, and this is the one place
@@ -292,15 +290,12 @@ fn turns(transcript: &Transcript) -> u32 {
     u32::try_from(transcript.turns().len()).unwrap_or(u32::MAX)
 }
 
-/// Raises a total by `amount`, the way every total in the model grows: a
-/// count that can't be raised any further stops there rather than wrapping to
-/// nonsense or panicking. One function, so no total is added up differently
-/// from the rest.
+/// Raises a total by `amount`, saturating. One function, so no total is
+/// added up differently from the rest.
 fn add(total: &mut u64, amount: u64) {
     *total = total.saturating_add(amount);
 }
 
-/// Adds what `turn` holds to the totals of `summary`.
 fn add_turn(summary: &mut RunSummary, turn: &Turn) {
     let record = turn.record();
     add(

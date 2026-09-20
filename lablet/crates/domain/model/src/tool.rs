@@ -55,8 +55,7 @@ impl core::fmt::Display for ToolSource {
     }
 }
 
-/// What became of one tool call: either the run offered no tool by that name,
-/// or a tool ran and ended some way.
+/// What became of one tool call.
 ///
 /// "The model called a tool the run doesn't have" used to be three facts that
 /// could disagree: a status, a missing source, and a name absent from the
@@ -176,8 +175,7 @@ impl core::fmt::Display for ToolCallStatus {
 /// The call's name and input aren't here, because the response's
 /// [`crate::ToolUse`] block with the same id holds them. Nor are the sizes:
 /// [`crate::ToolUse::input_bytes`] and [`ToolCallOutcome::output_bytes`]
-/// measure what's stored. Whether the model was sent an error, and where the
-/// tool came from, are both read from `status`.
+/// measure what's stored. Error and source are read from `status`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolCallOutcome {
@@ -201,8 +199,7 @@ impl ToolCallOutcome {
     /// The outcome of the call `call_id`, which started `started` into the
     /// run and took `latency`.
     ///
-    /// `content` is what the tool returned, or the message of the executor's
-    /// error. `max_output_bytes` is the run's cap on it, `None` for no cap;
+    /// `max_output_bytes` is the run's cap on `content`, `None` for no cap;
     /// it's applied here so that every tool's output is cut the same way: at a
     /// character boundary, with one last line that says what was cut.
     #[must_use]

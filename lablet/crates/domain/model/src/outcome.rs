@@ -154,10 +154,9 @@ display_as_str!(CompletionMode, StopReason);
 ///
 /// What an outcome carries follows from the [`StopClass`] of its stop reason:
 /// `error` is a message exactly when the run failed, and `result.structured`
-/// is a value only when it completed. Those three fields are private for
-/// that reason. [`crate::Run::finish`] builds outcomes that way and
-/// reading one from its serde form refuses any other, so no `RunOutcome`
-/// holds a completed run with an error or a failed one without.
+/// is a value only when it completed. Those three fields are private for that
+/// reason: [`crate::Run::finish`] builds outcomes that way, and reading one
+/// from its serde form refuses any other.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "RawOutcome")]
 pub struct RunOutcome {
@@ -240,9 +239,8 @@ impl TryFrom<RawOutcome> for RunOutcome {
 }
 
 impl RunOutcome {
-    /// The outcome of a run, keeping of `result.structured` and `error` what
-    /// the class of the stop reason allows, and giving a failure that came
-    /// without an error the reason's own message.
+    /// The outcome of a run, holding it to the [`StopClass`] rules and giving a
+    /// failure that came without an error the reason's own message.
     pub(crate) fn closing(raw: RawOutcome) -> Self {
         let class = raw.stop_reason.class();
         Self {
@@ -403,7 +401,7 @@ pub struct RunSummary {
     /// The cost of the run, when pricing is configured and the amount is a
     /// number.
     pub cost: Option<Cost>,
-    /// The outcome document, which holds the run totals.
+    /// The outcome document.
     pub outcome: RunOutcome,
 }
 
