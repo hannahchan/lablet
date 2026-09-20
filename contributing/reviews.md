@@ -4,12 +4,38 @@ What to look for when reviewing a diff here. [README.md](README.md) holds the ru
 
 Every item comes from a defect that reached `main` in the two domain crates and was caught by a later review. The commit that fixed each one is cited, so the reasoning is recoverable in full from `git show`. Nothing here is a gate: the gates are in `README.md`, and an item that becomes mechanical belongs there instead.
 
-Use it as a prompt, not a form. A reviewer with five findings to spend reads the sections that match the diff.
+Use it as a prompt, not a form. A reviewer with five findings to spend reads the sections that match the diff. The first section is the lens for the rest rather than a list of its own.
 
 ## Before the review
 
 - Read `product/decisions.md` first. A finding refuted on grounds recorded there costs the same to raise and nothing to settle. In `c75290c`, several of seventeen refuted findings were refuted on entries written in the previous two days.
 - Know what the diff claims. The commit message and the spec section it changes are part of the diff, and both are reviewable.
+
+## Structural, not contractual
+
+The question behind most of what follows. A rule is held at one of these levels, and the level decides what happens when someone doesn't know the rule:
+
+| Level                          | What holds it                                               | From this repository                                                                                                                                                               |
+| ------------------------------ | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unrepresentable                | The type. The state can't be built.                         | `Message`'s variant is the role, so no message holds a block its role may not send. `UserContent` is text, so a tool block in user input is unrepresentable rather than validated. |
+| One door                       | A private field and a constructor that validates.           | `UnknownReason`, whose `From<String>` is the only way in. `Cost`, `Rates`, and the id newtypes, checked on the code path and the serde path alike.                                 |
+| Derived                        | The fact is computed where it's needed, never stored twice. | `is_error` reads the call's status. The summary's run totals read the outcome. `Turn::calls(mode)` is the only reading of a response's tool calls.                                 |
+| Compile-time, across artefacts | An exhaustive match that fails to build.                    | `spellings.rs`: a new `ToolCallStatus` variant doesn't compile until the registry has the member.                                                                                  |
+| Gate                           | `cargo xtask`, in CI.                                       | The layer lint, `weaver check`, the coverage and mutation floors.                                                                                                                  |
+| Test                           | One case, one regression.                                   | Most of the suite.                                                                                                                                                                 |
+| Convention                     | A sentence in a document.                                   | The port obligation that bounds the per-tool attribute keys, today.                                                                                                                |
+
+Three questions follow from it, and they're worth asking of any diff that adds a rule.
+
+**What level is this rule at, and is there a cheaper level up?** The transcript is the worked example: it "enforced rules for values by type but left aggregates to convention," pairing a flat message list with a parallel record list by index. Making the pairing a field moved four rules from convention to unrepresentable and deleted the errors that had checked them (`4b6927a`). Deleted error variants are the sign that the move was real.
+
+**Does the change move a level, or only look like it?** Grouping `RunSummary`'s totals into value types reads better and moves nothing: it "doesn't make a swap impossible; only holding the mapping to the generated key list does" (`928dd0b`). Unit newtypes for `Bytes`, `Millis` and `Count` were declined on the same ground, since every attribute is an `int` at the telemetry boundary whatever the domain called it.
+
+**When an invariant moves, does its enforcement level drop?** This is how the per-tool bound was lost. `finish` had gated each entry on `RunSetup::tools`, which bounded the wide event's keys structurally, as a side effect. Reading the call's own status instead was right, "but the bound left with it" and became a sentence about what an adapter must honour (`b970009`). A change can be correct and still cost a level, and nothing fails when it does.
+
+Climbing isn't free, and three refusals are on record. A typestate for the loop protocol was rejected because it "would delete two error variants and cost more than they do." Enforcing that the cache counts are a subset of `input_tokens` was rejected because it would fail a real run over a provider's own arithmetic, and faithful measurement beats internal consistency here. String newtypes for `config_digest` and its neighbours wait for a producer to exist. The cost is paid by everything that touches the type; the benefit is the states that stop existing. Count both.
+
+The standing example is phase 3's: if resolving a name through the `ToolSet` is the only way to obtain a `ToolSource`, a tool that appears mid-run can't produce a `Ran` outcome at all, and the per-tool bound stops depending on an adapter's good behaviour.
 
 ## Documentation drift
 
