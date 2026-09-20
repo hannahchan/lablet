@@ -166,6 +166,11 @@ schemars = "=1.2.2"
 wiremock = "=0.6.5"
 # Benchmarks behind `cargo xtask bench`. Default features are off to avoid plotters and rayon.
 criterion = { version = "=0.8.2", default-features = false, features = ["cargo_bench_support"] }
+# Property tests for the laws the domain's aggregation depends on, which examples can't state:
+# that cost is additive over consistent usages, and that usage sums are a monoid. Default
+# features are off to drop the fork-based test runner and its `rusty-fork` and `tempfile` trees;
+# lablet's properties are pure and need no process isolation.
+proptest = { version = "=1.11.0", default-features = false, features = ["std", "bit-set"] }
 
 # Levels are "warn" so plain `cargo check` stays usable mid-edit; the clippy gate denies
 # warnings. xtask/Cargo.toml carries a copy, held in step by `cargo xtask lint-manifests`.

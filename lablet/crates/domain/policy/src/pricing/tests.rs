@@ -1,4 +1,4 @@
-use lablet_model::Rates;
+use lablet_model::{Rates, TokenCounts};
 
 use super::*;
 
@@ -203,4 +203,54 @@ fn the_error_says_which_rate_and_what_it_was() {
 #[test]
 fn the_pricing_reports_the_rates_it_was_built_with() {
     assert_eq!(pricing().rates(), Rates::new(4.0, 16.0, 0.5, 5.0).unwrap());
+}
+
+proptest::prop_compose! {
+    /// A usage whose cache counts are a part of its input, as every provider
+    /// that can count reports it.
+    fn consistent_usage()(
+        uncached in 0u64..10_000_000,
+        output in 0u64..10_000_000,
+        reasoning in 0u64..1_000_000,
+        cache_read in 0u64..10_000_000,
+        cache_write in 0u64..10_000_000,
+    ) -> Usage {
+        Usage::from_uncached(TokenCounts {
+            input: uncached,
+            output,
+            reasoning,
+            cache_read,
+            cache_write,
+        })
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(2_000))]
+
+    /// The law a composer depends on: summing the cost of each run gives the
+    /// same answer as pricing the summed usage. It holds for counts a
+    /// provider could actually report, and the wide event carries the rates
+    /// so a consumer can tell when one didn't; `uncached_input_tokens`
+    /// saturating to zero is what breaks it otherwise.
+    #[test]
+    fn cost_is_additive_over_usages_a_provider_could_report(
+        a in consistent_usage(), b in consistent_usage()
+    ) {
+        let parts = pricing().cost(&a).unwrap().usd() + pricing().cost(&b).unwrap().usd();
+        let whole = pricing().cost(&(a + b)).unwrap().usd();
+
+        proptest::prop_assert!(
+            (parts - whole).abs() <= whole.abs() * 1e-9 + 1e-9,
+            "{parts} != {whole}"
+        );
+    }
+
+    /// More tokens never cost less, whichever kind they are.
+    #[test]
+    fn cost_never_falls_as_tokens_rise(usage in consistent_usage(), extra in 0u64..1_000_000) {
+        let more = Usage { output_tokens: usage.output_tokens.saturating_add(extra), ..usage };
+
+        proptest::prop_assert!(pricing().cost(&more).unwrap() >= pricing().cost(&usage).unwrap());
+    }
 }

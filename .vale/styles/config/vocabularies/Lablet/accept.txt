@@ -24,6 +24,7 @@ doctests?
 DuckDB
 [Ee]nums?
 [Ee]val
+[Ff]ixpoint
 Grafana
 gRPC
 [Hh]umantime
@@ -43,6 +44,7 @@ MCP
 MiniJinja
 [Mm]ise
 [Mm]isspelt
+[Mm]onoid
 [Mm]ultiset
 [Mm]usl
 MSRV

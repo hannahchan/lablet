@@ -352,3 +352,16 @@ Phase 3 inherits two things worth stating before it starts:
 
 - **`ToolSet` should make the executor's obligation structural.** The per-tool attribute keys are bounded by what the executor resolves, which is a contract an adapter has to honour. If resolving a name through the tool set is the only way to obtain a `ToolSource`, a tool appearing mid-run can't produce a `Ran` outcome at all, and the bound stops depending on behaviour.
 - **`lablet-run`'s floors measure nothing until `RunService` exists.** A first commit of port traits alone reports "nothing to measure yet" and passes both floors while asserting nothing, so the first commit there carries enough of the loop to be measured.
+
+## 2026-09-20 Six laws, because examples can't state them
+
+`proptest` joins the workspace as a dev-dependency of the two domain crates, with default features off so the fork-based runner and its process-isolation trees don't come with it; lablet's properties are pure.
+
+Every test until now was an example. Examples say what one value does; these say what every value does, which is what a composer summing ten thousand runs actually relies on. The laws:
+
+- **Cost is additive over usages a provider could report.** Summing each run's cost gives the same answer as pricing the summed usage. This is the guarantee the product's stated purpose depends on, and it only holds when the cache counts are a part of the input count, which is why the rates now reach the wide event: a consumer can tell when a provider's arithmetic didn't agree with itself.
+- **Cost never falls as tokens rise.**
+- **Summing usage is a commutative monoid.** A run's totals don't depend on the order its turns are added in, and an empty run adds nothing. Saturating addition stays associative because both groupings reach the same ceiling, which was worth checking rather than assuming.
+- **Neither total double-counts the part it holds.**
+- **Normalising a finish reason is idempotent**, so a reason that round-trips through a document can't drift.
+- **A transcript read back is the transcript that was written.** Asserted on a transcript the model built, because blank text is dropped once on the way in, so an arbitrary document normalises on its first read rather than being a fixpoint immediately.

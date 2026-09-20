@@ -921,3 +921,58 @@ fn a_document_in_the_flat_message_form_or_short_of_a_field_is_not_a_transcript()
         assert!(serde_json::from_value::<Transcript>(document).is_err());
     }
 }
+
+/// A transcript of `turns` turns, each calling `calls` tools and answering
+/// them, built the way a run builds one.
+fn grown(system: &str, prompt_text: &str, turns: usize, calls: usize) -> Transcript {
+    let mut transcript = Transcript::new(system.to_owned());
+    let mut input = said(prompt_text);
+    for turn_n in 0..turns {
+        let ids: Vec<String> = (0..calls).map(|n| format!("call_{turn_n}_{n}")).collect();
+        let blocks = ids
+            .iter()
+            .map(|id| tool_use(id, "bash"))
+            .chain(std::iter::once(text("On it.")))
+            .collect();
+        transcript
+            .record(&mut input, response(blocks, 1, 1), ms(0), ms(1), 1)
+            .unwrap();
+        if calls > 0 {
+            transcript
+                .answer(ids.iter().map(|id| ok(id, "out")).collect())
+                .unwrap();
+        } else {
+            break;
+        }
+    }
+    transcript
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(400))]
+
+    /// A transcript written and read back is the same transcript, so a grader
+    /// that reads the document and a run that produced it agree. Blank text
+    /// is dropped once on the way in, which is why the fixpoint is asserted
+    /// on a transcript the model built rather than on arbitrary JSON.
+    #[test]
+    fn a_transcript_read_back_is_the_transcript_that_was_written(
+        system in "[ -~]{0,40}",
+        prompt_text in "[ -~]{1,40}",
+        turns in 1usize..4,
+        calls in 0usize..3,
+    ) {
+        proptest::prop_assume!(!prompt_text.trim().is_empty());
+        let transcript = grown(&system, &prompt_text, turns, calls);
+        let written = serde_json::to_string(&transcript).unwrap();
+
+        proptest::prop_assert_eq!(
+            serde_json::from_str::<Transcript>(&written).unwrap(),
+            transcript
+        );
+        proptest::prop_assert_eq!(
+            serde_json::to_string(&serde_json::from_str::<Transcript>(&written).unwrap()).unwrap(),
+            written
+        );
+    }
+}

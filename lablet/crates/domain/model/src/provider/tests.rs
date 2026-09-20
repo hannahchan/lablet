@@ -549,3 +549,63 @@ fn every_provider_error_kind_is_spelled_as_the_chat_span_reports_it() {
         assert_eq!(kind.is_retryable(), retryable, "{spelling}");
     }
 }
+
+// The laws below are properties rather than examples: they say something true
+// of every value, which is what a consumer summing ten thousand runs relies
+// on. Case counts are modest because the generators are cheap and the gate
+// runs on every push.
+
+proptest::prop_compose! {
+    /// Counts across the whole range, biased to the small values and the
+    /// extremes where saturation bites.
+    fn any_usage()(
+        input in proptest::prop_oneof![0u64..1_000_000, u64::MAX - 8..=u64::MAX],
+        output in proptest::prop_oneof![0u64..1_000_000, u64::MAX - 8..=u64::MAX],
+        reasoning in 0u64..1_000_000,
+        cache_read in proptest::prop_oneof![0u64..1_000_000, u64::MAX - 8..=u64::MAX],
+        cache_write in 0u64..1_000_000,
+    ) -> Usage {
+        Usage::from_inclusive(TokenCounts { input, output, reasoning, cache_read, cache_write })
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(2_000))]
+
+    /// Summing usage is a commutative monoid: a run's totals are the same
+    /// whatever order the turns are added in, and an empty run adds nothing.
+    #[test]
+    fn summing_usage_is_a_commutative_monoid(
+        a in any_usage(), b in any_usage(), c in any_usage()
+    ) {
+        proptest::prop_assert_eq!(a + Usage::default(), a);
+        proptest::prop_assert_eq!(Usage::default() + a, a);
+        proptest::prop_assert_eq!(a + b, b + a);
+        proptest::prop_assert_eq!((a + b) + c, a + (b + c));
+    }
+
+    /// Both totals hold their subsets, so neither is ever added to.
+    #[test]
+    fn the_totals_never_double_count_the_parts_they_hold(usage in any_usage()) {
+        proptest::prop_assert_eq!(
+            usage.total(),
+            usage.input_tokens.saturating_add(usage.output_tokens)
+        );
+        proptest::prop_assert!(usage.uncached_input_tokens() <= usage.input_tokens);
+    }
+
+    /// Reading a provider's word for a finish reason twice says the same
+    /// thing as reading it once, so a reason that round-trips through a
+    /// document can't drift.
+    #[test]
+    fn normalising_a_finish_reason_is_idempotent(reason in ".{0,24}") {
+        let once = FinishReason::from(reason.clone());
+        let twice = FinishReason::from(once.as_str().to_owned());
+
+        proptest::prop_assert_eq!(&once, &twice);
+        proptest::prop_assert_eq!(
+            serde_json::from_value::<FinishReason>(json!(reason)).unwrap(),
+            once
+        );
+    }
+}
