@@ -29,6 +29,7 @@ Grafana
 gRPC
 [Hh]umantime
 Honeycomb
+[Ii]dempotence
 [Ii]mpls?
 [Ii]nlined
 [Ii]nlining
@@ -59,6 +60,7 @@ Parquet
 [Pp]luggable
 [Pp]rost
 [Pp]rotobuf
+[Pp]seudocode
 PRs
 Pydantic
 Rego

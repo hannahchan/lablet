@@ -1,13 +1,13 @@
 # Contributing
 
-How to work in this repository. The what and why live in [../product/](../product/).
+How to work in this repository. The what and why live in [../product/](../product/). What to look for in a review lives in [reviews.md](reviews.md).
 
 ## Layout
 
 | Area            | Question                       | Contents                                 |
 | --------------- | ------------------------------ | ---------------------------------------- |
 | `product/`      | What are we building, and why? | Brief, spec, build plan, decisions log   |
-| `contributing/` | How do we work?                | This document                            |
+| `contributing/` | How do we work?                | This document, and the review checklist  |
 | `lablet/`       | The output                     | Rust workspace and user-facing docs      |
 | `xtask/`        | Gates                          | Root-level crate, not a workspace member |
 
@@ -120,6 +120,7 @@ A phase-end review is scaled to risk and has a budget.
 - One verifier for each surviving finding, reasoning from the code first. Reproduce only when the claim is disputed or cheap to run.
 - Each phase states a review budget of about 10 to 15 percent of the build's token cost, and the phase report gives the actual figure.
 - Every gate or feature is exercised once with real input on a cold clone before the phase closes.
+- [reviews.md](reviews.md) holds what to look for, drawn from defects that reached `main` and were caught by a later review.
 
 ## Versioning
 

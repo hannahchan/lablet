@@ -403,3 +403,13 @@ The timing is the same argument that made moving `Calls` free: pure code movemen
 - **`RunService::run` takes `&mut self`.** The spec says one service runs one run at a time and that concurrent calls are rejected, but the application ring is forbidden tokio by the layer lint, so there's no async mutex, and `run` returns a bare `FinishedRun` with nowhere to report a refusal. An exclusive borrow makes a concurrent call a compile error rather than a runtime one, which is the answer this domain gives everywhere else. Sequential runs, which is what the phase 4 library offers, are unaffected.
 - **`ProviderError` is a struct, not an enum with a message in each variant.** `ToolError` was already a struct with a `kind`, and `ProviderErrorKind` exists so the retry policy can read the class; one shape for both errors means the policy takes one field rather than matching four variants.
 - **`ToolSet` is built whole in this phase, and its filtering is unit-tested here.** The build plan's phase 3 line asks for allow and deny filtering and duplicate-name rejection, but the scenarios that exercise those are assigned to phases 4 and 8, where real executors exist. Half a type is worse than none, so it's built and unit-tested now; the named scenarios land where acceptance.md puts them.
+
+## 2026-09-20 A second document in `contributing/`
+
+Amends the 2026-09-17 entry "Documentation is three areas, four product files," which said `contributing/` holds one conventions document. It now holds two: `README.md` for the rules, and `reviews.md` for what to look for in a review.
+
+The split is along the line that already ran through the page. Every rule in `README.md` is enforced by a gate or labelled a review convention, and the Reviews section described how a review is staffed and budgeted but never what it should find. That knowledge existed only in commit messages and in this log, where it was recoverable but not reachable: a reviewer would have had to read fifteen commits to assemble it.
+
+`reviews.md` assembles it as fifty-three items, each one drawn from a defect that reached `main` in the two domain crates and was caught by a later review, with the fixing commit cited so the full reasoning stays recoverable. Nothing in it's a gate, and an item that becomes mechanical moves to `README.md` and becomes one.
+
+This isn't an ADR folder, templates, or metadata headers, which the original entry ruled out and which stay ruled out.
