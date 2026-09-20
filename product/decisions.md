@@ -34,6 +34,8 @@ Tool inputs and outputs are JSON by definition, so the domain needs a JSON value
 
 `product/` holds brief, spec, build plan, and this log. `contributing/` holds one conventions document. `lablet/docs/` holds user-facing docs. No ADR folder, no templates, no metadata headers.
 
+**Partly superseded on 2026-09-20 by "A second document in `contributing/`":** `contributing/` holds two, `README.md` and `reviews.md`. The three areas, the four product files, and the ban on an ADR folder, templates, and metadata headers all hold.
+
 ## 2026-09-18 One wide event per run
 
 Every run ends with a single wide event carrying the whole run summary, emitted by every observer from one `RunSummary` the loop accumulates. Analysis over many runs should work from one row per run; spans are for drilling into a single run.
@@ -396,6 +398,8 @@ Declined: splitting `message.rs` into owned storage and the borrowed wire view. 
 
 The timing is the same argument that made moving `Calls` free: pure code movement is cheap while `lablet-run` doesn't exist and expensive once the loop is written against these paths.
 
+**Partly superseded on 2026-09-20 by "`ProviderKind` is a leaf module, which the cycle claim needed":** the refactor dissolved one of the two import cycles, not both. Everything else in this entry holds.
+
 ## 2026-09-20 Phase 3 decisions made by the builder
 
 - **Superseded decisions are now marked where they sit.** Four entries said something a later entry reversed, with nothing at the old entry to say so: the stop policy's two evaluation points became three, `max_retries` changed from counting attempts to counting retries, the duration conversion moved from the loop to the model, and the per-tool bound moved from the configured name list to what the executor resolved. This log is used to refuse review findings that have already been decided, so an entry that reads as current when it isn't can mislead in the one direction that matters.
@@ -410,7 +414,7 @@ Amends the 2026-09-17 entry "Documentation is three areas, four product files," 
 
 The split is along the line that already ran through the page. Every rule in `README.md` is enforced by a gate or labelled a review convention, and the Reviews section described how a review is staffed and budgeted but never what it should find. That knowledge existed only in commit messages and in this log, where it was recoverable but not reachable: a reviewer would have had to read fifteen commits to assemble it.
 
-`reviews.md` assembles it as fifty-three items, each one drawn from a defect that reached `main` in the two domain crates and was caught by a later review, with the fixing commit cited so the full reasoning stays recoverable. Nothing in it's a gate, and an item that becomes mechanical moves to `README.md` and becomes one.
+`reviews.md` assembles it, each item drawn from a defect that reached `main` in the two domain crates and was caught by a later review, with the fixing commit cited so the full reasoning stays recoverable. Nothing in it's a gate, and an item that becomes mechanical moves to `README.md` and becomes one.
 
 This isn't an ADR folder, templates, or metadata headers, which the original entry ruled out and which stay ruled out.
 
