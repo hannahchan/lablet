@@ -10,8 +10,8 @@ use lablet_model::{
 use lablet_policy::{Pricing, RetryPolicy, StopPolicy};
 
 use crate::{
-    Cancellation, Clock, EventKind, ModelProvider, ProviderRequest, RunEvent, RunObserver,
-    ToolCall, ToolSet,
+    Cancellation, Clock, EventKind, McpCallMeta, ModelProvider, ProviderRequest, RunEvent,
+    RunObserver, ToolCall, ToolSet,
 };
 
 /// What bounds one call, which is not a stop decision: the run's limits are
@@ -42,6 +42,33 @@ pub struct RunService {
     request: RequestParams,
     pricing: Option<Pricing>,
     calls: CallLimits,
+}
+
+/// A provider call that answered, with the timing of the attempt that did.
+struct Answered {
+    response: ProviderResponse,
+    began: Duration,
+    latency: Duration,
+}
+
+/// What became of one tool call. The loop is the only hop between an executor
+/// and an observer, so the call's transport metadata travels with its result
+/// or the `mcp.*` attributes have no way to be set.
+struct Settled {
+    status: ToolCallStatus,
+    content: Vec<lablet_model::ToolResultContent>,
+    mcp: Option<McpCallMeta>,
+}
+
+impl Settled {
+    /// A call the loop answered itself, so no executor was reached.
+    fn local(status: ToolCallStatus, message: String) -> Self {
+        Self {
+            status,
+            content: vec![lablet_model::ToolResultContent::Text(message)],
+            mcp: None,
+        }
+    }
 }
 
 /// Why the loop stopped, and what it has to say about it.
@@ -98,7 +125,7 @@ impl RunService {
             model: self.provider.model().clone(),
             endpoint: self.provider.endpoint(),
             tools: self.tools.specs().iter().map(|s| s.name.clone()).collect(),
-            completion: self.stop.completion,
+            completion: self.tools.completion(),
             max_turns: self.stop.max_turns,
             timeout: self.stop.timeout,
             request: self.request.clone(),
@@ -111,8 +138,8 @@ impl RunService {
                 model: setup.model.clone(),
                 endpoint: setup.endpoint.clone(),
                 tools: self.tools.specs().to_vec(),
-                system_prompt: capture.then(|| prompts.system.clone()),
-                prompt: capture.then(|| prompts.task.clone()),
+                system_prompt: capture.then(|| prompts.system().to_owned()),
+                prompt: capture.then(|| prompts.task().to_owned()),
             },
         )
         .await;
@@ -179,21 +206,22 @@ impl RunService {
             self.emit(run_id, EventKind::TurnStarted { turn: turn_index })
                 .await;
 
-            let response = match self.call(run_id, run, bytes, turn_index, started).await {
-                Ok(response) => response,
+            let answered = match self.call(run_id, run, bytes, turn_index, started).await {
+                Ok(answered) => answered,
                 Err(stopped) => return stopped,
             };
 
-            let call_started = self.elapsed(started);
-            let turn = match run.responded(response, call_started, Duration::ZERO) {
+            let turn = match run.responded(answered.response, answered.began, answered.latency) {
                 Ok(turn) => turn,
                 Err(refusal) => return Stopped::defect(&refusal),
             };
             let record = turn.record().clone();
             let calls: Vec<ToolUse> = turn.tool_uses().cloned().collect();
-            let reason = self
-                .stop
-                .after_response(&record.finish, turn.calls(self.stop.completion));
+            let reason = self.stop.after_response(
+                &record.finish,
+                self.tools.completion(),
+                turn.calls(self.tools.completion()),
+            );
             let response_blocks = capture.then(|| turn.response().to_vec());
 
             self.emit(
@@ -230,6 +258,10 @@ impl RunService {
     }
 
     /// One provider call, with its retries.
+    ///
+    /// The attempt's own timing comes back with the response, because the
+    /// turn records when the attempt began and how long it took, and only
+    /// this function is in a position to know either.
     async fn call(
         &self,
         run_id: &lablet_model::RunId,
@@ -237,10 +269,11 @@ impl RunService {
         bytes: &mut RequestBytes,
         turn: u32,
         started: Instant,
-    ) -> Result<ProviderResponse, Stopped> {
+    ) -> Result<Answered, Stopped> {
         let mut attempt = 1;
         loop {
             let began = self.clock.now();
+            let began_at = began.saturating_duration_since(started);
             let request_bytes = {
                 let messages = run.messages();
                 bytes.measure(&messages)
@@ -274,36 +307,43 @@ impl RunService {
             let latency = self.clock.now().saturating_duration_since(began);
 
             let error = match result {
-                Ok(response) => return Ok(response),
+                Ok(response) => {
+                    return Ok(Answered {
+                        response,
+                        began: began_at,
+                        latency,
+                    });
+                }
                 Err(error) => error,
             };
             run.failed_attempt(latency);
 
             let wait = self.retry.next(attempt, error.kind);
             let elapsed = self.elapsed(started);
-            let will_retry = wait.is_some_and(|wait| self.stop.allows_wait(elapsed, wait));
+            let retry = wait.filter(|&wait| self.stop.allows_wait(elapsed, wait));
             self.emit(
                 run_id,
                 EventKind::ProviderCallFailed {
                     turn,
                     attempt,
                     error: error.clone(),
-                    will_retry,
-                    backoff: will_retry.then(|| wait.unwrap_or_default()),
+                    retry,
                 },
             )
             .await;
 
-            match wait {
-                Some(wait) if will_retry => {
+            match (wait, retry) {
+                (_, Some(wait)) => {
                     self.clock.sleep(wait).await;
                     attempt += 1;
                 }
                 // A wait that would carry the run past its own timeout isn't
                 // taken: the run stops now rather than sleeping up to a limit
                 // it's known to reach.
-                Some(_) => return Err(Stopped::just(StopReason::Timeout)),
-                None => return Err(Stopped::with(stop_reason_for(error.kind), error.message)),
+                (Some(_), None) => return Err(Stopped::just(StopReason::Timeout)),
+                (None, None) => {
+                    return Err(Stopped::with(stop_reason_for(error.kind), error.message));
+                }
             }
         }
     }
@@ -339,13 +379,13 @@ impl RunService {
 
             let began = self.clock.now();
             let trace_context = self.observer.trace_context(&call.id);
-            let (status, content) = self.settle(call, source, input, trace_context).await;
+            let settled = self.settle(call, source, input, trace_context).await;
             let latency = self.clock.now().saturating_duration_since(began);
 
             let outcome = ToolCallOutcome::measured(
                 call.id.clone(),
-                status,
-                content,
+                settled.status,
+                settled.content,
                 self.calls.max_tool_output_bytes,
                 self.elapsed(started).saturating_sub(latency),
                 latency,
@@ -359,7 +399,7 @@ impl RunService {
                     latency_ms: outcome.latency_ms,
                     output_bytes: outcome.output_bytes(),
                     truncated_from_bytes: outcome.truncated_from_bytes,
-                    mcp: None,
+                    mcp: settled.mcp,
                     output: capture.then(|| outcome.content.clone()),
                 },
             )
@@ -380,28 +420,25 @@ impl RunService {
         source: Option<lablet_model::ToolSource>,
         input: Option<serde_json::Value>,
         trace_context: Option<crate::TraceContext>,
-    ) -> (ToolCallStatus, Vec<lablet_model::ToolResultContent>) {
+    ) -> Settled {
         use lablet_model::{ToolCallEnd, ToolResultContent};
 
         let Some(source) = source else {
-            return (
+            return Settled::local(
                 ToolCallStatus::Unknown,
-                vec![ToolResultContent::Text(format!(
-                    "no tool named {} is offered by this run",
-                    call.name
-                ))],
+                format!("no tool named {} is offered by this run", call.name),
             );
         };
         let Some(input) = input else {
             let ToolInput::Unparsed(text) = &call.input else {
                 unreachable!("input is None only for arguments that didn't parse")
             };
-            return (
+            return Settled::local(
                 ToolCallStatus::MalformedInput,
-                vec![ToolResultContent::Text(format!(
+                format!(
                     "the arguments weren't valid JSON, so {} wasn't called: {text}",
                     call.name
-                ))],
+                ),
             );
         };
 
@@ -422,13 +459,21 @@ impl RunService {
                 } else {
                     ToolCallEnd::Ok
                 };
-                (ToolCallStatus::ran(source, ended), output.content)
+                Settled {
+                    status: ToolCallStatus::ran(source, ended),
+                    content: output.content,
+                    mcp: output.mcp,
+                }
             }
             Err(error) => {
                 let status = error.kind.ended().map_or(ToolCallStatus::Unknown, |ended| {
                     ToolCallStatus::ran(source, ended)
                 });
-                (status, vec![ToolResultContent::Text(error.message)])
+                Settled {
+                    status,
+                    content: vec![ToolResultContent::Text(error.message)],
+                    mcp: error.mcp,
+                }
             }
         }
     }

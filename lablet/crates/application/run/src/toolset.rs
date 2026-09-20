@@ -46,7 +46,14 @@ struct Routed {
     source: ToolSource,
 }
 
-/// The tools of one run: a composite [`ToolExecutor`] that routes by name.
+/// The tools of one run: a composite over several [`ToolExecutor`]s that
+/// routes a call by name. Deliberately not a `ToolExecutor` itself, because
+/// the loop needs [`ToolSet::source`] and the port can't answer it.
+///
+/// It also holds the run's [`CompletionMode`], because it's the one value
+/// whose shape depends on it: the mode decides whether `task_complete` is
+/// registered, so a set built for the wrong mode is a set with the wrong
+/// tools in it. Everything else that needs the mode reads it back from here.
 ///
 /// The set is settled once, when the run is built, and never asked again.
 /// That's what makes the port's obligation structural rather than a rule an
@@ -60,6 +67,7 @@ pub struct ToolSet {
     routes: BTreeMap<ToolName, Routed>,
     specs: Vec<ToolSpec>,
     task_complete: Option<ToolName>,
+    completion: CompletionMode,
 }
 
 impl ToolSet {
@@ -75,7 +83,8 @@ impl ToolSet {
     /// # Errors
     ///
     /// Returns [`ToolSetError::Specs`] when an executor can't list its tools,
-    /// and [`ToolSetError::DuplicateName`] when two serve the same name.
+    /// and [`ToolSetError::DuplicateName`] when two serve the same name, or
+    /// when one serves `task_complete` in explicit mode.
     pub async fn build(
         executors: Vec<Arc<dyn ToolExecutor>>,
         filter: &ToolFilter,
@@ -85,6 +94,13 @@ impl ToolSet {
         let mut claimed = BTreeSet::new();
         let mut routes = BTreeMap::new();
         let mut specs = Vec::new();
+        // Claimed before any executor is asked, because the loop intercepts
+        // this name rather than routing it: an executor that also serves it
+        // would be offered twice, which every provider rejects, and its own
+        // tool could never run.
+        if completion == CompletionMode::Explicit {
+            claimed.insert(ToolName::task_complete());
+        }
         for (index, executor) in executors.iter().enumerate() {
             for spec in executor.specs().await.map_err(Box::new)? {
                 // Claimed before the filter is asked, so a second executor
@@ -119,7 +135,15 @@ impl ToolSet {
             routes,
             specs,
             task_complete,
+            completion,
         })
+    }
+
+    /// How the run this set was built for decides that the model has
+    /// finished. The run's one copy of the value.
+    #[must_use]
+    pub const fn completion(&self) -> CompletionMode {
+        self.completion
     }
 
     /// Every tool offered to the model, in the order the executors served

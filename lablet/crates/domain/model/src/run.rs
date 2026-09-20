@@ -49,10 +49,47 @@ pub struct RunSetup {
 /// and reports both prompt sizes inverted, with nothing to catch it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prompts {
-    /// The system prompt, skills already appended.
-    pub system: String,
+    system: String,
+    task: String,
+}
+
+/// A run was given nothing to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the task prompt is blank")]
+pub struct BlankTask;
+
+impl Prompts {
+    /// The prompts of a run, with skills already appended to `system`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BlankTask`] when `task` is empty or only whitespace. The
+    /// transcript refuses a first turn whose input is blank, so without this
+    /// the run would spend a billed provider call and then throw the response
+    /// away, reporting zero turns and zero usage for tokens it did buy. An
+    /// empty `system` is a run with no system prompt, which is allowed.
+    pub fn new(system: impl Into<String>, task: impl Into<String>) -> Result<Self, BlankTask> {
+        let task: String = task.into();
+        if task.trim().is_empty() {
+            return Err(BlankTask);
+        }
+        Ok(Self {
+            system: system.into(),
+            task,
+        })
+    }
+
+    /// The system prompt.
+    #[must_use]
+    pub fn system(&self) -> &str {
+        &self.system
+    }
+
     /// The task the run is given, which becomes the first turn's input.
-    pub task: String,
+    #[must_use]
+    pub fn task(&self) -> &str {
+        &self.task
+    }
 }
 
 /// How far a run has come, which is what its limits are held against.

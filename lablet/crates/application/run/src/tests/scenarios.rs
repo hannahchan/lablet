@@ -49,10 +49,7 @@ fn context() -> RunContext {
 }
 
 fn prompts() -> Prompts {
-    Prompts {
-        system: "You fix tests.".to_owned(),
-        task: "Fix the failing test.".to_owned(),
-    }
+    Prompts::new("You fix tests.", "Fix the failing test.").expect("the task isn't blank")
 }
 
 /// A response that says `text` and calls each of `tools`, the n-th under the
@@ -95,6 +92,7 @@ struct Harness {
     pricing: Option<Pricing>,
     calls: CallLimits,
     context: RunContext,
+    completion: CompletionMode,
 }
 
 impl Harness {
@@ -119,7 +117,6 @@ impl Harness {
             cancel: Arc::new(FakeCancel::never()),
             filter: ToolFilter::default(),
             stop: StopPolicy {
-                completion: CompletionMode::Natural,
                 max_turns: nz(10),
                 timeout: Duration::from_secs(600),
                 max_total_tokens: None,
@@ -133,11 +130,12 @@ impl Harness {
                 max_tool_output_bytes: Some(100_000),
             },
             context: context(),
+            completion: CompletionMode::Natural,
         }
     }
 
     async fn run(self) -> Run {
-        let tools = ToolSet::build(self.tools, &self.filter, self.stop.completion, None)
+        let tools = ToolSet::build(self.tools, &self.filter, self.completion, None)
             .await
             .expect("these fakes serve distinct names");
         let mut service = RunService::new(
@@ -220,7 +218,7 @@ async fn explicit_mode_completes_when_the_model_calls_task_complete() {
             FinishReason::ToolUse,
         )),
     ]);
-    harness.stop.completion = CompletionMode::Explicit;
+    harness.completion = CompletionMode::Explicit;
 
     let run = harness.run().await;
 
@@ -239,7 +237,7 @@ async fn explicit_mode_completes_when_the_model_calls_task_complete() {
 #[tokio::test]
 async fn explicit_mode_ends_without_completion_when_the_model_just_stops() {
     let mut harness = Harness::new(vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))]);
-    harness.stop.completion = CompletionMode::Explicit;
+    harness.completion = CompletionMode::Explicit;
 
     let run = harness.run().await;
 
@@ -759,7 +757,7 @@ async fn request_bytes_are_the_system_prompt_the_specs_and_the_messages() {
     let prompt = serde_json::json!({
         "user": { "tool_results": [], "input": [{ "text": "Fix the failing test." }] }
     });
-    let first = prompts().system.len() as u64 + specs + prompt.to_string().len() as u64;
+    let first = prompts().system().len() as u64 + specs + prompt.to_string().len() as u64;
 
     let sizes = request_bytes(&run);
     assert_eq!(sizes.len(), 2);
@@ -818,14 +816,9 @@ async fn the_span_an_observer_opens_reaches_the_executor() {
     harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
     let tracing: Arc<dyn crate::RunObserver> = Arc::new(super::fakes::Tracer);
 
-    let set = ToolSet::build(
-        harness.tools,
-        &harness.filter,
-        harness.stop.completion,
-        None,
-    )
-    .await
-    .expect("distinct names");
+    let set = ToolSet::build(harness.tools, &harness.filter, harness.completion, None)
+        .await
+        .expect("distinct names");
     let mut service = RunService::new(
         Arc::clone(&harness.provider) as Arc<dyn crate::ModelProvider>,
         Arc::new(set),
@@ -909,7 +902,7 @@ async fn the_intercepted_completion_call_is_never_started() {
         &[CompletionMode::TASK_COMPLETE],
         FinishReason::ToolUse,
     ))]);
-    harness.stop.completion = CompletionMode::Explicit;
+    harness.completion = CompletionMode::Explicit;
 
     let run = harness.run().await;
 
@@ -946,7 +939,7 @@ async fn a_truncated_response_that_called_task_complete_does_not_complete_the_ru
         &[CompletionMode::TASK_COMPLETE],
         FinishReason::MaxTokens,
     ))]);
-    harness.stop.completion = CompletionMode::Explicit;
+    harness.completion = CompletionMode::Explicit;
 
     let run = harness.run().await;
 
@@ -1208,4 +1201,327 @@ async fn output_that_just_fits_the_cap_is_not_cut() {
     let outcome = &run.finished.transcript.turns()[0].tool_calls()[0];
     assert_eq!(outcome.truncated_from_bytes, None);
     assert_eq!(run.finished.summary.tool_calls_truncated, 0);
+}
+
+/// The central measurement of the provider group: how long its calls took.
+/// A run where nothing fails must still report it, and a turn must say when
+/// its attempt began rather than when it ended.
+#[tokio::test]
+async fn a_turn_records_when_its_attempt_began_and_how_long_it_took() {
+    let run = Harness::new(vec![
+        Answer::Responds(
+            Box::new(says("On it.", &["bash"], FinishReason::ToolUse)),
+            ms(400),
+        ),
+        Answer::Responds(Box::new(says("Done.", &[], FinishReason::EndTurn)), ms(150)),
+    ])
+    .run()
+    .await;
+
+    let turns = run.finished.transcript.turns();
+    assert_eq!(turns[0].record().started_ms, 0);
+    assert_eq!(turns[0].record().latency_ms, 400);
+    assert_eq!(
+        turns[1].record().started_ms,
+        400,
+        "the second attempt began where the first ended"
+    );
+    assert_eq!(turns[1].record().latency_ms, 150);
+
+    assert_eq!(
+        run.finished.summary.provider_latency_total_ms, 550,
+        "a run where nothing failed still spent time in the provider"
+    );
+    assert_eq!(run.finished.summary.provider_latency_max_ms, 400);
+}
+
+/// The totals count every attempt, not only the ones that answered.
+#[tokio::test]
+async fn provider_latency_counts_the_failed_attempts_too() {
+    let run = Harness::new(vec![
+        Answer::Fails(
+            ProviderErrorKind::Retryable,
+            "overloaded".to_owned(),
+            ms(90),
+        ),
+        Answer::Responds(Box::new(says("Done.", &[], FinishReason::EndTurn)), ms(60)),
+    ])
+    .run()
+    .await;
+
+    assert_eq!(run.finished.summary.provider_latency_total_ms, 150);
+    assert_eq!(run.finished.summary.provider_latency_max_ms, 90);
+    assert_eq!(
+        run.finished.transcript.turns()[0].record().started_ms,
+        190,
+        "the successful attempt began after the failure and its 100ms backoff"
+    );
+}
+
+/// The retry field is the whole answer: a wait means another attempt follows,
+/// and its absence means the call is over.
+#[tokio::test]
+async fn a_failed_attempt_reports_the_wait_before_the_attempt_that_follows() {
+    let run = Harness::new(vec![
+        Answer::Fails(ProviderErrorKind::Retryable, "overloaded".to_owned(), ms(0)),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ])
+    .run()
+    .await;
+
+    let waits: Vec<Option<Duration>> = run
+        .observer
+        .events()
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            EventKind::ProviderCallFailed { retry, .. } => Some(retry),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(waits, [Some(ms(100))], "the policy's first backoff");
+}
+
+#[tokio::test]
+async fn the_last_failed_attempt_reports_no_wait() {
+    let fail = || Answer::Fails(ProviderErrorKind::Fatal, "bad request".to_owned(), ms(0));
+    let run = Harness::new(vec![fail()]).run().await;
+
+    let waits: Vec<Option<Duration>> = run
+        .observer
+        .events()
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            EventKind::ProviderCallFailed { retry, .. } => Some(retry),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(waits, [None], "a fatal failure is never tried again");
+    assert_eq!(run.stop_reason(), StopReason::ProviderError);
+}
+
+/// The loop is the only hop between an executor and an observer, so anything
+/// it drops here can never become an `mcp.*` attribute.
+#[tokio::test]
+async fn what_a_tool_carried_back_over_mcp_reaches_the_observer() {
+    let meta = crate::McpCallMeta {
+        method: "tools/call".to_owned(),
+        session_id: Some("session-7".to_owned()),
+        protocol_version: Some("2025-06-18".to_owned()),
+        jsonrpc_request_id: Some("3".to_owned()),
+        rpc_status_code: None,
+        transport: crate::NetworkTransport::Pipe,
+    };
+    let clock = Arc::new(FakeClock::new());
+    let mut harness = Harness::new(vec![
+        Answer::now(says("On it.", &["search"], FinishReason::ToolUse)),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.tools = vec![Arc::new(
+        FakeTools::new(
+            Arc::clone(&clock),
+            vec![ToolSpec {
+                name: ToolName::new("search").expect("a test's tool name is valid"),
+                description: "The search tool.".to_owned(),
+                input_schema: serde_json::json!({ "type": "object" }),
+                source: ToolSource::Mcp {
+                    server: "docs".to_owned(),
+                },
+            }],
+        )
+        .answers(
+            "search",
+            Answers::OverMcp("found it".to_owned(), meta.clone()),
+        ),
+    )];
+
+    let run = harness.run().await;
+
+    let carried: Vec<Option<crate::McpCallMeta>> = run
+        .observer
+        .events()
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            EventKind::ToolCallFinished { mcp, .. } => Some(mcp),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(carried, [Some(meta)]);
+}
+
+/// A call that failed still has a span, so its metadata comes back too.
+#[tokio::test]
+async fn a_tool_that_failed_over_mcp_still_reports_how_it_was_reached() {
+    let meta = crate::McpCallMeta {
+        method: "tools/call".to_owned(),
+        session_id: None,
+        protocol_version: None,
+        jsonrpc_request_id: Some("4".to_owned()),
+        rpc_status_code: Some("-32603".to_owned()),
+        transport: crate::NetworkTransport::Tcp,
+    };
+    let clock = Arc::new(FakeClock::new());
+    let mut harness = Harness::new(vec![
+        Answer::now(says("On it.", &["search"], FinishReason::ToolUse)),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.tools = vec![Arc::new(
+        FakeTools::new(
+            Arc::clone(&clock),
+            vec![ToolSpec {
+                name: ToolName::new("search").expect("a test's tool name is valid"),
+                description: "The search tool.".to_owned(),
+                input_schema: serde_json::json!({ "type": "object" }),
+                source: ToolSource::Mcp {
+                    server: "docs".to_owned(),
+                },
+            }],
+        )
+        .answers(
+            "search",
+            Answers::FailsOverMcp(
+                crate::ToolErrorKind::Failed,
+                "the server gave up".to_owned(),
+                meta.clone(),
+            ),
+        ),
+    )];
+
+    let run = harness.run().await;
+
+    let carried: Vec<Option<crate::McpCallMeta>> = run
+        .observer
+        .events()
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            EventKind::ToolCallFinished { mcp, .. } => Some(mcp),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(carried, [Some(meta)]);
+}
+
+/// The loop answers an unknown name itself, so no executor was reached and
+/// there's no transport to report.
+#[tokio::test]
+async fn a_call_the_loop_answered_itself_carries_no_transport() {
+    let run = Harness::new(vec![
+        Answer::now(says("On it.", &["no_such_tool"], FinishReason::ToolUse)),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ])
+    .run()
+    .await;
+
+    let carried: Vec<Option<crate::McpCallMeta>> = run
+        .observer
+        .events()
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            EventKind::ToolCallFinished { mcp, .. } => Some(mcp),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(carried, [None]);
+}
+
+/// Point A is the only place these can be read, because every later point
+/// comes after a call the run hasn't earned.
+#[tokio::test]
+async fn a_zero_timeout_stops_the_run_before_its_first_provider_call() {
+    let mut harness = Harness::new(vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))]);
+    harness.stop.timeout = Duration::ZERO;
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Timeout);
+    assert_eq!(run.turns(), 0);
+    assert_eq!(run.provider.calls(), 0, "nothing was bought");
+    assert_eq!(
+        run.observer.names(),
+        ["RunStarted", "RunFinished"],
+        "the stop is read before a turn is announced, so no turn began"
+    );
+}
+
+#[tokio::test]
+async fn a_zero_token_budget_stops_the_run_before_its_first_provider_call() {
+    let mut harness = Harness::new(vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))]);
+    harness.stop.max_total_tokens = Some(0);
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::MaxTotalTokens);
+    assert_eq!(run.provider.calls(), 0);
+}
+
+#[tokio::test]
+async fn a_run_cancelled_before_its_first_poll_never_calls_the_provider() {
+    let mut harness = Harness::new(vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))]);
+    harness.cancel = Arc::new(FakeCancel::after(0));
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Cancelled);
+    assert_eq!(run.provider.calls(), 0);
+    assert_eq!(run.error(), None);
+}
+
+/// A call whose arguments didn't parse never reaches an executor: it has no
+/// latency of its own, and the model is sent its own text back so it can
+/// correct itself.
+#[tokio::test]
+async fn a_call_whose_arguments_did_not_parse_is_malformed_input_and_never_runs() {
+    let clock = Arc::new(FakeClock::new());
+    let mut harness = Harness::new(vec![
+        Answer::now(calls_with_unparsed_input("bash", "{\"cmd\": ")),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    let tools = Arc::new(FakeTools::new(Arc::clone(&clock), vec![spec("bash")]));
+    harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
+
+    let run = harness.run().await;
+
+    let calls = run.finished.transcript.turns()[0].tool_calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].status, ToolCallStatus::MalformedInput);
+    assert_eq!(calls[0].latency_ms, 0, "nothing ran, so nothing took time");
+    assert!(tools.taken().is_empty(), "the executor was never reached");
+
+    let lablet_model::ToolResultContent::Text(sent) = &calls[0].content[0];
+    assert!(sent.contains("weren't valid JSON"), "{sent}");
+    assert!(
+        sent.contains("{\"cmd\": "),
+        "the model sees its own text: {sent}"
+    );
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+}
+
+/// A response whose only call is unparsed, so `tool_uses` has one entry the
+/// loop resolves by name before it reads the arguments.
+fn calls_with_unparsed_input(tool: &str, text: &str) -> ProviderResponse {
+    ProviderResponse::new(
+        vec![
+            ContentBlock::Text("On it.".to_owned()),
+            ContentBlock::ToolUse(ToolUse {
+                id: ToolCallId::new("call_0").expect("a valid call id"),
+                name: name(tool),
+                input: ToolInput::Unparsed(text.to_owned()),
+            }),
+        ],
+        Usage::from_inclusive(TokenCounts {
+            input: 100,
+            output: 20,
+            reasoning: 0,
+            cache_read: 0,
+            cache_write: 0,
+        }),
+        FinishReason::ToolUse,
+        None,
+        None,
+    )
+    .expect("a test's response has distinct call ids")
 }

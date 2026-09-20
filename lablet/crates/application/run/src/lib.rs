@@ -11,15 +11,17 @@ mod provider;
 mod service;
 mod tool;
 mod toolset;
+mod trace;
 
 pub use clock::{Cancellation, Clock};
-pub use observer::{EventKind, RunEvent, RunObserver, TraceContext};
+pub use observer::{EventKind, RunEvent, RunObserver};
 pub use provider::{ModelProvider, ProviderError, ProviderRequest};
 pub use service::{CallLimits, RunService};
 pub use tool::{
     McpCallMeta, NetworkTransport, ToolCall, ToolError, ToolErrorKind, ToolExecutor, ToolOutput,
 };
 pub use toolset::{ToolFilter, ToolSet, ToolSetError};
+pub use trace::TraceContext;
 
 #[cfg(test)]
 mod tests;

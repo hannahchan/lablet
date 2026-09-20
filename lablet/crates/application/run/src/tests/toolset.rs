@@ -328,3 +328,69 @@ fn a_transport_prints_the_value_its_attribute_takes() {
     assert_eq!(crate::NetworkTransport::Pipe.as_str(), "pipe");
     assert_eq!(crate::NetworkTransport::Tcp.as_str(), "tcp");
 }
+
+/// The loop intercepts this name rather than routing it, so an executor that
+/// also serves it would be offered twice — which every provider rejects — and
+/// its own tool could never run.
+#[tokio::test]
+async fn an_executor_that_serves_task_complete_collides_with_the_built_in_one() {
+    let refused = ToolSet::build(
+        vec![executor(vec![spec(
+            CompletionMode::TASK_COMPLETE,
+            ToolSource::Builtin,
+        )])],
+        &ToolFilter::default(),
+        CompletionMode::Explicit,
+        None,
+    )
+    .await
+    .expect_err("the run already offers that name");
+
+    assert_eq!(
+        refused,
+        ToolSetError::DuplicateName {
+            name: ToolName::task_complete()
+        }
+    );
+}
+
+/// Nothing registers the name in natural mode, so it's an ordinary tool.
+#[tokio::test]
+async fn natural_mode_lets_an_executor_serve_a_tool_called_task_complete() {
+    let set = built(
+        vec![executor(vec![spec(
+            CompletionMode::TASK_COMPLETE,
+            ToolSource::Builtin,
+        )])],
+        ToolFilter::default(),
+    )
+    .await
+    .expect("nothing else claims the name");
+
+    assert_eq!(offered(&set), [&ToolName::task_complete()]);
+    assert_eq!(
+        set.source(&ToolName::task_complete()),
+        Some(&ToolSource::Builtin)
+    );
+    assert!(!set.is_task_complete(&ToolName::task_complete()));
+}
+
+/// The set is the run's one copy of the mode, so everything that needs it
+/// reads it back from the thing whose shape it decided.
+#[tokio::test]
+async fn a_tool_set_reports_the_mode_it_was_built_for() {
+    let natural = built(Vec::new(), ToolFilter::default())
+        .await
+        .expect("nothing to conflict");
+    let explicit = ToolSet::build(
+        Vec::new(),
+        &ToolFilter::default(),
+        CompletionMode::Explicit,
+        None,
+    )
+    .await
+    .expect("nothing to conflict");
+
+    assert_eq!(natural.completion(), CompletionMode::Natural);
+    assert_eq!(explicit.completion(), CompletionMode::Explicit);
+}

@@ -7,7 +7,7 @@ use lablet_model::{
     ToolName, ToolResultContent, ToolSource, ToolSpec, TurnRecord,
 };
 
-use crate::{McpCallMeta, ProviderError};
+use crate::{McpCallMeta, ProviderError, TraceContext};
 
 /// One thing that happened in a run.
 ///
@@ -78,10 +78,11 @@ pub enum EventKind {
         attempt: u32,
         /// Why.
         error: ProviderError,
-        /// Whether another attempt follows.
-        will_retry: bool,
-        /// How long the loop waits first, when it does.
-        backoff: Option<Duration>,
+        /// How long the loop waits before the attempt that follows, or `None`
+        /// when this attempt was the last. One field rather than a flag beside
+        /// a duration, so "retrying after no wait" and "not retrying, after
+        /// this wait" can't be written down.
+        retry: Option<Duration>,
     },
     /// A tool call began.
     ToolCallStarted {
@@ -145,16 +146,6 @@ impl EventKind {
             Self::RunFinished { .. } => "RunFinished",
         }
     }
-}
-
-/// A span's identity, as W3C strings, so no OpenTelemetry type reaches below
-/// the adapters.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TraceContext {
-    /// The `traceparent` header value.
-    pub traceparent: String,
-    /// The `tracestate` header value, when there is one.
-    pub tracestate: Option<String>,
 }
 
 /// Something watching a run.

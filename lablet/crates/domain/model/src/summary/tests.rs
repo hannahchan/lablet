@@ -137,10 +137,7 @@ fn a_finished_run_carries_the_summary_and_the_conversation() {
     };
     let finished = Run::start(
         setup,
-        Prompts {
-            system: "Be brief.".to_owned(),
-            task: "Hi.".to_owned(),
-        },
+        Prompts::new("Be brief.", "Hi.").expect("the task isn't blank"),
     )
     .finish(
         StopReason::Cancelled,

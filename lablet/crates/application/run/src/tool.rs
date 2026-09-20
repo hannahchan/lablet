@@ -62,6 +62,14 @@ impl ToolError {
             mcp: None,
         }
     }
+
+    /// The same failure, with what the MCP call carried back. A call that
+    /// failed still has a span, and these are its `mcp.*` attributes.
+    #[must_use]
+    pub fn over_mcp(mut self, mcp: McpCallMeta) -> Self {
+        self.mcp = Some(mcp);
+        self
+    }
 }
 
 /// Why an executor couldn't answer.

@@ -845,3 +845,40 @@ fn outcomes_that_are_not_those_of_the_last_turns_calls_are_refused() {
     );
     assert!(run.transcript.turns()[0].tool_calls().is_empty());
 }
+
+/// The transcript refuses a first turn whose input is blank, so a run built
+/// from a blank task would buy a provider call and throw the answer away.
+/// Refusing it here is the only place that costs nothing.
+#[test]
+fn a_blank_task_is_refused_before_a_run_can_be_built_from_it() {
+    for task in ["", " ", "\t\n "] {
+        assert_eq!(
+            Prompts::new("You fix tests.", task),
+            Err(BlankTask),
+            "{task:?}"
+        );
+    }
+    assert_eq!(BlankTask.to_string(), "the task prompt is blank");
+}
+
+#[test]
+fn prompts_keep_both_strings_as_they_were_given() {
+    let prompts = Prompts::new("You fix tests.", " Fix the test. ").expect("the task isn't blank");
+
+    assert_eq!(prompts.system(), "You fix tests.");
+    assert_eq!(
+        prompts.task(),
+        " Fix the test. ",
+        "only blankness is refused; the text itself is the caller's"
+    );
+}
+
+#[test]
+fn a_run_with_no_system_prompt_is_allowed() {
+    assert_eq!(
+        Prompts::new("", "Fix the test.")
+            .expect("the task isn't blank")
+            .system(),
+        ""
+    );
+}

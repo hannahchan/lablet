@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use lablet_model::{Calls, CompletionMode, FinishReason, Progress, StopReason};
 
-/// The limits of one run and how it completes.
+/// The limits of one run.
 ///
 /// Every value is meaningful, so the fields are public and nothing is
 /// validated. A limit is met when the run reaches it, not when it passes it.
@@ -18,8 +18,6 @@ use lablet_model::{Calls, CompletionMode, FinishReason, Progress, StopReason};
 /// `provider_error` from a failed provider call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StopPolicy {
-    /// How the run decides that the model has finished.
-    pub completion: CompletionMode,
     /// The number of turns after whose tool phase the run stops.
     pub max_turns: NonZeroU32,
     /// The elapsed time at which the run stops. Zero stops it before the first
@@ -63,15 +61,24 @@ impl StopPolicy {
     /// run. A reason lablet doesn't know, from an OpenAI-compatible server, is
     /// usually that server's word for a normal end, and the wide event carries
     /// every finish reason for whoever needs to tell.
+    ///
+    /// `completion` is passed rather than held, so the run keeps one copy of
+    /// it: the tool set it decides the shape of. The same value must have
+    /// produced `calls`.
     #[must_use]
-    pub fn after_response(&self, finish: &FinishReason, calls: Calls) -> Option<StopReason> {
+    pub fn after_response(
+        &self,
+        finish: &FinishReason,
+        completion: CompletionMode,
+        calls: Calls,
+    ) -> Option<StopReason> {
         match finish {
             FinishReason::Refusal => return Some(StopReason::Refused),
             FinishReason::MaxTokens => return Some(StopReason::OutputTruncated),
             FinishReason::ContextWindow => return Some(StopReason::ContextExhausted),
             FinishReason::EndTurn | FinishReason::ToolUse | FinishReason::Other(_) => {}
         }
-        match (self.completion, calls) {
+        match (completion, calls) {
             (CompletionMode::Explicit, Calls::TaskComplete)
             | (CompletionMode::Natural, Calls::None) => Some(StopReason::Completed),
             (CompletionMode::Explicit, Calls::None) => Some(StopReason::EndedWithoutCompletion),

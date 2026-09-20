@@ -42,7 +42,7 @@ pub use provider::{
     ResponseError, Thinking, UnknownReason,
 };
 pub use provider_kind::ProviderKind;
-pub use run::{Progress, Prompts, Run, RunSetup};
+pub use run::{BlankTask, Progress, Prompts, Run, RunSetup};
 pub use stop::{Calls, CompletionMode, StopClass, StopReason};
 pub use summary::{FinishedRun, RunContext, RunSummary, ToolStats};
 pub use tool::{ToolCallEnd, ToolCallOutcome, ToolCallStatus, ToolSource, ToolSpec};

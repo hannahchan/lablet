@@ -9,9 +9,8 @@ fn nz(count: u32) -> NonZeroU32 {
 }
 
 /// Limits far from anything the progress below reaches.
-fn policy(completion: CompletionMode) -> StopPolicy {
+fn limits() -> StopPolicy {
     StopPolicy {
-        completion,
         max_turns: nz(30),
         timeout: TIMEOUT,
         max_total_tokens: None,
@@ -19,12 +18,14 @@ fn policy(completion: CompletionMode) -> StopPolicy {
     }
 }
 
-fn natural() -> StopPolicy {
-    policy(CompletionMode::Natural)
+const EVERY_MODE: [CompletionMode; 2] = [CompletionMode::Natural, CompletionMode::Explicit];
+
+fn natural(finish: &FinishReason, calls: Calls) -> Option<StopReason> {
+    limits().after_response(finish, CompletionMode::Natural, calls)
 }
 
-fn explicit() -> StopPolicy {
-    policy(CompletionMode::Explicit)
+fn explicit(finish: &FinishReason, calls: Calls) -> Option<StopReason> {
+    limits().after_response(finish, CompletionMode::Explicit, calls)
 }
 
 /// One response in, one second gone, 100 tokens used.
@@ -61,19 +62,19 @@ fn everything_reached(policy: &StopPolicy) -> Progress {
 
 #[test]
 fn a_run_inside_every_limit_goes_on_at_every_point() {
-    for policy in [natural(), explicit()] {
-        assert_eq!(policy.before_call(&mid_run()), None);
+    for mode in EVERY_MODE {
+        assert_eq!(limits().before_call(&mid_run()), None);
         assert_eq!(
-            policy.after_response(&FinishReason::ToolUse, Calls::Tools),
+            limits().after_response(&FinishReason::ToolUse, mode, Calls::Tools),
             None
         );
-        assert_eq!(policy.after_tools(&mid_run()), None);
+        assert_eq!(limits().after_tools(&mid_run()), None);
     }
 }
 
 #[test]
 fn a_fresh_run_makes_its_first_provider_call() {
-    assert_eq!(natural().before_call(&Progress::default()), None);
+    assert_eq!(limits().before_call(&Progress::default()), None);
 }
 
 // The turn cap
@@ -82,7 +83,7 @@ fn a_fresh_run_makes_its_first_provider_call() {
 fn the_turn_cap_stops_the_run_after_the_tool_phase_of_the_capped_turn() {
     let policy = StopPolicy {
         max_turns: nz(2),
-        ..natural()
+        ..limits()
     };
     let after = |turns| Progress { turns, ..mid_run() };
 
@@ -95,7 +96,7 @@ fn the_turn_cap_stops_the_run_after_the_tool_phase_of_the_capped_turn() {
 fn the_turn_cap_is_not_read_before_a_provider_call() {
     let policy = StopPolicy {
         max_turns: nz(2),
-        ..natural()
+        ..limits()
     };
     let progress = Progress {
         turns: 2,
@@ -109,7 +110,7 @@ fn the_turn_cap_is_not_read_before_a_provider_call() {
 fn the_smallest_turn_cap_stops_the_run_after_one_turn() {
     let policy = StopPolicy {
         max_turns: nz(1),
-        ..natural()
+        ..limits()
     };
 
     assert_eq!(policy.before_call(&Progress::default()), None);
@@ -128,12 +129,12 @@ fn the_timeout_stops_the_run_at_the_instant_it_is_reached() {
 
     for decide in [StopPolicy::before_call, StopPolicy::after_tools] {
         assert_eq!(
-            decide(&natural(), &at(TIMEOUT.checked_sub(nanosecond).unwrap())),
+            decide(&limits(), &at(TIMEOUT.checked_sub(nanosecond).unwrap())),
             None
         );
-        assert_eq!(decide(&natural(), &at(TIMEOUT)), Some(StopReason::Timeout));
+        assert_eq!(decide(&limits(), &at(TIMEOUT)), Some(StopReason::Timeout));
         assert_eq!(
-            decide(&natural(), &at(TIMEOUT + nanosecond)),
+            decide(&limits(), &at(TIMEOUT + nanosecond)),
             Some(StopReason::Timeout)
         );
     }
@@ -143,7 +144,7 @@ fn the_timeout_stops_the_run_at_the_instant_it_is_reached() {
 fn a_timeout_of_zero_stops_the_run_before_its_first_provider_call() {
     let policy = StopPolicy {
         timeout: Duration::ZERO,
-        ..natural()
+        ..limits()
     };
 
     assert_eq!(
@@ -158,7 +159,7 @@ fn a_timeout_of_zero_stops_the_run_before_its_first_provider_call() {
 fn the_token_budget_stops_the_run_on_the_token_that_reaches_it() {
     let policy = StopPolicy {
         max_total_tokens: Some(1_000),
-        ..natural()
+        ..limits()
     };
     let with = |total| Progress {
         usage: tokens(total),
@@ -182,7 +183,7 @@ fn the_token_budget_stops_the_run_on_the_token_that_reaches_it() {
 fn the_token_budget_counts_input_plus_output_and_not_the_cache_fields_again() {
     let policy = StopPolicy {
         max_total_tokens: Some(1_000),
-        ..natural()
+        ..limits()
     };
     let cached = Progress {
         usage: Usage::from_inclusive(TokenCounts {
@@ -212,9 +213,9 @@ fn a_run_without_a_token_budget_is_never_stopped_for_tokens() {
         ..mid_run()
     };
 
-    assert_eq!(natural().max_total_tokens, None);
-    assert_eq!(natural().before_call(&progress), None);
-    assert_eq!(natural().after_tools(&progress), None);
+    assert_eq!(limits().max_total_tokens, None);
+    assert_eq!(limits().before_call(&progress), None);
+    assert_eq!(limits().after_tools(&progress), None);
 }
 
 // The consecutive tool-error cap
@@ -226,14 +227,14 @@ fn the_tool_error_cap_stops_the_run_on_the_error_that_reaches_it() {
         ..mid_run()
     };
 
-    assert_eq!(natural().max_consecutive_tool_errors, nz(3));
-    assert_eq!(natural().after_tools(&after(2)), None);
+    assert_eq!(limits().max_consecutive_tool_errors, nz(3));
+    assert_eq!(limits().after_tools(&after(2)), None);
     assert_eq!(
-        natural().after_tools(&after(3)),
+        limits().after_tools(&after(3)),
         Some(StopReason::ToolErrorsExhausted)
     );
     assert_eq!(
-        natural().after_tools(&after(4)),
+        limits().after_tools(&after(4)),
         Some(StopReason::ToolErrorsExhausted)
     );
 }
@@ -245,14 +246,14 @@ fn the_tool_error_cap_is_not_read_before_a_provider_call() {
         ..mid_run()
     };
 
-    assert_eq!(natural().before_call(&progress), None);
+    assert_eq!(limits().before_call(&progress), None);
 }
 
 #[test]
 fn the_smallest_tool_error_cap_stops_the_run_on_the_first_error() {
     let policy = StopPolicy {
         max_consecutive_tool_errors: nz(1),
-        ..natural()
+        ..limits()
     };
     let after = |consecutive_tool_errors| Progress {
         consecutive_tool_errors,
@@ -272,7 +273,7 @@ fn the_smallest_tool_error_cap_stops_the_run_on_the_first_error() {
 fn natural_mode_completes_on_a_response_with_no_tool_calls() {
     for finish in [FinishReason::EndTurn, FinishReason::ToolUse] {
         assert_eq!(
-            natural().after_response(&finish, Calls::None),
+            natural(&finish, Calls::None),
             Some(StopReason::Completed),
             "{finish}"
         );
@@ -283,13 +284,10 @@ fn natural_mode_completes_on_a_response_with_no_tool_calls() {
 fn natural_mode_completes_on_a_finish_reason_it_does_not_know() {
     let unknown = FinishReason::from("eos".to_owned());
 
+    assert_eq!(natural(&unknown, Calls::None), Some(StopReason::Completed));
+    assert_eq!(natural(&unknown, Calls::Tools), None);
     assert_eq!(
-        natural().after_response(&unknown, Calls::None),
-        Some(StopReason::Completed)
-    );
-    assert_eq!(natural().after_response(&unknown, Calls::Tools), None);
-    assert_eq!(
-        explicit().after_response(&unknown, Calls::None),
+        explicit(&unknown, Calls::None),
         Some(StopReason::EndedWithoutCompletion)
     );
 }
@@ -297,16 +295,13 @@ fn natural_mode_completes_on_a_finish_reason_it_does_not_know() {
 #[test]
 fn natural_mode_goes_on_when_the_response_has_tool_calls() {
     for finish in [FinishReason::ToolUse, FinishReason::EndTurn] {
-        assert_eq!(natural().after_response(&finish, Calls::Tools), None);
+        assert_eq!(natural(&finish, Calls::Tools), None);
     }
 }
 
 #[test]
 fn natural_mode_reads_task_complete_as_any_other_tool() {
-    assert_eq!(
-        natural().after_response(&FinishReason::ToolUse, Calls::TaskComplete),
-        None
-    );
+    assert_eq!(natural(&FinishReason::ToolUse, Calls::TaskComplete), None);
 }
 
 // The response, in explicit mode
@@ -315,7 +310,7 @@ fn natural_mode_reads_task_complete_as_any_other_tool() {
 fn explicit_mode_completes_when_task_complete_is_called() {
     for finish in [FinishReason::ToolUse, FinishReason::EndTurn] {
         assert_eq!(
-            explicit().after_response(&finish, Calls::TaskComplete),
+            explicit(&finish, Calls::TaskComplete),
             Some(StopReason::Completed)
         );
     }
@@ -324,17 +319,14 @@ fn explicit_mode_completes_when_task_complete_is_called() {
 #[test]
 fn explicit_mode_ends_without_completion_on_a_response_with_no_tool_calls() {
     assert_eq!(
-        explicit().after_response(&FinishReason::EndTurn, Calls::None),
+        explicit(&FinishReason::EndTurn, Calls::None),
         Some(StopReason::EndedWithoutCompletion)
     );
 }
 
 #[test]
 fn explicit_mode_goes_on_when_the_response_calls_other_tools() {
-    assert_eq!(
-        explicit().after_response(&FinishReason::ToolUse, Calls::Tools),
-        None
-    );
+    assert_eq!(explicit(&FinishReason::ToolUse, Calls::Tools), None);
 }
 
 // A response the model didn't finish
@@ -343,10 +335,10 @@ const EVERY_CALLS: [Calls; 3] = [Calls::None, Calls::Tools, Calls::TaskComplete]
 
 #[test]
 fn a_truncated_response_is_output_truncated_whatever_it_called_so_its_tools_never_run() {
-    for policy in [natural(), explicit()] {
+    for mode in EVERY_MODE {
         for calls in EVERY_CALLS {
             assert_eq!(
-                policy.after_response(&FinishReason::MaxTokens, calls),
+                limits().after_response(&FinishReason::MaxTokens, mode, calls),
                 Some(StopReason::OutputTruncated),
                 "{calls:?}"
             );
@@ -356,10 +348,10 @@ fn a_truncated_response_is_output_truncated_whatever_it_called_so_its_tools_neve
 
 #[test]
 fn a_response_cut_short_at_the_context_window_is_context_exhausted_whatever_it_called() {
-    for policy in [natural(), explicit()] {
+    for mode in EVERY_MODE {
         for calls in EVERY_CALLS {
             assert_eq!(
-                policy.after_response(&FinishReason::ContextWindow, calls),
+                limits().after_response(&FinishReason::ContextWindow, mode, calls),
                 Some(StopReason::ContextExhausted),
                 "{calls:?}"
             );
@@ -369,10 +361,10 @@ fn a_response_cut_short_at_the_context_window_is_context_exhausted_whatever_it_c
 
 #[test]
 fn a_refusal_is_refused_and_never_completed_whatever_it_called() {
-    for policy in [natural(), explicit()] {
+    for mode in EVERY_MODE {
         for calls in EVERY_CALLS {
             assert_eq!(
-                policy.after_response(&FinishReason::Refusal, calls),
+                limits().after_response(&FinishReason::Refusal, mode, calls),
                 Some(StopReason::Refused),
                 "{calls:?}"
             );
@@ -391,15 +383,18 @@ fn a_response_is_judged_without_the_limits_so_one_that_finishes_completes_the_ru
         timeout: Duration::ZERO,
         max_total_tokens: Some(0),
         max_consecutive_tool_errors: nz(1),
-        ..natural()
     };
 
     assert_eq!(
-        policy.after_response(&FinishReason::ToolUse, Calls::Tools),
+        policy.after_response(
+            &FinishReason::ToolUse,
+            CompletionMode::Natural,
+            Calls::Tools
+        ),
         None
     );
     assert_eq!(
-        policy.after_response(&FinishReason::EndTurn, Calls::None),
+        policy.after_response(&FinishReason::EndTurn, CompletionMode::Natural, Calls::None),
         Some(StopReason::Completed)
     );
 }
@@ -408,7 +403,7 @@ fn a_response_is_judged_without_the_limits_so_one_that_finishes_completes_the_ru
 fn before_a_provider_call_the_timeout_is_reported_ahead_of_the_token_budget() {
     let policy = StopPolicy {
         max_total_tokens: Some(1_000),
-        ..natural()
+        ..limits()
     };
 
     assert_eq!(
@@ -421,7 +416,7 @@ fn before_a_provider_call_the_timeout_is_reported_ahead_of_the_token_budget() {
 fn after_the_tool_phase_the_reasons_rank_tool_errors_then_turns_then_timeout_then_tokens() {
     let policy = StopPolicy {
         max_total_tokens: Some(1_000),
-        ..natural()
+        ..limits()
     };
     let all = everything_reached(&policy);
     let without_errors = Progress {
@@ -463,18 +458,18 @@ fn a_wait_is_allowed_only_when_it_ends_before_the_timeout() {
     let nanosecond = Duration::from_nanos(1);
     let elapsed = TIMEOUT.checked_sub(second).unwrap();
 
-    assert!(natural().allows_wait(elapsed, second.checked_sub(nanosecond).unwrap()));
-    assert!(!natural().allows_wait(elapsed, second));
-    assert!(!natural().allows_wait(elapsed, second + nanosecond));
-    assert!(natural().allows_wait(Duration::ZERO, Duration::ZERO));
+    assert!(limits().allows_wait(elapsed, second.checked_sub(nanosecond).unwrap()));
+    assert!(!limits().allows_wait(elapsed, second));
+    assert!(!limits().allows_wait(elapsed, second + nanosecond));
+    assert!(limits().allows_wait(Duration::ZERO, Duration::ZERO));
 }
 
 #[test]
 fn a_wait_too_long_to_add_is_refused_rather_than_overflowing() {
-    assert!(!natural().allows_wait(Duration::from_secs(1), Duration::MAX));
+    assert!(!limits().allows_wait(Duration::from_secs(1), Duration::MAX));
     let policy = StopPolicy {
         timeout: Duration::MAX,
-        ..natural()
+        ..limits()
     };
     assert!(!policy.allows_wait(Duration::from_secs(1), Duration::MAX));
 }

@@ -213,6 +213,10 @@ pub enum Answers {
     ToolError(String),
     /// Fails, so no tool answered.
     Fails(crate::ToolErrorKind, String),
+    /// Answers over MCP, with the transport metadata an MCP adapter attaches.
+    OverMcp(String, crate::McpCallMeta),
+    /// Fails over MCP, so the metadata comes back on the error instead.
+    FailsOverMcp(crate::ToolErrorKind, String, crate::McpCallMeta),
 }
 
 /// An executor serving named tools with scripted answers.
@@ -308,6 +312,14 @@ impl ToolExecutor for FakeTools {
                 mcp: None,
             }),
             Some(Answers::Fails(kind, message)) => Err(ToolError::new(kind, message)),
+            Some(Answers::OverMcp(text, mcp)) => Ok(ToolOutput {
+                content: vec![ToolResultContent::Text(text)],
+                is_error: false,
+                mcp: Some(mcp),
+            }),
+            Some(Answers::FailsOverMcp(kind, message, mcp)) => {
+                Err(ToolError::new(kind, message).over_mcp(mcp))
+            }
             // Nothing scripted: the tool ran and said so, which keeps a test
             // that only cares about the loop's shape short.
             None => Ok(ToolOutput {
