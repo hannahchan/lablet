@@ -9,6 +9,6 @@ mod pricing;
 mod retry;
 mod stop;
 
-pub use pricing::{Pricing, PricingError};
+pub use pricing::Pricing;
 pub use retry::{RetryPolicy, RetryPolicyError};
 pub use stop::StopPolicy;

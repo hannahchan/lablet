@@ -14,7 +14,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Cost, Endpoint, FinishReason, ModelRef, RequestParams, RunId, ToolName, Transcript, Usage,
+    Cost, Endpoint, FinishReason, ModelRef, Rates, RequestParams, RunId, ToolName, Transcript,
+    Usage,
 };
 
 /// Whole milliseconds, truncated. The one conversion from a `Duration` in the
@@ -391,7 +392,12 @@ pub struct RunSummary {
     /// Each called tool's share, by tool name. The keys are among `tools`,
     /// whatever names the model called.
     pub per_tool: BTreeMap<ToolName, ToolStats>,
-    /// The cost of the run, when pricing is configured.
+    /// The rates the run was priced at; `Some` exactly when pricing was
+    /// configured. They reach the wide event beside the cost so a consumer
+    /// can recompute it rather than trust it.
+    pub rates: Option<Rates>,
+    /// The cost of the run, when pricing is configured and the amount is a
+    /// number.
     pub cost: Option<Cost>,
     /// The outcome document, which holds the run totals.
     pub outcome: RunOutcome,

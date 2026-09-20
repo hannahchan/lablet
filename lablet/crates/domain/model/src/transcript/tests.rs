@@ -2,8 +2,8 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::{
-    CompletionMode, ProviderKind, ToolCallEnd, ToolCallStatus, ToolName, ToolResultContent,
-    ToolSource,
+    CompletionMode, ProviderKind, TokenCounts, ToolCallEnd, ToolCallStatus, ToolName,
+    ToolResultContent, ToolSource,
 };
 
 /// A call to a tool the run offered, which ended `ended`.
@@ -38,7 +38,13 @@ fn tool_use(call_id: &str, tool: &str) -> ContentBlock {
 fn response(content: Vec<ContentBlock>, input: u64, output: u64) -> ProviderResponse {
     ProviderResponse::new(
         content,
-        Usage::from_inclusive(input, output, 0, 0),
+        Usage::from_inclusive(TokenCounts {
+            input,
+            output,
+            reasoning: 0,
+            cache_read: 0,
+            cache_write: 0,
+        }),
         FinishReason::EndTurn,
         Some("msg_1".to_owned()),
         Some("model-2026".to_owned()),
@@ -213,7 +219,13 @@ fn a_completion_becomes_a_turn_that_takes_the_input_and_records_the_rest_with_th
     assert_eq!(
         turn.record(),
         &TurnRecord {
-            usage: Usage::from_inclusive(12, 3, 0, 0),
+            usage: Usage::from_inclusive(TokenCounts {
+                input: 12,
+                output: 3,
+                reasoning: 0,
+                cache_read: 0,
+                cache_write: 0
+            }),
             finish: FinishReason::EndTurn,
             response_id: Some("msg_1".to_owned()),
             response_model: Some("model-2026".to_owned()),
@@ -624,7 +636,13 @@ fn usage_is_summed_over_every_turn() {
     assert_eq!(transcript().usage(), Usage::default());
     assert_eq!(
         two_calls_in_one_turn().usage(),
-        Usage::from_inclusive(280, 25, 0, 0)
+        Usage::from_inclusive(TokenCounts {
+            input: 280,
+            output: 25,
+            reasoning: 0,
+            cache_read: 0,
+            cache_write: 0
+        })
     );
 }
 
@@ -674,6 +692,7 @@ fn document() -> Value {
                     "usage": {
                         "input_tokens": 100,
                         "output_tokens": 20,
+                        "reasoning_output_tokens": 0,
                         "cache_read_tokens": 0,
                         "cache_write_tokens": 0,
                     },
@@ -700,6 +719,7 @@ fn document() -> Value {
                     "usage": {
                         "input_tokens": 180,
                         "output_tokens": 5,
+                        "reasoning_output_tokens": 0,
                         "cache_read_tokens": 100,
                         "cache_write_tokens": 0,
                     },
@@ -727,7 +747,13 @@ fn a_transcript_has_one_json_form() {
                 ..call("call_a", "bash")
             }),
         ],
-        Usage::from_inclusive(100, 20, 0, 0),
+        Usage::from_inclusive(TokenCounts {
+            input: 100,
+            output: 20,
+            reasoning: 0,
+            cache_read: 0,
+            cache_write: 0,
+        }),
         FinishReason::ToolUse,
         Some("msg_1".to_owned()),
         Some("model-2026".to_owned()),
@@ -735,7 +761,13 @@ fn a_transcript_has_one_json_form() {
     .unwrap();
     let fixed = ProviderResponse::new(
         vec![text("Fixed.")],
-        Usage::from_inclusive(180, 5, 100, 0),
+        Usage::from_inclusive(TokenCounts {
+            input: 180,
+            output: 5,
+            reasoning: 0,
+            cache_read: 100,
+            cache_write: 0,
+        }),
         FinishReason::EndTurn,
         None,
         None,

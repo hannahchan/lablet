@@ -1,3 +1,5 @@
+use lablet_model::Rates;
+
 use super::*;
 
 /// Rates an f64 holds exactly, so the sums below are exact: 4 for input, 16
@@ -51,6 +53,7 @@ fn a_cost_is_the_sum_of_its_four_parts_in_proportion_to_the_tokens() {
     let usage = Usage {
         input_tokens: 1_000_000,
         output_tokens: 250_000,
+        reasoning_output_tokens: 0,
         cache_read_tokens: 500_000,
         cache_write_tokens: 250_000,
     };
@@ -64,6 +67,7 @@ fn cached_tokens_inside_the_input_count_are_billed_once() {
     let usage = Usage {
         input_tokens: 1_000_000,
         output_tokens: 0,
+        reasoning_output_tokens: 0,
         cache_read_tokens: 500_000,
         cache_write_tokens: 250_000,
     };
@@ -111,6 +115,7 @@ fn the_largest_usage_has_a_finite_cost() {
     let usage = Usage {
         input_tokens: u64::MAX,
         output_tokens: u64::MAX,
+        reasoning_output_tokens: 0,
         cache_read_tokens: u64::MAX,
         cache_write_tokens: u64::MAX,
     };
@@ -139,6 +144,7 @@ fn free_pricing_costs_nothing() {
     let usage = Usage {
         input_tokens: 1_000_000,
         output_tokens: 1_000_000,
+        reasoning_output_tokens: 0,
         cache_read_tokens: 10,
         cache_write_tokens: 10,
     };
@@ -148,8 +154,8 @@ fn free_pricing_costs_nothing() {
 
 #[test]
 fn a_negative_rate_is_refused_and_the_error_names_it() {
-    let refused = |name, result: Result<Pricing, PricingError>| {
-        assert_eq!(result, Err(PricingError::Rate { name, value: -0.01 }));
+    let refused = |name, result: Result<Pricing, RateError>| {
+        assert_eq!(result, Err(RateError { name, value: -0.01 }));
     };
 
     refused("input", Pricing::new(-0.01, 16.0, 0.5, 5.0));
@@ -162,14 +168,14 @@ fn a_negative_rate_is_refused_and_the_error_names_it() {
 fn a_rate_that_is_not_a_finite_number_is_refused() {
     assert_eq!(
         Pricing::new(4.0, f64::INFINITY, 0.5, 5.0),
-        Err(PricingError::Rate {
+        Err(RateError {
             name: "output",
             value: f64::INFINITY,
         })
     );
     assert!(matches!(
         Pricing::new(4.0, 16.0, f64::NAN, 5.0),
-        Err(PricingError::Rate { name: "cache_read", value }) if value.is_nan()
+        Err(RateError { name: "cache_read", value }) if value.is_nan()
     ));
 }
 
@@ -177,7 +183,7 @@ fn a_rate_that_is_not_a_finite_number_is_refused() {
 fn the_first_refused_rate_in_argument_order_is_the_one_reported() {
     assert_eq!(
         Pricing::new(4.0, -1.0, -2.0, -3.0),
-        Err(PricingError::Rate {
+        Err(RateError {
             name: "output",
             value: -1.0,
         })
@@ -190,4 +196,11 @@ fn the_error_says_which_rate_and_what_it_was() {
         Pricing::new(-3.0, 16.0, 0.5, 5.0).unwrap_err().to_string(),
         "input rate -3 isn't a finite number of at least 0"
     );
+}
+
+/// A run reports the rates beside the cost, so the pricing hands back exactly
+/// what it was built with.
+#[test]
+fn the_pricing_reports_the_rates_it_was_built_with() {
+    assert_eq!(pricing().rates(), Rates::new(4.0, 16.0, 0.5, 5.0).unwrap());
 }

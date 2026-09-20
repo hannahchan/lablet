@@ -40,6 +40,11 @@ events:
       - ref: gen_ai.request.reasoning.level
         requirement_level:
           conditionally_required: If `model.effort` is set.
+      - ref: gen_ai.request.temperature
+        requirement_level:
+          conditionally_required: If `model.temperature` is set.
+      - ref: lablet.request.thinking
+        requirement_level: required
       - ref: lablet.run.completion_mode
         requirement_level: required
       - ref: lablet.run.max_turns
@@ -92,6 +97,11 @@ events:
       - ref: gen_ai.usage.output_tokens
         brief: Output tokens summed over every successful provider call.
         requirement_level: required
+      - ref: gen_ai.usage.reasoning.output_tokens
+        brief: >
+          The part of the output tokens spent on reasoning, summed over every successful provider
+          call. A part of `gen_ai.usage.output_tokens`, never added to it.
+        requirement_level: required
       - ref: gen_ai.usage.cache_read.input_tokens
         requirement_level: required
       - ref: gen_ai.usage.cache_write.input_tokens
@@ -100,6 +110,18 @@ events:
         brief: The finish reason of each successful provider call, in order.
         requirement_level: required
       - ref: lablet.run.cost_usd
+        requirement_level:
+          conditionally_required: If `model.pricing` is configured.
+      - ref: lablet.pricing.input_usd_per_mtok
+        requirement_level:
+          conditionally_required: If `model.pricing` is configured.
+      - ref: lablet.pricing.output_usd_per_mtok
+        requirement_level:
+          conditionally_required: If `model.pricing` is configured.
+      - ref: lablet.pricing.cache_read_usd_per_mtok
+        requirement_level:
+          conditionally_required: If `model.pricing` is configured.
+      - ref: lablet.pricing.cache_write_usd_per_mtok
         requirement_level:
           conditionally_required: If `model.pricing` is configured.
       # Tools

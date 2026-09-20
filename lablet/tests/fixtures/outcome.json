@@ -5,6 +5,7 @@
   "usage": {
     "input_tokens": 48211,
     "output_tokens": 1840,
+    "reasoning_output_tokens": 1216,
     "cache_read_tokens": 39104,
     "cache_write_tokens": 6144
   },

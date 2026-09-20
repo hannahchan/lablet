@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{Effort, ProviderKind, Run, RunSetup, Thinking};
+use crate::{Effort, ProviderKind, Run, RunSetup, Thinking, TokenCounts};
 
 // The literal spellings below are the members of `lablet.run.stop_reason` and
 // `lablet.run.completion_mode` in the generated telemetry-registry crate,
@@ -93,7 +93,13 @@ fn raw(stop_reason: StopReason, structured: Option<Value>, error: Option<&str>) 
         run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").unwrap(),
         stop_reason,
         turns: 1,
-        usage: Usage::from_inclusive(12, 3, 8, 0),
+        usage: Usage::from_inclusive(TokenCounts {
+            input: 12,
+            output: 3,
+            reasoning: 0,
+            cache_read: 8,
+            cache_write: 0,
+        }),
         tool_calls: 2,
         duration_ms: 250,
         result: TaskResult {
@@ -119,7 +125,16 @@ fn an_outcome_is_read_through_its_getters() {
     assert_eq!(outcome.run_id.as_str(), "01K5F3Z8Q4X9T2M7B6W1R0VNEC");
     assert_eq!(outcome.stop_reason(), StopReason::ProviderError);
     assert_eq!(outcome.turns, 1);
-    assert_eq!(outcome.usage, Usage::from_inclusive(12, 3, 8, 0));
+    assert_eq!(
+        outcome.usage,
+        Usage::from_inclusive(TokenCounts {
+            input: 12,
+            output: 3,
+            reasoning: 0,
+            cache_read: 8,
+            cache_write: 0
+        })
+    );
     assert_eq!(outcome.tool_calls, 2);
     assert_eq!(outcome.duration_ms, 250);
     assert_eq!(outcome.result().text, "partial");
@@ -133,7 +148,7 @@ fn a_failed_natural_run_writes_these_exact_bytes() {
         serde_json::to_string(&outcome()).unwrap(),
         concat!(
             r#"{"run_id":"01K5F3Z8Q4X9T2M7B6W1R0VNEC","stop_reason":"provider_error","turns":1,"#,
-            r#""usage":{"input_tokens":12,"output_tokens":3,"cache_read_tokens":8,"cache_write_tokens":0},"#,
+            r#""usage":{"input_tokens":12,"output_tokens":3,"reasoning_output_tokens":0,"cache_read_tokens":8,"cache_write_tokens":0},"#,
             r#""tool_calls":2,"duration_ms":250,"result":{"text":"partial","structured":null},"#,
             r#""error":"provider: 401 unauthorized"}"#
         )
@@ -325,6 +340,7 @@ fn summary() -> RunSummary {
                 latency_ms: 35,
             },
         )]),
+        rates: Some(Rates::new(3.0, 15.0, 0.3, 3.75).unwrap()),
         cost: Some(Cost::new(0.002).unwrap()),
         outcome: outcome(),
     }
@@ -367,6 +383,7 @@ fn a_run_summary_has_one_json_form() {
             "tool_output_bytes": 2048,
             "tool_calls_truncated": 1,
             "per_tool": { "bash": { "calls": 1, "errors": 1, "latency_ms": 35 } },
+            "rates": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75 },
             "cost": 0.002,
             "outcome": serde_json::to_value(outcome()).unwrap(),
         })
@@ -389,6 +406,7 @@ fn a_finished_run_carries_the_summary_and_the_conversation() {
     let finished = Run::start(setup, "Be brief.".to_owned(), "Hi.".to_owned()).finish(
         StopReason::Cancelled,
         Duration::from_millis(250),
+        None,
         None,
         None,
         None,

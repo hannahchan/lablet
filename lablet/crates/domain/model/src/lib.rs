@@ -34,7 +34,7 @@ pub use outcome::{
 };
 pub use provider::{
     Cost, CostError, Effort, Endpoint, FinishReason, ModelRef, ProviderKind, ProviderResponse,
-    RequestParams, ResponseError, Thinking, UnknownReason, Usage,
+    RateError, Rates, RequestParams, ResponseError, Thinking, TokenCounts, UnknownReason, Usage,
 };
 pub use run::{Progress, Run, RunSetup};
 pub use tool::{ToolCallEnd, ToolCallOutcome, ToolCallStatus, ToolSource, ToolSpec};

@@ -90,6 +90,9 @@ pub const GEN_AI_USAGE_INPUT_TOKENS: &str = "gen_ai.usage.input_tokens";
 /// The number of tokens used in the GenAI response (completion).
 pub const GEN_AI_USAGE_OUTPUT_TOKENS: &str = "gen_ai.usage.output_tokens";
 
+/// The number of output tokens used for reasoning (e.g. chain-of-thought, extended thinking).
+pub const GEN_AI_USAGE_REASONING_OUTPUT_TOKENS: &str = "gen_ai.usage.reasoning.output_tokens";
+
 /// A string representation of the `id` property of the request and its corresponding response.
 pub const JSONRPC_REQUEST_ID: &str = "jsonrpc.request.id";
 
@@ -101,6 +104,18 @@ pub const LABLET_CONFIG_DIGEST: &str = "lablet.config.digest";
 
 /// Names of the configured MCP servers.
 pub const LABLET_MCP_SERVERS: &str = "lablet.mcp.servers";
+
+/// The price of a million input tokens served from the prompt cache, in US dollars.
+pub const LABLET_PRICING_CACHE_READ_USD_PER_MTOK: &str = "lablet.pricing.cache_read_usd_per_mtok";
+
+/// The price of a million input tokens written to the prompt cache, in US dollars.
+pub const LABLET_PRICING_CACHE_WRITE_USD_PER_MTOK: &str = "lablet.pricing.cache_write_usd_per_mtok";
+
+/// The price of a million uncached input tokens, in US dollars.
+pub const LABLET_PRICING_INPUT_USD_PER_MTOK: &str = "lablet.pricing.input_usd_per_mtok";
+
+/// The price of a million output tokens, in US dollars. Reasoning tokens bill at this rate.
+pub const LABLET_PRICING_OUTPUT_USD_PER_MTOK: &str = "lablet.pricing.output_usd_per_mtok";
 
 /// Size of the system prompt in bytes, skills included.
 pub const LABLET_PROMPT_SYSTEM_BYTES: &str = "lablet.prompt.system_bytes";
@@ -119,6 +134,9 @@ pub const LABLET_PROVIDER_RETRIES: &str = "lablet.provider.retries";
 
 /// Size in bytes of the system prompt, messages, and tool specs sent in a provider call.
 pub const LABLET_REQUEST_BYTES: &str = "lablet.request.bytes";
+
+/// How the model was asked to reason, as the config spells it.
+pub const LABLET_REQUEST_THINKING: &str = "lablet.request.thinking";
 
 /// Whether the run produced a structured result, the `task_complete` argument.
 pub const LABLET_RESULT_HAS_STRUCTURED: &str = "lablet.result.has_structured";

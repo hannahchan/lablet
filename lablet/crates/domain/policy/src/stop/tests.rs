@@ -1,4 +1,4 @@
-use lablet_model::Usage;
+use lablet_model::{TokenCounts, Usage};
 
 use super::*;
 
@@ -40,7 +40,13 @@ fn mid_run() -> Progress {
 /// Usage whose total is `total`, split so that only a sum of input and output
 /// gives it.
 const fn tokens(total: u64) -> Usage {
-    Usage::from_inclusive(total - total / 4, total / 4, total / 2, 0)
+    Usage::from_inclusive(TokenCounts {
+        input: total - total / 4,
+        output: total / 4,
+        reasoning: 0,
+        cache_read: total / 2,
+        cache_write: 0,
+    })
 }
 
 /// Progress at which every limit and cap of `policy` is reached at once.
@@ -179,7 +185,13 @@ fn the_token_budget_counts_input_plus_output_and_not_the_cache_fields_again() {
         ..natural()
     };
     let cached = Progress {
-        usage: Usage::from_inclusive(700, 200, 600, 100),
+        usage: Usage::from_inclusive(TokenCounts {
+            input: 700,
+            output: 200,
+            reasoning: 0,
+            cache_read: 600,
+            cache_write: 100,
+        }),
         ..mid_run()
     };
 
@@ -190,7 +202,13 @@ fn the_token_budget_counts_input_plus_output_and_not_the_cache_fields_again() {
 #[test]
 fn a_run_without_a_token_budget_is_never_stopped_for_tokens() {
     let progress = Progress {
-        usage: Usage::from_inclusive(u64::MAX, u64::MAX, 0, 0),
+        usage: Usage::from_inclusive(TokenCounts {
+            input: u64::MAX,
+            output: u64::MAX,
+            reasoning: 0,
+            cache_read: 0,
+            cache_write: 0,
+        }),
         ..mid_run()
     };
 

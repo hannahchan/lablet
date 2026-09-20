@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use crate::outcome::{RawOutcome, whole_ms};
 use crate::{
-    CompletionMode, Cost, Endpoint, FinishedRun, Message, ModelRef, ProviderResponse,
+    CompletionMode, Cost, Endpoint, FinishedRun, Message, ModelRef, ProviderResponse, Rates,
     RequestParams, RunId, RunOutcome, RunSummary, StopReason, TaskResult, ToolCallOutcome,
     ToolName, Transcript, TranscriptError, Turn, Usage, UserContent,
 };
@@ -205,6 +205,7 @@ impl Run {
         duration: Duration,
         structured: Option<serde_json::Value>,
         error: Option<String>,
+        rates: Option<Rates>,
         cost: Option<Cost>,
     ) -> FinishedRun {
         let Self {
@@ -242,6 +243,7 @@ impl Run {
             tool_output_bytes: 0,
             tool_calls_truncated: 0,
             per_tool: BTreeMap::new(),
+            rates,
             cost,
             outcome: RunOutcome::closing(RawOutcome {
                 run_id: setup.run_id,

@@ -2,8 +2,9 @@ use serde_json::json;
 
 use super::*;
 use crate::{
-    ContentBlock, Effort, FinishReason, ProviderKind, StopClass, Thinking, ToolCallEnd, ToolCallId,
-    ToolCallStatus, ToolResult, ToolResultContent, ToolSource, ToolStats, ToolUse,
+    ContentBlock, Effort, FinishReason, ProviderKind, Rates, StopClass, Thinking, TokenCounts,
+    ToolCallEnd, ToolCallId, ToolCallStatus, ToolResult, ToolResultContent, ToolSource, ToolStats,
+    ToolUse,
 };
 
 fn nz(count: u32) -> NonZeroU32 {
@@ -23,6 +24,10 @@ fn ran_over_mcp(ended: ToolCallEnd) -> ToolCallStatus {
         },
         ended,
     )
+}
+
+fn rates() -> Rates {
+    Rates::new(3.0, 15.0, 0.3, 3.75).expect("ordinary published rates")
 }
 
 fn usd(usd: f64) -> Cost {
@@ -83,7 +88,13 @@ fn response(text: &str, tools: &[&str], finish: FinishReason, input: u64) -> Pro
     }));
     ProviderResponse::new(
         content,
-        Usage::from_inclusive(input, 20, 0, 0),
+        Usage::from_inclusive(TokenCounts {
+            input,
+            output: 20,
+            reasoning: 0,
+            cache_read: 0,
+            cache_write: 0,
+        }),
         finish,
         None,
         None,
@@ -119,12 +130,12 @@ fn tool_turn(run: &mut Run, tools: &[&str], statuses: &[ToolCallStatus]) {
 }
 
 fn finish(run: Run, stop: StopReason) -> RunSummary {
-    run.finish(stop, ms(12_345), None, None, None).summary
+    run.finish(stop, ms(12_345), None, None, None, None).summary
 }
 
 #[test]
 fn a_run_that_did_nothing_has_a_summary_of_its_setup_and_zeros() {
-    let finished = start().finish(StopReason::Cancelled, ms(0), None, None, None);
+    let finished = start().finish(StopReason::Cancelled, ms(0), None, None, None, None);
     let summary = finished.summary;
 
     assert_eq!(summary.model, setup().model);
@@ -247,6 +258,7 @@ fn finish_writes_the_run_id_the_duration_in_whole_milliseconds_and_the_final_tex
         Duration::from_micros(12_345_999),
         None,
         Some("provider: 401 unauthorized".to_owned()),
+        Some(rates()),
         Some(usd(0.25)),
     );
 
@@ -258,6 +270,7 @@ fn finish_writes_the_run_id_the_duration_in_whole_milliseconds_and_the_final_tex
     assert_eq!(outcome.result().text, finished.transcript.final_text());
     assert_eq!(outcome.error(), Some("provider: 401 unauthorized"));
     assert_eq!(finished.summary.cost, Some(usd(0.25)));
+    assert_eq!(finished.summary.rates, Some(rates()));
 }
 
 #[test]
@@ -270,6 +283,7 @@ fn the_outcome_keeps_of_what_the_loop_passes_only_what_the_stop_reason_allows() 
                 ms(0),
                 Some(argument.clone()),
                 Some("boom".to_owned()),
+                None,
                 None,
             )
             .summary
@@ -309,10 +323,19 @@ fn each_completion_is_a_turn_with_its_usage_and_finish_reason() {
     )
     .unwrap();
 
-    assert_eq!(run.usage(), Usage::from_inclusive(280, 40, 0, 0));
+    assert_eq!(
+        run.usage(),
+        Usage::from_inclusive(TokenCounts {
+            input: 280,
+            output: 40,
+            reasoning: 0,
+            cache_read: 0,
+            cache_write: 0
+        })
+    );
     assert_eq!(run.progress(ms(1_500)).turns, 2);
     assert_eq!(run.transcript.turns().len(), 2);
-    let finished = run.finish(StopReason::Completed, ms(0), None, None, None);
+    let finished = run.finish(StopReason::Completed, ms(0), None, None, None, None);
     assert_eq!(finished.summary.outcome.turns, 2);
     assert_eq!(
         finished.summary.finish_reasons,
@@ -320,7 +343,13 @@ fn each_completion_is_a_turn_with_its_usage_and_finish_reason() {
     );
     assert_eq!(
         finished.summary.outcome.usage,
-        Usage::from_inclusive(280, 40, 0, 0)
+        Usage::from_inclusive(TokenCounts {
+            input: 280,
+            output: 40,
+            reasoning: 0,
+            cache_read: 0,
+            cache_write: 0
+        })
     );
     assert_eq!(finished.transcript.turns().len(), 2);
 }
@@ -576,7 +605,13 @@ fn progress_is_what_the_limits_are_held_against() {
         Progress {
             turns: 1,
             elapsed: ms(830),
-            usage: Usage::from_inclusive(100, 20, 0, 0),
+            usage: Usage::from_inclusive(TokenCounts {
+                input: 100,
+                output: 20,
+                reasoning: 0,
+                cache_read: 0,
+                cache_write: 0
+            }),
             consecutive_tool_errors: 1,
         }
     );
@@ -648,7 +683,7 @@ fn the_summarys_totals_are_those_of_the_transcript_it_comes_with() {
     );
     tool_turn(&mut run, &["bash"], &[ran(ToolCallEnd::Ok)]);
 
-    let finished = run.finish(StopReason::MaxTurns, ms(50), None, None, None);
+    let finished = run.finish(StopReason::MaxTurns, ms(50), None, None, None, None);
 
     let turns = finished.transcript.turns();
     let outcomes = || turns.iter().flat_map(Turn::tool_calls);

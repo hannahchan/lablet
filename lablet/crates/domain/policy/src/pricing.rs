@@ -1,27 +1,14 @@
 //! What a run's tokens cost.
 
-use lablet_model::{Cost, Usage};
+use lablet_model::{Cost, RateError, Rates, Usage};
 
-/// Why a [`Pricing`] was refused.
-#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
-pub enum PricingError {
-    /// A rate was negative, infinite, or not a number.
-    #[error("{name} rate {value} isn't a finite number of at least 0")]
-    Rate {
-        /// Which rate, as the config spells it.
-        name: &'static str,
-        /// The refused rate.
-        value: f64,
-    },
-}
-
-/// A model's prices in US dollars per million tokens.
+/// What a run's tokens cost, at the [`Rates`] it was configured with.
+///
+/// The rates are a model type, because the run reports them on its wide event
+/// beside the cost; the arithmetic is here, because it's a policy.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pricing {
-    input: f64,
-    output: f64,
-    cache_read: f64,
-    cache_write: f64,
+    rates: Rates,
 }
 
 impl Pricing {
@@ -31,38 +18,23 @@ impl Pricing {
     ///
     /// # Errors
     ///
-    /// Returns [`PricingError::Rate`] for the first rate, in argument order,
-    /// that isn't a finite number of at least 0.
+    /// Returns [`RateError`] for the first rate, in argument order, that isn't
+    /// a finite number of at least 0.
     pub fn new(
         input: f64,
         output: f64,
         cache_read: f64,
         cache_write: f64,
-    ) -> Result<Self, PricingError> {
-        let pricing = Self {
-            input,
-            output,
-            cache_read,
-            cache_write,
-        };
-        pricing.validate()?;
-        Ok(pricing)
+    ) -> Result<Self, RateError> {
+        Ok(Self {
+            rates: Rates::new(input, output, cache_read, cache_write)?,
+        })
     }
 
-    /// Apart from `new` because cargo-mutants never mutates a function of that
-    /// name, and these comparisons are what the mutation floor should hold.
-    fn validate(&self) -> Result<(), PricingError> {
-        for (name, value) in [
-            ("input", self.input),
-            ("output", self.output),
-            ("cache_read", self.cache_read),
-            ("cache_write", self.cache_write),
-        ] {
-            if !value.is_finite() || value < 0.0 {
-                return Err(PricingError::Rate { name, value });
-            }
-        }
-        Ok(())
+    /// The rates a run reports beside its cost.
+    #[must_use]
+    pub const fn rates(&self) -> Rates {
+        self.rates
     }
 
     /// The cost of `usage`, or `None` when the rates and counts multiply out
@@ -73,7 +45,9 @@ impl Pricing {
     /// `Usage::input_tokens` includes the cached tokens, so the input rate
     /// applies to `Usage::uncached_input_tokens` only and each cache field is
     /// billed once, at its own rate. Pricing `input_tokens` whole and adding
-    /// the cache fields would bill the cached tokens twice.
+    /// the cache fields would bill the cached tokens twice. Reasoning tokens
+    /// need no rate: both providers bill them at the output rate, and
+    /// `Usage::reasoning_output_tokens` is already part of `output_tokens`.
     ///
     /// A provider that reports cache counts above its own input count leaves
     /// no uncached part, so that run is priced for its cached tokens alone and
@@ -85,10 +59,10 @@ impl Pricing {
     #[must_use]
     pub fn cost(&self, usage: &Usage) -> Option<Cost> {
         Cost::new(
-            per_million(usage.uncached_input_tokens(), self.input)
-                + per_million(usage.output_tokens, self.output)
-                + per_million(usage.cache_read_tokens, self.cache_read)
-                + per_million(usage.cache_write_tokens, self.cache_write),
+            per_million(usage.uncached_input_tokens(), self.rates.input)
+                + per_million(usage.output_tokens, self.rates.output)
+                + per_million(usage.cache_read_tokens, self.rates.cache_read)
+                + per_million(usage.cache_write_tokens, self.rates.cache_write),
         )
         .ok()
     }

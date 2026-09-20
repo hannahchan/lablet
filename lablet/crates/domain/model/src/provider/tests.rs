@@ -7,6 +7,7 @@ const fn usage(input: u64, output: u64, cache_read: u64, cache_write: u64) -> Us
     Usage {
         input_tokens: input,
         output_tokens: output,
+        reasoning_output_tokens: 0,
         cache_read_tokens: cache_read,
         cache_write_tokens: cache_write,
     }
@@ -64,6 +65,7 @@ fn usage_serialises_all_four_fields_and_reads_a_missing_one_as_zero() {
         json!({
             "input_tokens": 1,
             "output_tokens": 2,
+            "reasoning_output_tokens": 0,
             "cache_read_tokens": 3,
             "cache_write_tokens": 4,
         })
@@ -77,7 +79,13 @@ fn usage_serialises_all_four_fields_and_reads_a_missing_one_as_zero() {
 #[test]
 fn from_inclusive_takes_the_input_count_as_it_is() {
     assert_eq!(
-        Usage::from_inclusive(1000, 200, 700, 100),
+        Usage::from_inclusive(TokenCounts {
+            input: 1000,
+            output: 200,
+            reasoning: 0,
+            cache_read: 700,
+            cache_write: 100
+        }),
         usage(1000, 200, 700, 100)
     );
 }
@@ -85,15 +93,35 @@ fn from_inclusive_takes_the_input_count_as_it_is() {
 #[test]
 fn from_uncached_adds_both_cache_counts_into_the_input() {
     assert_eq!(
-        Usage::from_uncached(200, 50, 700, 100),
+        Usage::from_uncached(TokenCounts {
+            input: 200,
+            output: 50,
+            reasoning: 0,
+            cache_read: 700,
+            cache_write: 100
+        }),
         usage(1000, 50, 700, 100)
     );
     assert_eq!(
-        Usage::from_uncached(200, 50, 700, 100).uncached_input_tokens(),
+        Usage::from_uncached(TokenCounts {
+            input: 200,
+            output: 50,
+            reasoning: 0,
+            cache_read: 700,
+            cache_write: 100
+        })
+        .uncached_input_tokens(),
         200
     );
     assert_eq!(
-        Usage::from_uncached(u64::MAX, 0, 1, 1).input_tokens,
+        Usage::from_uncached(TokenCounts {
+            input: u64::MAX,
+            output: 0,
+            reasoning: 0,
+            cache_read: 1,
+            cache_write: 1
+        })
+        .input_tokens,
         u64::MAX
     );
 }
@@ -263,6 +291,50 @@ fn request_defaults_have_one_json_form() {
     );
 }
 
+/// The rates reach the wide event, so a run's document carries them and a
+/// document that names a rate no price list could have is refused on the way
+/// in, as `Cost` is.
+#[test]
+fn rates_have_one_json_form_and_a_rate_that_is_not_a_price_is_refused() {
+    let rates = Rates::new(3.0, 15.0, 0.3, 3.75).unwrap();
+    let json = json!({ "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75 });
+
+    assert_eq!(serde_json::to_value(rates).unwrap(), json);
+    assert_eq!(serde_json::from_value::<Rates>(json).unwrap(), rates);
+    assert!(
+        serde_json::from_value::<Rates>(
+            json!({ "input": -1.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75 })
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<Rates>(json!({ "input": 3.0, "output": 15.0 })).is_err(),
+        "a rate left out is not zero"
+    );
+}
+
+#[test]
+fn the_first_rate_that_is_not_a_price_is_the_one_reported() {
+    for (name, rates) in [
+        ("input", Rates::new(f64::NAN, 15.0, 0.3, 3.75)),
+        ("output", Rates::new(3.0, -0.01, 0.3, 3.75)),
+        ("cache_read", Rates::new(3.0, 15.0, f64::INFINITY, 3.75)),
+        ("cache_write", Rates::new(3.0, 15.0, 0.3, -1.0)),
+    ] {
+        assert_eq!(rates.unwrap_err().name, name);
+    }
+    assert_eq!(
+        Rates::new(-3.0, 15.0, 0.3, 3.75).unwrap_err().to_string(),
+        "input rate -3 isn't a finite number of at least 0"
+    );
+}
+
+/// A locally served model costs nothing, so zero is a price like any other.
+#[test]
+fn a_rate_of_zero_is_a_price() {
+    assert!(Rates::new(0.0, 0.0, 0.0, 0.0).is_ok());
+}
+
 fn usd(usd: f64) -> Cost {
     Cost::new(usd).expect("the amounts in these tests are all real costs")
 }
@@ -330,6 +402,7 @@ fn a_completion_reads_from_the_form_a_script_would_hold() {
             "usage": {
                 "input_tokens": 12,
                 "output_tokens": 3,
+                "reasoning_output_tokens": 0,
                 "cache_read_tokens": 0,
                 "cache_write_tokens": 0,
             },

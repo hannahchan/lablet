@@ -27,6 +27,7 @@ fn the_fixture_deserialises_to_the_outcome_it_describes() {
         Usage {
             input_tokens: 48_211,
             output_tokens: 1_840,
+            reasoning_output_tokens: 1_216,
             cache_read_tokens: 39_104,
             cache_write_tokens: 6_144,
         }
@@ -76,7 +77,8 @@ fn the_fixture_has_exactly_the_keys_the_spec_lists() {
             "cache_read_tokens",
             "cache_write_tokens",
             "input_tokens",
-            "output_tokens"
+            "output_tokens",
+            "reasoning_output_tokens"
         ]
     );
     assert_eq!(keys(&fixture["result"]), ["structured", "text"]);

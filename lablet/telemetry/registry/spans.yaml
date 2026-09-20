@@ -59,6 +59,8 @@ spans:
         requirement_level: required
       - ref: gen_ai.usage.cache_write.input_tokens
         requirement_level: required
+      - ref: gen_ai.usage.reasoning.output_tokens
+        requirement_level: required
       - ref: lablet.run.cost_usd
         requirement_level:
           conditionally_required: If `model.pricing` is configured.
@@ -109,6 +111,9 @@ spans:
         requirement_level:
           conditionally_required: If the call succeeded.
       - ref: gen_ai.usage.output_tokens
+        requirement_level:
+          conditionally_required: If the call succeeded.
+      - ref: gen_ai.usage.reasoning.output_tokens
         requirement_level:
           conditionally_required: If the call succeeded.
       - ref: gen_ai.usage.cache_read.input_tokens

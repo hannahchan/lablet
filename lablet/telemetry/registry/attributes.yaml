@@ -462,3 +462,43 @@ attributes:
     note: >
       Justification: the conventions have no attribute for a retry delay.
     examples: [2000]
+  - key: lablet.pricing.input_usd_per_mtok
+    type: double
+    stability: development
+    brief: The price of a million uncached input tokens, in US dollars.
+    note: >
+      Justification: the conventions carry no prices. A run reports the rates it was priced at
+      beside `lablet.run.cost_usd`, so a consumer can recompute the cost rather than trust it,
+      and can tell a run whose provider reported cache counts above its own input count.
+    examples: [3.0]
+  - key: lablet.pricing.output_usd_per_mtok
+    type: double
+    stability: development
+    brief: The price of a million output tokens, in US dollars. Reasoning tokens bill at this rate.
+    note: >
+      Justification: as `lablet.pricing.input_usd_per_mtok`.
+    examples: [15.0]
+  - key: lablet.pricing.cache_read_usd_per_mtok
+    type: double
+    stability: development
+    brief: The price of a million input tokens served from the prompt cache, in US dollars.
+    note: >
+      Justification: as `lablet.pricing.input_usd_per_mtok`.
+    examples: [0.3]
+  - key: lablet.pricing.cache_write_usd_per_mtok
+    type: double
+    stability: development
+    brief: The price of a million input tokens written to the prompt cache, in US dollars.
+    note: >
+      Justification: as `lablet.pricing.input_usd_per_mtok`.
+    examples: [3.75]
+  - key: lablet.request.thinking
+    type: string
+    stability: development
+    brief: How the model was asked to reason, as the config spells it.
+    note: >
+      Justification: `gen_ai.request.reasoning.level` carries the effort level and nothing carries
+      the thinking mode or its token budget, which is the setting a run is most often varied by.
+      Written `provider_default`, `adaptive`, `adaptive:summarized`, `budget:2048`,
+      `budget:2048:summarized`, or `disabled`.
+    examples: ["adaptive:summarized", "budget:2048"]
