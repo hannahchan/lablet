@@ -483,7 +483,7 @@ All but one are a branch for a state the caller has already excluded, which is t
 
 ## 2026-09-21 The domain crates are held to every line and every region
 
-A trial, asked for after the region floor landed: remove the branches nothing can reach, then raise the floors to 100 and see what holds. `lablet-model` and `lablet-policy` now hold at 100% lines and 100% regions. `lablet-run` reached 98.4% regions and stays at 90, which is the open number.
+A trial, asked for after the region floor landed: remove the branches nothing can reach, then raise the floors to 100 and see what holds. `lablet-model` and `lablet-policy` now hold at 100% lines and 100% regions. `lablet-run` reached 98.4% regions and is held at 98: a ratchet just under where it stands rather than a round number, since it can't reach 100. The margin is two regions, so anything new that no test can reach fails the gate, where a floor at 90 would have left eight points of silent drift.
 
 Eighteen uncovered regions went in, seven of them design and four of them tests nobody had written:
 
