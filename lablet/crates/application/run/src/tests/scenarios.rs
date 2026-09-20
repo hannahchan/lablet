@@ -899,3 +899,313 @@ async fn an_observer_that_keeps_no_spans_hands_the_executor_nothing() {
 
     assert_eq!(tools.taken()[0].trace_context, None);
 }
+
+// L2: the intercepted call is never started, so an observer never sees it.
+
+#[tokio::test]
+async fn the_intercepted_completion_call_is_never_started() {
+    let mut harness = Harness::new(vec![Answer::now(says(
+        "Done.",
+        &[CompletionMode::TASK_COMPLETE],
+        FinishReason::ToolUse,
+    ))]);
+    harness.stop.completion = CompletionMode::Explicit;
+
+    let run = harness.run().await;
+
+    assert_eq!(run.finished.summary.outcome.tool_calls, 0);
+    assert!(
+        !run.observer.names().contains(&"ToolCallStarted"),
+        "the loop intercepts it rather than running it"
+    );
+}
+
+// L6, L7: a response the model didn't finish, with and without calls.
+
+#[tokio::test]
+async fn a_truncated_response_with_no_tool_call_still_truncates_the_run() {
+    let run = Harness::new(vec![Answer::now(says(
+        "Half a th",
+        &[],
+        FinishReason::MaxTokens,
+    ))])
+    .run()
+    .await;
+
+    assert_eq!(run.stop_reason(), StopReason::OutputTruncated);
+    assert_eq!(run.turns(), 1);
+}
+
+/// A cut-off response can end inside the completion call's arguments, so a
+/// `task_complete` in one doesn't complete the run and its argument isn't the
+/// result.
+#[tokio::test]
+async fn a_truncated_response_that_called_task_complete_does_not_complete_the_run() {
+    let mut harness = Harness::new(vec![Answer::now(says(
+        "Done",
+        &[CompletionMode::TASK_COMPLETE],
+        FinishReason::MaxTokens,
+    ))]);
+    harness.stop.completion = CompletionMode::Explicit;
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::OutputTruncated);
+    assert_eq!(
+        run.finished.summary.outcome.result().structured,
+        None,
+        "only a completed run carries a structured result"
+    );
+}
+
+// L9: both spellings of a refusal, and the turn that records it.
+
+#[tokio::test]
+async fn a_content_filter_refuses_the_run_and_its_tool_calls_do_not_run() {
+    let refusal = ProviderResponse::new(
+        vec![ContentBlock::ToolUse(ToolUse {
+            id: ToolCallId::new("call_0").expect("a valid call id"),
+            name: name("bash"),
+            input: ToolInput::Json(serde_json::json!({})),
+        })],
+        Usage::default(),
+        FinishReason::from("content_filter".to_owned()),
+        None,
+        None,
+    )
+    .expect("distinct call ids");
+
+    let run = Harness::new(vec![Answer::now(refusal)]).run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Refused);
+    assert_eq!(run.finished.summary.outcome.tool_calls, 0);
+    assert_eq!(
+        run.finished.transcript.turns()[0].record().finish,
+        FinishReason::Refusal,
+        "the transcript records why, so a grader can tell a refusal from an end"
+    );
+}
+
+// L10: the transcript, the events and the summary all describe one run.
+
+#[tokio::test]
+async fn the_summary_is_the_sum_of_the_transcript_beside_it() {
+    let mut harness = Harness::new(vec![
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::Responds(
+            Box::new(says(
+                "On it.",
+                &["bash", "read_file"],
+                FinishReason::ToolUse,
+            )),
+            ms(80),
+        ),
+        Answer::Responds(Box::new(says("Done.", &[], FinishReason::EndTurn)), ms(40)),
+    ]);
+    harness.tools = vec![Arc::new(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![spec("bash"), spec("read_file")],
+        )
+        .answers("bash", Answers::Text("ok".to_owned()))
+        .answers("read_file", Answers::ToolError("no such file".to_owned())),
+    )];
+
+    let run = harness.run().await;
+    let turns = run.finished.transcript.turns();
+    let summary = &run.finished.summary;
+
+    assert_eq!(turns.len(), 2);
+    assert_eq!(
+        turns[0].record().attempts,
+        2,
+        "the failed attempt is counted"
+    );
+    assert_eq!(turns[0].tool_calls().len(), 2);
+    assert_eq!(
+        turns[0].tool_calls()[0].status,
+        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok)
+    );
+    assert_eq!(
+        turns[0].tool_calls()[1].status,
+        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::ToolError)
+    );
+
+    // Every total is the sum over the turns it describes.
+    assert_eq!(summary.provider_retries, 1);
+    assert_eq!(summary.outcome.tool_calls, 2);
+    assert_eq!(summary.tool_calls_errors, 1);
+    assert_eq!(
+        summary.outcome.usage,
+        turns
+            .iter()
+            .fold(Usage::default(), |sum, turn| sum + turn.record().usage)
+    );
+    assert_eq!(
+        summary.finish_reasons,
+        turns
+            .iter()
+            .map(|t| t.record().finish.clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        summary.per_tool.keys().collect::<Vec<_>>(),
+        [&name("bash"), &name("read_file")]
+    );
+}
+
+// E2, E3: what the retry budget counts, and what it belongs to.
+
+#[tokio::test]
+async fn a_retry_budget_of_zero_gives_up_on_the_first_error() {
+    let mut harness = Harness::new(vec![
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.retry = RetryPolicy::new(0, ms(100), ms(10_000), 2.0).expect("a valid policy");
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::RetriesExhausted);
+    assert_eq!(run.provider.calls(), 1);
+}
+
+/// The budget belongs to a call, not to the run: three calls each surviving
+/// two failures is a completed run, not an exhausted one.
+#[tokio::test]
+async fn the_retry_budget_starts_again_for_every_provider_call() {
+    let mut script = Vec::new();
+    for turn in 0..3 {
+        script.push(Answer::fails(ProviderErrorKind::Retryable));
+        script.push(Answer::fails(ProviderErrorKind::Retryable));
+        let finish = if turn == 2 {
+            FinishReason::EndTurn
+        } else {
+            FinishReason::ToolUse
+        };
+        let tools: &[&str] = if turn == 2 { &[] } else { &["bash"] };
+        script.push(Answer::now(says("On it.", tools, finish)));
+    }
+
+    let run = Harness::new(script).run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(run.provider.calls(), 9);
+    assert_eq!(run.finished.summary.provider_retries, 6);
+    assert_eq!(run.turns(), 3);
+}
+
+// E4, E5, E6: what each failure says, and which are tried again.
+
+#[tokio::test]
+async fn a_failure_reports_the_providers_own_words() {
+    let run = Harness::new(vec![Answer::Fails(
+        ProviderErrorKind::ContextExhausted,
+        "prompt is 205000 tokens, over the 200000 limit".to_owned(),
+        Duration::ZERO,
+    )])
+    .run()
+    .await;
+
+    assert_eq!(
+        run.error(),
+        Some("prompt is 205000 tokens, over the 200000 limit"),
+        "lablet's own sentence is for a failure that came without one"
+    );
+}
+
+#[tokio::test]
+async fn a_fatal_failure_reports_what_the_provider_said() {
+    let run = Harness::new(vec![Answer::Fails(
+        ProviderErrorKind::Fatal,
+        "401 unauthorized".to_owned(),
+        Duration::ZERO,
+    )])
+    .run()
+    .await;
+
+    assert_eq!(run.stop_reason(), StopReason::ProviderError);
+    assert_eq!(run.error(), Some("401 unauthorized"));
+    assert_eq!(run.turns(), 0);
+}
+
+/// A response the adapter couldn't map needn't recur, so it's tried again.
+#[tokio::test]
+async fn a_malformed_response_is_tried_again() {
+    let run = Harness::new(vec![
+        Answer::fails(ProviderErrorKind::Malformed),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ])
+    .run()
+    .await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(run.provider.calls(), 2);
+    assert_eq!(run.finished.summary.provider_retries, 1);
+}
+
+// E8: an unknown name is an error result, and errors are errors whatever
+// made them.
+
+#[tokio::test]
+async fn calls_to_a_name_the_run_does_not_offer_count_toward_the_tool_error_cap() {
+    let mut harness = Harness::new(vec![
+        Answer::now(says("One.", &["invented"], FinishReason::ToolUse)),
+        Answer::now(says("Two.", &["invented"], FinishReason::ToolUse)),
+        Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.stop.max_consecutive_tool_errors = nz(2);
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::ToolErrorsExhausted);
+    assert_eq!(run.finished.summary.tool_calls_unknown, 2);
+}
+
+// T10: the exact bytes the model is sent.
+
+#[tokio::test]
+async fn output_over_the_cap_is_cut_at_the_cap_and_says_what_was_cut() {
+    let mut harness = Harness::new(vec![
+        Answer::now(says("One.", &["bash"], FinishReason::ToolUse)),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.calls.max_tool_output_bytes = Some(10);
+    harness.tools = vec![Arc::new(
+        FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")])
+            .answers("bash", Answers::Text("0123456789abcdef".to_owned())),
+    )];
+
+    let run = harness.run().await;
+
+    let outcome = &run.finished.transcript.turns()[0].tool_calls()[0];
+    assert_eq!(
+        outcome.content,
+        vec![
+            lablet_model::ToolResultContent::Text("0123456789".to_owned()),
+            lablet_model::ToolResultContent::Text(
+                "[truncated: the first 10 of 16 bytes]".to_owned()
+            ),
+        ]
+    );
+    assert_eq!(outcome.truncated_from_bytes, Some(16));
+}
+
+#[tokio::test]
+async fn output_that_just_fits_the_cap_is_not_cut() {
+    let mut harness = Harness::new(vec![
+        Answer::now(says("One.", &["bash"], FinishReason::ToolUse)),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.calls.max_tool_output_bytes = Some(10);
+    harness.tools = vec![Arc::new(
+        FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")])
+            .answers("bash", Answers::Text("0123456789".to_owned())),
+    )];
+
+    let run = harness.run().await;
+
+    let outcome = &run.finished.transcript.turns()[0].tool_calls()[0];
+    assert_eq!(outcome.truncated_from_bytes, None);
+    assert_eq!(run.finished.summary.tool_calls_truncated, 0);
+}

@@ -81,6 +81,7 @@ Written to stdout as one JSON document when the run ends, whatever the stop reas
     "input_tokens": 0,
     "output_tokens": 0,
     "cache_read_tokens": 0,
+    "reasoning_output_tokens": 0,
     "cache_write_tokens": 0
   },
   "tool_calls": 5,
@@ -181,7 +182,7 @@ pub enum ContentBlock {                                               // one blo
 }
 pub struct ToolUse { pub id: ToolCallId, pub name: ToolName, pub input: ToolInput }
 pub enum ToolInput { Json(serde_json::Value), Unparsed(String) }   // arguments the model produced, and whether they parsed
-impl ToolUse { pub fn input_bytes(&self) -> u64; }                   // byte length of `input` as compact JSON
+impl ToolUse { pub fn input_bytes(&self) -> u64; }                   // the arguments as the provider carries them: compact JSON when they parsed, the model's own text when they didn't
 pub enum UserContent { Text(String) }                                // what a user supplies to a turn: text today; nothing a model or a tool produces fits
 pub enum ToolResultContent { Text(String) }                          // tool results are text; an enum so another kind can arrive without a serde break
 impl ToolResultContent { pub fn omitted(kind: &str, mime_type: &str, bytes: u64) -> ToolResultContent; }   // Text("[image omitted: image/png, 48213 bytes]")
@@ -271,7 +272,7 @@ impl Run {
     pub fn transcript(&self) -> &Transcript;
     pub fn messages(&self) -> Vec<Message<'_>>;                                 // what the next provider call sends
     pub fn failed_attempt(&mut self, latency: Duration);                        // a provider call attempt that failed
-    pub fn completion(&mut self, completion: ProviderResponse, started: Duration, latency: Duration) -> Result<&Turn, TranscriptError>;   // one that succeeded becomes the next turn
+    pub fn responded(&mut self, response: ProviderResponse, started: Duration, latency: Duration) -> Result<&Turn, TranscriptError>;   // one that succeeded becomes the next turn
     pub fn tool_calls(&mut self, outcomes: Vec<ToolCallOutcome>) -> Result<(), TranscriptError>;   // what happened to the last turn's tool calls
     pub fn progress(&self, elapsed: Duration) -> Progress;
     pub fn usage(&self) -> Usage;                                               // what the run's cost is priced from
@@ -351,7 +352,7 @@ impl RetryPolicy {
 }
 pub enum RetryPolicyError { BaseAboveMax { base: Duration, max: Duration }, Factor(f64) }
 
-pub struct Pricing { input: f64, output: f64, cache_read: f64, cache_write: f64 }   // USD per million tokens
+pub struct Pricing { rates: Rates }                       // the rates are a model type (§3), because a run reports them
 impl Pricing {
     pub fn new(rates: Rates) -> Pricing;                              // Rates::new is where a rate is checked
     pub fn rates(&self) -> Rates;                                     // what the run reports beside its cost
@@ -359,9 +360,9 @@ impl Pricing {
 }
 ```
 
-**Stop policy.** The three methods hold the order and the boundaries §1 gives for each point. Each takes only what its point reads, so an input can't contradict itself: the two limit checks take the `Progress` the run produces (§3), and the token budget reads `Progress::usage.total()`, the billed tokens of every call so far (§1), while `after_response` takes the finish reason and a `Calls` and sees no limit at all. `Turn::calls(mode)` (§3) builds the `Calls`, and is the only thing that does, so the loop can't read a response differently from how the policy expects it: `TaskComplete` when the response calls `task_complete`, alone or among other tools, which only explicit mode offers; natural mode reads it as `Tools`. `Progress` lives in the model because the run produces it, and the policy depends on the model, never the reverse; the loop's call is `stop.before_call(&run.progress(elapsed))`. The policy decides nine of the stop reasons, `context_exhausted` among them when a response was cut short at the context window. The rest aren't its to decide: `cancelled` comes from the loop's poll of the `Cancellation` port, and `retries_exhausted`, `provider_error`, and `context_exhausted` for a rejected request from a failed provider call (`RetryPolicy::delay` returning `None`, and the `ProviderError` variant). `allows_wait` is here because stopping with `timeout` instead of sleeping is a reached-the-limit decision like the others. Every `StopPolicy` value is meaningful, so its fields are public and nothing is validated. The two counted caps are `NonZeroU32`, since a cap of zero has no reading other than one and two fields shouldn't reach that by two different routes; a zero `timeout` or token budget does stop the run at the first point A, which is a reading of its own.
+**Stop policy.** The three methods hold the order and the boundaries §1 gives for each point. Each takes only what its point reads, so an input can't contradict itself: the two limit checks take the `Progress` the run produces (§3), and the token budget reads `Progress::usage.total()`, the billed tokens of every call so far (§1), while `after_response` takes the finish reason and a `Calls` and sees no limit at all. `Turn::calls(mode)` (§3) builds the `Calls`, and is the only thing that does, so the loop can't read a response differently from how the policy expects it: `TaskComplete` when the response calls `task_complete`, alone or among other tools, which only explicit mode offers; natural mode reads it as `Tools`. `Progress` lives in the model because the run produces it, and the policy depends on the model, never the reverse; the loop's call is `stop.before_call(&run.progress(elapsed))`. The policy decides nine of the stop reasons, `context_exhausted` among them when a response was cut short at the context window. The rest aren't its to decide: `cancelled` comes from the loop's poll of the `Cancellation` port, and `retries_exhausted`, `provider_error`, and `context_exhausted` for a rejected request from a failed provider call (`RetryPolicy::next` returning `None`, and the failure's `ProviderErrorKind`). `allows_wait` is here because stopping with `timeout` instead of sleeping is a reached-the-limit decision like the others. Every `StopPolicy` value is meaningful, so its fields are public and nothing is validated. The two counted caps are `NonZeroU32`, since a cap of zero has no reading other than one and two fields shouldn't reach that by two different routes; a zero `timeout` or token budget does stop the run at the first point A, which is a reading of its own.
 
-**Retry policy.** `max_retries` is `run.max_retries`, and 0 is valid: it never retries. `new` refuses a `base` longer than `max` and a `factor` that isn't a finite number of at least 1. `delay(n)` is a wait when `n` is at most `max_retries` and `None` after that. It answers `None` at once for a failure another attempt can't change, so the policy owns the whole retry rule rather than half of it. It's total: attempt 0 is read as 1, and an attempt number or a factor large enough to overflow gives `max`, or zero when `base` is zero, never a panic or a NaN.
+**Retry policy.** `max_retries` is `run.max_retries`, and 0 is valid: it never retries. `new` refuses a `base` longer than `max` and a `factor` that isn't a finite number of at least 1. `next(n, kind)` is a wait when `kind` is one another attempt could answer and `n` is at most `max_retries`, and `None` otherwise. It answers `None` at once for a failure another attempt can't change, so the policy owns the whole retry rule rather than half of it. It's total: attempt 0 is read as 1, and an attempt number or a factor large enough to overflow gives `max`, or zero when `base` is zero, never a panic or a NaN.
 
 **Pricing.** `new` refuses a rate that isn't a finite number of at least 0. `cost` prices `Usage::uncached_input_tokens()` at the input rate and each cache field once, at its own rate, because `input_tokens` already includes both (§3); pricing `input_tokens` whole and adding the cache fields would bill the cached tokens twice. A cost is never negative and never NaN.
 
@@ -375,8 +376,8 @@ impl Pricing {
     fn endpoint(&self) -> Option<Endpoint>;                     // server.address and server.port; None for fake
     async fn complete(&self, req: ProviderRequest<'_>) -> Result<ProviderResponse, ProviderError>;
 }
-pub struct ProviderRequest<'a> { system: &'a str, messages: &'a [Message<'a>], tools: &'a [ToolSpec], max_tokens: u32, temperature: Option<f64>, thinking: Thinking, effort: Option<Effort>, seed: Option<u64>, deadline: Duration }   // messages is Run::messages(); Thinking and Effort are model types (§3), because RequestParams holds them
-pub enum ProviderError { Retryable(String), ContextExhausted(String), Fatal(String), Malformed(String) }   // each carries the adapter's message; ProviderErrorKind (§3) is the part the policy reads
+pub struct ProviderRequest<'a> { system: &'a str, messages: &'a [Message<'a>], tools: &'a [ToolSpec], max_tokens: u32, temperature: Option<f64>, thinking: Thinking, effort: Option<Effort>, seed: Option<i64>, deadline: Duration }   // messages is Run::messages(); Thinking and Effort are model types (§3), because RequestParams holds them
+pub struct ProviderError { kind: ProviderErrorKind, message: String }   // the same shape as ToolError: the policy reads the kind, the outcome and telemetry read the message
 
 #[async_trait] pub trait ToolExecutor: Send + Sync {
     async fn specs(&self) -> Result<Vec<ToolSpec>, ToolError>;
@@ -396,7 +397,8 @@ pub enum NetworkTransport { Pipe, Tcp }                              // stdio an
     async fn on(&self, event: RunEvent);
     fn trace_context(&self, call_id: &ToolCallId) -> Option<TraceContext> { None }   // the OTel observer answers with the tool span it opened on ToolCallStarted
 }
-pub enum RunEvent {                       // every variant carries run_id
+pub struct RunEvent { run_id: RunId, kind: EventKind }   // the id is a join key every observer needs on every event, so it's one field rather than eight
+pub enum EventKind {
     RunStarted { context: RunContext, model, endpoint: Option<Endpoint>, tools: Vec<ToolSpec>, system_prompt: Option<String>, prompt: Option<String> },
     TurnStarted { turn },
     ProviderCallStarted { turn, attempt, request_bytes: u64 },
@@ -428,9 +430,15 @@ The `Clock` port is the only source of time for the loop, so `lablet-run` tests 
 ### Use case
 
 ```rust
-pub struct RunService { provider: Arc<dyn ModelProvider>, tools: Arc<dyn ToolExecutor>, observer: Arc<dyn RunObserver>, clock: Arc<dyn Clock>, cancel: Arc<dyn Cancellation>, stop: StopPolicy, retry: RetryPolicy, request: RequestParams, pricing: Option<Pricing>, calls: CallLimits }
+pub struct RunService { provider: Arc<dyn ModelProvider>, tools: Arc<ToolSet>, observer: Arc<dyn RunObserver>, clock: Arc<dyn Clock>, cancel: Arc<dyn Cancellation>, stop: StopPolicy, retry: RetryPolicy, request: RequestParams, pricing: Option<Pricing>, calls: CallLimits }
 pub struct CallLimits { provider_timeout: Duration, tool_timeout: Duration, max_tool_output_bytes: Option<u64> }   // run.provider_timeout, run.tool_timeout, tools.max_output_bytes
-impl RunService { pub async fn run(&self, context: RunContext, system: String, prompt: String) -> FinishedRun }
+impl RunService { pub async fn run(&mut self, context: RunContext, prompts: Prompts) -> FinishedRun }
+pub struct ToolFilter { allow: Vec<ToolName>, deny: Vec<ToolName> }   // an empty allow list offers everything; a name in both is denied
+pub enum ToolSetError { DuplicateName { name: ToolName }, Specs(Box<ToolError>) }
+impl ToolSet {
+    pub async fn build(executors: Vec<Arc<dyn ToolExecutor>>, filter: &ToolFilter, completion: CompletionMode, completion_schema: Option<Value>) -> Result<ToolSet, ToolSetError>;
+    pub fn specs(&self) -> &[ToolSpec];  pub fn source(&self, name: &ToolName) -> Option<&ToolSource>;  pub fn is_task_complete(&self, name: &ToolName) -> bool;
+}
 ```
 
 `run` never returns `Err`: every failure is a `RunOutcome` with a stop reason, so the caller always gets telemetry-consistent output. It returns one value, the model's `FinishedRun` (§3), which `Run::finish` builds: the `RunSummary`, whose `outcome` is the outcome document, and the `Transcript`, which is how the conversation leaves the loop. When `pricing` is set, the loop fills `RunSummary.cost` with `Pricing::cost` of the run's usage; otherwise it's `None`. The limits and request parameters in the summary come from the service's own `StopPolicy` and `RequestParams`, so they can't differ from what the run enforced. `CallLimits` holds what bounds one call and isn't a stop decision: the two per-call timeouts, which become the `deadline` of a request or a tool call, and the tool output cap, which the loop hands to `ToolCallOutcome::measured` for every call, so no executor cuts output itself.
@@ -438,7 +446,8 @@ impl RunService { pub async fn run(&self, context: RunContext, system: String, p
 The loop body, in the model's and the policy's terms. Every offset and latency is a `Duration` read from the `Clock`; the model turns them into milliseconds.
 
 ```
-run = Run::start(RunSetup { run_id, model, endpoint, tools, completion, max_turns, timeout, request }, system, prompt)
+tools = ToolSet::build(executors, &filter, completion, completion_schema)?        # settled once; the only place a ToolSource is learned
+run = Run::start(RunSetup { run_id, model, endpoint, tools.specs(), completion, max_turns, timeout, request }, prompts)
 loop:
     if cancelled: stop cancelled;  if let Some(r) = stop.before_call(&run.progress(elapsed)): stop r
     attempt = 1
@@ -446,15 +455,21 @@ loop:
         result = { messages = run.messages(); provider.complete(ProviderRequest { system: run.transcript().system(), &messages, .. }) }
         Ok(r)  -> break r
         Err(e) -> run.failed_attempt(latency); ContextExhausted -> stop context_exhausted, e; Fatal -> stop provider_error, e
-                  retry.delay(attempt): Some(wait) if stop.allows_wait(elapsed, wait) -> sleep(wait), attempt += 1
-                                        Some(_) -> stop timeout;  None -> stop retries_exhausted, e
+                  retry.next(attempt, e.kind): Some(wait) if stop.allows_wait(elapsed, wait) -> sleep(wait), attempt += 1
+                                               Some(_) -> stop timeout
+                                               None -> stop retryable and malformed as retries_exhausted,
+                                                       context_exhausted and fatal as themselves, with e.message
     turn = run.responded(response, started, latency)?                      # the transcript's new turn; it takes the waiting input, and its record counts the attempts
     calls = turn.tool_uses().cloned();  structured = the input of the call named task_complete, if any
     if let Some(r) = stop.after_response(&turn.record().finish, turn.calls(stop.completion)): stop r
-    outcomes = for call in calls:
-        (status, content) = match tools.execute(ToolCall { id, name, input, deadline: tool_timeout, trace_context }):
-            Ok(out) -> (ToolCallStatus::ran(source of call.name, if out.is_error { ToolError } else { Ok }), out.content)
-            Err(e)  -> (Unknown for ToolErrorKind::Unknown, else ToolCallStatus::ran(source of call.name, e.kind), [Text(e.message)])
+    outcomes = for call in calls:                                          # the name is resolved before the arguments are read
+        (status, content) = match tools.source(&call.name):
+            None          -> (Unknown, [Text("no tool named ... is offered by this run")])
+            Some(source)  -> match call.input:
+                Unparsed(text) -> (MalformedInput, [Text("the arguments weren't valid JSON ...")])
+                Json(input)    -> match tools.execute(ToolCall { id, name, input, deadline: tool_timeout, trace_context }):
+                    Ok(out) -> (ToolCallStatus::ran(source, if out.is_error { ToolError } else { Ok }), out.content)
+                    Err(e)  -> (Unknown for ToolErrorKind::Unknown, else ran(source, e.kind), [Text(e.message)])
         ToolCallOutcome::measured(call.id, status, content, max_tool_output_bytes, started, latency)
     run.tool_calls(outcomes)?
     if cancelled: stop cancelled;  if let Some(r) = stop.after_tools(&run.progress(elapsed)): stop r
@@ -462,9 +477,9 @@ rates = pricing.map(Pricing::rates); cost = pricing.and_then(|p| p.cost(&run.usa
 return run.finish(reason, elapsed, structured, error, rates, cost)         # FinishedRun { summary, transcript }
 ```
 
-The messages are rendered inside the attempt because they borrow the run, which a failed attempt changes; rendering is one allocation and no copy of the conversation. The loop passes `finish` whatever `structured` and `error` it has, and the outcome keeps what the stop reason allows (§3), so the loop has no rule of its own about which stop reason carries which. The two calls marked `?` refuse only a sequence this loop can't produce: a response while the last turn's tool calls are unanswered or when it made none, which point R never lets through, and outcomes that aren't one for each call of the last turn, in order. `lablet-run`'s tests hold that neither is ever refused; if one were, `run` would report the defect on the diagnostic log and end the run with `provider_error` and the refusal's text, because a `FinishedRun` must still come back.
+A call whose arguments didn't parse never reaches an executor, so it has no latency of its own and no `ToolCall` is built for it; the model is sent its own text back, which is what lets it correct itself. The messages are rendered inside the attempt because they borrow the run, which a failed attempt changes; rendering is one allocation and no copy of the conversation. The loop passes `finish` whatever `structured` and `error` it has, and the outcome keeps what the stop reason allows (§3), so the loop has no rule of its own about which stop reason carries which. The two calls marked `?` refuse only a sequence this loop can't produce: a response while the last turn's tool calls are unanswered or when it made none, which point R never lets through, and outcomes that aren't one for each call of the last turn, in order. `lablet-run`'s tests hold that neither is ever refused; if one were, `run` would report the defect on the diagnostic log and end the run with `provider_error` and the refusal's text, because a `FinishedRun` must still come back.
 
-One `RunService` executes one run at a time; concurrent calls are a programming error and are rejected.
+One `RunService` executes one run at a time, which `run` taking `&mut self` makes a compile error rather than a race. This ring has no runtime, so there's no mutex to reject a concurrent call at, and `run` returns a bare `FinishedRun` with nowhere to report a refusal; an exclusive borrow is the same answer the domain gives everywhere else.
 
 `ToolSet` is a composite `ToolExecutor` in this crate that routes by name across several executors, applies the config allow and deny lists, and rejects duplicate names at build time. The `task_complete` tool spec is defined in this crate, registered by `ToolSet` only in `explicit` mode regardless of `tools.builtin.enabled`, and never executed: the loop intercepts it. Its input schema is `run.completion_schema` when set, otherwise a free-form object. `ToolSet` is where "what happens when a tool is missing" is expressed: the tool is simply absent from `specs()`.
 

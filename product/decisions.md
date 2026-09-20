@@ -425,3 +425,13 @@ Corrects the entry above, "One module per idea, not one per stage of a run," whi
 `ProviderKind` moves to its own module, which breaks the cycle at the only edge that could move. `provider` depends on `message` for content whatever happens, so the provider family was the half to go, and it goes down rather than sideways: a leaf that names which provider serves a run, imported by the content that tags an opaque block and by the `ModelRef` that names a model. `Usage` set the pattern one commit earlier, when it left `provider.rs` while `ProviderResponse` went on holding one.
 
 `lablet-model` is twelve modules, and its module graph has no cycle.
+
+## 2026-09-21 Phase 3, finished
+
+- **`RunService` holds a `ToolSet`, not an `Arc<dyn ToolExecutor>`.** The loop has to learn where a tool came from, and the port can't say: `specs()` lists them but nothing maps a name to its source. Holding the composite concretely is what makes the executor's obligation structural, since `ToolSet::source` answers from a map fixed when the run was built.
+- **Which stop reason a provider failure becomes lives in the loop.** It depends on context the policy can't see: a retryable or malformed failure is `retries_exhausted` only once the budget is spent, where a fatal one is `provider_error` at once and a context-exhausted one is itself. `ProviderErrorKind` stays a domain type; the mapping doesn't.
+- **A call whose arguments didn't parse never reaches an executor.** The loop resolves the name first, so a name the run doesn't offer is `unknown` whether or not its arguments parsed, and only a real name with bad arguments is `malformed_input`. No `ToolCall` is built for one, so it has no latency of its own.
+- **The fakes live under `src/tests/`.** The gate forbids `#[cfg(test)]` on anything but `mod tests;`, and coverage tells test code from production by filename, so a `src/fakes.rs` would have been measured as production and failed the attribute check. One `#[cfg(test)] mod tests;` in `lib.rs`, everything else below it.
+- **`ToolName::task_complete()` is infallible.** An error path for a name that can't be refused would be an unreachable branch, and an unreachable branch can't be covered, so the floor would have refused it. The floors shaped the design rather than only checking it.
+
+Known limit, carried forward: one mutant survives in `lablet-run`, replacing the default `RunObserver::trace_context` with `None`. The default body is already `None`, so it's an equivalent mutant and no test can kill it.
