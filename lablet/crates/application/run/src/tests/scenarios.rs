@@ -280,7 +280,14 @@ async fn the_token_budget_stops_the_run_before_the_call_that_would_pass_it() {
         2,
         "120 tokens was under the budget, so the second call was still made; 240 passed it"
     );
+    assert_eq!(
+        run.provider.calls(),
+        2,
+        "the budget stopped the run before a third call, not after it"
+    );
 }
+
+// L8: the run timeout.
 
 #[tokio::test]
 async fn the_timeout_stops_the_run_at_the_instant_it_is_reached() {
@@ -297,6 +304,11 @@ async fn the_timeout_stops_the_run_at_the_instant_it_is_reached() {
 
     assert_eq!(run.stop_reason(), StopReason::Timeout);
     assert_eq!(run.turns(), 1);
+    assert_eq!(
+        run.provider.calls(),
+        1,
+        "no provider call is made after the overrun"
+    );
 }
 
 // L5, L6: a response the model didn't finish.
@@ -317,6 +329,10 @@ async fn a_truncated_response_stops_the_run_and_none_of_its_tool_calls_run() {
         "a cut-off input can parse as a smaller one, so none of its calls runs"
     );
     assert!(run.finished.transcript.turns()[0].tool_calls().is_empty());
+    assert!(
+        !run.observer.names().contains(&"ToolCallStarted"),
+        "a call that never runs is never announced either"
+    );
 }
 
 #[tokio::test]
@@ -331,6 +347,11 @@ async fn a_refusal_stops_the_run_and_is_not_a_completed_one() {
 
     assert_eq!(run.stop_reason(), StopReason::Refused);
     assert_eq!(run.error(), None, "a refusal is a stop, not a failure");
+    assert_ne!(
+        run.stop_reason(),
+        StopReason::Completed,
+        "the CLI exits 2 on any stop reason but this one"
+    );
 }
 
 #[tokio::test]
@@ -348,6 +369,11 @@ async fn a_response_cut_short_at_the_context_window_fails_the_run() {
         run.error(),
         Some("the response was cut short at the model's context window"),
         "a failure always carries an error, even when the loop had none to give"
+    );
+    assert_eq!(
+        run.observer.names().last(),
+        Some(&"RunFinished"),
+        "a failed run still publishes its wide event"
     );
 }
 
@@ -494,6 +520,11 @@ async fn the_tool_error_cap_stops_the_run_on_the_error_that_reaches_it() {
         run.error(),
         Some("consecutive tool error results reached their cap")
     );
+    assert_eq!(
+        run.provider.calls(),
+        2,
+        "the error results that reached the cap are never sent back to the model"
+    );
 }
 
 #[tokio::test]
@@ -559,6 +590,33 @@ async fn a_cancelled_run_stops_at_the_next_point_it_is_polled() {
 
     assert_eq!(run.stop_reason(), StopReason::Cancelled);
     assert_eq!(run.error(), None, "a cancelled run didn't fail");
+    assert_eq!(
+        run.provider.calls(),
+        1,
+        "the scripted second answer was never bought"
+    );
+
+    let turns = run.finished.transcript.turns();
+    assert_eq!(
+        turns.len(),
+        1,
+        "the transcript of a cancelled run comes back"
+    );
+    assert_eq!(
+        turns[0].tool_calls().len(),
+        1,
+        "the call in flight ran to its end rather than being abandoned"
+    );
+    assert_eq!(
+        turns[0].tool_calls()[0].status,
+        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok),
+        "and its outcome was recorded"
+    );
+    assert_eq!(
+        run.observer.names().last(),
+        Some(&"RunFinished"),
+        "a cancelled run still publishes its wide event"
+    );
 }
 
 // T10: the output cap.
@@ -583,6 +641,11 @@ async fn a_tool_s_output_is_cut_by_the_loop_and_the_outcome_holds_both_sizes() {
     assert!(
         outcome.output_bytes() > 4,
         "the marker naming what was cut is added on top of the cap"
+    );
+    assert_eq!(
+        outcome.status,
+        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok),
+        "the loop cut the output; the tool itself succeeded"
     );
 }
 
@@ -949,6 +1012,14 @@ async fn a_truncated_response_that_called_task_complete_does_not_complete_the_ru
         None,
         "only a completed run carries a structured result"
     );
+    assert_eq!(
+        run.finished.summary.outcome.tool_calls, 0,
+        "the cut-off completion call doesn't run either"
+    );
+    assert!(
+        !run.observer.names().contains(&"ToolCallStarted"),
+        "and isn't announced"
+    );
 }
 
 // L9: both spellings of a refusal, and the turn that records it.
@@ -1022,6 +1093,21 @@ async fn the_summary_is_the_sum_of_the_transcript_beside_it() {
     assert_eq!(
         turns[0].tool_calls()[1].status,
         ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::ToolError)
+    );
+    assert_eq!(
+        turns[0].tool_calls()[0].call_id.as_str(),
+        "call_0",
+        "the outcomes are in call order"
+    );
+    assert_eq!(turns[0].tool_calls()[1].call_id.as_str(), "call_1");
+    assert_eq!(
+        turns[0].tool_calls()[0].started_ms,
+        turns[0].record().started_ms + turns[0].record().latency_ms,
+        "the first call began when the response that asked for it arrived"
+    );
+    assert!(
+        turns[0].tool_calls()[1].started_ms >= turns[0].tool_calls()[0].started_ms,
+        "calls within a turn run in order, so the second began no earlier"
     );
 
     // Every total is the sum over the turns it describes.
@@ -1100,10 +1186,16 @@ async fn a_failure_reports_the_providers_own_words() {
     .run()
     .await;
 
+    assert_eq!(run.stop_reason(), StopReason::ContextExhausted);
     assert_eq!(
         run.error(),
         Some("prompt is 205000 tokens, over the 200000 limit"),
         "lablet's own sentence is for a failure that came without one"
+    );
+    assert_eq!(
+        run.observer.names().last(),
+        Some(&"RunFinished"),
+        "a failed run still publishes its wide event"
     );
 }
 

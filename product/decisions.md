@@ -446,3 +446,20 @@ Eleven findings survived verification, three of them one defect found by three r
 - **`task_complete` is claimed before any executor is asked.** The duplicate check guarded executors against each other and the built-in spec was pushed afterwards, so an executor serving `task_complete` in explicit mode got the name offered twice. Every provider rejects that with a 400, so every call of the run would have failed, with the cause nowhere in the telemetry, and the executor's own tool was unreachable behind the interception. It's now `ToolSetError::DuplicateName`, which is what that error exists for.
 
 Also fixed, without a decision to record: every successful provider call was recorded with zero latency and a start offset equal to the instant the response arrived, so `lablet.provider.latency_ms.total` counted only failed attempts and a clean run published zero for it; and the loop dropped every executor's `McpCallMeta` at `settle`, which left six declared `mcp.*` and `jsonrpc.*` span attributes with no path to being set. Both are now held by tests.
+
+## 2026-09-21 `RunService::run` keeps `&mut self`
+
+Signed off by the human after the phase 3 review raised it. Two runs on one service is a compile error rather than a race. The spec asks for a concurrent call to be rejected, and this ring has no runtime to reject one at: `run` returns a bare `FinishedRun` with nowhere to report a refusal, so an exclusive borrow is the same answer the domain gives everywhere else.
+
+The cost lands in phase 4, where `Lablet` runs more than once: it holds the service mutably, or builds one per run. Neither is a race.
+
+## 2026-09-21 Two phase 3 sign-offs, and what checking them found
+
+Both decided by the human; the first needed the build plan's phase 3 acceptance prose narrowed, so verifying it was worth doing properly.
+
+- **The build plan's phase 3 prose now matches `acceptance.md`.** It asked for allow and deny filtering and duplicate-name rejection end to end, where acceptance.md puts those scenarios (T1, T2, T3) in phases 4 and 8, which is where real executors exist. `ToolSet` is built and unit-tested whole in phase 3, as the 2026-09-21 entry above says; the prose now says that rather than claiming the scenarios.
+- **L9's exit code belongs to phase 5.** Spec §2 makes exit 2 the CLI's mapping of any stop reason but `completed`. Phase 3 has no CLI, so it asserts the stop reason and that it isn't `completed`; the code itself is asserted where `main.rs` exists.
+
+Checking the claim scenario by scenario found nine of the twenty-one phase 3 scenarios under-asserted: the loop behaved correctly in every case, but fifteen clauses of `acceptance.md` had no assertion that would fail if the behaviour broke. The pattern was consistent: a test asserted the stop reason and stopped there, where the scenario also asks for no further provider call, no `ToolCallStarted`, or the wide event written all the same. Two were load-bearing: nothing asserted that a cancelled run's in-flight tool call runs to its end and comes back on the transcript, and nothing asserted that a tool call outcome holds its own start offset, which is the same timing chain the zero-latency defect broke. All fifteen are now asserted.
+
+A stop reason is the cheapest thing to assert and the least of what a scenario says. That's the review item: assert the clause, not the outcome it implies.
