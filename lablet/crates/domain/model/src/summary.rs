@@ -161,7 +161,7 @@ impl RunSummary {
             add(&mut self.tool_latency_total_ms, outcome.latency_ms);
             add(&mut self.tool_input_bytes, call.input_bytes());
             add(&mut self.tool_output_bytes, outcome.output_bytes());
-            if outcome.status.source().is_some() {
+            if outcome.status.names_an_offered_tool() {
                 let stats = self.per_tool.entry(call.name.clone()).or_default();
                 add(&mut stats.calls, 1);
                 add(&mut stats.errors, errors);

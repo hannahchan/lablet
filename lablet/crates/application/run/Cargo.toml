@@ -9,3 +9,15 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+async-trait.workspace = true
+lablet-model.workspace = true
+lablet-policy.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# The loop is async, so its tests need a runtime; dev-dependencies aren't held
+# to the ring rules, and no production code here touches tokio.
+tokio = { workspace = true, features = ["macros", "rt"] }

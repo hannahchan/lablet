@@ -529,6 +529,26 @@ fn a_call_to_a_name_the_run_did_not_offer_counts_in_the_totals_and_gets_no_per_t
     assert_eq!(summary.per_tool.keys().collect::<Vec<_>>(), [&name("bash")]);
 }
 
+/// A call whose arguments didn't parse named a tool the run has, so it earns
+/// its per-tool entry and isn't counted among the calls to a name the run
+/// doesn't have. `lablet.tool_calls.unknown` says the model invented a name,
+/// and a model that can't serialise for a real tool hasn't.
+#[test]
+fn a_call_whose_arguments_did_not_parse_is_not_a_call_to_an_unknown_tool() {
+    let mut run = start();
+    tool_turn(
+        &mut run,
+        &["bash", "rm_rf"],
+        &[ToolCallStatus::MalformedInput, ToolCallStatus::Unknown],
+    );
+
+    let summary = finish(run, StopReason::Completed);
+    assert_eq!(summary.tool_calls_unknown, 1);
+    assert_eq!(summary.tool_calls_errors, 2);
+    assert_eq!(summary.per_tool.keys().collect::<Vec<_>>(), [&name("bash")]);
+    assert_eq!(summary.per_tool[&name("bash")].errors, 1);
+}
+
 /// The summary asks the status whether a tool ran, not where it came from, so
 /// an MCP tool earns its per-tool entry exactly as a built-in one does. Every
 /// other test here runs built-in tools, which would leave the branch that

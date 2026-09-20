@@ -146,6 +146,18 @@ impl ToolCallStatus {
         }
     }
 
+    /// Whether the call named a tool the run offered.
+    ///
+    /// A call whose arguments didn't parse did: nothing ran, but the name was
+    /// real, so it earns its per-tool entry and isn't one of the calls to a
+    /// name the run doesn't have. The loop resolves the name before it reads
+    /// the arguments, so a bad name with bad arguments is
+    /// [`ToolCallStatus::Unknown`].
+    #[must_use]
+    pub const fn names_an_offered_tool(&self) -> bool {
+        !matches!(self, Self::Unknown)
+    }
+
     /// Whether the model is sent an error result. A name the run doesn't have
     /// is one, because the model is told so.
     #[must_use]
