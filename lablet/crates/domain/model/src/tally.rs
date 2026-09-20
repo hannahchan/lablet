@@ -151,9 +151,10 @@ impl RunTally {
     /// # Errors
     ///
     /// Returns [`TranscriptError::OutcomesDontAnswerCalls`] unless `outcomes`
-    /// is empty or answers the tool calls of the last response, each once and
-    /// in call order. The loop builds one outcome for each call, in order, so
-    /// it never sees this.
+    /// answers the tool calls of the last response, each once and in call
+    /// order, or both are empty; and [`TranscriptError::AlreadyAnswered`] when
+    /// the turn's calls were answered before. The loop builds one outcome for
+    /// each call, in order, so it never sees either.
     pub fn tool_calls(&mut self, outcomes: Vec<ToolCallOutcome>) -> Result<(), TranscriptError> {
         self.transcript.answer(outcomes)
     }

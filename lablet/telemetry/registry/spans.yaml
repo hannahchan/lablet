@@ -163,6 +163,8 @@ spans:
           conditionally_required: If the tool call returned an error result to the model.
       - ref: lablet.turn
         requirement_level: required
+      - ref: lablet.tool.status
+        requirement_level: required
       - ref: lablet.tool.source
         requirement_level:
           conditionally_required: If the tool is one the run offered to the model.

@@ -21,8 +21,8 @@ DataFusion
 [Dd]print
 doctests?
 DuckDB
-[Ee]val
 [Ee]nums?
+[Ee]val
 Grafana
 gRPC
 [Hh]umantime
@@ -86,6 +86,7 @@ ULID
 [Uu]ncached
 [Uu]ngrouping
 [Uu]nprefixed
+[Uu]nrepresentable
 [Uu]ntracked
 [Uu]nwritable
 vLLM

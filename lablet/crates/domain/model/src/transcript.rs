@@ -89,7 +89,9 @@ impl TryFrom<RawTranscript> for Transcript {
         for mut turn in raw.turns {
             distinct_tool_use_ids(&turn.response)?;
             transcript.push(&mut turn.input, turn.response, turn.record)?;
-            transcript.answer(turn.tool_calls)?;
+            if !turn.tool_calls.is_empty() {
+                transcript.answer(turn.tool_calls)?;
+            }
         }
         Ok(transcript)
     }
@@ -152,6 +154,12 @@ pub enum TranscriptError {
         turn: usize,
         /// The ids of its calls, in order.
         calls: Vec<String>,
+    },
+    /// A turn's tool calls are answered once.
+    #[error("turn {turn}'s tool calls already have their outcomes")]
+    AlreadyAnswered {
+        /// The turn whose calls were answered before, counted from 1.
+        turn: usize,
     },
     /// Outcomes aren't those of the last turn's tool calls.
     #[error(
@@ -258,10 +266,20 @@ impl Transcript {
     /// Makes `outcomes` those of the last turn. See
     /// [`crate::RunTally::tool_calls`] for the contract.
     pub(crate) fn answer(&mut self, outcomes: Vec<ToolCallOutcome>) -> Result<(), TranscriptError> {
-        if outcomes.is_empty() {
-            return Ok(());
+        if self
+            .turns
+            .last()
+            .is_some_and(|turn| !turn.tool_calls.is_empty())
+        {
+            return Err(TranscriptError::AlreadyAnswered {
+                turn: self.turns.len(),
+            });
         }
         let calls = self.turns.last().map(Turn::call_ids).unwrap_or_default();
+        if outcomes.is_empty() && calls.is_empty() {
+            return Ok(());
+        }
+
         let answered = ids(outcomes.iter().map(|outcome| &outcome.call_id));
         if answered != calls {
             return Err(TranscriptError::OutcomesDontAnswerCalls {
@@ -292,6 +310,7 @@ impl Transcript {
                 calls: last.call_ids(),
             });
         }
+        input.retain(|block| !matches!(block, UserContent::Text(text) if text.trim().is_empty()));
         if input.is_empty() && last.is_none_or(|last| last.tool_calls.is_empty()) {
             return Err(TranscriptError::NothingFromTheUser {
                 turn: self.turns.len() + 1,

@@ -303,6 +303,52 @@ fn the_first_turn_is_refused_without_input() {
 }
 
 #[test]
+fn input_that_is_only_whitespace_is_nothing_from_the_user() {
+    let mut transcript = transcript();
+
+    for blank in ["", "   ", "\n\t"] {
+        assert_eq!(
+            turn(&mut transcript, said(blank), says("Hello.")),
+            Err(TranscriptError::NothingFromTheUser { turn: 1 }),
+            "{blank:?}"
+        );
+    }
+    turn(&mut transcript, prompt(), says("Hello.")).unwrap();
+    assert_eq!(transcript.turns()[0].input(), prompt());
+}
+
+#[test]
+fn the_tool_calls_of_a_turn_are_answered_once() {
+    let mut transcript = transcript();
+    turn(&mut transcript, prompt(), calls(&["call_a"])).unwrap();
+
+    assert_eq!(
+        transcript.answer(Vec::new()),
+        Err(TranscriptError::OutcomesDontAnswerCalls {
+            calls: vec!["call_a".to_owned()],
+            outcomes: Vec::new(),
+        })
+    );
+    transcript
+        .answer(vec![outcome("call_a", ToolCallStatus::Ok, "done")])
+        .unwrap();
+    assert_eq!(
+        transcript.answer(vec![outcome("call_a", ToolCallStatus::Ok, "again")]),
+        Err(TranscriptError::AlreadyAnswered { turn: 1 })
+    );
+    assert_eq!(transcript.turns()[0].tool_calls().len(), 1);
+}
+
+#[test]
+fn a_turn_that_called_no_tools_takes_no_outcomes() {
+    let mut transcript = transcript();
+    turn(&mut transcript, prompt(), says("Done.")).unwrap();
+
+    transcript.answer(Vec::new()).unwrap();
+    assert!(transcript.turns()[0].tool_calls().is_empty());
+}
+
+#[test]
 fn a_turn_after_one_that_called_no_tools_needs_input_of_its_own() {
     let mut transcript = transcript();
     turn(&mut transcript, prompt(), says("One.")).unwrap();
@@ -701,6 +747,21 @@ fn a_document_with_two_adjacent_responses_is_not_a_transcript() {
         "turn 3 has no input and no tool results come before it, \
          so nothing from the user would precede its response"
     );
+}
+
+#[test]
+fn a_document_whose_first_input_is_blank_is_not_a_transcript() {
+    for blank in ["", "  "] {
+        let mut document = document();
+        document["turns"][0]["input"] = json!([{ "text": blank }]);
+
+        assert_eq!(
+            reading(document),
+            "turn 1 has no input and no tool results come before it, \
+             so nothing from the user would precede its response",
+            "{blank:?}"
+        );
+    }
 }
 
 #[test]

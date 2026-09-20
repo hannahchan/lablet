@@ -116,3 +116,40 @@ impl core::fmt::Display for LabletToolSource {
         f.write_str(self.as_str())
     }
 }
+
+/// How a tool call ended.
+///
+/// The values of `lablet.tool.status`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LabletToolStatus {
+    /// The tool ran and returned a result.
+    Ok,
+    /// The tool ran and reported an error in its own result.
+    ToolError,
+    /// No configured tool has the name the model called.
+    Unknown,
+    /// The call ran past the tool timeout.
+    Timeout,
+    /// The executor failed before the tool could answer.
+    Failed,
+}
+
+impl LabletToolStatus {
+    /// The value as it appears on the wire.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::ToolError => "tool_error",
+            Self::Unknown => "unknown",
+            Self::Timeout => "timeout",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl core::fmt::Display for LabletToolStatus {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}

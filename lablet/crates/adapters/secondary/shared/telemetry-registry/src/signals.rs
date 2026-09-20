@@ -57,6 +57,7 @@ pub const SPAN_LABLET_EXECUTE_TOOL_REQUIRED: &[&str] = &[
     attribute::LABLET_TOOL_IS_ERROR,
     attribute::LABLET_TOOL_OUTPUT_BYTES,
     attribute::LABLET_TOOL_OUTPUT_TRUNCATED,
+    attribute::LABLET_TOOL_STATUS,
     attribute::LABLET_TURN,
     attribute::SESSION_ID,
 ];
@@ -78,6 +79,7 @@ pub const SPAN_LABLET_EXECUTE_TOOL_KEYS: &[&str] = &[
     attribute::LABLET_TOOL_OUTPUT_ORIGINAL_BYTES,
     attribute::LABLET_TOOL_OUTPUT_TRUNCATED,
     attribute::LABLET_TOOL_SOURCE,
+    attribute::LABLET_TOOL_STATUS,
     attribute::LABLET_TURN,
     attribute::MCP_METHOD_NAME,
     attribute::MCP_PROTOCOL_VERSION,

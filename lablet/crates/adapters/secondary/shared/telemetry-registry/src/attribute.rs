@@ -201,6 +201,9 @@ pub const LABLET_TOOL_OUTPUT_TRUNCATED: &str = "lablet.tool.output.truncated";
 /// Where a tool comes from.
 pub const LABLET_TOOL_SOURCE: &str = "lablet.tool.source";
 
+/// How a tool call ended.
+pub const LABLET_TOOL_STATUS: &str = "lablet.tool.status";
+
 /// Number of tool calls that returned an error result.
 pub const LABLET_TOOL_CALLS_ERRORS: &str = "lablet.tool_calls.errors";
 

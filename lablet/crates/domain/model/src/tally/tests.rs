@@ -568,7 +568,7 @@ fn sums_and_durations_saturate_rather_than_overflow() {
             ..setup()
         },
         String::new(),
-        String::new(),
+        "Go.".to_owned(),
     );
     for _ in 0..2 {
         tally.failed_attempt(Duration::MAX);

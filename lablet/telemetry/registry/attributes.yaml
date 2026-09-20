@@ -377,6 +377,36 @@ attributes:
       Justification: `gen_ai.tool.type` says how a tool is invoked (function, extension,
       datastore), not which executor serves it.
     examples: [builtin, mcp]
+  - key: lablet.tool.status
+    type:
+      members:
+        - id: ok
+          value: ok
+          brief: The tool ran and returned a result.
+          stability: development
+        - id: tool_error
+          value: tool_error
+          brief: The tool ran and reported an error in its own result.
+          stability: development
+        - id: unknown
+          value: unknown
+          brief: No configured tool has the name the model called.
+          stability: development
+        - id: timeout
+          value: timeout
+          brief: The call ran past the tool timeout.
+          stability: development
+        - id: failed
+          value: failed
+          brief: The executor failed before the tool could answer.
+          stability: development
+    stability: development
+    brief: How a tool call ended.
+    note: >
+      Justification: `error.type` is an open set, so it can't hold lablet's closed one, and a
+      call that ended `ok` has no `error.type` at all. Every value but `ok` is also the call's
+      `error.type`.
+    examples: [ok, tool_error]
   - key: lablet.tool.input.bytes
     type: int
     stability: development

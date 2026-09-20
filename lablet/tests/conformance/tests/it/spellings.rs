@@ -2,9 +2,9 @@
 //! closed values are compared here. Each match is exhaustive, so a variant
 //! added on either side fails to compile until the other side has it too.
 
-use lablet_model::{CompletionMode, StopReason, ToolSource};
+use lablet_model::{CompletionMode, StopReason, ToolCallStatus, ToolSource};
 use lablet_telemetry_registry::enums::{
-    LabletRunCompletionMode, LabletRunStopReason, LabletToolSource,
+    LabletRunCompletionMode, LabletRunStopReason, LabletToolSource, LabletToolStatus,
 };
 
 const fn registry_stop_reason(reason: StopReason) -> LabletRunStopReason {
@@ -94,5 +94,33 @@ fn both_tool_sources_are_spelled_as_the_registry_spells_them() {
             LabletToolSource::Mcp => "mcp",
         };
         assert_eq!(model.as_str(), expected);
+    }
+}
+
+#[test]
+fn every_tool_call_status_is_spelled_as_the_registry_spells_it() {
+    for status in [
+        ToolCallStatus::Ok,
+        ToolCallStatus::ToolError,
+        ToolCallStatus::Unknown,
+        ToolCallStatus::Timeout,
+        ToolCallStatus::Failed,
+    ] {
+        let registry = match status {
+            ToolCallStatus::Ok => LabletToolStatus::Ok,
+            ToolCallStatus::ToolError => LabletToolStatus::ToolError,
+            ToolCallStatus::Unknown => LabletToolStatus::Unknown,
+            ToolCallStatus::Timeout => LabletToolStatus::Timeout,
+            ToolCallStatus::Failed => LabletToolStatus::Failed,
+        };
+        assert_eq!(status.as_str(), registry.as_str());
+        let back = match registry {
+            LabletToolStatus::Ok => ToolCallStatus::Ok,
+            LabletToolStatus::ToolError => ToolCallStatus::ToolError,
+            LabletToolStatus::Unknown => ToolCallStatus::Unknown,
+            LabletToolStatus::Timeout => ToolCallStatus::Timeout,
+            LabletToolStatus::Failed => ToolCallStatus::Failed,
+        };
+        assert_eq!(back, status);
     }
 }

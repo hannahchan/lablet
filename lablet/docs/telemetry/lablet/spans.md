@@ -269,19 +269,20 @@ A call to an MCP tool is this one span carrying the `mcp.*` attributes too, not 
 | [`lablet.tool.is_error`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-is-error) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | boolean | Whether the tool call returned an error result to the model. [27] | `false` |
 | [`lablet.tool.output.bytes`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-output-bytes) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Size in bytes of a tool call's output as the model was sent it, after the output cap. [28] | `20480` |
 | [`lablet.tool.output.truncated`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-output-truncated) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | boolean | Whether the output cap cut the tool call's output short. [29] | `false` |
-| [`lablet.turn`](/lablet/docs/telemetry/lablet/README.md#lablet-turn) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | One-based index of the turn a provider call or tool call belongs to. [30] | `1`; `2` |
+| [`lablet.tool.status`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-status) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | How a tool call ended. [30] | `ok`; `tool_error` |
+| [`lablet.turn`](/lablet/docs/telemetry/lablet/README.md#lablet-turn) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | One-based index of the turn a provider call or tool call belongs to. [31] | `1`; `2` |
 | `session.id` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The run id, for backends that group by session. | `00112233-4455-6677-8899-aabbccddeeff` |
-| `error.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | `Conditionally Required` [31] | string | How the call failed: `tool_error` when the tool ran and reported an error, `unknown`, `timeout`, or `failed` when the executor did. [32] | `timeout`; `java.net.UnknownHostException`; `server_certificate_invalid`; `500` |
-| `gen_ai.tool.description` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the tool is one the run offered to the model. | string | The tool description. [33] | `Multiply two numbers` |
-| `gen_ai.tool.type` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the tool is one the run offered to the model. | string | `function` for a built-in tool, `extension` for an MCP tool. [34] | `function`; `extension`; `datastore` |
-| `jsonrpc.request.id` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` [35] | string | A string representation of the `id` property of the request and its corresponding response. [36] | `10`; `request-7` |
-| [`lablet.tool.output.original_bytes`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-output-original-bytes) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the output cap cut the output short. | int | Size in bytes of a tool call's output before the output cap cut it. [37] | `5242880` |
-| [`lablet.tool.source`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-source) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the tool is one the run offered to the model. | string | Where a tool comes from. [38] | `builtin`; `mcp` |
+| `error.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | `Conditionally Required` [32] | string | How the call failed: `tool_error` when the tool ran and reported an error, `unknown`, `timeout`, or `failed` when the executor did. [33] | `timeout`; `java.net.UnknownHostException`; `server_certificate_invalid`; `500` |
+| `gen_ai.tool.description` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the tool is one the run offered to the model. | string | The tool description. [34] | `Multiply two numbers` |
+| `gen_ai.tool.type` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the tool is one the run offered to the model. | string | `function` for a built-in tool, `extension` for an MCP tool. [35] | `function`; `extension`; `datastore` |
+| `jsonrpc.request.id` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` [36] | string | A string representation of the `id` property of the request and its corresponding response. [37] | `10`; `request-7` |
+| [`lablet.tool.output.original_bytes`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-output-original-bytes) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the output cap cut the output short. | int | Size in bytes of a tool call's output before the output cap cut it. [38] | `5242880` |
+| [`lablet.tool.source`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-source) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the tool is one the run offered to the model. | string | Where a tool comes from. [39] | `builtin`; `mcp` |
 | `mcp.method.name` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the tool is served over MCP. | string | The name of the request or notification method. | `notifications/cancelled`; `initialize`; `notifications/initialized` |
-| `mcp.protocol.version` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` [39] | string | The [version](https://modelcontextprotocol.io/specification/versioning) of the Model Context Protocol used. | `2025-06-18` |
-| `mcp.session.id` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` [40] | string | Identifies [MCP session](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#session-management). | `191c4850af6c49e08843a3f6c80e5046` |
-| `network.transport` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | `Conditionally Required` If the tool is served over MCP. | string | `pipe` for a stdio MCP server, `tcp` for an HTTP one. [41] | `tcp`; `udp` |
-| `rpc.response.status_code` | ![Release Candidate](https://img.shields.io/badge/-rc-mediumorchid) | `Conditionally Required` If the MCP response carried a JSON-RPC error. | string | The error code of the JSON-RPC response. [42] | `OK`; `DEADLINE_EXCEEDED`; `-32602` |
+| `mcp.protocol.version` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` [40] | string | The [version](https://modelcontextprotocol.io/specification/versioning) of the Model Context Protocol used. | `2025-06-18` |
+| `mcp.session.id` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` [41] | string | Identifies [MCP session](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#session-management). | `191c4850af6c49e08843a3f6c80e5046` |
+| `network.transport` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | `Conditionally Required` If the tool is served over MCP. | string | `pipe` for a stdio MCP server, `tcp` for an HTTP one. [42] | `tcp`; `udp` |
+| `rpc.response.status_code` | ![Release Candidate](https://img.shields.io/badge/-rc-mediumorchid) | `Conditionally Required` If the MCP response carried a JSON-RPC error. | string | The error code of the JSON-RPC response. [43] | `OK`; `DEADLINE_EXCEEDED`; `-32602` |
 
 **[23] `gen_ai.conversation.id`:** Instrumentations SHOULD populate conversation id when they have an identifier
 for the conversation readily available for a given operation, for example:
@@ -314,11 +315,13 @@ libraries.
 
 **[29] `lablet.tool.output.truncated`:** Justification: no convention says that a tool's output was cut before the model saw it, and `lablet.tool.output.bytes` alone can't tell a cut output from one that fitted.
 
-**[30] `lablet.turn`:** Justification: the conventions have no turn; the index groups a turn's chat and tool spans without adding a span level.
+**[30] `lablet.tool.status`:** Justification: `error.type` is an open set, so it can't hold lablet's closed one, and a call that ended `ok` has no `error.type` at all. Every value but `ok` is also the call's `error.type`.
 
-**[31] `error.type`:** If the tool call returned an error result to the model.
+**[31] `lablet.turn`:** Justification: the conventions have no turn; the index groups a turn's chat and tool spans without adding a span level.
 
-**[32] `error.type`:** The `error.type` SHOULD be predictable, and SHOULD have low cardinality.
+**[32] `error.type`:** If the tool call returned an error result to the model.
+
+**[33] `error.type`:** The `error.type` SHOULD be predictable, and SHOULD have low cardinality.
 
 When `error.type` is set to a type (e.g., an exception type), its
 canonical class name identifying the type within the artifact SHOULD be used.
@@ -344,37 +347,37 @@ it's RECOMMENDED to:
 - Use a domain-specific attribute
 - Set `error.type` to capture all errors, regardless of whether they are defined within the domain-specific set or not.
 
-**[33] `gen_ai.tool.description`:**
+**[34] `gen_ai.tool.description`:**
 
 > [!WARNING]
 > This attribute may contain sensitive information.
 
-**[34] `gen_ai.tool.type`:** Extension: A tool executed on the agent-side to directly call external APIs, bridging the gap between the agent and real-world systems.
+**[35] `gen_ai.tool.type`:** Extension: A tool executed on the agent-side to directly call external APIs, bridging the gap between the agent and real-world systems.
   Agent-side operations involve actions that are performed by the agent on the server or within the agent's controlled environment.
 Function: A tool executed on the client-side, where the agent generates parameters for a predefined function, and the client executes the logic.
   Client-side operations are actions taken on the user's end or within the client application.
 Datastore: A tool used by the agent to access and query structured or unstructured external data for retrieval-augmented tasks or knowledge updates.
 
-**[35] `jsonrpc.request.id`:** If the tool is served over MCP and the request had an id.
+**[36] `jsonrpc.request.id`:** If the tool is served over MCP and the request had an id.
 
-**[36] `jsonrpc.request.id`:** Under the [JSON-RPC specification](https://www.jsonrpc.org/specification), the `id` property may be a string, number, null, or omitted entirely. When omitted, the request is treated as a notification. Using `null` is not equivalent to omitting the `id`, but it is discouraged.
+**[37] `jsonrpc.request.id`:** Under the [JSON-RPC specification](https://www.jsonrpc.org/specification), the `id` property may be a string, number, null, or omitted entirely. When omitted, the request is treated as a notification. Using `null` is not equivalent to omitting the `id`, but it is discouraged.
 Instrumentations SHOULD NOT capture this attribute when the `id` is `null` or omitted.
 
-**[37] `lablet.tool.output.original_bytes`:** Justification: once an output is cut, `lablet.tool.output.bytes` is the size sent, and no convention carries the size the tool produced.
+**[38] `lablet.tool.output.original_bytes`:** Justification: once an output is cut, `lablet.tool.output.bytes` is the size sent, and no convention carries the size the tool produced.
 
-**[38] `lablet.tool.source`:** Justification: `gen_ai.tool.type` says how a tool is invoked (function, extension, datastore), not which executor serves it.
+**[39] `lablet.tool.source`:** Justification: `gen_ai.tool.type` says how a tool is invoked (function, extension, datastore), not which executor serves it.
 
-**[39] `mcp.protocol.version`:** If the tool is served over MCP and the version was negotiated.
+**[40] `mcp.protocol.version`:** If the tool is served over MCP and the version was negotiated.
 
-**[40] `mcp.session.id`:** If the tool is served over MCP and the transport has a session.
+**[41] `mcp.session.id`:** If the tool is served over MCP and the transport has a session.
 
-**[41] `network.transport`:** The value SHOULD be normalized to lowercase.
+**[42] `network.transport`:** The value SHOULD be normalized to lowercase.
 
 Consider always setting the transport when setting a port number, since
 a port number is ambiguous without knowing the transport. For example
 different processes could be listening on TCP port 12345 and UDP port 12345.
 
-**[42] `rpc.response.status_code`:** Usually it represents an error code, but may also represent partial success, warning, or differentiate between various types of successful outcomes.
+**[43] `rpc.response.status_code`:** Usually it represents an error code, but may also represent partial success, warning, or differentiate between various types of successful outcomes.
 Semantic conventions for individual RPC frameworks SHOULD document what `rpc.response.status_code` means in the context of that system and which values are considered to represent errors.
 
 ---
@@ -399,7 +402,7 @@ Semantic conventions for individual RPC frameworks SHOULD document what `rpc.res
 | `delete_memory_store` | Delete or deprovision a memory store | ![Development](https://img.shields.io/badge/-development-blue) |
 | `embeddings` | Embeddings operation such as [OpenAI Create embeddings API](https://platform.openai.com/docs/api-reference/embeddings/create) | ![Development](https://img.shields.io/badge/-development-blue) |
 | `execute_tool` | Execute a tool | ![Development](https://img.shields.io/badge/-development-blue) |
-| `fetch_response` | Fetch a previously generated model response by its identifier, without performing inference, such as [OpenAI Get a model response](https://platform.openai.com/docs/api-reference/responses/get) [43] | ![Development](https://img.shields.io/badge/-development-blue) |
+| `fetch_response` | Fetch a previously generated model response by its identifier, without performing inference, such as [OpenAI Get a model response](https://platform.openai.com/docs/api-reference/responses/get) [44] | ![Development](https://img.shields.io/badge/-development-blue) |
 | `generate_content` | Multimodal content generation operation such as [Gemini Generate Content](https://ai.google.dev/api/generate-content) | ![Development](https://img.shields.io/badge/-development-blue) |
 | `invoke_agent` | Invoke GenAI agent | ![Development](https://img.shields.io/badge/-development-blue) |
 | `invoke_workflow` | Invoke GenAI workflow | ![Development](https://img.shields.io/badge/-development-blue) |
@@ -410,7 +413,7 @@ Semantic conventions for individual RPC frameworks SHOULD document what `rpc.res
 | `update_memory` | Update existing memory records | ![Development](https://img.shields.io/badge/-development-blue) |
 | `upsert_memory` | Create or update memory records without the caller choosing which | ![Development](https://img.shields.io/badge/-development-blue) |
 
-**[43]:** Instrumentations SHOULD NOT report token usage (as attributes or metrics) for this operation.
+**[44]:** Instrumentations SHOULD NOT report token usage (as attributes or metrics) for this operation.
 
 ---
 
@@ -420,6 +423,18 @@ Semantic conventions for individual RPC frameworks SHOULD document what `rpc.res
 | --- | --- | --- |
 | `builtin` | One of lablet's built-in tools. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `mcp` | A tool served by a configured MCP server. | ![Development](https://img.shields.io/badge/-development-blue) |
+
+---
+
+`lablet.tool.status` has the following list of well-known values. If one of them applies, then the respective value MUST be used; otherwise, a custom value MAY be used.
+
+| Value | Description | Stability |
+| --- | --- | --- |
+| `failed` | The executor failed before the tool could answer. | ![Development](https://img.shields.io/badge/-development-blue) |
+| `ok` | The tool ran and returned a result. | ![Development](https://img.shields.io/badge/-development-blue) |
+| `timeout` | The call ran past the tool timeout. | ![Development](https://img.shields.io/badge/-development-blue) |
+| `tool_error` | The tool ran and reported an error in its own result. | ![Development](https://img.shields.io/badge/-development-blue) |
+| `unknown` | No configured tool has the name the model called. | ![Development](https://img.shields.io/badge/-development-blue) |
 
 ---
 
@@ -488,22 +503,22 @@ The `gen_ai.usage.*` values are the run's totals. A query that sums them over ev
 | --- | --- | --- | --- | --- | --- |
 | `gen_ai.agent.name` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | Always `lablet`. | `Math Tutor`; `Fiction Writer` |
 | `gen_ai.agent.version` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The lablet version. | `1.0.0`; `2025-05-01` |
-| `gen_ai.conversation.id` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The run id. [44] | `conv_5j66UpCpwteGg4YSxUnt7lPY` |
-| `gen_ai.operation.name` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | Always `invoke_agent`. [45] | `chat`; `generate_content`; `text_completion` |
+| `gen_ai.conversation.id` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The run id. [45] | `conv_5j66UpCpwteGg4YSxUnt7lPY` |
+| `gen_ai.operation.name` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | Always `invoke_agent`. [46] | `chat`; `generate_content`; `text_completion` |
 | `gen_ai.request.model` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The name of the GenAI model a request is being made to. | `gpt-4` |
-| `gen_ai.usage.cache_read.input_tokens` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | The number of input tokens served from a provider-managed cache. [46] | `50` |
-| `gen_ai.usage.cache_write.input_tokens` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | The number of input tokens written to a provider-managed cache. [47] | `25` |
-| `gen_ai.usage.input_tokens` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | The number of tokens used in the GenAI input (prompt). [48] | `100` |
-| `gen_ai.usage.output_tokens` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | The number of tokens used in the GenAI response (completion). [49] | `180` |
-| [`lablet.config.digest`](/lablet/docs/telemetry/lablet/README.md#lablet-config-digest) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | SHA-256 of the resolved config, in hex. [50] | `9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08` |
-| [`lablet.run.stop_reason`](/lablet/docs/telemetry/lablet/README.md#lablet-run-stop-reason) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | Why the run ended. [51] | `completed`; `max_turns` |
-| [`lablet.run.turns`](/lablet/docs/telemetry/lablet/README.md#lablet-run-turns) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of turns the run took. [52] | `7` |
-| [`lablet.tool_calls.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls executed. The intercepted `task_complete` call isn't one. [53] | `5` |
+| `gen_ai.usage.cache_read.input_tokens` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | The number of input tokens served from a provider-managed cache. [47] | `50` |
+| `gen_ai.usage.cache_write.input_tokens` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | The number of input tokens written to a provider-managed cache. [48] | `25` |
+| `gen_ai.usage.input_tokens` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | The number of tokens used in the GenAI input (prompt). [49] | `100` |
+| `gen_ai.usage.output_tokens` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | The number of tokens used in the GenAI response (completion). [50] | `180` |
+| [`lablet.config.digest`](/lablet/docs/telemetry/lablet/README.md#lablet-config-digest) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | SHA-256 of the resolved config, in hex. [51] | `9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08` |
+| [`lablet.run.stop_reason`](/lablet/docs/telemetry/lablet/README.md#lablet-run-stop-reason) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | Why the run ended. [52] | `completed`; `max_turns` |
+| [`lablet.run.turns`](/lablet/docs/telemetry/lablet/README.md#lablet-run-turns) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of turns the run took. [53] | `7` |
+| [`lablet.tool_calls.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls executed. The intercepted `task_complete` call isn't one. [54] | `5` |
 | `session.id` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The run id, for backends that group by session. | `00112233-4455-6677-8899-aabbccddeeff` |
-| `error.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | `Conditionally Required` If the stop reason isn't `completed`. | string | The stop reason, when the run didn't complete. [54] | `timeout`; `java.net.UnknownHostException`; `server_certificate_invalid`; `500` |
-| [`lablet.run.cost_usd`](/lablet/docs/telemetry/lablet/README.md#lablet-run-cost-usd) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If `model.pricing` is configured. | double | Cost of the run in US dollars, from the configured pricing. [55] | `0.0421` |
+| `error.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | `Conditionally Required` If the stop reason isn't `completed`. | string | The stop reason, when the run didn't complete. [55] | `timeout`; `java.net.UnknownHostException`; `server_certificate_invalid`; `500` |
+| [`lablet.run.cost_usd`](/lablet/docs/telemetry/lablet/README.md#lablet-run-cost-usd) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If `model.pricing` is configured. | double | Cost of the run in US dollars, from the configured pricing. [56] | `0.0421` |
 
-**[44] `gen_ai.conversation.id`:** Instrumentations SHOULD populate conversation id when they have an identifier
+**[45] `gen_ai.conversation.id`:** Instrumentations SHOULD populate conversation id when they have an identifier
 for the conversation readily available for a given operation, for example:
 
 - when the client framework being instrumented manages conversation history
@@ -522,13 +537,13 @@ Application developers that manage conversation history MAY add conversation id 
 spans or logs using custom span or log record processors or hooks provided by instrumentation
 libraries.
 
-**[45] `gen_ai.operation.name`:** If one of the predefined values applies, but specific system uses a different name it's RECOMMENDED to document it in the semantic conventions for specific GenAI system and use system-specific name in the instrumentation. If a different name is not documented, instrumentation libraries SHOULD use applicable predefined value.
+**[46] `gen_ai.operation.name`:** If one of the predefined values applies, but specific system uses a different name it's RECOMMENDED to document it in the semantic conventions for specific GenAI system and use system-specific name in the instrumentation. If a different name is not documented, instrumentation libraries SHOULD use applicable predefined value.
 
-**[46] `gen_ai.usage.cache_read.input_tokens`:** The value SHOULD be included in `gen_ai.usage.input_tokens`.
+**[47] `gen_ai.usage.cache_read.input_tokens`:** The value SHOULD be included in `gen_ai.usage.input_tokens`.
 
-**[47] `gen_ai.usage.cache_write.input_tokens`:** The value SHOULD be included in `gen_ai.usage.input_tokens`.
+**[48] `gen_ai.usage.cache_write.input_tokens`:** The value SHOULD be included in `gen_ai.usage.input_tokens`.
 
-**[48] `gen_ai.usage.input_tokens`:** This value SHOULD include all types of input tokens, including cached tokens.
+**[49] `gen_ai.usage.input_tokens`:** This value SHOULD include all types of input tokens, including cached tokens.
 Instrumentations SHOULD make a best effort to populate this value, using a total
 provided by the provider when available or, depending on the provider API,
 by summing different token types parsed from the provider output.
@@ -546,20 +561,20 @@ if a request has 100 text tokens (40 cached) and 200 image tokens:
 - `gen_ai.usage.text.cache_read.input_tokens`: 40
 - `gen_ai.usage.image.input_tokens`: 200
 
-**[49] `gen_ai.usage.output_tokens`:** When the provider reports both billed token counts and model-consumed
+**[50] `gen_ai.usage.output_tokens`:** When the provider reports both billed token counts and model-consumed
 token counts (for example, Cohere exposes both `usage.billed_units` and
 `usage.tokens`), instrumentations SHOULD report the billed count so the
 value matches the units the customer is charged for.
 
-**[50] `lablet.config.digest`:** Justification: no convention identifies the configuration that produced a run, and grouping runs by configuration is what lablet's measurements are for.
+**[51] `lablet.config.digest`:** Justification: no convention identifies the configuration that produced a run, and grouping runs by configuration is what lablet's measurements are for.
 
-**[51] `lablet.run.stop_reason`:** Justification: `gen_ai.response.finish_reasons` describes one inference call and can't express a budget, a timeout, or a cancellation; the conventions have no per-run outcome.
+**[52] `lablet.run.stop_reason`:** Justification: `gen_ai.response.finish_reasons` describes one inference call and can't express a budget, a timeout, or a cancellation; the conventions have no per-run outcome.
 
-**[52] `lablet.run.turns`:** Justification: a turn is the loop's own unit, one provider response and its tool calls; the conventions count inference calls, which also include retries.
+**[53] `lablet.run.turns`:** Justification: a turn is the loop's own unit, one provider response and its tool calls; the conventions count inference calls, which also include retries.
 
-**[53] `lablet.tool_calls.total`:** Justification: no convention counts the tool calls of an agent run.
+**[54] `lablet.tool_calls.total`:** Justification: no convention counts the tool calls of an agent run.
 
-**[54] `error.type`:** The `error.type` SHOULD be predictable, and SHOULD have low cardinality.
+**[55] `error.type`:** The `error.type` SHOULD be predictable, and SHOULD have low cardinality.
 
 When `error.type` is set to a type (e.g., an exception type), its
 canonical class name identifying the type within the artifact SHOULD be used.
@@ -585,7 +600,7 @@ it's RECOMMENDED to:
 - Use a domain-specific attribute
 - Set `error.type` to capture all errors, regardless of whether they are defined within the domain-specific set or not.
 
-**[55] `lablet.run.cost_usd`:** Justification: the GenAI conventions report token counts only and define no cost attribute.
+**[56] `lablet.run.cost_usd`:** Justification: the GenAI conventions report token counts only and define no cost attribute.
 
 ---
 
@@ -609,7 +624,7 @@ it's RECOMMENDED to:
 | `delete_memory_store` | Delete or deprovision a memory store | ![Development](https://img.shields.io/badge/-development-blue) |
 | `embeddings` | Embeddings operation such as [OpenAI Create embeddings API](https://platform.openai.com/docs/api-reference/embeddings/create) | ![Development](https://img.shields.io/badge/-development-blue) |
 | `execute_tool` | Execute a tool | ![Development](https://img.shields.io/badge/-development-blue) |
-| `fetch_response` | Fetch a previously generated model response by its identifier, without performing inference, such as [OpenAI Get a model response](https://platform.openai.com/docs/api-reference/responses/get) [56] | ![Development](https://img.shields.io/badge/-development-blue) |
+| `fetch_response` | Fetch a previously generated model response by its identifier, without performing inference, such as [OpenAI Get a model response](https://platform.openai.com/docs/api-reference/responses/get) [57] | ![Development](https://img.shields.io/badge/-development-blue) |
 | `generate_content` | Multimodal content generation operation such as [Gemini Generate Content](https://ai.google.dev/api/generate-content) | ![Development](https://img.shields.io/badge/-development-blue) |
 | `invoke_agent` | Invoke GenAI agent | ![Development](https://img.shields.io/badge/-development-blue) |
 | `invoke_workflow` | Invoke GenAI workflow | ![Development](https://img.shields.io/badge/-development-blue) |
@@ -620,7 +635,7 @@ it's RECOMMENDED to:
 | `update_memory` | Update existing memory records | ![Development](https://img.shields.io/badge/-development-blue) |
 | `upsert_memory` | Create or update memory records without the caller choosing which | ![Development](https://img.shields.io/badge/-development-blue) |
 
-**[56]:** Instrumentations SHOULD NOT report token usage (as attributes or metrics) for this operation.
+**[57]:** Instrumentations SHOULD NOT report token usage (as attributes or metrics) for this operation.
 
 ---
 
