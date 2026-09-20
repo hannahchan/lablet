@@ -65,20 +65,24 @@ impl Pricing {
         Ok(())
     }
 
-    /// The cost of `usage`, never negative and never NaN.
+    /// The cost of `usage`, or `None` when the rates and counts multiply out
+    /// past what an `f64` holds. Rates are finite and counts are exact, so
+    /// that takes rates no real price list has; the run then reports no cost
+    /// rather than one that would reach JSON as `null`.
     ///
     /// `Usage::input_tokens` includes the cached tokens, so the input rate
     /// applies to `Usage::uncached_input_tokens` only and each cache field is
     /// billed once, at its own rate. Pricing `input_tokens` whole and adding
     /// the cache fields would bill the cached tokens twice.
     #[must_use]
-    pub fn cost(&self, usage: &Usage) -> Cost {
+    pub fn cost(&self, usage: &Usage) -> Option<Cost> {
         Cost::new(
             per_million(usage.uncached_input_tokens(), self.input)
                 + per_million(usage.output_tokens, self.output)
                 + per_million(usage.cache_read_tokens, self.cache_read)
                 + per_million(usage.cache_write_tokens, self.cache_write),
         )
+        .ok()
     }
 }
 

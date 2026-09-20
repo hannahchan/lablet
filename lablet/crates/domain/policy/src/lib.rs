@@ -11,4 +11,4 @@ mod stop;
 
 pub use pricing::{Pricing, PricingError};
 pub use retry::{RetryPolicy, RetryPolicyError};
-pub use stop::{Calls, StopPolicy};
+pub use stop::StopPolicy;

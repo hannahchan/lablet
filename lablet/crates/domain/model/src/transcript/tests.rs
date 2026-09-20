@@ -1,7 +1,15 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{ProviderKind, ToolName, ToolResultContent, ToolSource};
+use crate::{
+    CompletionMode, ProviderKind, ToolCallEnd, ToolCallStatus, ToolName, ToolResultContent,
+    ToolSource,
+};
+
+/// A call to a tool the run offered, which ended `ended`.
+fn ran(ended: ToolCallEnd) -> ToolCallStatus {
+    ToolCallStatus::ran(ToolSource::Builtin, ended)
+}
 
 const fn ms(millis: u64) -> Duration {
     Duration::from_millis(millis)
@@ -49,7 +57,6 @@ fn calls(ids: &[&str]) -> Completion {
 fn outcome(call_id: &str, status: ToolCallStatus, output: &str) -> ToolCallOutcome {
     ToolCallOutcome::measured(
         id(call_id),
-        Some(ToolSource::Builtin),
         status,
         vec![ToolResultContent::Text(output.to_owned())],
         None,
@@ -59,7 +66,7 @@ fn outcome(call_id: &str, status: ToolCallStatus, output: &str) -> ToolCallOutco
 }
 
 fn ok(call_id: &str, output: &str) -> ToolCallOutcome {
-    outcome(call_id, ToolCallStatus::Ok, output)
+    outcome(call_id, ran(ToolCallEnd::Ok), output)
 }
 
 fn transcript() -> Transcript {
@@ -85,6 +92,54 @@ fn turn(
         .cloned()
 }
 
+/// A turn whose response makes the calls `tools`, in that order.
+fn turn_calling(tools: &[&str]) -> Turn {
+    let response = tools
+        .iter()
+        .enumerate()
+        .map(|(n, tool)| tool_use(&format!("call_{n}"), tool))
+        .collect();
+    turn(&mut transcript(), prompt(), completion(response, 1, 1)).unwrap()
+}
+
+#[test]
+fn a_response_that_calls_no_tool_has_no_calls_in_either_mode() {
+    let turn = turn_calling(&[]);
+
+    assert_eq!(turn.calls(CompletionMode::Natural), Calls::None);
+    assert_eq!(turn.calls(CompletionMode::Explicit), Calls::None);
+}
+
+#[test]
+fn a_response_that_calls_ordinary_tools_has_tool_calls_in_either_mode() {
+    let turn = turn_calling(&["bash", "read_file"]);
+
+    assert_eq!(turn.calls(CompletionMode::Natural), Calls::Tools);
+    assert_eq!(turn.calls(CompletionMode::Explicit), Calls::Tools);
+}
+
+#[test]
+fn only_explicit_mode_reads_task_complete_as_the_end_of_the_task() {
+    for response in [
+        vec![CompletionMode::TASK_COMPLETE],
+        vec!["bash", CompletionMode::TASK_COMPLETE],
+        vec![CompletionMode::TASK_COMPLETE, "bash"],
+    ] {
+        let turn = turn_calling(&response);
+
+        assert_eq!(
+            turn.calls(CompletionMode::Explicit),
+            Calls::TaskComplete,
+            "{response:?}"
+        );
+        assert_eq!(
+            turn.calls(CompletionMode::Natural),
+            Calls::Tools,
+            "{response:?}"
+        );
+    }
+}
+
 /// A turn with two tool calls and their outcomes, and a final turn.
 fn two_calls_in_one_turn() -> Transcript {
     let mut transcript = transcript();
@@ -97,7 +152,7 @@ fn two_calls_in_one_turn() -> Transcript {
     transcript
         .answer(vec![
             ok("call_a", "fn main() {}"),
-            outcome("call_b", ToolCallStatus::ToolError, "1 failed"),
+            outcome("call_b", ran(ToolCallEnd::ToolError), "1 failed"),
         ])
         .unwrap();
     turn(
@@ -330,10 +385,10 @@ fn the_tool_calls_of_a_turn_are_answered_once() {
         })
     );
     transcript
-        .answer(vec![outcome("call_a", ToolCallStatus::Ok, "done")])
+        .answer(vec![outcome("call_a", ran(ToolCallEnd::Ok), "done")])
         .unwrap();
     assert_eq!(
-        transcript.answer(vec![outcome("call_a", ToolCallStatus::Ok, "again")]),
+        transcript.answer(vec![outcome("call_a", ran(ToolCallEnd::Ok), "again")]),
         Err(TranscriptError::AlreadyAnswered { turn: 1 })
     );
     assert_eq!(transcript.turns()[0].tool_calls().len(), 1);
@@ -402,7 +457,7 @@ fn outcomes_that_answer_the_calls_each_once_and_in_order_become_the_turns_tool_c
         .collect();
 
     assert_eq!(pairs, [("read_file", "call_a"), ("bash", "call_b")]);
-    assert_eq!(turn.tool_calls()[1].status, ToolCallStatus::ToolError);
+    assert_eq!(turn.tool_calls()[1].status, ran(ToolCallEnd::ToolError));
 }
 
 #[test]
@@ -552,9 +607,9 @@ fn consecutive_tool_errors_count_back_from_the_last_outcome_to_the_last_success(
     assert_eq!(transcript.consecutive_tool_errors(), 0);
 
     let statuses = [
-        (ToolCallStatus::Failed, ToolCallStatus::Ok, 0),
-        (ToolCallStatus::Ok, ToolCallStatus::Timeout, 1),
-        (ToolCallStatus::Unknown, ToolCallStatus::ToolError, 3),
+        (ran(ToolCallEnd::Failed), ran(ToolCallEnd::Ok), 0),
+        (ran(ToolCallEnd::Ok), ran(ToolCallEnd::Timeout), 1),
+        (ToolCallStatus::Unknown, ran(ToolCallEnd::ToolError), 3),
     ];
     let mut input = prompt();
     for (first, second, expected) in statuses {
@@ -604,8 +659,7 @@ fn document() -> Value {
                 },
                 "tool_calls": [{
                     "call_id": "call_a",
-                    "source": "builtin",
-                    "status": "tool_error",
+                    "status": { "ran": { "source": "builtin", "ended": "tool_error" } },
                     "started_ms": 900,
                     "latency_ms": 30,
                     "truncated_from_bytes": null,
@@ -666,7 +720,7 @@ fn a_transcript_has_one_json_form() {
     transcript
         .answer(vec![outcome(
             "call_a",
-            ToolCallStatus::ToolError,
+            ran(ToolCallEnd::ToolError),
             "1 failed",
         )])
         .unwrap();

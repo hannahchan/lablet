@@ -7,6 +7,7 @@
 //! same number.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -34,6 +35,11 @@ pub enum CompletionMode {
 }
 
 impl CompletionMode {
+    /// The name of the tool that ends a run in [`CompletionMode::Explicit`]:
+    /// the loop offers it, intercepts it rather than executing it, and the
+    /// stop policy reads it. One definition, because those three have to agree.
+    pub const TASK_COMPLETE: &'static str = "task_complete";
+
     /// The serde spelling, which is the `lablet.run.completion_mode` value.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -174,6 +180,7 @@ pub struct RunOutcome {
 /// What an outcome is read from, so that reading one holds it to the rules,
 /// and what the tally fills in to close a run.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RawOutcome {
     pub(crate) run_id: RunId,
     pub(crate) stop_reason: StopReason,
@@ -330,7 +337,15 @@ pub struct ToolStats {
 /// The run totals that the outcome document carries (`usage`, `tool_calls`,
 /// `turns`, `duration_ms`, `stop_reason`, `error`) are read from `outcome` and
 /// aren't repeated here, so no two fields can disagree.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// It's written, never read: the wide event is emitted from it, and the
+/// documents lablet writes are the outcome and the transcript, each of which
+/// checks itself on the way in. A summary holds invariants that span its
+/// fields, such as `per_tool` keys being among `tools` and one finish reason
+/// per turn of the outcome, and only [`crate::RunTally::finish`] establishes
+/// them. So there's no `Deserialize`, rather than one that would take a
+/// summary no run could have produced.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RunSummary {
     /// The model the run called.
     pub model: ModelRef,
@@ -342,7 +357,7 @@ pub struct RunSummary {
     /// How the run decided that the model had finished.
     pub completion: CompletionMode,
     /// The cap on turns.
-    pub max_turns: u32,
+    pub max_turns: NonZeroU32,
     /// The run timeout, in whole milliseconds.
     pub timeout_ms: u64,
     /// The request parameters every provider call shared.
@@ -383,8 +398,9 @@ pub struct RunSummary {
 }
 
 /// What a finished run hands back: everything measured, the outcome inside
-/// it, and the conversation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// it, and the conversation. Written, never read, for the reason
+/// [`RunSummary`] gives.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FinishedRun {
     /// The run's summary, whose `outcome` is the outcome document.
     pub summary: RunSummary,

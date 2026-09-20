@@ -2,7 +2,7 @@
 //! closed values are compared here. Each match is exhaustive, so a variant
 //! added on either side fails to compile until the other side has it too.
 
-use lablet_model::{CompletionMode, StopReason, ToolCallStatus, ToolSource};
+use lablet_model::{CompletionMode, StopReason, ToolCallEnd, ToolCallStatus, ToolSource};
 use lablet_telemetry_registry::enums::{
     LabletRunCompletionMode, LabletRunStopReason, LabletToolSource, LabletToolStatus,
 };
@@ -97,30 +97,43 @@ fn both_tool_sources_are_spelled_as_the_registry_spells_them() {
     }
 }
 
+/// The model nests the five registry values in two levels, so both levels are
+/// matched exhaustively here and the flattening is what's compared.
+const fn registry_tool_status(status: &ToolCallStatus) -> LabletToolStatus {
+    match status {
+        ToolCallStatus::Unknown => LabletToolStatus::Unknown,
+        ToolCallStatus::Ran { ended, .. } => match ended {
+            ToolCallEnd::Ok => LabletToolStatus::Ok,
+            ToolCallEnd::ToolError => LabletToolStatus::ToolError,
+            ToolCallEnd::Timeout => LabletToolStatus::Timeout,
+            ToolCallEnd::Failed => LabletToolStatus::Failed,
+        },
+    }
+}
+
+const fn model_tool_status(registry: LabletToolStatus) -> ToolCallStatus {
+    match registry {
+        LabletToolStatus::Unknown => ToolCallStatus::Unknown,
+        LabletToolStatus::Ok => ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok),
+        LabletToolStatus::ToolError => {
+            ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::ToolError)
+        }
+        LabletToolStatus::Timeout => ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Timeout),
+        LabletToolStatus::Failed => ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Failed),
+    }
+}
+
 #[test]
 fn every_tool_call_status_is_spelled_as_the_registry_spells_it() {
     for status in [
-        ToolCallStatus::Ok,
-        ToolCallStatus::ToolError,
         ToolCallStatus::Unknown,
-        ToolCallStatus::Timeout,
-        ToolCallStatus::Failed,
+        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok),
+        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::ToolError),
+        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Timeout),
+        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Failed),
     ] {
-        let registry = match status {
-            ToolCallStatus::Ok => LabletToolStatus::Ok,
-            ToolCallStatus::ToolError => LabletToolStatus::ToolError,
-            ToolCallStatus::Unknown => LabletToolStatus::Unknown,
-            ToolCallStatus::Timeout => LabletToolStatus::Timeout,
-            ToolCallStatus::Failed => LabletToolStatus::Failed,
-        };
+        let registry = registry_tool_status(&status);
         assert_eq!(status.as_str(), registry.as_str());
-        let back = match registry {
-            LabletToolStatus::Ok => ToolCallStatus::Ok,
-            LabletToolStatus::ToolError => ToolCallStatus::ToolError,
-            LabletToolStatus::Unknown => ToolCallStatus::Unknown,
-            LabletToolStatus::Timeout => ToolCallStatus::Timeout,
-            LabletToolStatus::Failed => ToolCallStatus::Failed,
-        };
-        assert_eq!(back, status);
+        assert_eq!(model_tool_status(registry), status);
     }
 }

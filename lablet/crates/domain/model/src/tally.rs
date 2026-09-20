@@ -8,6 +8,7 @@
 //! disagree with the turns it sums.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 use std::time::Duration;
 
 use crate::run::{RawOutcome, whole_ms};
@@ -34,7 +35,7 @@ pub struct RunSetup {
     /// How the run decides that the model has finished.
     pub completion: CompletionMode,
     /// The cap on turns.
-    pub max_turns: u32,
+    pub max_turns: NonZeroU32,
     /// The run timeout.
     pub timeout: Duration,
     /// The request parameters every provider call shares.
@@ -192,7 +193,11 @@ impl RunTally {
     /// last failed attempt, which nothing followed, isn't one. A tool call to
     /// a name the run didn't offer counts in the totals and as an unknown
     /// call, and gets no per-tool entry: the model can call any name, and the
-    /// per-tool keys of the wide event must stay bounded by the config.
+    /// per-tool keys of the wide event must stay bounded by the config. Which
+    /// calls those are is read from each outcome's
+    /// [`crate::ToolCallStatus`], the value the executor set when it looked
+    /// the name up, rather than looked up a second time here against the tool
+    /// list, where the two answers could differ.
     #[must_use]
     pub fn finish(
         self,
@@ -292,7 +297,7 @@ fn add_turn(summary: &mut RunSummary, turn: &Turn) {
         summary.tool_output_bytes = summary
             .tool_output_bytes
             .saturating_add(outcome.output_bytes());
-        if summary.tools.contains(&call.name) {
+        if outcome.status.source().is_some() {
             let stats = summary.per_tool.entry(call.name.clone()).or_default();
             stats.calls += 1;
             stats.errors += errors;

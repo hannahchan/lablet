@@ -176,7 +176,25 @@ pub enum FinishReason {
     /// The model declined to answer, or a content filter withheld the response.
     Refusal,
     /// Any other reason, as the provider spelled it.
-    Other(String),
+    Other(UnknownReason),
+}
+
+/// A finish reason lablet has no name for, kept as the provider spelled it.
+///
+/// Its string is private so that [`FinishReason::from`] is the only way to
+/// build one. Otherwise `Other("refusal".to_owned())` would typecheck, and a
+/// refusal that skipped normalisation reads at the stop policy as an ordinary
+/// end: the run would complete, and exit 0, on a response the model declined
+/// to give.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct UnknownReason(String);
+
+impl UnknownReason {
+    /// The reason as the provider spelled it.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl FinishReason {
@@ -190,7 +208,7 @@ impl FinishReason {
             Self::MaxTokens => "max_tokens",
             Self::ContextWindow => "context_window",
             Self::Refusal => "refusal",
-            Self::Other(reason) => reason,
+            Self::Other(reason) => reason.as_str(),
         }
     }
 }
@@ -204,7 +222,7 @@ impl From<String> for FinishReason {
             "max_tokens" | "length" => Self::MaxTokens,
             "context_window" | "model_context_window_exceeded" => Self::ContextWindow,
             "refusal" | "content_filter" => Self::Refusal,
-            _ => Self::Other(reason),
+            _ => Self::Other(UnknownReason(reason)),
         }
     }
 }
@@ -319,22 +337,53 @@ pub(crate) fn distinct_tool_use_ids(content: &[ContentBlock]) -> Result<(), Comp
     Ok(())
 }
 
-/// An amount of money in US dollars.
+/// An amount of money in US dollars: finite, and never negative.
+///
+/// Both rules exist because of what the alternative looks like downstream.
+/// JSON has no infinity or NaN, so serde writes either as `null`, which is
+/// how the wide event and the summary also write "no pricing was configured":
+/// a cost that overflowed would be indistinguishable from one that was never
+/// asked for. A negative cost is no more meaningful.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(transparent)]
+#[serde(into = "f64", try_from = "f64")]
 pub struct Cost(f64);
 
+/// Why an amount isn't a cost.
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+#[error("{0} isn't a finite number of US dollars of at least 0")]
+pub struct CostError(f64);
+
 impl Cost {
-    /// Wraps an amount in US dollars.
-    #[must_use]
-    pub const fn new(usd: f64) -> Self {
-        Self(usd)
+    /// An amount in US dollars.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CostError`] unless `usd` is finite and at least 0.
+    pub fn new(usd: f64) -> Result<Self, CostError> {
+        if !usd.is_finite() || usd < 0.0 {
+            return Err(CostError(usd));
+        }
+        Ok(Self(usd))
     }
 
     /// The amount in US dollars.
     #[must_use]
     pub const fn usd(self) -> f64 {
         self.0
+    }
+}
+
+impl TryFrom<f64> for Cost {
+    type Error = CostError;
+
+    fn try_from(usd: f64) -> Result<Self, CostError> {
+        Self::new(usd)
+    }
+}
+
+impl From<Cost> for f64 {
+    fn from(cost: Cost) -> Self {
+        cost.0
     }
 }
 

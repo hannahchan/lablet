@@ -17,7 +17,7 @@
 //! | `Step.reasoning_content` | the text of the response's thinking blocks |
 //! | `Step.tool_calls[]` | the response's [`ToolUse`] blocks: `tool_call_id` is `id`, `function_name` is `name`, `arguments` is `input` |
 //! | `Step.observation.results[]` | [`Turn::tool_calls`], in the same order: `source_call_id` is `call_id`, `content` is the text of `content` |
-//! | `ObservationResult.extra` | the outcome's `source`, `status`, `started_ms`, `latency_ms`, `truncated_from_bytes`: ATIF has no slot for an error, a time, or a truncation |
+//! | `ObservationResult.extra` | the outcome's `status`, which holds the source, and its `started_ms`, `latency_ms`, `truncated_from_bytes`: ATIF has no slot for an error, a time, or a truncation |
 //! | `Step.metrics` | `prompt_tokens` is `usage.input_tokens`, `completion_tokens` is `usage.output_tokens`, `cached_tokens` is `usage.cache_read_tokens`, a subset of the prompt tokens in both |
 //! | `Metrics.extra` | `usage.cache_write_tokens`, and the record's `finish`, `response_id`, `latency_ms`, `attempts` |
 //!
@@ -32,8 +32,8 @@ use crate::message::tool_uses;
 use crate::provider::distinct_tool_use_ids;
 use crate::run::whole_ms;
 use crate::{
-    Completion, CompletionError, ContentBlock, FinishReason, Message, ToolCallId, ToolCallOutcome,
-    ToolCallStatus, ToolResult, ToolUse, Usage, UserContent,
+    Completion, CompletionError, CompletionMode, ContentBlock, FinishReason, Message, ToolCallId,
+    ToolCallOutcome, ToolResult, ToolUse, Usage, UserContent,
 };
 
 /// The conversation of one run: the system prompt and the turns.
@@ -234,7 +234,7 @@ impl Transcript {
             .iter()
             .rev()
             .flat_map(|turn| turn.tool_calls.iter().rev())
-            .take_while(|outcome| outcome.status != ToolCallStatus::Ok)
+            .take_while(|outcome| outcome.status.is_error())
             .count();
         u32::try_from(errors).unwrap_or(u32::MAX)
     }
@@ -328,7 +328,38 @@ impl Transcript {
     }
 }
 
+/// The tool calls of a response, as far as completion reads them.
+///
+/// [`Turn::calls`] is the only place a response is read this way, so the loop
+/// can't classify a response differently from how the stop policy expects it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Calls {
+    /// The response called no tool.
+    None,
+    /// The response called tools, and `task_complete` wasn't one of them.
+    Tools,
+    /// The response called `task_complete`, alone or among other tools. Only
+    /// [`CompletionMode::Explicit`] has such a tool, so a natural-mode
+    /// response is never read as this.
+    TaskComplete,
+}
+
 impl Turn {
+    /// How `mode` reads the tool calls of the response.
+    #[must_use]
+    pub fn calls(&self, mode: CompletionMode) -> Calls {
+        let mut called = Calls::None;
+        for call in self.tool_uses() {
+            if mode == CompletionMode::Explicit
+                && call.name.as_str() == CompletionMode::TASK_COMPLETE
+            {
+                return Calls::TaskComplete;
+            }
+            called = Calls::Tools;
+        }
+        called
+    }
+
     /// What the user supplied to the turn: the task prompt for the first
     /// turn, and nothing for a turn that follows tool results.
     #[must_use]

@@ -194,6 +194,20 @@ fn document(stop_reason: &str, structured: &Value, error: &Value) -> Value {
     })
 }
 
+/// The outcome document is the contract a composer parses, so a field it
+/// doesn't recognise is a misspelling to report, not one to pass over.
+#[test]
+fn an_outcome_document_with_a_field_the_model_does_not_know_is_refused() {
+    let mut document = document("completed", &Value::Null, &Value::Null);
+    document["stop_resaon"] = json!("completed");
+
+    let refused = serde_json::from_value::<RunOutcome>(document).unwrap_err();
+    assert!(
+        refused.to_string().contains("unknown field `stop_resaon`"),
+        "{refused}"
+    );
+}
+
 #[test]
 fn an_outcome_a_run_can_have_reads_back_as_itself() {
     let failed = document(
@@ -281,7 +295,7 @@ fn summary() -> RunSummary {
         }),
         tools: vec![bash.clone()],
         completion: CompletionMode::Explicit,
-        max_turns: 30,
+        max_turns: NonZeroU32::new(30).unwrap(),
         timeout_ms: 600_000,
         request: RequestDefaults {
             max_tokens: 4096,
@@ -310,13 +324,15 @@ fn summary() -> RunSummary {
                 latency_ms: 35,
             },
         )]),
-        cost: Some(Cost::new(0.002)),
+        cost: Some(Cost::new(0.002).unwrap()),
         outcome: outcome(),
     }
 }
 
+/// A summary is written, never read, so there's a written form to pin and no
+/// round trip to make.
 #[test]
-fn a_run_summary_round_trips_through_json() {
+fn a_run_summary_has_one_json_form() {
     let json = serde_json::to_value(summary()).unwrap();
 
     assert_eq!(
@@ -332,10 +348,7 @@ fn a_run_summary_round_trips_through_json() {
     );
     assert_eq!(json["finish_reasons"], json!(["tool_use", "end_turn"]));
     assert_eq!(json["cost"], json!(0.002));
-    assert_eq!(
-        serde_json::from_value::<RunSummary>(json).unwrap(),
-        summary()
-    );
+    assert_eq!(json["max_turns"], json!(30));
 }
 
 #[test]
@@ -367,10 +380,6 @@ fn a_finished_run_carries_the_summary_and_the_conversation() {
     assert_eq!(
         json["transcript"],
         json!({ "system": "Be brief.", "turns": [] })
-    );
-    assert_eq!(
-        serde_json::from_value::<FinishedRun>(json).unwrap(),
-        finished
     );
 }
 

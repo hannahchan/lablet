@@ -4,14 +4,18 @@ use super::*;
 
 const TIMEOUT: Duration = Duration::from_secs(600);
 
+fn nz(count: u32) -> NonZeroU32 {
+    NonZeroU32::new(count).expect("the caps in these tests are all above zero")
+}
+
 /// Limits far from anything the progress below reaches.
 fn policy(completion: CompletionMode) -> StopPolicy {
     StopPolicy {
         completion,
-        max_turns: 30,
+        max_turns: nz(30),
         timeout: TIMEOUT,
         max_total_tokens: None,
-        max_consecutive_tool_errors: 3,
+        max_consecutive_tool_errors: nz(3),
     }
 }
 
@@ -42,10 +46,10 @@ const fn tokens(total: u64) -> Usage {
 /// Progress at which every limit and cap of `policy` is reached at once.
 fn everything_reached(policy: &StopPolicy) -> Progress {
     Progress {
-        turns: policy.max_turns,
+        turns: policy.max_turns.get(),
         elapsed: policy.timeout,
         usage: tokens(policy.max_total_tokens.unwrap()),
-        consecutive_tool_errors: policy.max_consecutive_tool_errors,
+        consecutive_tool_errors: policy.max_consecutive_tool_errors.get(),
     }
 }
 
@@ -71,7 +75,7 @@ fn a_fresh_run_makes_its_first_provider_call() {
 #[test]
 fn the_turn_cap_stops_the_run_after_the_tool_phase_of_the_capped_turn() {
     let policy = StopPolicy {
-        max_turns: 2,
+        max_turns: nz(2),
         ..natural()
     };
     let after = |turns| Progress { turns, ..mid_run() };
@@ -84,7 +88,7 @@ fn the_turn_cap_stops_the_run_after_the_tool_phase_of_the_capped_turn() {
 #[test]
 fn the_turn_cap_is_not_read_before_a_provider_call() {
     let policy = StopPolicy {
-        max_turns: 2,
+        max_turns: nz(2),
         ..natural()
     };
     let progress = Progress {
@@ -96,9 +100,9 @@ fn the_turn_cap_is_not_read_before_a_provider_call() {
 }
 
 #[test]
-fn a_turn_cap_of_zero_acts_as_one() {
+fn the_smallest_turn_cap_stops_the_run_after_one_turn() {
     let policy = StopPolicy {
-        max_turns: 0,
+        max_turns: nz(1),
         ..natural()
     };
 
@@ -204,7 +208,7 @@ fn the_tool_error_cap_stops_the_run_on_the_error_that_reaches_it() {
         ..mid_run()
     };
 
-    assert_eq!(natural().max_consecutive_tool_errors, 3);
+    assert_eq!(natural().max_consecutive_tool_errors, nz(3));
     assert_eq!(natural().after_tools(&after(2)), None);
     assert_eq!(
         natural().after_tools(&after(3)),
@@ -227,9 +231,9 @@ fn the_tool_error_cap_is_not_read_before_a_provider_call() {
 }
 
 #[test]
-fn a_tool_error_cap_of_zero_acts_as_one() {
+fn the_smallest_tool_error_cap_stops_the_run_on_the_first_error() {
     let policy = StopPolicy {
-        max_consecutive_tool_errors: 0,
+        max_consecutive_tool_errors: nz(1),
         ..natural()
     };
     let after = |consecutive_tool_errors| Progress {
@@ -259,7 +263,7 @@ fn natural_mode_completes_on_a_response_with_no_tool_calls() {
 
 #[test]
 fn natural_mode_completes_on_a_finish_reason_it_does_not_know() {
-    let unknown = FinishReason::Other("eos".to_owned());
+    let unknown = FinishReason::from("eos".to_owned());
 
     assert_eq!(
         natural().after_response(&unknown, Calls::None),
@@ -365,10 +369,10 @@ fn a_response_is_judged_without_the_limits_so_one_that_finishes_completes_the_ru
     // `after_response` takes no progress: a policy whose every limit is
     // already reached still answers from the response alone.
     let policy = StopPolicy {
-        max_turns: 0,
+        max_turns: nz(1),
         timeout: Duration::ZERO,
         max_total_tokens: Some(0),
-        max_consecutive_tool_errors: 0,
+        max_consecutive_tool_errors: nz(1),
         ..natural()
     };
 

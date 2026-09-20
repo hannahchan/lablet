@@ -1,8 +1,9 @@
 //! Whether a run goes on, asked at the three points of a turn where it can end.
 
+use std::num::NonZeroU32;
 use std::time::Duration;
 
-use lablet_model::{CompletionMode, FinishReason, Progress, StopReason};
+use lablet_model::{Calls, CompletionMode, FinishReason, Progress, StopReason};
 
 /// The limits of one run and how it completes.
 ///
@@ -19,9 +20,8 @@ use lablet_model::{CompletionMode, FinishReason, Progress, StopReason};
 pub struct StopPolicy {
     /// How the run decides that the model has finished.
     pub completion: CompletionMode,
-    /// The number of turns after whose tool phase the run stops. The cap is
-    /// only read after a tool phase, so `0` acts as `1`.
-    pub max_turns: u32,
+    /// The number of turns after whose tool phase the run stops.
+    pub max_turns: NonZeroU32,
     /// The elapsed time at which the run stops. Zero stops it before the first
     /// provider call.
     pub timeout: Duration,
@@ -29,21 +29,8 @@ pub struct StopPolicy {
     /// the run stops; `None` is no budget. Context that's sent again is counted
     /// again, as it's billed.
     pub max_total_tokens: Option<u64>,
-    /// The run of consecutive tool error results at which the run stops. `0`
-    /// acts as `1`: a run is never stopped for errors it hasn't had.
-    pub max_consecutive_tool_errors: u32,
-}
-
-/// The tool calls of a response, as far as completion reads them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Calls {
-    /// The response called no tool.
-    None,
-    /// The response called tools, and `task_complete` wasn't one of them.
-    Tools,
-    /// The response called `task_complete`, alone or among other tools.
-    /// Natural mode has no such tool and reads this as [`Calls::Tools`].
-    TaskComplete,
+    /// The run of consecutive tool error results at which the run stops.
+    pub max_consecutive_tool_errors: NonZeroU32,
 }
 
 impl StopPolicy {
@@ -126,9 +113,9 @@ impl StopPolicy {
 
     /// The caps that only a finished tool phase can reach.
     fn cap_reached(&self, progress: &Progress) -> Option<StopReason> {
-        if progress.consecutive_tool_errors >= self.max_consecutive_tool_errors.max(1) {
+        if progress.consecutive_tool_errors >= self.max_consecutive_tool_errors.get() {
             Some(StopReason::ToolErrorsExhausted)
-        } else if progress.turns >= self.max_turns {
+        } else if progress.turns >= self.max_turns.get() {
             Some(StopReason::MaxTurns)
         } else {
             None

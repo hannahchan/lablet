@@ -55,49 +55,112 @@ impl core::fmt::Display for ToolSource {
     }
 }
 
-/// How an executed tool call ended. One value says both whether the model got
-/// an error result and why, so the two can't disagree.
+/// What became of one tool call: either the run offered no tool by that name,
+/// or a tool ran and ended some way.
 ///
-/// Every status but [`ToolCallStatus::Ok`] is an error result for the model,
-/// and its [`ToolCallStatus::as_str`] is the `error.type` of the call's
-/// `execute_tool` span; a call that ended `ok` has no `error.type`.
+/// "The model called a tool the run doesn't have" used to be three facts that
+/// could disagree: a status, a missing source, and a name absent from the
+/// run's tool list. It's one here. A call has a [`ToolSource`] exactly when a
+/// tool ran, so the summary reads both what it counts as unknown and which
+/// calls earn a per-tool entry from this one value, and the
+/// `lablet.tool.source` and `gen_ai.tool.type` attributes of the call's
+/// `execute_tool` span are present on exactly the same calls.
+///
+/// Every status but [`ToolCallEnd::Ok`] is an error result for the model, and
+/// [`ToolCallStatus::as_str`] is the `error.type` of the span; a call that
+/// ended `ok` has no `error.type`.
+///
+/// Written `"unknown"` or `{"ran": {"source": "builtin", "ended": "ok"}}`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum ToolCallStatus {
+    /// No configured tool has the name the model called, so nothing ran.
+    Unknown,
+    /// A tool ran.
+    Ran {
+        /// Where the tool that ran comes from.
+        source: ToolSource,
+        /// How it ended.
+        ended: ToolCallEnd,
+    },
+}
+
+/// How a tool that ran ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ToolCallStatus {
-    /// The tool ran and returned a result.
+pub enum ToolCallEnd {
+    /// The tool returned a result.
     Ok,
-    /// The tool ran and reported an error in its own result, as an MCP tool
-    /// does with `isError`.
+    /// The tool reported an error in its own result, as an MCP tool does with
+    /// `isError`.
     ToolError,
-    /// No configured tool has the name the model called.
-    Unknown,
     /// The call ran past the tool timeout.
     Timeout,
     /// The executor failed before the tool could answer.
     Failed,
 }
 
-impl ToolCallStatus {
+impl ToolCallEnd {
     /// The serde spelling.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Ok => "ok",
             Self::ToolError => "tool_error",
-            Self::Unknown => "unknown",
             Self::Timeout => "timeout",
             Self::Failed => "failed",
         }
     }
+}
 
-    /// Whether the model is sent an error result.
+impl ToolCallStatus {
+    /// A call to a tool that ran and ended `ended`.
     #[must_use]
-    pub const fn is_error(self) -> bool {
-        !matches!(self, Self::Ok)
+    pub const fn ran(source: ToolSource, ended: ToolCallEnd) -> Self {
+        Self::Ran { source, ended }
+    }
+
+    /// The `lablet.tool.status` value, which flattens the two levels into the
+    /// registry's five.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Ran { ended, .. } => ended.as_str(),
+        }
+    }
+
+    /// Where the tool that ran comes from; `None` when none did.
+    #[must_use]
+    pub const fn source(&self) -> Option<&ToolSource> {
+        match self {
+            Self::Unknown => None,
+            Self::Ran { source, .. } => Some(source),
+        }
+    }
+
+    /// Whether the model is sent an error result. A name the run doesn't have
+    /// is one, because the model is told so.
+    #[must_use]
+    pub const fn is_error(&self) -> bool {
+        !matches!(
+            self,
+            Self::Ran {
+                ended: ToolCallEnd::Ok,
+                ..
+            }
+        )
     }
 }
 
-display_as_str!(ToolCallStatus);
+display_as_str!(ToolCallEnd);
+
+/// For people, and for the `lablet.tool.status` value.
+impl core::fmt::Display for ToolCallStatus {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// What happened to one executed tool call: a member of the [`crate::Turn`]
 /// whose response made the call.
@@ -105,15 +168,14 @@ display_as_str!(ToolCallStatus);
 /// The call's name and input aren't here, because the response's
 /// [`crate::ToolUse`] block with the same id holds them. Nor are the sizes:
 /// [`crate::ToolUse::input_bytes`] and [`ToolCallOutcome::output_bytes`]
-/// measure what's stored. Whether the model was sent an error is read from
-/// `status`.
+/// measure what's stored. Whether the model was sent an error, and where the
+/// tool came from, are both read from `status`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ToolCallOutcome {
     /// The id of the [`crate::ToolUse`] this answers.
     pub call_id: ToolCallId,
-    /// Where the tool comes from; `None` for a name no configured tool has.
-    pub source: Option<ToolSource>,
-    /// How the call ended.
+    /// What became of the call.
     pub status: ToolCallStatus,
     /// When the call started, in whole milliseconds since the run started.
     pub started_ms: u64,
@@ -138,7 +200,6 @@ impl ToolCallOutcome {
     #[must_use]
     pub fn measured(
         call_id: ToolCallId,
-        source: Option<ToolSource>,
         status: ToolCallStatus,
         content: Vec<ToolResultContent>,
         max_output_bytes: Option<u64>,
@@ -151,7 +212,6 @@ impl ToolCallOutcome {
         };
         Self {
             call_id,
-            source,
             status,
             started_ms: whole_ms(started),
             latency_ms: whole_ms(latency),

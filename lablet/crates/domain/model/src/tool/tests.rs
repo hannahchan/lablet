@@ -8,6 +8,11 @@ fn docs_server() -> ToolSource {
     }
 }
 
+/// A call to a built-in tool, which ended `ended`.
+const fn ran(ended: ToolCallEnd) -> ToolCallStatus {
+    ToolCallStatus::ran(ToolSource::Builtin, ended)
+}
+
 // The literal spellings are the members of `lablet.tool.source` in the
 // telemetry registry, which this crate can't depend on.
 #[test]
@@ -65,30 +70,69 @@ fn a_tool_spec_has_one_json_form() {
 // span, which is a semantic-convention attribute with no registry enum to
 // compare with.
 const STATUSES: [(ToolCallStatus, &str); 5] = [
-    (ToolCallStatus::Ok, "ok"),
-    (ToolCallStatus::ToolError, "tool_error"),
+    (ran(ToolCallEnd::Ok), "ok"),
+    (ran(ToolCallEnd::ToolError), "tool_error"),
     (ToolCallStatus::Unknown, "unknown"),
-    (ToolCallStatus::Timeout, "timeout"),
-    (ToolCallStatus::Failed, "failed"),
+    (ran(ToolCallEnd::Timeout), "timeout"),
+    (ran(ToolCallEnd::Failed), "failed"),
 ];
 
 #[test]
-fn every_status_prints_and_serialises_as_its_error_type_spelling() {
+fn every_status_prints_as_its_error_type_spelling() {
     for (status, spelling) in STATUSES {
+        assert_eq!(status.as_str(), spelling);
         assert_eq!(status.to_string(), spelling);
-        assert_eq!(serde_json::to_value(status).unwrap(), json!(spelling));
-        assert_eq!(
-            serde_json::from_value::<ToolCallStatus>(json!(spelling)).unwrap(),
-            status
-        );
     }
 }
 
 #[test]
 fn every_status_but_ok_is_an_error_result_for_the_model() {
-    for (status, _) in STATUSES {
-        assert_eq!(status.is_error(), status != ToolCallStatus::Ok, "{status}");
+    for (status, spelling) in STATUSES {
+        assert_eq!(status.is_error(), spelling != "ok", "{status}");
     }
+}
+
+#[test]
+fn only_a_call_that_ran_has_a_source() {
+    assert_eq!(ToolCallStatus::Unknown.source(), None);
+    assert_eq!(
+        ToolCallStatus::ran(docs_server(), ToolCallEnd::Failed).source(),
+        Some(&docs_server())
+    );
+}
+
+/// The flattening that `as_str` does is for telemetry; the document keeps the
+/// two levels, so a reader can tell a built-in failure from an MCP one.
+#[test]
+fn a_status_serialises_as_the_two_levels_it_holds() {
+    assert_eq!(
+        serde_json::to_value(ToolCallStatus::Unknown).unwrap(),
+        json!("unknown")
+    );
+    assert_eq!(
+        serde_json::from_value::<ToolCallStatus>(json!("unknown")).unwrap(),
+        ToolCallStatus::Unknown
+    );
+
+    let timed_out = ToolCallStatus::ran(docs_server(), ToolCallEnd::Timeout);
+    let expected = json!({
+        "ran": { "source": { "mcp": { "server": "docs" } }, "ended": "timeout" },
+    });
+
+    assert_eq!(serde_json::to_value(&timed_out).unwrap(), expected);
+    assert_eq!(
+        serde_json::from_value::<ToolCallStatus>(expected).unwrap(),
+        timed_out
+    );
+}
+
+#[test]
+fn a_status_that_ran_without_saying_where_the_tool_came_from_is_not_a_status() {
+    let no_source = json!({ "ran": { "ended": "ok" } });
+    let unknown_field = json!({ "ran": { "source": "builtin", "ended": "ok", "why": "?" } });
+
+    assert!(serde_json::from_value::<ToolCallStatus>(no_source).is_err());
+    assert!(serde_json::from_value::<ToolCallStatus>(unknown_field).is_err());
 }
 
 fn call_1() -> ToolCallId {
@@ -103,8 +147,7 @@ fn text(text: &str) -> Vec<ToolResultContent> {
 fn an_outcome_holds_what_it_was_given_with_its_times_in_whole_milliseconds() {
     let outcome = ToolCallOutcome::measured(
         call_1(),
-        Some(ToolSource::Builtin),
-        ToolCallStatus::Ok,
+        ran(ToolCallEnd::Ok),
         text("hello"),
         Some(100),
         Duration::from_micros(1_500_999),
@@ -115,8 +158,7 @@ fn an_outcome_holds_what_it_was_given_with_its_times_in_whole_milliseconds() {
         outcome,
         ToolCallOutcome {
             call_id: call_1(),
-            source: Some(ToolSource::Builtin),
-            status: ToolCallStatus::Ok,
+            status: ran(ToolCallEnd::Ok),
             started_ms: 1_500,
             latency_ms: 42,
             truncated_from_bytes: None,
@@ -128,10 +170,9 @@ fn an_outcome_holds_what_it_was_given_with_its_times_in_whole_milliseconds() {
 
 #[test]
 fn the_result_the_model_is_sent_is_an_error_exactly_when_the_status_is_not_ok() {
-    for (status, _) in STATUSES {
+    for (status, spelling) in STATUSES {
         let outcome = ToolCallOutcome::measured(
             call_1(),
-            None,
             status,
             text("no"),
             None,
@@ -144,9 +185,9 @@ fn the_result_the_model_is_sent_is_an_error_exactly_when_the_status_is_not_ok() 
             ToolResult {
                 call_id: &call_1(),
                 content: &text("no"),
-                is_error: status != ToolCallStatus::Ok,
+                is_error: spelling != "ok",
             },
-            "{status}"
+            "{spelling}"
         );
     }
 }
@@ -155,8 +196,7 @@ fn the_result_the_model_is_sent_is_an_error_exactly_when_the_status_is_not_ok() 
 fn output_over_the_cap_is_cut_and_the_outcome_holds_the_size_sent_and_the_size_before() {
     let outcome = ToolCallOutcome::measured(
         call_1(),
-        Some(docs_server()),
-        ToolCallStatus::Ok,
+        ran(ToolCallEnd::Ok),
         text("0123456789"),
         Some(4),
         Duration::ZERO,
@@ -178,8 +218,7 @@ fn output_over_the_cap_is_cut_and_the_outcome_holds_the_size_sent_and_the_size_b
 fn output_that_just_fits_the_cap_is_not_cut() {
     let outcome = ToolCallOutcome::measured(
         call_1(),
-        None,
-        ToolCallStatus::Ok,
+        ran(ToolCallEnd::Ok),
         text("0123456789"),
         Some(10),
         Duration::ZERO,
@@ -194,8 +233,7 @@ fn output_that_just_fits_the_cap_is_not_cut() {
 fn without_a_cap_no_output_is_cut() {
     let outcome = ToolCallOutcome::measured(
         call_1(),
-        None,
-        ToolCallStatus::Ok,
+        ran(ToolCallEnd::Ok),
         text("0123456789"),
         None,
         Duration::ZERO,
@@ -211,8 +249,7 @@ fn without_a_cap_no_output_is_cut() {
 fn a_tool_call_outcome_has_one_json_form_without_a_name_an_input_or_an_error_flag() {
     let outcome = ToolCallOutcome::measured(
         call_1(),
-        Some(docs_server()),
-        ToolCallStatus::Timeout,
+        ToolCallStatus::ran(docs_server(), ToolCallEnd::Timeout),
         text("timed out after 60s"),
         Some(8),
         Duration::from_millis(2_000),
@@ -220,8 +257,9 @@ fn a_tool_call_outcome_has_one_json_form_without_a_name_an_input_or_an_error_fla
     );
     let expected = json!({
         "call_id": "call_1",
-        "source": { "mcp": { "server": "docs" } },
-        "status": "timeout",
+        "status": {
+            "ran": { "source": { "mcp": { "server": "docs" } }, "ended": "timeout" },
+        },
         "started_ms": 2_000,
         "latency_ms": 60_000,
         "truncated_from_bytes": 19,

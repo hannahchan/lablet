@@ -2,9 +2,22 @@ use serde_json::json;
 
 use super::*;
 use crate::{
-    ContentBlock, Effort, FinishReason, ProviderKind, StopClass, Thinking, ToolCallId,
+    ContentBlock, Effort, FinishReason, ProviderKind, StopClass, Thinking, ToolCallEnd, ToolCallId,
     ToolCallStatus, ToolResult, ToolResultContent, ToolSource, ToolStats, ToolUse,
 };
+
+fn nz(count: u32) -> NonZeroU32 {
+    NonZeroU32::new(count).expect("the caps in these tests are all above zero")
+}
+
+/// A call to a tool the run offered, which ended `ended`.
+fn ran(ended: ToolCallEnd) -> ToolCallStatus {
+    ToolCallStatus::ran(ToolSource::Builtin, ended)
+}
+
+fn usd(usd: f64) -> Cost {
+    Cost::new(usd).expect("the amounts in these tests are all real costs")
+}
 
 const fn ms(millis: u64) -> Duration {
     Duration::from_millis(millis)
@@ -27,7 +40,7 @@ fn setup() -> RunSetup {
         }),
         tools: vec![name("bash"), name("read_file")],
         completion: CompletionMode::Explicit,
-        max_turns: 30,
+        max_turns: nz(30),
         timeout: Duration::from_secs(600),
         request: RequestDefaults {
             max_tokens: 4096,
@@ -71,7 +84,6 @@ fn completion(text: &str, tools: &[&str], finish: FinishReason, input: u64) -> C
 fn outcome(n: usize, status: ToolCallStatus, output: &str, latency: Duration) -> ToolCallOutcome {
     ToolCallOutcome::measured(
         ToolCallId::new(format!("call_{n}")).unwrap(),
-        Some(ToolSource::Builtin),
         status,
         vec![ToolResultContent::Text(output.to_owned())],
         Some(8),
@@ -92,7 +104,7 @@ fn tool_turn(tally: &mut RunTally, tools: &[&str], statuses: &[ToolCallStatus]) 
     let outcomes = statuses
         .iter()
         .enumerate()
-        .map(|(n, &status)| outcome(n, status, "out", ms(1)))
+        .map(|(n, status)| outcome(n, status.clone(), "out", ms(1)))
         .collect();
     tally.tool_calls(outcomes).unwrap();
 }
@@ -110,7 +122,7 @@ fn a_run_that_did_nothing_has_a_summary_of_its_setup_and_zeros() {
     assert_eq!(summary.endpoint, setup().endpoint);
     assert_eq!(summary.tools, setup().tools);
     assert_eq!(summary.completion, CompletionMode::Explicit);
-    assert_eq!(summary.max_turns, 30);
+    assert_eq!(summary.max_turns, nz(30));
     assert_eq!(summary.timeout_ms, 600_000);
     assert_eq!(summary.request, setup().request);
     assert_eq!(summary.prompt_system_bytes, 14);
@@ -161,15 +173,15 @@ fn the_conversation_so_far_can_be_read_while_the_run_goes_on() {
     assert_eq!(tally.transcript().system(), "You fix tests.");
     assert!(tally.transcript().turns().is_empty());
 
-    tool_turn(&mut tally, &["bash"], &[ToolCallStatus::Ok]);
+    tool_turn(&mut tally, &["bash"], &[ran(ToolCallEnd::Ok)]);
     assert_eq!(tally.transcript().turns().len(), 1);
 }
 
 #[test]
 fn the_prompt_is_the_input_of_the_first_turn_and_of_no_other() {
     let mut tally = start();
-    tool_turn(&mut tally, &["bash"], &[ToolCallStatus::Ok]);
-    tool_turn(&mut tally, &["bash"], &[ToolCallStatus::Ok]);
+    tool_turn(&mut tally, &["bash"], &[ran(ToolCallEnd::Ok)]);
+    tool_turn(&mut tally, &["bash"], &[ran(ToolCallEnd::Ok)]);
 
     let turns = tally.transcript.turns();
     assert_eq!(
@@ -191,7 +203,7 @@ fn the_messages_are_the_prompt_and_then_each_response_with_the_results_that_answ
         }]
     );
 
-    tool_turn(&mut tally, &["bash"], &[ToolCallStatus::Timeout]);
+    tool_turn(&mut tally, &["bash"], &[ran(ToolCallEnd::Timeout)]);
 
     let turn = &tally.transcript.turns()[0];
     let outcome = &turn.tool_calls()[0];
@@ -232,7 +244,7 @@ fn finish_writes_the_run_id_the_duration_in_whole_milliseconds_and_the_final_tex
         Duration::from_micros(12_345_999),
         None,
         Some("provider: 401 unauthorized".to_owned()),
-        Some(Cost::new(0.25)),
+        Some(usd(0.25)),
     );
 
     let outcome = &finished.summary.outcome;
@@ -242,7 +254,7 @@ fn finish_writes_the_run_id_the_duration_in_whole_milliseconds_and_the_final_tex
     assert_eq!(outcome.result().text, "Partial answer.");
     assert_eq!(outcome.result().text, finished.transcript.final_text());
     assert_eq!(outcome.error(), Some("provider: 401 unauthorized"));
-    assert_eq!(finished.summary.cost, Some(Cost::new(0.25)));
+    assert_eq!(finished.summary.cost, Some(usd(0.25)));
 }
 
 #[test]
@@ -286,7 +298,7 @@ fn a_run_stopped_at_the_context_window_by_its_finish_reason_says_so() {
 #[test]
 fn each_completion_is_a_turn_with_its_usage_and_finish_reason() {
     let mut tally = start();
-    tool_turn(&mut tally, &["bash"], &[ToolCallStatus::Ok]);
+    tool_turn(&mut tally, &["bash"], &[ran(ToolCallEnd::Ok)]);
     tally
         .completion(
             completion("Done.", &[], FinishReason::EndTurn, 180),
@@ -337,7 +349,7 @@ fn provider_latency_is_summed_and_its_maximum_kept_over_every_attempt() {
     tally.failed_attempt(ms(900));
     tally.completion(calling, ms(0), ms(400)).unwrap();
     tally
-        .tool_calls(vec![outcome(0, ToolCallStatus::Ok, "out", ms(0))])
+        .tool_calls(vec![outcome(0, ran(ToolCallEnd::Ok), "out", ms(0))])
         .unwrap();
     tally.failed_attempt(ms(200));
 
@@ -370,8 +382,8 @@ fn a_turn_counts_the_attempts_of_its_call_and_the_next_call_starts_again() {
     let mut tally = start();
     tally.failed_attempt(ms(10));
     tally.failed_attempt(ms(10));
-    tool_turn(&mut tally, &["bash"], &[ToolCallStatus::Ok]);
-    tool_turn(&mut tally, &["bash"], &[ToolCallStatus::Ok]);
+    tool_turn(&mut tally, &["bash"], &[ran(ToolCallEnd::Ok)]);
+    tool_turn(&mut tally, &["bash"], &[ran(ToolCallEnd::Ok)]);
 
     let attempts: Vec<u32> = tally
         .transcript
@@ -422,9 +434,9 @@ fn tool_calls_add_to_the_totals_and_to_the_share_of_their_tool() {
         .unwrap();
     tally
         .tool_calls(vec![
-            outcome(0, ToolCallStatus::Ok, "12345678", ms(30)),
-            outcome(1, ToolCallStatus::ToolError, "exit 1", ms(5)),
-            outcome(2, ToolCallStatus::Ok, "0123456789", ms(2)),
+            outcome(0, ran(ToolCallEnd::Ok), "12345678", ms(30)),
+            outcome(1, ran(ToolCallEnd::ToolError), "exit 1", ms(5)),
+            outcome(2, ran(ToolCallEnd::Ok), "0123456789", ms(2)),
         ])
         .unwrap();
 
@@ -468,7 +480,7 @@ fn a_call_to_a_name_the_run_did_not_offer_counts_in_the_totals_and_gets_no_per_t
         &mut tally,
         &["bash", "rm_rf", "invented_again"],
         &[
-            ToolCallStatus::Ok,
+            ran(ToolCallEnd::Ok),
             ToolCallStatus::Unknown,
             ToolCallStatus::Unknown,
         ],
@@ -480,6 +492,21 @@ fn a_call_to_a_name_the_run_did_not_offer_counts_in_the_totals_and_gets_no_per_t
     assert_eq!(summary.tool_calls_unknown, 2);
     assert_eq!(summary.tool_latency_total_ms, 3);
     assert_eq!(summary.per_tool.keys().collect::<Vec<_>>(), [&name("bash")]);
+}
+
+/// The summary asks the outcome what became of the call, not the tool list
+/// what the name looks like. The two agree in a run, because the executor
+/// resolves the name against that same list; this is what keeps them from
+/// being two answers to one question.
+#[test]
+fn whether_a_call_was_to_a_tool_the_run_has_is_read_from_the_outcome_alone() {
+    let mut tally = start();
+    tool_turn(&mut tally, &["bash"], &[ToolCallStatus::Unknown]);
+
+    let summary = finish(tally, StopReason::Completed);
+    assert!(summary.tools.contains(&name("bash")));
+    assert_eq!(summary.tool_calls_unknown, 1);
+    assert!(summary.per_tool.is_empty());
 }
 
 #[test]
@@ -508,12 +535,12 @@ fn consecutive_tool_errors_count_up_and_a_success_resets_them() {
     tool_turn(
         &mut tally,
         &["bash", "no_such_tool"],
-        &[ToolCallStatus::Timeout, ToolCallStatus::Unknown],
+        &[ran(ToolCallEnd::Timeout), ToolCallStatus::Unknown],
     );
     assert_eq!(errors(&tally), 2);
-    tool_turn(&mut tally, &["bash"], &[ToolCallStatus::Ok]);
+    tool_turn(&mut tally, &["bash"], &[ran(ToolCallEnd::Ok)]);
     assert_eq!(errors(&tally), 0);
-    tool_turn(&mut tally, &["bash"], &[ToolCallStatus::Failed]);
+    tool_turn(&mut tally, &["bash"], &[ran(ToolCallEnd::Failed)]);
     assert_eq!(errors(&tally), 1);
 }
 
@@ -522,7 +549,7 @@ fn progress_is_what_the_limits_are_held_against() {
     let mut tally = start();
     assert_eq!(tally.progress(ms(0)), Progress::default());
 
-    tool_turn(&mut tally, &["bash"], &[ToolCallStatus::ToolError]);
+    tool_turn(&mut tally, &["bash"], &[ran(ToolCallEnd::ToolError)]);
 
     assert_eq!(
         tally.progress(ms(830)),
@@ -548,8 +575,8 @@ fn a_latency_is_truncated_as_it_is_recorded_so_totals_are_sums_of_whole_millisec
         .unwrap();
     tally
         .tool_calls(vec![
-            outcome(0, ToolCallStatus::Ok, "", Duration::from_micros(1_600)),
-            outcome(1, ToolCallStatus::Ok, "", Duration::from_micros(1_600)),
+            outcome(0, ran(ToolCallEnd::Ok), "", Duration::from_micros(1_600)),
+            outcome(1, ran(ToolCallEnd::Ok), "", Duration::from_micros(1_600)),
         ])
         .unwrap();
 
@@ -582,8 +609,8 @@ fn sums_and_durations_saturate_rather_than_overflow() {
         .unwrap();
     tally
         .tool_calls(vec![
-            outcome(0, ToolCallStatus::Ok, "", Duration::MAX),
-            outcome(1, ToolCallStatus::Ok, "", Duration::MAX),
+            outcome(0, ran(ToolCallEnd::Ok), "", Duration::MAX),
+            outcome(1, ran(ToolCallEnd::Ok), "", Duration::MAX),
         ])
         .unwrap();
 
@@ -601,9 +628,9 @@ fn the_summarys_totals_are_those_of_the_transcript_it_comes_with() {
     tool_turn(
         &mut tally,
         &["bash", "read_file"],
-        &[ToolCallStatus::Ok, ToolCallStatus::ToolError],
+        &[ran(ToolCallEnd::Ok), ran(ToolCallEnd::ToolError)],
     );
-    tool_turn(&mut tally, &["bash"], &[ToolCallStatus::Ok]);
+    tool_turn(&mut tally, &["bash"], &[ran(ToolCallEnd::Ok)]);
 
     let finished = tally.finish(StopReason::MaxTurns, ms(50), None, None, None);
 
@@ -714,7 +741,7 @@ fn outcomes_that_are_not_those_of_the_last_turns_calls_are_refused() {
         .unwrap();
 
     assert_eq!(
-        tally.tool_calls(vec![outcome(7, ToolCallStatus::Ok, "out", ms(1))]),
+        tally.tool_calls(vec![outcome(7, ran(ToolCallEnd::Ok), "out", ms(1))]),
         Err(TranscriptError::OutcomesDontAnswerCalls {
             calls: vec!["call_0".to_owned()],
             outcomes: vec!["call_7".to_owned()],

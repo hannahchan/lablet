@@ -17,6 +17,7 @@ CLI
 Datadog
 DataFusion
 [Dd]eserialisation
+[Dd]eserialise
 [Dd]ev
 [Dd]print
 doctests?
@@ -41,10 +42,12 @@ Langfuse
 MCP
 MiniJinja
 [Mm]ise
+[Mm]isspelt
 [Mm]ultiset
 [Mm]usl
 MSRV
 [Nn]amespace
+[Nn]ewtypes?
 Ollama
 OpenTelemetry|opentelemetry
 OTel
@@ -82,6 +85,8 @@ TOML
 [Tt]eardown
 [Tt]okio
 [Tt]oolchain
+[Tt]ypecheck(?:s|ed)?
+[Tt]ypestate
 ULID
 [Uu]ncached
 [Uu]ngrouping

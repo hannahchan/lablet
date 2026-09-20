@@ -6,12 +6,12 @@ fn pricing() -> Pricing {
     Pricing::new(4.0, 16.0, 0.5, 5.0).unwrap()
 }
 
-fn cost(usage: Usage) -> Cost {
+fn cost(usage: Usage) -> Option<Cost> {
     pricing().cost(&usage)
 }
 
-const fn usd(usd: f64) -> Cost {
-    Cost::new(usd)
+fn usd(usd: f64) -> Option<Cost> {
+    Cost::new(usd).ok()
 }
 
 #[test]
@@ -114,10 +114,23 @@ fn the_largest_usage_has_a_finite_cost() {
         cache_read_tokens: u64::MAX,
         cache_write_tokens: u64::MAX,
     };
-    let cost = cost(usage).usd();
+    let cost = cost(usage)
+        .expect("rates this ordinary can't overflow")
+        .usd();
 
     assert!(cost.is_finite());
     assert!(cost > 0.0);
+}
+
+#[test]
+fn a_cost_that_overflows_an_f64_is_reported_as_no_cost() {
+    let absurd = Pricing::new(f64::MAX, 0.0, 0.0, 0.0).unwrap();
+    let usage = Usage {
+        input_tokens: u64::MAX,
+        ..Usage::default()
+    };
+
+    assert_eq!(absurd.cost(&usage), None);
 }
 
 #[test]

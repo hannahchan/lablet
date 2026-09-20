@@ -113,7 +113,7 @@ fn finish_reasons() -> [(FinishReason, &'static str); 6] {
         (FinishReason::MaxTokens, "max_tokens"),
         (FinishReason::ContextWindow, "context_window"),
         (FinishReason::Refusal, "refusal"),
-        (FinishReason::Other("pause_turn".to_owned()), "pause_turn"),
+        (FinishReason::from("pause_turn".to_owned()), "pause_turn"),
     ]
 }
 
@@ -160,14 +160,14 @@ fn every_provider_spelling_of_a_known_reason_gives_that_reason() {
 
 #[test]
 fn only_a_string_that_spells_no_known_reason_is_kept_as_other() {
-    assert_eq!(
-        FinishReason::from("pause_turn".to_owned()),
-        FinishReason::Other("pause_turn".to_owned())
-    );
-    assert_eq!(
-        FinishReason::from(String::new()),
-        FinishReason::Other(String::new())
-    );
+    for spelling in ["pause_turn", ""] {
+        let reason = FinishReason::from(spelling.to_owned());
+
+        assert!(
+            matches!(&reason, FinishReason::Other(kept) if kept.as_str() == spelling),
+            "{reason:?}"
+        );
+    }
     for (_, spelling) in finish_reasons().into_iter().take(5) {
         assert!(
             !matches!(
@@ -263,14 +263,36 @@ fn request_defaults_have_one_json_form() {
     );
 }
 
+fn usd(usd: f64) -> Cost {
+    Cost::new(usd).expect("the amounts in these tests are all real costs")
+}
+
 #[test]
 fn a_cost_is_a_bare_number_of_dollars() {
-    let cost = Cost::new(0.0125);
+    let cost = usd(0.0125);
 
     assert!((cost.usd() - 0.0125).abs() < f64::EPSILON);
     assert_eq!(serde_json::to_value(cost).unwrap(), json!(0.0125));
     assert_eq!(serde_json::from_value::<Cost>(json!(0.0125)).unwrap(), cost);
-    assert!(Cost::new(1.0) < Cost::new(2.0));
+    assert!(usd(1.0) < usd(2.0));
+    assert_eq!(usd(0.0), Cost::new(0.0).unwrap());
+}
+
+/// An amount JSON can't write, or one that means nothing, is refused on both
+/// paths: serde would otherwise put a `null` where a cost belongs, and `null`
+/// is how a run with no pricing configured writes the same field.
+#[test]
+fn an_amount_that_is_not_a_finite_number_of_dollars_is_no_cost() {
+    for amount in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.01] {
+        assert!(Cost::new(amount).is_err(), "{amount}");
+    }
+    // JSON has no infinity or NaN, so a negative is the only one a document
+    // can hold.
+    assert!(serde_json::from_value::<Cost>(json!(-0.01)).is_err());
+    assert_eq!(
+        Cost::new(-1.5).unwrap_err().to_string(),
+        "-1.5 isn't a finite number of US dollars of at least 0"
+    );
 }
 
 fn bash(id: &str) -> ContentBlock {

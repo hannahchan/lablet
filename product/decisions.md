@@ -269,3 +269,22 @@ A second design review, and a proposal from a parallel session, found that the m
 - **Port data left the domain.** `McpCallMeta`, `TraceContext`, and `NetworkTransport` are types of the application layer. `Endpoint` stays, because the summary carries it for the wide event.
 - **`lablet.provider.calls` is gone**, because turns counts model responses and the two were always equal.
 - **Known limit:** a run that receives no response has no turns, so its transcript document doesn't hold the prompt, though the prompt's size still reaches the summary. Revisit when the ATIF export makes the missing user step visible.
+
+## 2026-09-20 One fact, one place, before the loop is written
+
+A review from a parallel session raised twelve modelling findings against the revised domain. Seven landed here, before phase 3, because each one is cheaper to change while the loop that reads these types doesn't yet exist.
+
+- **A tool call's status says whether a tool ran.** `ToolCallStatus` is `Unknown` or `Ran { source, ended }`, so a source exists exactly when a tool ran. Before this, "the model called a tool the run doesn't have" was three facts that could disagree: a missing source, a status, and a name that `finish` looked up a second time in the run's tool list. The summary now reads the outcome's own status for both what it counts as unknown and which calls earn a per-tool entry. `as_str` still flattens to the five `lablet.tool.status` values, so the registry and the conformance test are untouched. The transcript document holds the two levels.
+- **`Turn::calls(mode)` is the only way to read a response's tool calls.** The `Calls` type moved from the policy to the model to sit beside `Turn`. The loop can no longer classify a response differently from how the stop policy expects it.
+- **The two counted caps are `NonZeroU32`.** `max_turns` and `max_consecutive_tool_errors` both meant one at zero, and each reached that by a different route: a `.max(1)` in one, an unread cap in the other. A zero timeout or token budget still stops a run at the first point A, because there it means something.
+- **`FinishReason::Other` carries a private newtype**, so `From<String>` is the only way to build one. `Other("refusal")` used to typecheck, and a refusal that skipped normalisation reads at point R as an ordinary end: the run would have completed, and exited 0, on a response the model declined to give.
+- **A cost is finite and never negative**, refused on both the code and the serde path, and `Pricing::cost` answers `Option<Cost>`. JSON has no infinity or NaN, so serde writes either as `null`, which is also how a run with no pricing configured writes the field. An overflowed cost would have been indistinguishable from one never asked for.
+- **`RunSummary` and `FinishedRun` serialise and don't deserialise.** They hold the invariants that span fields, such as one finish reason per turn and per-tool keys among the tools, and only `RunTally::finish` establishes them. They were the last serde path with no rule on the way in; nothing reads either back, so the path is gone rather than guarded.
+- **The outcome document refuses a field it doesn't know**, as every other raw type already did. It's the contract a composer parses, so a misspelt key is worth reporting.
+
+Rejected, with the reasoning kept because it will come up again:
+
+- **A typestate for the loop protocol** would delete two error variants and cost more than they do. Whether a response makes tool calls isn't known statically, so the transition would return a sum of two states that both need `finish`, and moving the tally through a `loop` fights the borrow checker. `NothingFromTheUser` survives either way, because a whitespace-only prompt is a value, not a state. The serde path keeps both checks regardless.
+- **Enforcing that the cache counts are a subset of `input_tokens`** would fail a real run because a provider's numbers didn't add up. Reporting what the provider said, and saturating where the subtraction would go negative, is the better trade for a tool whose job is faithful measurement.
+
+Deferred: newtypes for `config_digest`, `ModelRef::name`, `Endpoint::host`, and an MCP server name; the shared validation of `RunId` and `ToolCallId`, whose provenance is opposite; and the seven `Run*` type names, which want the loop to exist before anything is renamed.
