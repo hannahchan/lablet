@@ -35,8 +35,8 @@ fn tool_use(call_id: &str, tool: &str) -> ContentBlock {
     ContentBlock::ToolUse(call(call_id, tool))
 }
 
-fn completion(content: Vec<ContentBlock>, input: u64, output: u64) -> Completion {
-    Completion::new(
+fn response(content: Vec<ContentBlock>, input: u64, output: u64) -> ProviderResponse {
+    ProviderResponse::new(
         content,
         Usage::from_inclusive(input, output, 0, 0),
         FinishReason::EndTurn,
@@ -46,12 +46,12 @@ fn completion(content: Vec<ContentBlock>, input: u64, output: u64) -> Completion
     .unwrap()
 }
 
-fn says(words: &str) -> Completion {
-    completion(vec![text(words)], 1, 1)
+fn says(words: &str) -> ProviderResponse {
+    response(vec![text(words)], 1, 1)
 }
 
-fn calls(ids: &[&str]) -> Completion {
-    completion(ids.iter().map(|id| tool_use(id, "bash")).collect(), 1, 1)
+fn calls(ids: &[&str]) -> ProviderResponse {
+    response(ids.iter().map(|id| tool_use(id, "bash")).collect(), 1, 1)
 }
 
 fn outcome(call_id: &str, status: ToolCallStatus, output: &str) -> ToolCallOutcome {
@@ -85,7 +85,7 @@ fn prompt() -> Vec<UserContent> {
 fn turn(
     transcript: &mut Transcript,
     mut input: Vec<UserContent>,
-    completion: Completion,
+    completion: ProviderResponse,
 ) -> Result<Turn, TranscriptError> {
     transcript
         .record(&mut input, completion, ms(0), ms(0), 1)
@@ -94,12 +94,12 @@ fn turn(
 
 /// A turn whose response makes the calls `tools`, in that order.
 fn turn_calling(tools: &[&str]) -> Turn {
-    let response = tools
+    let blocks = tools
         .iter()
         .enumerate()
         .map(|(n, tool)| tool_use(&format!("call_{n}"), tool))
         .collect();
-    turn(&mut transcript(), prompt(), completion(response, 1, 1)).unwrap()
+    turn(&mut transcript(), prompt(), response(blocks, 1, 1)).unwrap()
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn two_calls_in_one_turn() -> Transcript {
         tool_use("call_a", "read_file"),
         tool_use("call_b", "bash"),
     ];
-    turn(&mut transcript, prompt(), completion(looking, 100, 20)).unwrap();
+    turn(&mut transcript, prompt(), response(looking, 100, 20)).unwrap();
     transcript
         .answer(vec![
             ok("call_a", "fn main() {}"),
@@ -158,7 +158,7 @@ fn two_calls_in_one_turn() -> Transcript {
     turn(
         &mut transcript,
         Vec::new(),
-        completion(vec![text("Fixed.")], 180, 5),
+        response(vec![text("Fixed.")], 180, 5),
     )
     .unwrap();
     transcript
@@ -199,7 +199,7 @@ fn a_completion_becomes_a_turn_that_takes_the_input_and_records_the_rest_with_th
     let turn = transcript
         .record(
             &mut input,
-            completion(vec![text("Hello.")], 12, 3),
+            response(vec![text("Hello.")], 12, 3),
             Duration::from_micros(1_500_999),
             Duration::from_micros(42_999),
             3,
@@ -244,8 +244,8 @@ fn text_blocks_that_are_empty_or_only_whitespace_are_dropped_and_nothing_else_is
     let mut transcript = transcript();
     let mut without_them = transcript.clone();
 
-    turn(&mut transcript, prompt(), completion(sent, 1, 1)).unwrap();
-    turn(&mut without_them, prompt(), completion(kept.clone(), 1, 1)).unwrap();
+    turn(&mut transcript, prompt(), response(sent, 1, 1)).unwrap();
+    turn(&mut without_them, prompt(), response(kept.clone(), 1, 1)).unwrap();
 
     // Equal transcripts give the same final text and the same size for every
     // message, so nothing measured after the drop can tell the two apart.
@@ -320,7 +320,7 @@ fn the_request_ends_with_the_results_the_next_turn_answers_or_with_the_last_resp
 
 #[test]
 fn a_response_is_rendered_block_for_block_in_the_order_it_arrived() {
-    let response = vec![
+    let blocks = vec![
         ContentBlock::Thinking {
             text: "hm".to_owned(),
             signature: Some("sig".to_owned()),
@@ -336,14 +336,9 @@ fn a_response_is_rendered_block_for_block_in_the_order_it_arrived() {
         tool_use("call_a", "bash"),
     ];
     let mut transcript = transcript();
-    turn(
-        &mut transcript,
-        prompt(),
-        completion(response.clone(), 1, 1),
-    )
-    .unwrap();
+    turn(&mut transcript, prompt(), response(blocks.clone(), 1, 1)).unwrap();
 
-    assert_eq!(transcript.messages(&[])[1], Message::Assistant(&response));
+    assert_eq!(transcript.messages(&[])[1], Message::Assistant(&blocks));
 }
 
 #[test]
@@ -576,7 +571,7 @@ fn only_the_last_turn_may_have_tool_calls_and_no_outcomes_whatever_input_follows
 fn a_turn_whose_tools_never_ran_is_told_from_one_that_called_none_by_its_response() {
     let mut transcript = two_calls_in_one_turn();
     let called_none = transcript.turns()[1].clone();
-    let done = completion(vec![tool_use("call_done", "task_complete")], 10, 2);
+    let done = response(vec![tool_use("call_done", "task_complete")], 10, 2);
     let never_ran = turn(&mut transcript, said("Finish."), done).unwrap();
 
     assert!(called_none.tool_calls().is_empty());
@@ -609,7 +604,7 @@ fn final_text_is_the_text_of_the_last_turn_without_its_other_blocks() {
         },
         text("tidied."),
     ];
-    let tidied = turn(&mut transcript, said("And?"), completion(blocks, 200, 9)).unwrap();
+    let tidied = turn(&mut transcript, said("And?"), response(blocks, 200, 9)).unwrap();
 
     assert_eq!(transcript.final_text(), "Also tidied.");
     assert_eq!(tidied.text(), "Also tidied.");
@@ -724,7 +719,7 @@ fn document() -> Value {
 #[test]
 fn a_transcript_has_one_json_form() {
     let mut transcript = transcript();
-    let looking = Completion::new(
+    let looking = ProviderResponse::new(
         vec![
             text("Looking."),
             ContentBlock::ToolUse(ToolUse {
@@ -738,7 +733,7 @@ fn a_transcript_has_one_json_form() {
         Some("model-2026".to_owned()),
     )
     .unwrap();
-    let fixed = Completion::new(
+    let fixed = ProviderResponse::new(
         vec![text("Fixed.")],
         Usage::from_inclusive(180, 5, 100, 0),
         FinishReason::EndTurn,

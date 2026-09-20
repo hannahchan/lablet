@@ -241,7 +241,7 @@ fn a_thinking_budget_of_zero_is_refused() {
 
 #[test]
 fn request_defaults_have_one_json_form() {
-    let request = RequestDefaults {
+    let request = RequestParams {
         max_tokens: 4096,
         temperature: Some(0.7),
         thinking: Thinking::Budget(NonZeroU32::new(1024).unwrap()),
@@ -258,7 +258,7 @@ fn request_defaults_have_one_json_form() {
 
     assert_eq!(serde_json::to_value(&request).unwrap(), expected);
     assert_eq!(
-        serde_json::from_value::<RequestDefaults>(expected).unwrap(),
+        serde_json::from_value::<RequestParams>(expected).unwrap(),
         request
     );
 }
@@ -310,7 +310,7 @@ fn a_completion_reads_from_the_form_a_script_would_hold() {
         "usage": { "input_tokens": 12, "output_tokens": 3 },
         "finish": "stop",
     });
-    let completion = Completion::new(
+    let completion = ProviderResponse::new(
         vec![ContentBlock::Text("done".to_owned())],
         usage(12, 3, 0, 0),
         FinishReason::EndTurn,
@@ -320,7 +320,7 @@ fn a_completion_reads_from_the_form_a_script_would_hold() {
     .unwrap();
 
     assert_eq!(
-        serde_json::from_value::<Completion>(script).unwrap(),
+        serde_json::from_value::<ProviderResponse>(script).unwrap(),
         completion
     );
     assert_eq!(
@@ -342,7 +342,7 @@ fn a_completion_reads_from_the_form_a_script_would_hold() {
 
 #[test]
 fn a_completion_without_usage_used_no_tokens() {
-    let completion = serde_json::from_value::<Completion>(json!({
+    let completion = serde_json::from_value::<ProviderResponse>(json!({
         "content": [],
         "finish": "end_turn",
         "response_id": "msg_1",
@@ -364,7 +364,7 @@ fn a_script_cannot_give_a_completion_a_role_or_a_misspelt_field() {
         json!({ "content": [], "finish": "end_turn", "reponse_id": "msg_1" }),
     ] {
         assert!(
-            serde_json::from_value::<Completion>(script.clone()).is_err(),
+            serde_json::from_value::<ProviderResponse>(script.clone()).is_err(),
             "{script}"
         );
     }
@@ -374,7 +374,7 @@ fn a_script_cannot_give_a_completion_a_role_or_a_misspelt_field() {
 fn a_completion_whose_tool_calls_have_distinct_ids_holds_its_content_in_order() {
     let content = vec![ContentBlock::Text("on it".to_owned()), bash("a"), bash("b")];
 
-    let completion = Completion::new(
+    let completion = ProviderResponse::new(
         content.clone(),
         usage(12, 3, 0, 0),
         FinishReason::ToolUse,
@@ -392,7 +392,7 @@ fn a_completion_whose_tool_calls_have_distinct_ids_holds_its_content_in_order() 
 
 #[test]
 fn a_repeated_tool_use_id_is_refused_in_code_and_in_a_script() {
-    let repeated = Completion::new(
+    let repeated = ProviderResponse::new(
         vec![bash("a"), bash("b"), bash("a")],
         Usage::default(),
         FinishReason::ToolUse,
@@ -409,9 +409,9 @@ fn a_repeated_tool_use_id_is_refused_in_code_and_in_a_script() {
 
     assert_eq!(
         repeated,
-        Err(CompletionError::DuplicateToolUse { id: "a".to_owned() })
+        Err(ResponseError::DuplicateToolUse { id: "a".to_owned() })
     );
-    let error = serde_json::from_value::<Completion>(script).unwrap_err();
+    let error = serde_json::from_value::<ProviderResponse>(script).unwrap_err();
     assert!(
         error
             .to_string()
@@ -427,7 +427,7 @@ fn a_script_cannot_put_a_tool_result_in_a_completion() {
         "finish": "end_turn",
     });
 
-    assert!(serde_json::from_value::<Completion>(script).is_err());
+    assert!(serde_json::from_value::<ProviderResponse>(script).is_err());
 }
 
 #[test]

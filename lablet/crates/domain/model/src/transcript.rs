@@ -29,16 +29,16 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::message::tool_uses;
+use crate::outcome::whole_ms;
 use crate::provider::distinct_tool_use_ids;
-use crate::run::whole_ms;
 use crate::{
-    Completion, CompletionError, CompletionMode, ContentBlock, FinishReason, Message, ToolCallId,
-    ToolCallOutcome, ToolResult, ToolUse, Usage, UserContent,
+    CompletionMode, ContentBlock, FinishReason, Message, ProviderResponse, ResponseError,
+    ToolCallId, ToolCallOutcome, ToolResult, ToolUse, Usage, UserContent,
 };
 
 /// The conversation of one run: the system prompt and the turns.
 ///
-/// A run builds one through its [`crate::RunTally`], and reading one from its
+/// A run builds one through its [`crate::Run`], and reading one from its
 /// serde form goes through the same steps, so every `Transcript` holds these
 /// rules:
 ///
@@ -136,7 +136,7 @@ pub struct TurnRecord {
 pub enum TranscriptError {
     /// A response in a transcript being read breaks the rule of a completion.
     #[error(transparent)]
-    Response(#[from] CompletionError),
+    Response(#[from] ResponseError),
     /// A turn would put its response straight after another, or first of all.
     #[error(
         "turn {turn} has no input and no tool results come before it, so nothing from the user would precede its response"
@@ -195,7 +195,7 @@ impl Transcript {
     }
 
     /// The flat form of the provider call that asks for the next turn, whose
-    /// input is `input`. See [`crate::RunTally::messages`] for the contract.
+    /// input is `input`. See [`crate::Run::messages`] for the contract.
     pub(crate) fn messages<'a>(&'a self, input: &'a [UserContent]) -> Vec<Message<'a>> {
         let mut messages = Vec::new();
         let mut tool_results = Vec::new();
@@ -242,11 +242,11 @@ impl Transcript {
     /// Makes `completion` the next turn and takes `input` as its input: the
     /// completion's content becomes the response and the rest, with the
     /// timing, the record. When the turn is refused, `input` is left as it
-    /// was. See [`crate::RunTally::completion`] for the contract.
+    /// was. See [`crate::Run::responded`] for the contract.
     pub(crate) fn record(
         &mut self,
         input: &mut Vec<UserContent>,
-        completion: Completion,
+        completion: ProviderResponse,
         started: Duration,
         latency: Duration,
         attempts: u32,
@@ -264,7 +264,7 @@ impl Transcript {
     }
 
     /// Makes `outcomes` those of the last turn. See
-    /// [`crate::RunTally::tool_calls`] for the contract.
+    /// [`crate::Run::tool_calls`] for the contract.
     pub(crate) fn answer(&mut self, outcomes: Vec<ToolCallOutcome>) -> Result<(), TranscriptError> {
         if self
             .turns

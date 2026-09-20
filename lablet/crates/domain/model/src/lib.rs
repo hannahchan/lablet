@@ -20,22 +20,22 @@ macro_rules! display_as_str {
 
 mod id;
 mod message;
+mod outcome;
 mod provider;
 mod run;
-mod tally;
 mod tool;
 mod transcript;
 
 pub use id::{IdError, RunId, ToolCallId, ToolName};
 pub use message::{ContentBlock, Message, ToolResult, ToolResultContent, ToolUse, UserContent};
+pub use outcome::{
+    CompletionMode, FinishedRun, OutcomeError, RunContext, RunOutcome, RunSummary, StopClass,
+    StopReason, TaskResult, ToolStats,
+};
 pub use provider::{
-    Completion, CompletionError, Cost, CostError, Effort, Endpoint, FinishReason, ModelRef,
-    ProviderKind, RequestDefaults, Thinking, UnknownReason, Usage,
+    Cost, CostError, Effort, Endpoint, FinishReason, ModelRef, ProviderKind, ProviderResponse,
+    RequestParams, ResponseError, Thinking, UnknownReason, Usage,
 };
-pub use run::{
-    CompletionMode, FinishedRun, OutcomeError, RunContext, RunOutcome, RunResult, RunSummary,
-    StopClass, StopReason, ToolStats,
-};
-pub use tally::{Progress, RunSetup, RunTally};
+pub use run::{Progress, Run, RunSetup};
 pub use tool::{ToolCallEnd, ToolCallOutcome, ToolCallStatus, ToolSource, ToolSpec};
 pub use transcript::{Calls, Transcript, TranscriptError, Turn, TurnRecord};

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::run::whole_ms;
+use crate::outcome::whole_ms;
 use crate::{ToolCallId, ToolName, ToolResult, ToolResultContent};
 
 /// A tool as it's offered to the model.

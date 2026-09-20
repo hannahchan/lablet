@@ -237,14 +237,14 @@ impl From<FinishReason> for String {
 /// about it.
 ///
 /// A completion's tool calls have distinct ids, because an outcome couldn't
-/// otherwise say which call it answers. [`Completion::new`] and
+/// otherwise say which call it answers. [`ProviderResponse::new`] and
 /// deserialisation both refuse a repeated id, and `content` isn't public, so
 /// no completion breaks the rule: an adapter reports the error as a malformed
 /// response. Deserialisation also refuses a field it doesn't know, so a
 /// hand-written script that misspells one is an error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "RawCompletion")]
-pub struct Completion {
+#[serde(try_from = "RawProviderResponse")]
+pub struct ProviderResponse {
     pub(crate) content: Vec<ContentBlock>,
     /// The tokens the call used.
     pub usage: Usage,
@@ -259,7 +259,7 @@ pub struct Completion {
 /// What a completion is read from, so that reading one checks it.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawCompletion {
+struct RawProviderResponse {
     content: Vec<ContentBlock>,
     #[serde(default)]
     usage: Usage,
@@ -268,10 +268,10 @@ struct RawCompletion {
     response_model: Option<String>,
 }
 
-impl TryFrom<RawCompletion> for Completion {
-    type Error = CompletionError;
+impl TryFrom<RawProviderResponse> for ProviderResponse {
+    type Error = ResponseError;
 
-    fn try_from(raw: RawCompletion) -> Result<Self, CompletionError> {
+    fn try_from(raw: RawProviderResponse) -> Result<Self, ResponseError> {
         Self::new(
             raw.content,
             raw.usage,
@@ -284,7 +284,7 @@ impl TryFrom<RawCompletion> for Completion {
 
 /// Why content can't be the response of a completion.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum CompletionError {
+pub enum ResponseError {
     /// Two tool-use blocks share an id, so an outcome couldn't say which it answers.
     #[error("tool call id {id:?} is on more than one tool-use block of the response")]
     DuplicateToolUse {
@@ -293,12 +293,12 @@ pub enum CompletionError {
     },
 }
 
-impl Completion {
+impl ProviderResponse {
     /// A completion whose response is `content`.
     ///
     /// # Errors
     ///
-    /// Returns [`CompletionError::DuplicateToolUse`] for the first tool-use
+    /// Returns [`ResponseError::DuplicateToolUse`] for the first tool-use
     /// block, in order, whose id an earlier one has.
     pub fn new(
         content: Vec<ContentBlock>,
@@ -306,7 +306,7 @@ impl Completion {
         finish: FinishReason,
         response_id: Option<String>,
         response_model: Option<String>,
-    ) -> Result<Self, CompletionError> {
+    ) -> Result<Self, ResponseError> {
         distinct_tool_use_ids(&content)?;
         Ok(Self {
             content,
@@ -325,11 +325,11 @@ impl Completion {
 }
 
 /// Refuses content in which two tool-use blocks share an id.
-pub(crate) fn distinct_tool_use_ids(content: &[ContentBlock]) -> Result<(), CompletionError> {
+pub(crate) fn distinct_tool_use_ids(content: &[ContentBlock]) -> Result<(), ResponseError> {
     let mut seen = BTreeSet::new();
     for call in tool_uses(content) {
         if !seen.insert(&call.id) {
-            return Err(CompletionError::DuplicateToolUse {
+            return Err(ResponseError::DuplicateToolUse {
                 id: call.id.as_str().to_owned(),
             });
         }
@@ -389,7 +389,7 @@ impl From<Cost> for f64 {
 
 /// The request parameters every provider call of a run shares.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RequestDefaults {
+pub struct RequestParams {
     /// The cap on output tokens for each call.
     pub max_tokens: u32,
     /// The sampling temperature; `None` leaves the provider's default. An
