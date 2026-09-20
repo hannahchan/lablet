@@ -463,3 +463,20 @@ Both decided by the human; the first needed the build plan's phase 3 acceptance 
 Checking the claim scenario by scenario found nine of the twenty-one phase 3 scenarios under-asserted: the loop behaved correctly in every case, but fifteen clauses of `acceptance.md` had no assertion that would fail if the behaviour broke. The pattern was consistent: a test asserted the stop reason and stopped there, where the scenario also asks for no further provider call, no `ToolCallStarted`, or the wide event written all the same. Two were load-bearing: nothing asserted that a cancelled run's in-flight tool call runs to its end and comes back on the transcript, and nothing asserted that a tool call outcome holds its own start offset, which is the same timing chain the zero-latency defect broke. All fifteen are now asserted.
 
 A stop reason is the cheapest thing to assert and the least of what a scenario says. That's the review item: assert the clause, not the outcome it implies.
+
+## 2026-09-21 Coverage judges regions as well as lines
+
+`cargo xtask coverage` held each floor crate to a line floor alone, though cargo-llvm-cov reports regions in the same JSON and the gate parsed them away. A region is a span of source with its own counter, so each match arm, each `else` a line never spells out, and the far side of a `&&` are counted apart, where a line counts as covered when any region touching it ran. Regions are therefore the stricter measure and 100% regions implies 100% lines; the gap between the two is where a line hides an arm nothing took.
+
+The floor is 90%, the same as lines, because the number is what the existing floors already commit to, and raising it needs a decision of its own. Each crate now gets two report lines, lines then regions, so the gap reads off adjacent rows. `conclude` counts floors rather than crates, since a crate is now held to more than one.
+
+Branch coverage was considered and left out. It's finer again in the other direction, because a condition that's never false has no uncovered region and only branch coverage sees it, but `-Z coverage-options=branch` needs nightly and `rust-toolchain.toml` pins stable 1.98.1. Measured on nightly before this change, it found nothing region coverage doesn't already flag: `lablet-policy` is 18 of 18 branches, and `lablet-run`'s two missed branches are both also missed regions. That's a fact about today's code rather than a property, and it's worth measuring again when the loop grows.
+
+What stands between the domain and application crates and 100% regions, as of this commit, is one testable gap and a set of defensive branches:
+
+- `transcript.rs`, the `else` of `if let Some(turn) = self.turns.last_mut()`, never taken in 1,680 calls.
+- `service.rs`, `Stopped::defect` and both its call sites: the transcript refusing a sequence the loop can't produce.
+- `service.rs`, the `unreachable!` in `settle`'s `let ... else`.
+- `service.rs`, `ToolInput::Unparsed` in `task_complete_argument`, and `tool.rs`, `ToolErrorKind::Unknown` in `ended`. The first is reachable and untested; the second can't be reached through `settle`, which resolves the name before it calls an executor.
+
+All but one are a branch for a state the caller has already excluded, which is the reading the human gave this gate: coverage falling in these layers is a design signal. Raising the floor to 100% would mean making those states unrepresentable rather than guarded, and is left as its own decision.

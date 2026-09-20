@@ -20,6 +20,13 @@ pub struct Floor {
     pub package: &'static str,
     /// The least share of lines, in percent, its tests must execute.
     pub line_coverage: u64,
+    /// The least share of regions, in percent, its tests must execute.
+    ///
+    /// A region is a span of source with its own counter, so a match arm, an
+    /// `else` a line never spells out, and the far side of a `&&` each count
+    /// on their own. Lines are derived from regions and can only be kinder:
+    /// one line holding three arms is covered when any one of them runs.
+    pub region_coverage: u64,
     /// The least share of viable mutants, in percent, its tests must catch.
     pub mutants_caught: u64,
 }
@@ -30,16 +37,19 @@ pub const FLOORS: &[Floor] = &[
     Floor {
         package: "lablet-model",
         line_coverage: 90,
+        region_coverage: 90,
         mutants_caught: 80,
     },
     Floor {
         package: "lablet-policy",
         line_coverage: 90,
+        region_coverage: 90,
         mutants_caught: 80,
     },
     Floor {
         package: "lablet-run",
         line_coverage: 90,
+        region_coverage: 90,
         mutants_caught: 80,
     },
 ];
@@ -140,7 +150,10 @@ impl fmt::Display for Line {
 }
 
 /// A floor report as a step result: every line is shown either way, and any
-/// crate below its floor, or unmeasured though it defines a function, fails.
+/// floor not met, or unmeasured though the crate defines a function, fails.
+///
+/// The count is of floors rather than crates, because a crate can be held to
+/// more than one: coverage judges its lines and its regions apart.
 pub fn conclude(what: &str, lines: &[Line]) -> crate::gates::CheckResult {
     let report = lines
         .iter()
@@ -156,14 +169,14 @@ pub fn conclude(what: &str, lines: &[Line]) -> crate::gates::CheckResult {
     let failed = count(&[Standing::Below, Standing::NothingMeasured]);
     if failed > 0 {
         return Err(format!(
-            "{what}: {failed} crate(s) below the floor or unmeasured\n\n{report}"
+            "{what}: {failed} floor(s) below or unmeasured\n\n{report}"
         ));
     }
     println!("{report}");
     let unmeasured = count(&[Standing::NothingToMeasure]);
     Ok((unmeasured > 0).then(|| {
         format!(
-            "{unmeasured} of {} crate(s) had nothing to measure yet",
+            "{unmeasured} of {} floor(s) had nothing to measure yet",
             lines.len()
         )
     }))
@@ -319,6 +332,7 @@ mod tests {
         let packages: Vec<&str> = FLOORS.iter().map(|floor| floor.package).collect();
         assert_eq!(packages, ["lablet-model", "lablet-policy", "lablet-run"]);
         assert!(FLOORS.iter().all(|floor| floor.line_coverage == 90));
+        assert!(FLOORS.iter().all(|floor| floor.region_coverage == 90));
         assert!(FLOORS.iter().all(|floor| floor.mutants_caught == 80));
     }
 
@@ -338,7 +352,7 @@ mod tests {
         let note = conclude("coverage", &[line(95, 100, 90), empty]).unwrap();
         assert_eq!(
             note.as_deref(),
-            Some("1 of 2 crate(s) had nothing to measure yet")
+            Some("1 of 2 floor(s) had nothing to measure yet")
         );
         assert_eq!(conclude("coverage", &[line(95, 100, 90)]).unwrap(), None);
 
@@ -349,7 +363,7 @@ mod tests {
         assert_eq!(hidden.standing(), Standing::NothingMeasured);
         let error = conclude("mutants", &[line(0, 0, 90), hidden]).unwrap_err();
         assert!(
-            error.starts_with("mutants: 1 crate(s) below the floor or unmeasured"),
+            error.starts_with("mutants: 1 floor(s) below or unmeasured"),
             "{error}"
         );
         for phrase in ["NOTHING MEASURED", "hides the crate", "without a body"] {
@@ -377,7 +391,7 @@ mod tests {
     fn one_crate_below_its_floor_fails_the_report_and_every_line_is_shown() {
         let error = conclude("coverage", &[line(95, 100, 90), line(10, 100, 90)]).unwrap_err();
         assert!(
-            error.starts_with("coverage: 1 crate(s) below the floor"),
+            error.starts_with("coverage: 1 floor(s) below or unmeasured"),
             "{error}"
         );
         assert!(error.contains("95.0%"), "{error}");
