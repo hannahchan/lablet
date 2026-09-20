@@ -74,6 +74,14 @@ impl Pricing {
     /// applies to `Usage::uncached_input_tokens` only and each cache field is
     /// billed once, at its own rate. Pricing `input_tokens` whole and adding
     /// the cache fields would bill the cached tokens twice.
+    ///
+    /// A provider that reports cache counts above its own input count leaves
+    /// no uncached part, so that run is priced for its cached tokens alone and
+    /// the cost comes out low. The alternative is refusing to price a run
+    /// because a provider's arithmetic didn't agree with itself, which is the
+    /// worse failure for a tool whose job is to report what happened: all four
+    /// counts reach the wide event beside the cost, so a consumer can see the
+    /// inconsistency and discount the number.
     #[must_use]
     pub fn cost(&self, usage: &Usage) -> Option<Cost> {
         Cost::new(

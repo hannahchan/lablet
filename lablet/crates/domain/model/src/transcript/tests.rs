@@ -372,6 +372,38 @@ fn input_that_is_only_whitespace_is_nothing_from_the_user() {
     assert_eq!(transcript.turns()[0].input(), prompt());
 }
 
+/// The caller keeps its input to offer to the next turn, so a refusal can't
+/// quietly take part of it. `turn` copies the input in, which would hide this.
+#[test]
+fn a_refused_turn_leaves_the_input_as_the_caller_had_it() {
+    let mut transcript = transcript();
+    let mut blank = said("   ");
+    let mut waiting = prompt();
+
+    assert_eq!(
+        transcript
+            .record(&mut blank, says("Hello."), ms(0), ms(0), 1)
+            .unwrap_err(),
+        TranscriptError::NothingFromTheUser { turn: 1 }
+    );
+    assert_eq!(blank, said("   "));
+
+    transcript
+        .record(&mut waiting, calls(&["call_a"]), ms(0), ms(0), 1)
+        .unwrap();
+    let mut next = prompt();
+    assert_eq!(
+        transcript
+            .record(&mut next, says("Hello."), ms(0), ms(0), 1)
+            .unwrap_err(),
+        TranscriptError::UnansweredCalls {
+            turn: 1,
+            calls: vec!["call_a".to_owned()],
+        }
+    );
+    assert_eq!(next, prompt());
+}
+
 #[test]
 fn the_tool_calls_of_a_turn_are_answered_once() {
     let mut transcript = transcript();

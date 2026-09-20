@@ -28,7 +28,7 @@ Grafana
 gRPC
 [Hh]umantime
 Honeycomb
-[Ii]mpls
+[Ii]mpls?
 [Ii]nlined
 [Ii]nlining
 Jaeger

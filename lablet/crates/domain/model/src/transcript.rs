@@ -310,12 +310,13 @@ impl Transcript {
                 calls: last.call_ids(),
             });
         }
-        input.retain(|block| !matches!(block, UserContent::Text(text) if text.trim().is_empty()));
-        if input.is_empty() && last.is_none_or(|last| last.tool_calls.is_empty()) {
+        // Refused before `input` is touched, so a refusal leaves it as it was.
+        if input.iter().all(is_blank) && last.is_none_or(|last| last.tool_calls.is_empty()) {
             return Err(TranscriptError::NothingFromTheUser {
                 turn: self.turns.len() + 1,
             });
         }
+        input.retain(|block| !is_blank(block));
         response
             .retain(|block| !matches!(block, ContentBlock::Text(text) if text.trim().is_empty()));
         self.turns.push(Turn {
@@ -431,6 +432,11 @@ fn push_user<'a>(
 
 fn ids<'a>(ids: impl Iterator<Item = &'a ToolCallId>) -> Vec<String> {
     ids.map(|id| id.as_str().to_owned()).collect()
+}
+
+/// Text that's empty or only whitespace carries nothing, so it's not input.
+fn is_blank(block: &UserContent) -> bool {
+    matches!(block, UserContent::Text(text) if text.trim().is_empty())
 }
 
 #[cfg(test)]

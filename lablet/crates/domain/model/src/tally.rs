@@ -277,33 +277,41 @@ fn turns(transcript: &Transcript) -> u32 {
     u32::try_from(transcript.turns().len()).unwrap_or(u32::MAX)
 }
 
+/// Raises a total by `amount`, the way every total in the model grows: a
+/// count that can't be raised any further stops there rather than wrapping to
+/// nonsense or panicking. One function, so no total is added up differently
+/// from the rest.
+fn add(total: &mut u64, amount: u64) {
+    *total = total.saturating_add(amount);
+}
+
 /// Adds what `turn` holds to the totals of `summary`.
 fn add_turn(summary: &mut RunSummary, turn: &Turn) {
     let record = turn.record();
-    summary.provider_retries += u64::from(record.attempts.saturating_sub(1));
-    summary.provider_latency_total_ms = summary
-        .provider_latency_total_ms
-        .saturating_add(record.latency_ms);
+    add(
+        &mut summary.provider_retries,
+        u64::from(record.attempts.saturating_sub(1)),
+    );
+    add(&mut summary.provider_latency_total_ms, record.latency_ms);
     summary.provider_latency_max_ms = summary.provider_latency_max_ms.max(record.latency_ms);
     summary.finish_reasons.push(record.finish.clone());
     for (call, outcome) in turn.tool_uses().zip(turn.tool_calls()) {
         let errors = u64::from(outcome.status.is_error());
-        summary.tool_calls_errors += errors;
-        summary.tool_calls_truncated += u64::from(outcome.truncated_from_bytes.is_some());
-        summary.tool_latency_total_ms = summary
-            .tool_latency_total_ms
-            .saturating_add(outcome.latency_ms);
-        summary.tool_input_bytes = summary.tool_input_bytes.saturating_add(call.input_bytes());
-        summary.tool_output_bytes = summary
-            .tool_output_bytes
-            .saturating_add(outcome.output_bytes());
+        add(&mut summary.tool_calls_errors, errors);
+        add(
+            &mut summary.tool_calls_truncated,
+            u64::from(outcome.truncated_from_bytes.is_some()),
+        );
+        add(&mut summary.tool_latency_total_ms, outcome.latency_ms);
+        add(&mut summary.tool_input_bytes, call.input_bytes());
+        add(&mut summary.tool_output_bytes, outcome.output_bytes());
         if outcome.status.source().is_some() {
             let stats = summary.per_tool.entry(call.name.clone()).or_default();
-            stats.calls += 1;
-            stats.errors += errors;
-            stats.latency_ms = stats.latency_ms.saturating_add(outcome.latency_ms);
+            add(&mut stats.calls, 1);
+            add(&mut stats.errors, errors);
+            add(&mut stats.latency_ms, outcome.latency_ms);
         } else {
-            summary.tool_calls_unknown += 1;
+            add(&mut summary.tool_calls_unknown, 1);
         }
     }
 }
