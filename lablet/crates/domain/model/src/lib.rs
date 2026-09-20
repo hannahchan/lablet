@@ -27,15 +27,18 @@ mod tool;
 mod transcript;
 
 pub use id::{IdError, RunId, ToolCallId, ToolName};
-pub use message::{ContentBlock, Message, ToolResult, ToolResultContent, ToolUse, UserContent};
+pub use message::{
+    ContentBlock, Message, ToolInput, ToolResult, ToolResultContent, ToolUse, UserContent,
+};
 pub use outcome::{
     CompletionMode, FinishedRun, OutcomeError, RunContext, RunOutcome, RunSummary, StopClass,
     StopReason, TaskResult, ToolStats,
 };
 pub use provider::{
-    Cost, CostError, Effort, Endpoint, FinishReason, ModelRef, ProviderKind, ProviderResponse,
-    RateError, Rates, RequestParams, ResponseError, Thinking, TokenCounts, UnknownReason, Usage,
+    Cost, CostError, Effort, Endpoint, FinishReason, ModelRef, ProviderErrorKind, ProviderKind,
+    ProviderResponse, RateError, Rates, RequestParams, ResponseError, Thinking, TokenCounts,
+    UnknownReason, Usage,
 };
-pub use run::{Progress, Run, RunSetup};
+pub use run::{Progress, Prompts, Run, RunSetup};
 pub use tool::{ToolCallEnd, ToolCallOutcome, ToolCallStatus, ToolSource, ToolSpec};
 pub use transcript::{Calls, Transcript, TranscriptError, Turn, TurnRecord};

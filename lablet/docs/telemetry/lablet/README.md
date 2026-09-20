@@ -223,6 +223,7 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 | Value | Description | Stability |
 | --- | --- | --- |
 | `failed` | The executor failed before the tool could answer. | ![Development](https://img.shields.io/badge/-development-blue) |
+| `malformed_input` | The model's arguments for the call weren't valid JSON, so nothing ran. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `ok` | The tool ran and returned a result. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `timeout` | The call ran past the tool timeout. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `tool_error` | The tool ran and reported an error in its own result. | ![Development](https://img.shields.io/badge/-development-blue) |

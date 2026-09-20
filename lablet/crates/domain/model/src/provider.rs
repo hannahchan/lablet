@@ -178,6 +178,46 @@ impl AddAssign for Usage {
     }
 }
 
+/// Why a provider call failed, as far as a policy reads it. The adapter
+/// classifies its own error and carries the message; this is the part the
+/// domain decides on.
+///
+/// The four spellings are the `error.type` of a failed `lablet.chat` span.
+/// That attribute is an open set in the conventions, so nothing generated can
+/// pin them; a unit test does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderErrorKind {
+    /// Transport failure, rate limit, 5xx, overloaded, or a per-call timeout.
+    Retryable,
+    /// The provider rejected the request as longer than the model's context.
+    ContextExhausted,
+    /// Auth, a bad request, an unknown model: another attempt changes nothing.
+    Fatal,
+    /// The adapter couldn't map the payload to the domain model. Retryable,
+    /// because a garbled response needn't recur.
+    Malformed,
+}
+
+impl ProviderErrorKind {
+    /// The serde spelling, which is the span's `error.type`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Retryable => "retryable",
+            Self::ContextExhausted => "context_exhausted",
+            Self::Fatal => "fatal",
+            Self::Malformed => "malformed",
+        }
+    }
+
+    /// Whether another attempt could answer differently.
+    #[must_use]
+    pub const fn is_retryable(self) -> bool {
+        matches!(self, Self::Retryable | Self::Malformed)
+    }
+}
+
 /// Why the model stopped generating, normalised across providers.
 ///
 /// [`FinishReason::from`] is how a provider's string becomes a reason, and
@@ -567,7 +607,7 @@ impl Effort {
     }
 }
 
-display_as_str!(ProviderKind, FinishReason, Effort);
+display_as_str!(ProviderKind, ProviderErrorKind, FinishReason, Effort);
 
 #[cfg(test)]
 mod tests;

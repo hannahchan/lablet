@@ -70,12 +70,19 @@ impl core::fmt::Display for ToolSource {
 /// [`ToolCallStatus::as_str`] is the `error.type` of the span; a call that
 /// ended `ok` has no `error.type`.
 ///
-/// Written `"unknown"` or `{"ran": {"source": "builtin", "ended": "ok"}}`.
+/// Written `"unknown"`, `"malformed_input"`, or
+/// `{"ran": {"source": "builtin", "ended": "ok"}}`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ToolCallStatus {
     /// No configured tool has the name the model called, so nothing ran.
     Unknown,
+    /// The model's arguments for the call weren't valid JSON, so nothing ran.
+    /// The model is sent its own text back as an error result, which is what
+    /// lets it correct itself; the alternative, refusing the response, spends
+    /// a retry re-rolling the same prompt and reports a tool-surface problem
+    /// as provider flakiness.
+    MalformedInput,
     /// A tool ran.
     Ran {
         /// Where the tool that ran comes from.
@@ -126,6 +133,7 @@ impl ToolCallStatus {
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Unknown => "unknown",
+            Self::MalformedInput => "malformed_input",
             Self::Ran { ended, .. } => ended.as_str(),
         }
     }
@@ -134,7 +142,7 @@ impl ToolCallStatus {
     #[must_use]
     pub const fn source(&self) -> Option<&ToolSource> {
         match self {
-            Self::Unknown => None,
+            Self::Unknown | Self::MalformedInput => None,
             Self::Ran { source, .. } => Some(source),
         }
     }

@@ -128,6 +128,8 @@ pub enum LabletToolStatus {
     ToolError,
     /// No configured tool has the name the model called.
     Unknown,
+    /// The model's arguments for the call weren't valid JSON, so nothing ran.
+    MalformedInput,
     /// The call ran past the tool timeout.
     Timeout,
     /// The executor failed before the tool could answer.
@@ -142,6 +144,7 @@ impl LabletToolStatus {
             Self::Ok => "ok",
             Self::ToolError => "tool_error",
             Self::Unknown => "unknown",
+            Self::MalformedInput => "malformed_input",
             Self::Timeout => "timeout",
             Self::Failed => "failed",
         }

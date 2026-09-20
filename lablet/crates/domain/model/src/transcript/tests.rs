@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::{
-    CompletionMode, ProviderKind, TokenCounts, ToolCallEnd, ToolCallStatus, ToolName,
+    CompletionMode, ProviderKind, TokenCounts, ToolCallEnd, ToolCallStatus, ToolInput, ToolName,
     ToolResultContent, ToolSource,
 };
 
@@ -27,7 +27,7 @@ fn call(call_id: &str, tool: &str) -> ToolUse {
     ToolUse {
         id: id(call_id),
         name: ToolName::new(tool).unwrap(),
-        input: json!({}),
+        input: ToolInput::Json(json!({})),
     }
 }
 
@@ -686,7 +686,7 @@ fn document() -> Value {
                 "input": [{ "text": "Fix the failing test." }],
                 "response": [
                     { "text": "Looking." },
-                    { "tool_use": { "id": "call_a", "name": "bash", "input": { "command": "cargo test" } } },
+                    { "tool_use": { "id": "call_a", "name": "bash", "input": { "json": { "command": "cargo test" } } } },
                 ],
                 "record": {
                     "usage": {
@@ -743,7 +743,7 @@ fn a_transcript_has_one_json_form() {
         vec![
             text("Looking."),
             ContentBlock::ToolUse(ToolUse {
-                input: json!({ "command": "cargo test" }),
+                input: ToolInput::Json(json!({ "command": "cargo test" })),
                 ..call("call_a", "bash")
             }),
         ],
@@ -880,7 +880,7 @@ fn a_document_whose_first_input_is_blank_is_not_a_transcript() {
 #[test]
 fn a_document_whose_input_holds_a_tool_block_is_not_a_transcript() {
     for block in [
-        json!({ "tool_use": { "id": "call_b", "name": "bash", "input": {} } }),
+        json!({ "tool_use": { "id": "call_b", "name": "bash", "input": { "json": {} } } }),
         json!({ "tool_result": { "call_id": "call_a", "content": [] } }),
     ] {
         let mut document = document();

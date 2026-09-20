@@ -2,9 +2,9 @@ use serde_json::json;
 
 use super::*;
 use crate::{
-    ContentBlock, Effort, FinishReason, ProviderKind, Rates, StopClass, Thinking, TokenCounts,
-    ToolCallEnd, ToolCallId, ToolCallStatus, ToolResult, ToolResultContent, ToolSource, ToolStats,
-    ToolUse,
+    ContentBlock, Effort, FinishReason, Prompts, ProviderKind, Rates, StopClass, Thinking,
+    TokenCounts, ToolCallEnd, ToolCallId, ToolCallStatus, ToolInput, ToolResult, ToolResultContent,
+    ToolSource, ToolStats, ToolUse,
 };
 
 fn nz(count: u32) -> NonZeroU32 {
@@ -70,8 +70,10 @@ fn setup() -> RunSetup {
 fn start() -> Run {
     Run::start(
         setup(),
-        "You fix tests.".to_owned(),
-        "Fix the failing test.".to_owned(),
+        Prompts {
+            system: "You fix tests.".to_owned(),
+            task: "Fix the failing test.".to_owned(),
+        },
     )
 }
 
@@ -83,7 +85,7 @@ fn response(text: &str, tools: &[&str], finish: FinishReason, input: u64) -> Pro
         ContentBlock::ToolUse(ToolUse {
             id: ToolCallId::new(format!("call_{n}")).unwrap(),
             name: name(tool),
-            input: json!({ "n": n }),
+            input: ToolInput::Json(json!({ "n": n })),
         })
     }));
     ProviderResponse::new(
@@ -169,7 +171,13 @@ fn a_run_that_did_nothing_has_a_summary_of_its_setup_and_zeros() {
 
 #[test]
 fn the_prompt_sizes_are_byte_lengths_whether_or_not_a_turn_has_taken_the_prompt() {
-    let mut run = Run::start(setup(), "caf\u{e9}".to_owned(), "na\u{ef}ve".to_owned());
+    let mut run = Run::start(
+        setup(),
+        Prompts {
+            system: "caf\u{e9}".to_owned(),
+            task: "na\u{ef}ve".to_owned(),
+        },
+    );
 
     let waiting = finish(run.clone(), StopReason::Cancelled);
     run.responded(response("Hi.", &[], FinishReason::EndTurn, 1), ms(0), ms(1))
@@ -647,8 +655,10 @@ fn sums_and_durations_saturate_rather_than_overflow() {
             timeout: Duration::MAX,
             ..setup()
         },
-        String::new(),
-        "Go.".to_owned(),
+        Prompts {
+            system: String::new(),
+            task: "Go.".to_owned(),
+        },
     );
     for _ in 0..2 {
         run.failed_attempt(Duration::MAX);

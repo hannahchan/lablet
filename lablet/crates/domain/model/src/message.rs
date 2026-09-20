@@ -65,15 +65,40 @@ pub struct ToolUse {
     pub id: ToolCallId,
     /// The tool to call.
     pub name: ToolName,
-    /// The arguments, as the JSON the model produced.
-    pub input: serde_json::Value,
+    /// The arguments the model produced.
+    pub input: ToolInput,
+}
+
+/// The arguments of a tool call, which the model doesn't always get right.
+///
+/// A model that can't serialise against an awkward schema produces text that
+/// isn't JSON. That's kept as the model wrote it rather than refused, because
+/// the answer is to show the model its own output and let it try again: the
+/// call is in the transcript, it counts in the tool statistics, and its
+/// outcome is [`crate::ToolCallStatus::MalformedInput`]. Refusing the whole
+/// response instead spends a retry re-rolling the same prompt, and reports a
+/// tool-surface problem as provider flakiness.
+///
+/// Written `{"json": {...}}` or `{"unparsed": "..."}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolInput {
+    /// Arguments that parsed.
+    Json(serde_json::Value),
+    /// Arguments that didn't, as the model wrote them.
+    Unparsed(String),
 }
 
 impl ToolUse {
-    /// The size of the call's input: the byte length of `input` as compact JSON.
+    /// The size of the call's input: the byte length of the arguments as the
+    /// provider would carry them, which is compact JSON when they parsed and
+    /// the model's own text when they didn't.
     #[must_use]
     pub fn input_bytes(&self) -> u64 {
-        self.input.to_string().len() as u64
+        match &self.input {
+            ToolInput::Json(value) => value.to_string().len() as u64,
+            ToolInput::Unparsed(text) => text.len() as u64,
+        }
     }
 }
 

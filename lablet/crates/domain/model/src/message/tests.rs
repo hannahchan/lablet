@@ -10,7 +10,7 @@ fn bash(call_id: &str) -> ToolUse {
     ToolUse {
         id: id(call_id),
         name: ToolName::new("bash").unwrap(),
-        input: json!({ "command": "ls" }),
+        input: ToolInput::Json(json!({ "command": "ls" })),
     }
 }
 
@@ -28,15 +28,14 @@ fn texts(content: &[ToolResultContent]) -> Vec<&str> {
 #[test]
 fn input_bytes_is_the_length_of_the_input_as_compact_json() {
     let call = ToolUse {
-        input: json!({ "command": "ls", "n": 2 }),
+        input: ToolInput::Json(json!({ "command": "ls", "n": 2 })),
         ..bash("a")
     };
 
-    assert_eq!(call.input.to_string(), r#"{"command":"ls","n":2}"#);
     assert_eq!(call.input_bytes(), 22);
     assert_eq!(
         ToolUse {
-            input: json!({}),
+            input: ToolInput::Json(json!({})),
             ..bash("a")
         }
         .input_bytes(),
@@ -147,7 +146,7 @@ fn every_block_of_a_response_has_one_json_form() {
         { "text": "hello" },
         { "thinking": { "text": "hm", "signature": "sig" } },
         { "redacted_thinking": { "data": "opaque" } },
-        { "tool_use": { "id": "a", "name": "bash", "input": { "command": "ls" } } },
+        { "tool_use": { "id": "a", "name": "bash", "input": { "json": { "command": "ls" } } } },
         { "opaque": { "provider": "anthropic", "payload": { "type": "server_tool_use" } } },
     ]);
 
@@ -167,14 +166,15 @@ fn a_tool_result_is_not_a_block_a_response_can_hold() {
 
 #[test]
 fn a_misspelt_field_of_a_tool_use_is_an_error() {
-    let call = json!({ "tool_use": { "id": "a", "name": "bash", "input": {}, "args": {} } });
+    let call =
+        json!({ "tool_use": { "id": "a", "name": "bash", "input": { "json": {} }, "args": {} } });
 
     assert!(serde_json::from_value::<ContentBlock>(call).is_err());
 }
 
 #[test]
 fn a_tool_use_with_an_invalid_name_does_not_deserialise() {
-    let block = json!({ "tool_use": { "id": "a", "name": "not a name", "input": {} } });
+    let block = json!({ "tool_use": { "id": "a", "name": "not a name", "input": { "json": {} } } });
 
     assert!(serde_json::from_value::<ContentBlock>(block).is_err());
 }
@@ -227,7 +227,7 @@ fn each_message_serialises_under_its_role_to_these_exact_bytes() {
     );
     assert_eq!(
         serde_json::to_string(&Message::Assistant(&response)).unwrap(),
-        r#"{"assistant":[{"tool_use":{"id":"a","name":"bash","input":{"command":"ls"}}}]}"#
+        r#"{"assistant":[{"tool_use":{"id":"a","name":"bash","input":{"json":{"command":"ls"}}}}]}"#
     );
 }
 
@@ -244,7 +244,7 @@ fn user_content_is_text_and_nothing_a_model_or_a_tool_produces() {
         prompt
     );
     for block in [
-        json!({ "tool_use": { "id": "a", "name": "bash", "input": {} } }),
+        json!({ "tool_use": { "id": "a", "name": "bash", "input": { "json": {} } } }),
         json!({ "tool_result": { "call_id": "a", "content": [] } }),
         json!({ "thinking": { "text": "hm" } }),
     ] {
@@ -277,4 +277,35 @@ fn tool_uses_yields_the_calls_in_order_and_nothing_else() {
         [&bash("a"), &bash("b")]
     );
     assert_eq!(tool_uses(&content[..1]).count(), 0);
+}
+
+/// A model that can't serialise against an awkward schema is shown its own
+/// text back rather than having the whole response refused, so the call is in
+/// the transcript and counts in the tool statistics like any other.
+#[test]
+fn arguments_that_are_not_json_are_kept_as_the_model_wrote_them() {
+    let call = ToolUse {
+        input: ToolInput::Unparsed(r#"{"command": "ls"#.to_owned()),
+        ..bash("a")
+    };
+
+    assert_eq!(call.input_bytes(), 15);
+    assert_eq!(
+        serde_json::to_value(&call.input).unwrap(),
+        json!({ "unparsed": r#"{"command": "ls"# })
+    );
+    assert_eq!(
+        serde_json::to_value(ToolInput::Json(json!({ "a": 1 }))).unwrap(),
+        json!({ "json": { "a": 1 } })
+    );
+    for form in [
+        json!({ "unparsed": r#"{"command": "ls"# }),
+        json!({ "json": { "a": 1 } }),
+    ] {
+        assert_eq!(
+            serde_json::to_value(serde_json::from_value::<ToolInput>(form.clone()).unwrap())
+                .unwrap(),
+            form
+        );
+    }
 }

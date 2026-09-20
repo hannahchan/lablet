@@ -42,6 +42,19 @@ pub struct RunSetup {
     pub request: RequestParams,
 }
 
+/// What the user gives a run to work from.
+///
+/// One value rather than two strings, because `start(setup, system, prompt)`
+/// takes them adjacent and swapping them runs the task as the system prompt
+/// and reports both prompt sizes inverted, with nothing to catch it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prompts {
+    /// The system prompt, skills already appended.
+    pub system: String,
+    /// The task the run is given, which becomes the first turn's input.
+    pub task: String,
+}
+
 /// How far a run has come, which is what its limits are held against.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Progress {
@@ -70,14 +83,14 @@ pub struct Run {
 }
 
 impl Run {
-    /// A run that has done nothing yet. `prompt` becomes the input of the
-    /// first turn.
+    /// A run that has done nothing yet. The task prompt becomes the input of
+    /// the first turn.
     #[must_use]
-    pub fn start(setup: RunSetup, system: String, prompt: String) -> Self {
+    pub fn start(setup: RunSetup, prompts: Prompts) -> Self {
         Self {
             setup,
-            transcript: Transcript::new(system),
-            input: vec![UserContent::Text(prompt)],
+            transcript: Transcript::new(prompts.system),
+            input: vec![UserContent::Text(prompts.task)],
             failed_attempts: 0,
             failed_latency_total_ms: 0,
             failed_latency_max_ms: 0,

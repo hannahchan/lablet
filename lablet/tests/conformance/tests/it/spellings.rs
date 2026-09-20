@@ -121,6 +121,7 @@ fn both_tool_sources_are_spelled_as_the_registry_spells_them() {
 const fn registry_tool_status(status: &ToolCallStatus) -> LabletToolStatus {
     match status {
         ToolCallStatus::Unknown => LabletToolStatus::Unknown,
+        ToolCallStatus::MalformedInput => LabletToolStatus::MalformedInput,
         ToolCallStatus::Ran { ended, .. } => match ended {
             ToolCallEnd::Ok => LabletToolStatus::Ok,
             ToolCallEnd::ToolError => LabletToolStatus::ToolError,
@@ -133,6 +134,7 @@ const fn registry_tool_status(status: &ToolCallStatus) -> LabletToolStatus {
 const fn model_tool_status(registry: LabletToolStatus) -> ToolCallStatus {
     match registry {
         LabletToolStatus::Unknown => ToolCallStatus::Unknown,
+        LabletToolStatus::MalformedInput => ToolCallStatus::MalformedInput,
         LabletToolStatus::Ok => ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok),
         LabletToolStatus::ToolError => {
             ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::ToolError)
@@ -146,6 +148,7 @@ const fn model_tool_status(registry: LabletToolStatus) -> ToolCallStatus {
 fn every_tool_call_status_is_spelled_as_the_registry_spells_it() {
     for status in [
         ToolCallStatus::Unknown,
+        ToolCallStatus::MalformedInput,
         ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok),
         ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::ToolError),
         ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Timeout),

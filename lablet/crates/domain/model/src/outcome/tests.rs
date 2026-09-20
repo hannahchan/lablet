@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{Effort, ProviderKind, Run, RunSetup, Thinking, TokenCounts};
+use crate::{Effort, Prompts, ProviderKind, Rates, Run, RunSetup, Thinking, TokenCounts};
 
 // The literal spellings below are the members of `lablet.run.stop_reason` and
 // `lablet.run.completion_mode` in the generated telemetry-registry crate,
@@ -403,7 +403,14 @@ fn a_finished_run_carries_the_summary_and_the_conversation() {
         timeout: Duration::from_secs(600),
         request: summary.request,
     };
-    let finished = Run::start(setup, "Be brief.".to_owned(), "Hi.".to_owned()).finish(
+    let finished = Run::start(
+        setup,
+        Prompts {
+            system: "Be brief.".to_owned(),
+            task: "Hi.".to_owned(),
+        },
+    )
+    .finish(
         StopReason::Cancelled,
         Duration::from_millis(250),
         None,

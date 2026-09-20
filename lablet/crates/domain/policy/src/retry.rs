@@ -3,6 +3,8 @@
 
 use std::time::Duration;
 
+use lablet_model::ProviderErrorKind;
+
 /// Why a [`RetryPolicy`] was refused.
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 pub enum RetryPolicyError {
@@ -73,8 +75,14 @@ impl RetryPolicy {
     }
 
     /// The wait before the next attempt, given that attempt number `attempt`
-    /// of a call has just failed, or `None` when the call has had all its
-    /// retries: attempt `n` is retried when `n` is at most `max_retries`.
+    /// of a call has just failed with `kind`, or `None` to stop trying.
+    ///
+    /// The whole rule is here rather than split with the loop: a call is
+    /// tried again when the failure is one another attempt could answer
+    /// differently ([`ProviderErrorKind::is_retryable`]) **and** the call has
+    /// a retry left, so `None` means `retries_exhausted` for a retryable
+    /// failure and the failure's own stop reason for the rest. A policy that
+    /// only measured the wait would leave the loop deciding half of it.
     ///
     /// `attempt` is one-based, as `lablet.attempt` is: the first try of a call
     /// is attempt 1, and `0` is read as 1. The wait after attempt `n` is
@@ -82,7 +90,10 @@ impl RetryPolicy {
     /// same attempt always gives the same wait and a test on a fake clock can
     /// assert it. No attempt number overflows or panics.
     #[must_use]
-    pub fn delay(&self, attempt: u32) -> Option<Duration> {
+    pub fn next(&self, attempt: u32, kind: ProviderErrorKind) -> Option<Duration> {
+        if !kind.is_retryable() {
+            return None;
+        }
         let attempt = attempt.max(1);
         if attempt > self.max_retries {
             return None;

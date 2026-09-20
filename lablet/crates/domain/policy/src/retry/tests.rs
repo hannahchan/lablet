@@ -1,3 +1,5 @@
+use lablet_model::ProviderErrorKind;
+
 use super::*;
 
 const fn ms(millis: u64) -> Duration {
@@ -15,31 +17,37 @@ fn doubling(max_retries: u32) -> RetryPolicy {
 fn the_failure_of_the_attempt_after_the_last_retry_exhausts_the_call() {
     let policy = doubling(2);
 
-    assert_eq!(policy.delay(1), Some(ms(100)));
-    assert_eq!(policy.delay(2), Some(ms(200)));
-    assert_eq!(policy.delay(3), None);
-    assert_eq!(policy.delay(4), None);
+    assert_eq!(policy.next(1, ProviderErrorKind::Retryable), Some(ms(100)));
+    assert_eq!(policy.next(2, ProviderErrorKind::Retryable), Some(ms(200)));
+    assert_eq!(policy.next(3, ProviderErrorKind::Retryable), None);
+    assert_eq!(policy.next(4, ProviderErrorKind::Retryable), None);
 }
 
 #[test]
 fn three_retries_allow_four_attempts() {
     let policy = doubling(3);
 
-    assert_eq!(policy.delay(3), Some(ms(400)));
-    assert_eq!(policy.delay(4), None);
+    assert_eq!(policy.next(3, ProviderErrorKind::Retryable), Some(ms(400)));
+    assert_eq!(policy.next(4, ProviderErrorKind::Retryable), None);
 }
 
 #[test]
 fn a_policy_of_no_retries_is_valid_and_never_retries() {
-    assert_eq!(doubling(0).delay(1), None);
-    assert_eq!(doubling(0).delay(2), None);
+    assert_eq!(doubling(0).next(1, ProviderErrorKind::Retryable), None);
+    assert_eq!(doubling(0).next(2, ProviderErrorKind::Retryable), None);
 }
 
 #[test]
 fn attempt_zero_is_read_as_the_first_attempt() {
-    assert_eq!(doubling(2).delay(0), Some(ms(100)));
-    assert_eq!(doubling(1).delay(0), Some(ms(100)));
-    assert_eq!(doubling(0).delay(0), None);
+    assert_eq!(
+        doubling(2).next(0, ProviderErrorKind::Retryable),
+        Some(ms(100))
+    );
+    assert_eq!(
+        doubling(1).next(0, ProviderErrorKind::Retryable),
+        Some(ms(100))
+    );
+    assert_eq!(doubling(0).next(0, ProviderErrorKind::Retryable), None);
 }
 
 // Growth and the cap
@@ -47,7 +55,9 @@ fn attempt_zero_is_read_as_the_first_attempt() {
 #[test]
 fn the_wait_grows_by_the_factor_after_each_failure() {
     let policy = doubling(10);
-    let waits: Vec<_> = (1..=7).map(|attempt| policy.delay(attempt)).collect();
+    let waits: Vec<_> = (1..=7)
+        .map(|attempt| policy.next(attempt, ProviderErrorKind::Retryable))
+        .collect();
 
     assert_eq!(
         waits,
@@ -59,41 +69,59 @@ fn the_wait_grows_by_the_factor_after_each_failure() {
 fn the_wait_never_exceeds_the_cap() {
     let policy = doubling(10);
 
-    assert_eq!(policy.delay(7), Some(ms(6_400)));
-    assert_eq!(policy.delay(8), Some(ms(10_000)));
-    assert_eq!(policy.delay(9), Some(ms(10_000)));
+    assert_eq!(
+        policy.next(7, ProviderErrorKind::Retryable),
+        Some(ms(6_400))
+    );
+    assert_eq!(
+        policy.next(8, ProviderErrorKind::Retryable),
+        Some(ms(10_000))
+    );
+    assert_eq!(
+        policy.next(9, ProviderErrorKind::Retryable),
+        Some(ms(10_000))
+    );
 }
 
 #[test]
 fn a_wait_that_lands_on_the_cap_is_the_cap() {
     let policy = RetryPolicy::new(10, ms(1_000), ms(4_000), 2.0).unwrap();
 
-    assert_eq!(policy.delay(3), Some(ms(4_000)));
+    assert_eq!(
+        policy.next(3, ProviderErrorKind::Retryable),
+        Some(ms(4_000))
+    );
 }
 
 #[test]
 fn a_factor_that_is_not_a_whole_number_grows_the_wait_too() {
     let policy = RetryPolicy::new(10, ms(100), ms(10_000), 1.5).unwrap();
 
-    assert_eq!(policy.delay(1), Some(ms(100)));
-    assert_eq!(policy.delay(2), Some(ms(150)));
-    assert_eq!(policy.delay(3), Some(ms(225)));
+    assert_eq!(policy.next(1, ProviderErrorKind::Retryable), Some(ms(100)));
+    assert_eq!(policy.next(2, ProviderErrorKind::Retryable), Some(ms(150)));
+    assert_eq!(policy.next(3, ProviderErrorKind::Retryable), Some(ms(225)));
 }
 
 #[test]
 fn a_factor_of_one_waits_the_base_every_time() {
     let policy = RetryPolicy::new(u32::MAX, ms(100), ms(10_000), 1.0).unwrap();
 
-    assert_eq!(policy.delay(1), Some(ms(100)));
-    assert_eq!(policy.delay(50), Some(ms(100)));
-    assert_eq!(policy.delay(u32::MAX - 1), Some(ms(100)));
+    assert_eq!(policy.next(1, ProviderErrorKind::Retryable), Some(ms(100)));
+    assert_eq!(policy.next(50, ProviderErrorKind::Retryable), Some(ms(100)));
+    assert_eq!(
+        policy.next(u32::MAX - 1, ProviderErrorKind::Retryable),
+        Some(ms(100))
+    );
 }
 
 #[test]
 fn the_same_attempt_always_gives_the_same_wait() {
     let policy = doubling(10);
 
-    assert_eq!(policy.delay(4), policy.delay(4));
+    assert_eq!(
+        policy.next(4, ProviderErrorKind::Retryable),
+        policy.next(4, ProviderErrorKind::Retryable)
+    );
 }
 
 // Extremes
@@ -103,35 +131,63 @@ fn an_attempt_number_whose_wait_overflows_gives_the_cap() {
     let policy = doubling(u32::MAX);
 
     for attempt in [64, 1_100, 1 << 31, u32::MAX] {
-        assert_eq!(policy.delay(attempt), Some(ms(10_000)), "{attempt}");
+        assert_eq!(
+            policy.next(attempt, ProviderErrorKind::Retryable),
+            Some(ms(10_000)),
+            "{attempt}"
+        );
     }
-    assert_eq!(doubling(u32::MAX - 1).delay(u32::MAX), None);
+    assert_eq!(
+        doubling(u32::MAX - 1).next(u32::MAX, ProviderErrorKind::Retryable),
+        None
+    );
 }
 
 #[test]
 fn the_largest_factor_gives_the_base_and_then_the_cap() {
     let policy = RetryPolicy::new(u32::MAX, ms(100), ms(10_000), f64::MAX).unwrap();
 
-    assert_eq!(policy.delay(1), Some(ms(100)));
-    assert_eq!(policy.delay(2), Some(ms(10_000)));
-    assert_eq!(policy.delay(u32::MAX - 1), Some(ms(10_000)));
+    assert_eq!(policy.next(1, ProviderErrorKind::Retryable), Some(ms(100)));
+    assert_eq!(
+        policy.next(2, ProviderErrorKind::Retryable),
+        Some(ms(10_000))
+    );
+    assert_eq!(
+        policy.next(u32::MAX - 1, ProviderErrorKind::Retryable),
+        Some(ms(10_000))
+    );
 }
 
 #[test]
 fn a_base_of_zero_waits_zero_however_far_the_scale_overflows() {
     let policy = RetryPolicy::new(u32::MAX, Duration::ZERO, ms(10_000), 2.0).unwrap();
 
-    assert_eq!(policy.delay(1), Some(Duration::ZERO));
-    assert_eq!(policy.delay(5_000), Some(Duration::ZERO));
-    assert_eq!(policy.delay(u32::MAX - 1), Some(Duration::ZERO));
+    assert_eq!(
+        policy.next(1, ProviderErrorKind::Retryable),
+        Some(Duration::ZERO)
+    );
+    assert_eq!(
+        policy.next(5_000, ProviderErrorKind::Retryable),
+        Some(Duration::ZERO)
+    );
+    assert_eq!(
+        policy.next(u32::MAX - 1, ProviderErrorKind::Retryable),
+        Some(Duration::ZERO)
+    );
 }
 
 #[test]
 fn the_longest_durations_are_a_valid_policy() {
     let policy = RetryPolicy::new(u32::MAX, Duration::MAX, Duration::MAX, 2.0).unwrap();
 
-    assert_eq!(policy.delay(1), Some(Duration::MAX));
-    assert_eq!(policy.delay(2), Some(Duration::MAX));
+    assert_eq!(
+        policy.next(1, ProviderErrorKind::Retryable),
+        Some(Duration::MAX)
+    );
+    assert_eq!(
+        policy.next(2, ProviderErrorKind::Retryable),
+        Some(Duration::MAX)
+    );
 }
 
 // Validation
@@ -202,4 +258,34 @@ fn each_error_says_what_was_wrong() {
         .to_string(),
         "backoff base 2s is longer than the backoff cap 500ms"
     );
+}
+
+/// The policy owns the whole rule, so a failure another attempt can't answer
+/// stops the call however much budget is left.
+#[test]
+fn a_failure_that_another_attempt_cannot_answer_is_never_retried() {
+    let policy = RetryPolicy::new(u32::MAX, ms(100), ms(10_000), 2.0).unwrap();
+
+    for kind in [
+        ProviderErrorKind::ContextExhausted,
+        ProviderErrorKind::Fatal,
+    ] {
+        assert_eq!(policy.next(1, kind), None, "{kind}");
+    }
+    for kind in [ProviderErrorKind::Retryable, ProviderErrorKind::Malformed] {
+        assert_eq!(policy.next(1, kind), Some(ms(100)), "{kind}");
+    }
+}
+
+#[test]
+fn every_provider_error_kind_is_spelled_as_the_chat_span_reports_it() {
+    for (kind, spelling) in [
+        (ProviderErrorKind::Retryable, "retryable"),
+        (ProviderErrorKind::ContextExhausted, "context_exhausted"),
+        (ProviderErrorKind::Fatal, "fatal"),
+        (ProviderErrorKind::Malformed, "malformed"),
+    ] {
+        assert_eq!(kind.as_str(), spelling);
+        assert_eq!(kind.to_string(), spelling);
+    }
 }

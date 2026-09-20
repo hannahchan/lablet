@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use super::*;
-use crate::{ToolCallId, ToolName, ToolUse};
+use crate::{ToolCallId, ToolInput, ToolName, ToolUse};
 
 const fn usage(input: u64, output: u64, cache_read: u64, cache_write: u64) -> Usage {
     Usage {
@@ -371,7 +371,7 @@ fn bash(id: &str) -> ContentBlock {
     ContentBlock::ToolUse(ToolUse {
         id: ToolCallId::new(id).unwrap(),
         name: ToolName::new("bash").unwrap(),
-        input: json!({}),
+        input: ToolInput::Json(json!({})),
     })
 }
 
@@ -474,8 +474,8 @@ fn a_repeated_tool_use_id_is_refused_in_code_and_in_a_script() {
     );
     let script = json!({
         "content": [
-            { "tool_use": { "id": "a", "name": "bash", "input": {} } },
-            { "tool_use": { "id": "a", "name": "bash", "input": {} } },
+            { "tool_use": { "id": "a", "name": "bash", "input": { "json": {} } } },
+            { "tool_use": { "id": "a", "name": "bash", "input": { "json": {} } } },
         ],
         "finish": "tool_use",
     });
@@ -522,4 +522,30 @@ fn a_model_ref_and_an_endpoint_have_one_json_form() {
         serde_json::to_value(&endpoint).unwrap(),
         json!({ "host": "api.anthropic.com", "port": 443 })
     );
+}
+
+/// The spellings are a failed chat span's `error.type`. That attribute is an
+/// open set in the conventions, so no generated enum can pin them and this
+/// does.
+#[test]
+fn every_provider_error_kind_is_spelled_as_the_chat_span_reports_it() {
+    for (kind, spelling, retryable) in [
+        (ProviderErrorKind::Retryable, "retryable", true),
+        (
+            ProviderErrorKind::ContextExhausted,
+            "context_exhausted",
+            false,
+        ),
+        (ProviderErrorKind::Fatal, "fatal", false),
+        (ProviderErrorKind::Malformed, "malformed", true),
+    ] {
+        assert_eq!(kind.as_str(), spelling);
+        assert_eq!(kind.to_string(), spelling);
+        assert_eq!(serde_json::to_value(kind).unwrap(), json!(spelling));
+        assert_eq!(
+            serde_json::from_value::<ProviderErrorKind>(json!(spelling)).unwrap(),
+            kind
+        );
+        assert_eq!(kind.is_retryable(), retryable, "{spelling}");
+    }
 }

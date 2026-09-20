@@ -29,6 +29,8 @@ An entry under `Unreleased` is mandatory for any change to one of the three cont
 - Pricing on the wide event: the four rates a run was priced at are emitted beside `lablet.run.cost_usd` as `lablet.pricing.*_usd_per_mtok`, so a consumer can recompute the cost rather than trust it. A run whose provider reported cache counts above its own input count is priced for its cached tokens alone, and the rates are what let a consumer see that. Reasoning needs no rate of its own.
 - Request settings on the wide event: `gen_ai.request.temperature` joins it, having been on the chat span alone, and the new `lablet.request.thinking` carries the thinking mode, its budget, and whether the reasoning text was asked for. A reasoning budget is the setting a run is most often varied by, and neither it nor the temperature reached the one row an analyst reads.
 
+- Tool arguments that aren't valid JSON: the call is kept with the model's own text, runs nowhere, and its outcome is the new `lablet.tool.status` member `malformed_input`, an error result the model can correct from. It counts in the tool statistics rather than as a retried provider error, because a model that can't serialise against an awkward tool schema is a tool-surface problem and reporting it as provider flakiness points at the wrong component. A `ToolUse` input is now written `{"json": {...}}` or `{"unparsed": "..."}`.
+
 ### Removed
 
 - Telemetry contract: `lablet.provider.calls` leaves the `lablet.run` wide event and the registry. `lablet.run.turns` counts the model responses a run received, which is the same number on every row, and chat spans now number `lablet.run.turns` plus `lablet.provider.retries`, plus one when the run ended on a failed provider call.
