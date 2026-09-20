@@ -47,6 +47,7 @@ MiniJinja
 [Mm]onoid
 [Mm]ultiset
 [Mm]usl
+[Mm]utex
 MSRV
 [Nn]amespace
 [Nn]ewtypes?

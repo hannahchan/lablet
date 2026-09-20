@@ -68,6 +68,8 @@ Supersedes the 2026-09-17 entry. The conversation model is serialised by JSONL t
 
 ## 2026-09-18 Retry budget is per provider call
 
+**Partly superseded on 2026-09-20 by "Phase 2 decisions made by the builder":** `run.max_retries` counts retries, not attempts, so `3` allows four attempts and `0` never retries. The budget being per call, and resetting on success, still holds.
+
 `run.max_retries` counts attempts for one call and resets on success. A per-run budget made a long run lose to a few spread-out rate limits, which measures the provider's weather rather than the agent.
 
 ## 2026-09-18 MCP tool names are never prefixed by default
@@ -75,6 +77,8 @@ Supersedes the 2026-09-17 entry. The conversation model is serialised by JSONL t
 Tools keep the names their server reports so measurements reflect the server as-is and allow and deny lists stay stable when servers are added. A collision is a build error; `prefix_tools: true` on a server is the escape hatch.
 
 ## 2026-09-18 Stop policy has two evaluation points
+
+**Superseded on 2026-09-20 by "Phase 2 decisions made by the builder":** there are three points, not two. A response is judged before its tool calls run, which is what lets a refusal or a truncated response stop the run without executing anything.
 
 Before each provider call and after each tool phase. One evaluation per iteration let the tool-error cap, timeout, and cancellation fire one provider call late.
 
@@ -227,7 +231,7 @@ shellcheck as `cargo xtask lint-shell` in pre-commit, a Claude Code session-star
 - **Every limit is met when the run reaches it.** `max_turns: 2` stops after turn 2's tool phase, elapsed equal to the timeout stops, and tokens equal to the budget stops.
 - **`run.max_retries` counts retries, not attempts.** `3` allows four attempts and `0` never retries. The first build read it as attempts because of how scenario E2 was worded; the name now means what it says, and E2 is four errors.
 - **Backoff is `base * 2^(n - 1)` capped at `max`, with no jitter**, from `run.retry_backoff_base` (500ms) and `run.retry_backoff_max` (30s). The loop checks the run timeout before each wait.
-- **Durations are whole milliseconds in `u64` fields named `*_ms`.** The model holds no `Duration`; the loop converts once where it reads the clock, so no observer rounds for itself.
+- **Durations are whole milliseconds in `u64` fields named `*_ms`.** ~~The loop converts once where it reads the clock~~, superseded later the same day by the domain revision, where the model converts as it records and holds the only `whole_ms`. The rule that no observer rounds for itself still holds, and is why the conversion has one home.
 - **`RunSummary` doesn't repeat what `RunOutcome` holds.** Usage and the tool call total are read from the outcome inside it, so no two fields can disagree.
 - **`RunContext` carries `capture_content`.** The loop reads it to fill content fields, and an observer reads it before emitting the result. This came from the phase review.
 - **Pricing bills uncached input once.** `input_tokens` includes cached tokens, so the input rate applies to input minus cache reads and writes, and each cache count is billed at its own rate.
@@ -246,7 +250,7 @@ An independent review of the two domain crates, checked against the real Anthrop
 - **Tool results are text.** No provider has a wire form for JSON tool results, so each adapter would turn the value into text differently and the same run would cost different tokens by provider. Image, audio, and binary content from an MCP tool isn't carried; one function renders the placeholder line that names the kind, the MIME type, and the byte count.
 - **The run accumulates itself in the model**, as pure methods, and `RunSummary` is built only by its `finish`. It's the one place a duration becomes whole milliseconds, which supersedes the earlier rule that the loop converts once. It owns the running usage and the consecutive tool-error count.
 - **`turns` counts model responses received** and is derived from the completions recorded, so a run whose first provider call fails has zero turns.
-- **Per-tool statistics exist only for configured tool names.** A call to any other name counts in the totals and in `lablet.tool_calls.unknown`, so the per-tool attribute keys stay bounded however many names a model invents.
+- **Per-tool statistics exist only for configured tool names.** A call to any other name counts in the totals and in `lablet.tool_calls.unknown`, so the per-tool attribute keys stay bounded however many names a model invents. **Superseded on 2026-09-20 by "What bounds the per-tool keys, now that the summary doesn't":** the bound is what the tool executor resolved, not the configured name list, and the two coincide only because the executor resolves nothing it didn't offer.
 - **`RunContext` holds only what the composition root alone knows.** ProviderResponse mode, the turn cap, the timeout, and the request defaults moved to `RunSummary`, written from the loop's own policy, so the wide event can't report limits the loop didn't obey. `capture_content` stays on the context.
 - **The stop policy takes inputs that can't contradict themselves**: a `Progress` before a call and after a tool phase, and the finish reason with a `Calls` value after a response. `Progress` lives in the model because the run produces it.
 - **`RetryPolicy` takes `max_retries` directly**, zero included, and `StopPolicy::allows_wait` owns the rule that a backoff wait mustn't carry the run to its timeout.
@@ -391,3 +395,11 @@ This dissolves both import cycles the second review found: `message` and `provid
 Declined: splitting `message.rs` into owned storage and the borrowed wire view. `Message<'a>` borrows from the owned types, so a module line between them would make the lifetime harder to follow, not easier. Also declined, for now: splitting the three largest test files, which is navigability alone.
 
 The timing is the same argument that made moving `Calls` free: pure code movement is cheap while `lablet-run` doesn't exist and expensive once the loop is written against these paths.
+
+## 2026-09-20 Phase 3 decisions made by the builder
+
+- **Superseded decisions are now marked where they sit.** Four entries said something a later entry reversed, with nothing at the old entry to say so: the stop policy's two evaluation points became three, `max_retries` changed from counting attempts to counting retries, the duration conversion moved from the loop to the model, and the per-tool bound moved from the configured name list to what the executor resolved. This log is used to refuse review findings that have already been decided, so an entry that reads as current when it isn't can mislead in the one direction that matters.
+- **`RunEvent` carries the run id once, not on every kind.** The spec's sketch said every variant carries `run_id` and gave it to none. It's `RunEvent { run_id, kind }`, because the id is a join key an observer needs on every signal, and one field is one place to read it rather than eight match arms.
+- **`RunService::run` takes `&mut self`.** The spec says one service runs one run at a time and that concurrent calls are rejected, but the application ring is forbidden tokio by the layer lint, so there's no async mutex, and `run` returns a bare `FinishedRun` with nowhere to report a refusal. An exclusive borrow makes a concurrent call a compile error rather than a runtime one, which is the answer this domain gives everywhere else. Sequential runs, which is what the phase 4 library offers, are unaffected.
+- **`ProviderError` is a struct, not an enum with a message in each variant.** `ToolError` was already a struct with a `kind`, and `ProviderErrorKind` exists so the retry policy can read the class; one shape for both errors means the policy takes one field rather than matching four variants.
+- **`ToolSet` is built whole in this phase, and its filtering is unit-tested here.** The build plan's phase 3 line asks for allow and deny filtering and duplicate-name rejection, but the scenarios that exercise those are assigned to phases 4 and 8, where real executors exist. Half a type is worse than none, so it's built and unit-tested now; the named scenarios land where acceptance.md puts them.

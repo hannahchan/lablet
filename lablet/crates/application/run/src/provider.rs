@@ -79,5 +79,8 @@ pub trait ModelProvider: Send + Sync {
     /// could answer differently. An adapter enforces `request.deadline`
     /// itself, in real time, and reports reaching it as
     /// [`ProviderErrorKind::Retryable`].
-    async fn complete(&self, request: ProviderRequest<'_>) -> Result<ProviderResponse, ProviderError>;
+    async fn complete(
+        &self,
+        request: ProviderRequest<'_>,
+    ) -> Result<ProviderResponse, ProviderError>;
 }
