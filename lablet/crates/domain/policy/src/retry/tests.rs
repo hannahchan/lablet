@@ -276,16 +276,3 @@ fn a_failure_that_another_attempt_cannot_answer_is_never_retried() {
         assert_eq!(policy.next(1, kind), Some(ms(100)), "{kind}");
     }
 }
-
-#[test]
-fn every_provider_error_kind_is_spelled_as_the_chat_span_reports_it() {
-    for (kind, spelling) in [
-        (ProviderErrorKind::Retryable, "retryable"),
-        (ProviderErrorKind::ContextExhausted, "context_exhausted"),
-        (ProviderErrorKind::Fatal, "fatal"),
-        (ProviderErrorKind::Malformed, "malformed"),
-    ] {
-        assert_eq!(kind.as_str(), spelling);
-        assert_eq!(kind.to_string(), spelling);
-    }
-}

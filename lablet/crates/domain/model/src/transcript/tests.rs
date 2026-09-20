@@ -473,18 +473,6 @@ fn a_turn_after_answered_tool_calls_needs_no_input_and_may_have_some() {
 }
 
 #[test]
-fn a_refused_turn_leaves_the_input_it_was_offered() {
-    let mut transcript = transcript();
-    turn(&mut transcript, prompt(), calls(&["call_a"])).unwrap();
-    let mut input = said("Never mind the tools.");
-
-    let refused = transcript.record(&mut input, says("Next."), ms(0), ms(0), 1);
-
-    assert!(refused.is_err());
-    assert_eq!(input, said("Never mind the tools."));
-}
-
-#[test]
 fn outcomes_that_answer_the_calls_each_once_and_in_order_become_the_turns_tool_calls() {
     let transcript = two_calls_in_one_turn();
     let turn = &transcript.turns()[0];

@@ -179,7 +179,7 @@ pub struct RunOutcome {
 }
 
 /// What an outcome is read from, so that reading one holds it to the rules,
-/// and what the tally fills in to close a run.
+/// and what [`crate::Run::finish`] fills in to close a run.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawOutcome {
@@ -342,10 +342,12 @@ pub struct ToolStats {
 /// It's written, never read: the wide event is emitted from it, and the
 /// documents lablet writes are the outcome and the transcript, each of which
 /// checks itself on the way in. A summary holds invariants that span its
-/// fields, such as `per_tool` keys being among `tools` and one finish reason
-/// per turn of the outcome, and only [`crate::Run::finish`] establishes
-/// them. So there's no `Deserialize`, rather than one that would take a
-/// summary no run could have produced.
+/// fields, such as one finish reason per turn of the outcome and totals that
+/// agree with the transcript beside them, and only [`crate::Run::finish`]
+/// establishes those. So there's no `Deserialize`, rather than one that would
+/// take a summary no run could have produced. The bound on the `per_tool`
+/// keys isn't among them: the tool executor establishes that one, and
+/// `finish` reads its answer.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RunSummary {
     /// The model the run called.
@@ -389,8 +391,10 @@ pub struct RunSummary {
     pub tool_output_bytes: u64,
     /// How many tool calls had their output cut by the output cap.
     pub tool_calls_truncated: u64,
-    /// Each called tool's share, by tool name. The keys are among `tools`,
-    /// whatever names the model called.
+    /// Each called tool's share, by tool name. A key exists for each call a
+    /// tool ran for, which is the same set as `tools` in a run because the
+    /// executor resolves only the names it offered, whatever names the model
+    /// called.
     pub per_tool: BTreeMap<ToolName, ToolStats>,
     /// The rates the run was priced at; `Some` exactly when pricing was
     /// configured. They reach the wide event beside the cost so a consumer

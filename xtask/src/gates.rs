@@ -222,8 +222,13 @@ pub fn lint_shell_steps() -> Vec<Step> {
             args.extend(scripts.iter().map(String::as_str));
             vec![Step::command("lint-shell", "shellcheck", &args)]
         }
+        // Listing the scripts failed while planning the gate. Report that when
+        // the step runs, rather than listing again and passing green having
+        // linted nothing.
         Err(_) => vec![Step::check("lint-shell", || {
-            shell_scripts(&repo_root()).map(|_| None)
+            Err(shell_scripts(&repo_root()).err().unwrap_or_else(|| {
+                "the tracked file list couldn't be read when the gate was planned".to_owned()
+            }))
         })],
     }
 }

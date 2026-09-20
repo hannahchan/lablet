@@ -29,8 +29,8 @@ pub struct RunSetup {
     /// Where the provider's API is served; `None` for a provider that isn't
     /// reached over the network.
     pub endpoint: Option<Endpoint>,
-    /// The tools offered to the model, after the allow and deny lists. Only
-    /// these names get per-tool statistics.
+    /// The tools offered to the model, after the allow and deny lists, and
+    /// so the names the executor can resolve a call to.
     pub tools: Vec<ToolName>,
     /// How the run decides that the model has finished.
     pub completion: CompletionMode,
@@ -206,7 +206,7 @@ impl Run {
     /// last failed attempt, which nothing followed, isn't one. A tool call to
     /// a name the run didn't offer counts in the totals and as an unknown
     /// call, and gets no per-tool entry: the model can call any name, and the
-    /// per-tool keys of the wide event must stay bounded by the config. Which
+    /// per-tool keys of the wide event must stay bounded. Which
     /// calls those are is read from each outcome's
     /// [`crate::ToolCallStatus`], the value the executor set when it looked
     /// the name up, rather than looked up a second time here against the tool
