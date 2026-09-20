@@ -365,3 +365,15 @@ Every test until now was an example. Examples say what one value does; these say
 - **Neither total double-counts the part it holds.**
 - **Normalising a finish reason is idempotent**, so a reason that round-trips through a document can't drift.
 - **A transcript read back is the transcript that was written.** Asserted on a transcript the model built, because blank text is dropped once on the way in, so an arbitrary document normalises on its first read rather than being a fixpoint immediately.
+
+## 2026-09-20 The summary's totals are grouped at phase 4, with the mapping that needs them
+
+The review raised three findings against `RunSummary`, which are one shape seen three ways: twelve bare `u64` fields, `finish` initialising twenty zeros and mutating them, and a 22-field struct. Grouping the totals into value types with `Add` impls, mirroring `Usage`, was going to land before phase 3.
+
+It moves to phase 4 instead, paired with the change that actually prevents the bug.
+
+The risk is the wide-event mapping: twenty assignments between same-typed values, where the compiler sees one type, the registry declares every attribute `int`, and the summary's JSON test checks how the summary serialises rather than how it reaches telemetry. Grouping the fields makes that mapping read better and doesn't make a swap impossible; only holding the mapping to the generated key list does. So the two land together, and the mapping gets written first, because it shows which groups it wants rather than leaving the grouping to a guess.
+
+Two things argued against doing the grouping alone and early. The wide event is flat by rule, since the aggregatability rules forbid nested maps, so a flat summary mirrors what it becomes and nesting it only to flatten it again adds a step that can itself be wrong. And the forgotten-field risk in `finish` is covered today: every field is asserted, so one left unwritten fails now. The exposure is to fields added later, which is worth fixing and isn't urgent.
+
+Newtypes for the units instead, `Bytes`, `Millis` and `Count`, were considered and declined. It targets the swap directly and would hold across the whole model, but it touches every arithmetic site and buys nothing at the telemetry boundary, where every attribute is an `int` whatever the domain called it.
