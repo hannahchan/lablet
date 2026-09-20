@@ -5,7 +5,7 @@ use super::*;
 /// Rates an f64 holds exactly, so the sums below are exact: 4 for input, 16
 /// for output, 0.5 for a cache read, 5 for a cache write.
 fn pricing() -> Pricing {
-    Pricing::new(4.0, 16.0, 0.5, 5.0).unwrap()
+    Pricing::new(Rates::new(4.0, 16.0, 0.5, 5.0).unwrap())
 }
 
 fn cost(usage: Usage) -> Option<Cost> {
@@ -129,7 +129,7 @@ fn the_largest_usage_has_a_finite_cost() {
 
 #[test]
 fn a_cost_that_overflows_an_f64_is_reported_as_no_cost() {
-    let absurd = Pricing::new(f64::MAX, 0.0, 0.0, 0.0).unwrap();
+    let absurd = Pricing::new(Rates::new(f64::MAX, 0.0, 0.0, 0.0).unwrap());
     let usage = Usage {
         input_tokens: u64::MAX,
         ..Usage::default()
@@ -140,7 +140,7 @@ fn a_cost_that_overflows_an_f64_is_reported_as_no_cost() {
 
 #[test]
 fn free_pricing_costs_nothing() {
-    let free = Pricing::new(0.0, 0.0, 0.0, 0.0).unwrap();
+    let free = Pricing::new(Rates::new(0.0, 0.0, 0.0, 0.0).unwrap());
     let usage = Usage {
         input_tokens: 1_000_000,
         output_tokens: 1_000_000,
@@ -152,54 +152,6 @@ fn free_pricing_costs_nothing() {
     assert_eq!(free.cost(&usage), usd(0.0));
 }
 
-#[test]
-fn a_negative_rate_is_refused_and_the_error_names_it() {
-    let refused = |name, result: Result<Pricing, RateError>| {
-        assert_eq!(result, Err(RateError { name, value: -0.01 }));
-    };
-
-    refused("input", Pricing::new(-0.01, 16.0, 0.5, 5.0));
-    refused("output", Pricing::new(4.0, -0.01, 0.5, 5.0));
-    refused("cache_read", Pricing::new(4.0, 16.0, -0.01, 5.0));
-    refused("cache_write", Pricing::new(4.0, 16.0, 0.5, -0.01));
-}
-
-#[test]
-fn a_rate_that_is_not_a_finite_number_is_refused() {
-    assert_eq!(
-        Pricing::new(4.0, f64::INFINITY, 0.5, 5.0),
-        Err(RateError {
-            name: "output",
-            value: f64::INFINITY,
-        })
-    );
-    assert!(matches!(
-        Pricing::new(4.0, 16.0, f64::NAN, 5.0),
-        Err(RateError { name: "cache_read", value }) if value.is_nan()
-    ));
-}
-
-#[test]
-fn the_first_refused_rate_in_argument_order_is_the_one_reported() {
-    assert_eq!(
-        Pricing::new(4.0, -1.0, -2.0, -3.0),
-        Err(RateError {
-            name: "output",
-            value: -1.0,
-        })
-    );
-}
-
-#[test]
-fn the_error_says_which_rate_and_what_it_was() {
-    assert_eq!(
-        Pricing::new(-3.0, 16.0, 0.5, 5.0).unwrap_err().to_string(),
-        "input rate -3 isn't a finite number of at least 0"
-    );
-}
-
-/// A run reports the rates beside the cost, so the pricing hands back exactly
-/// what it was built with.
 #[test]
 fn the_pricing_reports_the_rates_it_was_built_with() {
     assert_eq!(pricing().rates(), Rates::new(4.0, 16.0, 0.5, 5.0).unwrap());

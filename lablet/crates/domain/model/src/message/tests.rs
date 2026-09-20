@@ -18,13 +18,6 @@ fn text(text: &str) -> ToolResultContent {
     ToolResultContent::Text(text.to_owned())
 }
 
-fn texts(content: &[ToolResultContent]) -> Vec<&str> {
-    content
-        .iter()
-        .map(|ToolResultContent::Text(text)| text.as_str())
-        .collect()
-}
-
 #[test]
 fn input_bytes_is_the_length_of_the_input_as_compact_json() {
     let call = ToolUse {
@@ -59,70 +52,6 @@ fn omitted_content_is_worded_one_way() {
         ToolResultContent::omitted("image", "image/png", 48_213),
         text("[image omitted: image/png, 48213 bytes]")
     );
-}
-
-#[test]
-fn the_truncation_line_is_worded_one_way() {
-    assert_eq!(
-        ToolResultContent::truncated(100_000, 5_242_880),
-        text("[truncated: the first 100000 of 5242880 bytes]")
-    );
-}
-
-#[test]
-fn content_within_the_cap_is_returned_unchanged() {
-    let content = vec![text("0123456789")];
-
-    for cap in [10, 11, u64::MAX] {
-        assert_eq!(
-            ToolResultContent::capped(content.clone(), cap),
-            (content.clone(), None)
-        );
-    }
-}
-
-#[test]
-fn content_one_byte_over_the_cap_is_cut_and_says_so_in_one_last_line() {
-    let (capped, original) = ToolResultContent::capped(vec![text("0123456789")], 9);
-
-    assert_eq!(original, Some(10));
-    assert_eq!(
-        texts(&capped),
-        ["012345678", "[truncated: the first 9 of 10 bytes]"]
-    );
-}
-
-#[test]
-fn the_cut_falls_on_a_character_boundary_and_the_line_counts_what_was_kept() {
-    // Each of these characters is two bytes, so a cap of 5 lands inside the third.
-    let (capped, original) = ToolResultContent::capped(vec![text("\u{e9}\u{e9}\u{e9}\u{e9}")], 5);
-
-    assert_eq!(original, Some(8));
-    assert_eq!(
-        texts(&capped),
-        ["\u{e9}\u{e9}", "[truncated: the first 4 of 8 bytes]"]
-    );
-}
-
-#[test]
-fn the_cap_is_spent_across_the_pieces_in_order_and_what_is_left_over_is_dropped() {
-    let content = vec![text("aaaa"), text("bbbbbbbb"), text("cccc")];
-
-    let (capped, original) = ToolResultContent::capped(content, 10);
-
-    assert_eq!(original, Some(16));
-    assert_eq!(
-        texts(&capped),
-        ["aaaa", "bbbbbb", "[truncated: the first 10 of 16 bytes]"]
-    );
-}
-
-#[test]
-fn a_cap_of_zero_leaves_only_the_line_that_says_what_was_cut() {
-    let (capped, original) = ToolResultContent::capped(vec![text("0123456789")], 0);
-
-    assert_eq!(original, Some(10));
-    assert_eq!(texts(&capped), ["[truncated: the first 0 of 10 bytes]"]);
 }
 
 #[test]

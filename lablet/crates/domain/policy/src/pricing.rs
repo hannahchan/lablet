@@ -1,6 +1,6 @@
 //! What a run's tokens cost.
 
-use lablet_model::{Cost, RateError, Rates, Usage};
+use lablet_model::{Cost, Rates, Usage};
 
 /// What a run's tokens cost, at the [`Rates`] it was configured with.
 ///
@@ -12,21 +12,11 @@ pub struct Pricing {
 }
 
 impl Pricing {
-    /// Prices per million tokens, `input` for the input that touched no cache.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RateError`] for the first rate, in argument order, that isn't
-    /// a finite number of at least 0.
-    pub fn new(
-        input: f64,
-        output: f64,
-        cache_read: f64,
-        cache_write: f64,
-    ) -> Result<Self, RateError> {
-        Ok(Self {
-            rates: Rates::new(input, output, cache_read, cache_write)?,
-        })
+    /// Prices usage at `rates`. [`Rates::new`] is where a rate is checked,
+    /// so there's nothing left to refuse here.
+    #[must_use]
+    pub const fn new(rates: Rates) -> Self {
+        Self { rates }
     }
 
     /// The rates a run reports beside its cost.

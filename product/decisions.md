@@ -377,3 +377,17 @@ The risk is the wide-event mapping: twenty assignments between same-typed values
 Two things argued against doing the grouping alone and early. The wide event is flat by rule, since the aggregatability rules forbid nested maps, so a flat summary mirrors what it becomes and nesting it only to flatten it again adds a step that can itself be wrong. And the forgotten-field risk in `finish` is covered today: every field is asserted, so one left unwritten fails now. The exposure is to fields added later, which is worth fixing and isn't urgent.
 
 Newtypes for the units instead, `Bytes`, `Millis` and `Count`, were considered and declined. It targets the swap directly and would hold across the whole model, but it touches every arithmetic site and buys nothing at the telemetry boundary, where every attribute is an `int` whatever the domain called it.
+
+## 2026-09-20 One module per idea, not one per stage of a run
+
+Two independent module-organisation reviews, run without contact, reached the same shortlist: `provider.rs` and `outcome.rs` had become catch-alls, and `whole_ms` was in the wrong file. The second named the cause the first only described: the modules were named along two axes at once, some for a kind of thing (`id`, `message`, `tool`, `provider`) and some for a stage of a run (`run`, `transcript`, `outcome`), so anything fitting neither landed in the nearest stage-module.
+
+`lablet-model` is now eleven modules with one idea each. `price.rs` takes `Cost` and `Rates`, which were in `provider.rs` though they're neither what a run asks a provider nor what one answers; the giveaway was that the request parameters had been pushed below them, so the file's declaration order contradicted its own doc. `usage.rs` takes `Usage` and `TokenCounts`, which every other module reads. `stop.rs` takes the vocabulary of how a run ends, `CompletionMode`, `StopReason`, `StopClass` and `Calls`; `outcome.rs` keeps the document; `summary.rs` takes the two halves of the wide event. `whole_ms` moved to `lib.rs`, so `tool.rs` no longer says `use crate::outcome::whole_ms` and implies that tools depend on outcomes.
+
+Three things moved to sit beside what they belong to. `add_turn` is now `RunSummary::add_turn`, next to the doc claiming `Run::finish` establishes the summary's invariants rather than a file away from it. The output cap, `ToolResultContent::capped`, moved from `message.rs` to `tool.rs`, because a cap is a property of a tool call and its only caller was there. And `Pricing::new` takes a `Rates` and is infallible: it had been re-declaring `Rates::new`'s four-`f64` signature and its `# Errors` section only to call it, and had no caller outside its own tests.
+
+This dissolves both import cycles the second review found: `message` and `provider` each imported the other, as did `transcript` and `outcome`. Legal in Rust, and the usual sign of a boundary in the wrong place.
+
+Declined: splitting `message.rs` into owned storage and the borrowed wire view. `Message<'a>` borrows from the owned types, so a module line between them would make the lifetime harder to follow, not easier. Also declined, for now: splitting the three largest test files, which is navigability alone.
+
+The timing is the same argument that made moving `Calls` free: pure code movement is cheap while `lablet-run` doesn't exist and expensive once the loop is written against these paths.

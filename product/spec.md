@@ -122,7 +122,7 @@ Explicit architecture, in the shape of the UsefulBytes repository, sized down. R
 
 ```
 lablet/
-  crates/domain/model            conversation, tools, usage, stop reasons, run identity, summary
+  crates/domain/model            one module per idea: id, message, tool, usage, price, provider, transcript, run, stop, outcome, summary
   crates/domain/policy           pure stop and retry decisions, pricing
   crates/application/run         RunService (the loop) and its secondary ports
   crates/adapters/secondary/
@@ -353,7 +353,7 @@ pub enum RetryPolicyError { BaseAboveMax { base: Duration, max: Duration }, Fact
 
 pub struct Pricing { input: f64, output: f64, cache_read: f64, cache_write: f64 }   // USD per million tokens
 impl Pricing {
-    pub fn new(input: f64, output: f64, cache_read: f64, cache_write: f64) -> Result<Pricing, RateError>;
+    pub fn new(rates: Rates) -> Pricing;                              // Rates::new is where a rate is checked
     pub fn rates(&self) -> Rates;                                     // what the run reports beside its cost
     pub fn cost(&self, usage: &Usage) -> Option<Cost>;   // None when the amount overflows an f64
 }

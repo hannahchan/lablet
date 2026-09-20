@@ -21,24 +21,34 @@ macro_rules! display_as_str {
 mod id;
 mod message;
 mod outcome;
+mod price;
 mod provider;
 mod run;
+mod stop;
+mod summary;
 mod tool;
 mod transcript;
+mod usage;
 
 pub use id::{IdError, RunId, ToolCallId, ToolName};
 pub use message::{
     ContentBlock, Message, ToolInput, ToolResult, ToolResultContent, ToolUse, UserContent,
 };
-pub use outcome::{
-    CompletionMode, FinishedRun, OutcomeError, RunContext, RunOutcome, RunSummary, StopClass,
-    StopReason, TaskResult, ToolStats,
-};
+pub use outcome::{OutcomeError, RunOutcome, TaskResult};
+pub use price::{Cost, CostError, RateError, Rates};
 pub use provider::{
-    Cost, CostError, Effort, Endpoint, FinishReason, ModelRef, ProviderErrorKind, ProviderKind,
-    ProviderResponse, RateError, Rates, RequestParams, ResponseError, Thinking, TokenCounts,
-    UnknownReason, Usage,
+    Effort, Endpoint, FinishReason, ModelRef, ProviderErrorKind, ProviderKind, ProviderResponse,
+    RequestParams, ResponseError, Thinking, UnknownReason,
 };
 pub use run::{Progress, Prompts, Run, RunSetup};
+pub use stop::{Calls, CompletionMode, StopClass, StopReason};
+pub use summary::{FinishedRun, RunContext, RunSummary, ToolStats};
 pub use tool::{ToolCallEnd, ToolCallOutcome, ToolCallStatus, ToolSource, ToolSpec};
-pub use transcript::{Calls, Transcript, TranscriptError, Turn, TurnRecord};
+pub use transcript::{Transcript, TranscriptError, Turn, TurnRecord};
+pub use usage::{TokenCounts, Usage};
+
+/// Whole milliseconds, truncated. The one conversion from a `Duration` in the
+/// model, so every `*_ms` value is cut the same way.
+pub(crate) fn whole_ms(duration: std::time::Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}

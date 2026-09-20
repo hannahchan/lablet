@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::outcome::whole_ms;
+use crate::whole_ms;
 use crate::{ToolCallId, ToolName, ToolResult, ToolResultContent};
 
 /// A tool as it's offered to the model.
@@ -193,6 +193,49 @@ pub struct ToolCallOutcome {
     /// What the model was sent: the tool's output, or the message of the
     /// executor's error, after the output cap.
     pub content: Vec<ToolResultContent>,
+}
+
+/// The output cap. It's a property of a tool call rather than of content:
+/// every tool's output is cut the same way, here, so no executor cuts its
+/// own.
+impl ToolResultContent {
+    /// The line that ends content the output cap cut short:
+    /// `[truncated: the first 100000 of 5242880 bytes]`. Worded here for the
+    /// same reason as [`ToolResultContent::omitted`].
+    fn truncated(kept: u64, original: u64) -> Self {
+        Self::Text(format!("[truncated: the first {kept} of {original} bytes]"))
+    }
+
+    /// The summed byte length of the text of `content`.
+    pub(crate) fn bytes(content: &[Self]) -> u64 {
+        content
+            .iter()
+            .map(|Self::Text(text)| text.len() as u64)
+            .fold(0, u64::saturating_add)
+    }
+
+    /// `content` cut down to `max_bytes` of text, and its size before the cut;
+    /// unchanged, with `None`, when it was within the budget.
+    ///
+    /// Text is kept from the start and cut at a character boundary, so up to
+    /// three bytes fewer than the budget may be kept. One
+    /// [`ToolResultContent::truncated`] line follows it and isn't counted
+    /// against the budget.
+    pub(crate) fn capped(mut content: Vec<Self>, max_bytes: u64) -> (Vec<Self>, Option<u64>) {
+        let original = Self::bytes(&content);
+        if original <= max_bytes {
+            return (content, None);
+        }
+        let mut room = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+        content.retain_mut(|Self::Text(text)| {
+            text.truncate(text.floor_char_boundary(room));
+            room -= text.len();
+            !text.is_empty()
+        });
+        let kept = Self::bytes(&content);
+        content.push(Self::truncated(kept, original));
+        (content, Some(original))
+    }
 }
 
 impl ToolCallOutcome {

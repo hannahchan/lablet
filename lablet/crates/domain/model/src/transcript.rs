@@ -34,10 +34,10 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::message::tool_uses;
-use crate::outcome::whole_ms;
 use crate::provider::distinct_tool_use_ids;
+use crate::whole_ms;
 use crate::{
-    CompletionMode, ContentBlock, FinishReason, Message, ProviderResponse, ResponseError,
+    Calls, CompletionMode, ContentBlock, FinishReason, Message, ProviderResponse, ResponseError,
     ToolCallId, ToolCallOutcome, ToolResult, ToolUse, Usage, UserContent,
 };
 
@@ -326,22 +326,6 @@ impl Transcript {
         });
         Ok(&self.turns[self.turns.len() - 1])
     }
-}
-
-/// The tool calls of a response, as far as completion reads them.
-///
-/// [`Turn::calls`] is the only place a response is read this way, so the loop
-/// can't classify a response differently from how the stop policy expects it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Calls {
-    /// The response called no tool.
-    None,
-    /// The response called tools, and `task_complete` wasn't one of them.
-    Tools,
-    /// The response called `task_complete`, alone or among other tools. Only
-    /// [`CompletionMode::Explicit`] has such a tool, so a natural-mode
-    /// response is never read as this.
-    TaskComplete,
 }
 
 impl Turn {
