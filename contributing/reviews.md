@@ -19,7 +19,7 @@ The most repeated defect in the domain layer's history. Twelve of the fifteen do
 2. **When a type is renamed, grep the old name in prose.** `6ea164d` renamed four types; `c75290c` later found two comments still calling the aggregate root "the tally."
 3. **When a signature changes, check the spec's pseudocode.** `a72ab5f` found the loop pseudocode still calling `finish` with five arguments after `rates` made it six.
 4. **A doc comment that states a contract is a contract.** `Transcript::record` promised that a refused turn leaves the caller's input alone, and `push` broke it by dropping blank blocks before the refusal (`b970009`). The effect was benign; the sentence was what the loop would be written against.
-5. **Re-verify the structural claims a refactor makes.** Prose asserting a structural property drifts as readily as prose asserting an invariant. `d59dfd1` states that it dissolves both import cycles in `lablet-model`; it dissolved `transcript` and `outcome`, and `message` and `provider` still import each other.
+5. **Re-verify the structural claims a refactor makes.** Prose asserting a structural property drifts as readily as prose asserting an invariant. `d59dfd1` states that it dissolves both import cycles in `lablet-model`. It dissolved `transcript` and `outcome`, and left `message` and `provider` importing each other through `ProviderKind` and `tool_uses`; `562295e` recorded that, and the commit after it moved `ProviderKind` to a leaf module and made the sentence true.
 6. **Ask of any claim: is this still true, or was it true when written?**
 
 ## One fact, one place
@@ -92,7 +92,7 @@ From the two independent reviews behind `d59dfd1`.
 41. **A module doc that needs "and" twice is two modules.**
 42. **Put a `pub(crate)` helper where its only caller is.** The output cap moved to `tool.rs` because a cap is a property of a tool call and its only caller was there. A helper with callers in several modules belongs to the crate root, which is where `whole_ms` went.
 43. **Read the `use` block as a claim about dependencies.** `use crate::outcome::whole_ms` in `tool.rs` implied that tools depend on outcomes.
-44. **Import cycles between sibling modules are legal and are the usual sign of a boundary in the wrong place.**
+44. **Import cycles between sibling modules are legal and are the usual sign of a boundary in the wrong place.** The fix is usually to move the shared type down into a leaf module rather than to merge the two: `ProviderKind` left `provider.rs` because `message` needed it and `provider` needs `ContentBlock` either way.
 45. **A delegating wrapper duplicates the tests, not just the signature.** `Pricing::new` re-declared `Rates::new`'s signature and its `# Errors` section only to call it, and its four rate-validation tests were duplicates of the model's. Also ask whether the wrapper has a caller outside its own tests.
 
 ## Reviewing the review

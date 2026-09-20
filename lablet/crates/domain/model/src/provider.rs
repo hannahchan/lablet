@@ -6,31 +6,7 @@ use std::num::NonZeroU32;
 use serde::{Deserialize, Serialize};
 
 use crate::message::tool_uses;
-use crate::{ContentBlock, Usage};
-
-/// The provider families lablet has an adapter for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderKind {
-    /// The Anthropic Messages API.
-    Anthropic,
-    /// Any server that speaks OpenAI chat completions.
-    Openai,
-    /// The scripted provider.
-    Fake,
-}
-
-impl ProviderKind {
-    /// The serde spelling.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Anthropic => "anthropic",
-            Self::Openai => "openai",
-            Self::Fake => "fake",
-        }
-    }
-}
+use crate::{ContentBlock, ProviderKind, Usage};
 
 /// A model as a run names it: the provider and the provider's name for the model.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -340,7 +316,7 @@ impl Effort {
     }
 }
 
-display_as_str!(ProviderKind, ProviderErrorKind, FinishReason, Effort);
+display_as_str!(ProviderErrorKind, FinishReason, Effort);
 
 #[cfg(test)]
 mod tests;

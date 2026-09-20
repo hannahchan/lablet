@@ -413,3 +413,11 @@ The split is along the line that already ran through the page. Every rule in `RE
 `reviews.md` assembles it as fifty-three items, each one drawn from a defect that reached `main` in the two domain crates and was caught by a later review, with the fixing commit cited so the full reasoning stays recoverable. Nothing in it's a gate, and an item that becomes mechanical moves to `README.md` and becomes one.
 
 This isn't an ADR folder, templates, or metadata headers, which the original entry ruled out and which stay ruled out.
+
+## 2026-09-20 `ProviderKind` is a leaf module, which the cycle claim needed
+
+Corrects the entry above, "One module per idea, not one per stage of a run," which says the refactor dissolved both import cycles in `lablet-model`. It dissolved one. `transcript` and `outcome` no longer import each other, and `message` and `provider` still did: `message` needs `ProviderKind` for `ContentBlock::Opaque`, and `provider` needs `ContentBlock` for a response.
+
+`ProviderKind` moves to its own module, which breaks the cycle at the only edge that could move. `provider` depends on `message` for content whatever happens, so the provider family was the half to go, and it goes down rather than sideways: a leaf that names which provider serves a run, imported by the content that tags an opaque block and by the `ModelRef` that names a model. `Usage` set the pattern one commit earlier, when it left `provider.rs` while `ProviderResponse` went on holding one.
+
+`lablet-model` is twelve modules, and its module graph has no cycle.

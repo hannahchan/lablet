@@ -23,6 +23,7 @@ mod message;
 mod outcome;
 mod price;
 mod provider;
+mod provider_kind;
 mod run;
 mod stop;
 mod summary;
@@ -37,9 +38,10 @@ pub use message::{
 pub use outcome::{OutcomeError, RunOutcome, TaskResult};
 pub use price::{Cost, CostError, RateError, Rates};
 pub use provider::{
-    Effort, Endpoint, FinishReason, ModelRef, ProviderErrorKind, ProviderKind, ProviderResponse,
-    RequestParams, ResponseError, Thinking, UnknownReason,
+    Effort, Endpoint, FinishReason, ModelRef, ProviderErrorKind, ProviderResponse, RequestParams,
+    ResponseError, Thinking, UnknownReason,
 };
+pub use provider_kind::ProviderKind;
 pub use run::{Progress, Prompts, Run, RunSetup};
 pub use stop::{Calls, CompletionMode, StopClass, StopReason};
 pub use summary::{FinishedRun, RunContext, RunSummary, ToolStats};

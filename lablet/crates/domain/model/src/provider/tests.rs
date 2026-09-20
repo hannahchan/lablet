@@ -87,22 +87,6 @@ fn only_a_string_that_spells_no_known_reason_is_kept_as_other() {
 }
 
 #[test]
-fn a_provider_kind_prints_what_it_serialises_as() {
-    for (kind, spelling) in [
-        (ProviderKind::Anthropic, "anthropic"),
-        (ProviderKind::Openai, "openai"),
-        (ProviderKind::Fake, "fake"),
-    ] {
-        assert_eq!(kind.to_string(), spelling);
-        assert_eq!(serde_json::to_value(kind).unwrap(), json!(spelling));
-        assert_eq!(
-            serde_json::from_value::<ProviderKind>(json!(spelling)).unwrap(),
-            kind
-        );
-    }
-}
-
-#[test]
 fn an_effort_prints_what_it_serialises_as_and_xhigh_is_one_word() {
     for (effort, spelling) in [
         (Effort::Low, "low"),
