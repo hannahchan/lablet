@@ -129,6 +129,24 @@ pub enum EventKind {
     },
 }
 
+impl EventKind {
+    /// The variant's name, which is how a test states the shape of a run
+    /// without repeating every field.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::RunStarted { .. } => "RunStarted",
+            Self::TurnStarted { .. } => "TurnStarted",
+            Self::ProviderCallStarted { .. } => "ProviderCallStarted",
+            Self::ProviderCallFinished { .. } => "ProviderCallFinished",
+            Self::ProviderCallFailed { .. } => "ProviderCallFailed",
+            Self::ToolCallStarted { .. } => "ToolCallStarted",
+            Self::ToolCallFinished { .. } => "ToolCallFinished",
+            Self::RunFinished { .. } => "RunFinished",
+        }
+    }
+}
+
 /// A span's identity, as W3C strings, so no OpenTelemetry type reaches below
 /// the adapters.
 #[derive(Debug, Clone, PartialEq, Eq)]

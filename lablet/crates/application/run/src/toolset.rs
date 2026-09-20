@@ -175,5 +175,16 @@ fn task_complete_spec(name: ToolName, schema: Option<serde_json::Value>) -> Tool
     }
 }
 
-#[cfg(test)]
-mod tests;
+#[expect(
+    clippy::missing_fields_in_debug,
+    reason = "an executor is a trait object with nothing to print; what a run offers is the routes and the specs"
+)]
+impl core::fmt::Debug for ToolSet {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ToolSet")
+            .field("routes", &self.routes)
+            .field("specs", &self.specs)
+            .field("task_complete", &self.task_complete)
+            .finish()
+    }
+}

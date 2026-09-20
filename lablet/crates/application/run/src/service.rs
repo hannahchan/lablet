@@ -545,6 +545,3 @@ fn task_complete_argument(tools: &ToolSet, calls: &[ToolUse]) -> Option<serde_js
             ToolInput::Unparsed(_) => None,
         })
 }
-
-#[cfg(test)]
-mod tests;

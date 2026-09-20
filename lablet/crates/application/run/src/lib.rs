@@ -20,3 +20,6 @@ pub use tool::{
     McpCallMeta, NetworkTransport, ToolCall, ToolError, ToolErrorKind, ToolExecutor, ToolOutput,
 };
 pub use toolset::{ToolFilter, ToolSet, ToolSetError};
+
+#[cfg(test)]
+mod tests;
