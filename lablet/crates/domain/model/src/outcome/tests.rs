@@ -64,25 +64,26 @@ fn natural_is_the_default_completion_mode() {
     assert_eq!(CompletionMode::default(), CompletionMode::Natural);
 }
 
-// The class of each reason, in the order of `STOP_REASONS`.
-const CLASSES: [StopClass; 12] = [
-    StopClass::Completed,
-    StopClass::Stopped,
-    StopClass::Stopped,
-    StopClass::Stopped,
-    StopClass::Stopped,
-    StopClass::Stopped,
-    StopClass::Failed,
-    StopClass::Failed,
-    StopClass::Failed,
-    StopClass::Stopped,
-    StopClass::Failed,
-    StopClass::Stopped,
+// Each reason with its class. Paired rather than a list in the order of
+// `STOP_REASONS`, so reordering either can't silently relabel them all.
+const CLASSES: [(StopReason, StopClass); 12] = [
+    (StopReason::Completed, StopClass::Completed),
+    (StopReason::EndedWithoutCompletion, StopClass::Stopped),
+    (StopReason::MaxTurns, StopClass::Stopped),
+    (StopReason::Timeout, StopClass::Stopped),
+    (StopReason::MaxTotalTokens, StopClass::Stopped),
+    (StopReason::OutputTruncated, StopClass::Stopped),
+    (StopReason::ContextExhausted, StopClass::Failed),
+    (StopReason::RetriesExhausted, StopClass::Failed),
+    (StopReason::ToolErrorsExhausted, StopClass::Failed),
+    (StopReason::Cancelled, StopClass::Stopped),
+    (StopReason::ProviderError, StopClass::Failed),
+    (StopReason::Refused, StopClass::Stopped),
 ];
 
 #[test]
 fn every_stop_reason_has_its_class() {
-    for ((reason, _), class) in STOP_REASONS.into_iter().zip(CLASSES) {
+    for (reason, class) in CLASSES {
         assert_eq!(reason.class(), class, "{reason}");
     }
 }
@@ -153,7 +154,7 @@ fn closing_keeps_a_structured_result_only_for_a_completed_run() {
 
 #[test]
 fn closing_keeps_an_error_only_for_a_failed_run() {
-    for ((reason, _), class) in STOP_REASONS.into_iter().zip(CLASSES) {
+    for (reason, class) in CLASSES {
         let outcome = RunOutcome::closing(raw(reason, None, Some("boom")));
 
         let expected = (class == StopClass::Failed).then_some("boom");
@@ -335,20 +336,41 @@ fn summary() -> RunSummary {
 fn a_run_summary_has_one_json_form() {
     let json = serde_json::to_value(summary()).unwrap();
 
+    // Every field, because each one is a wide-event attribute: a rename or a
+    // field that stops being written loses an attribute silently otherwise.
     assert_eq!(
-        json["endpoint"],
-        json!({ "host": "localhost", "port": 11434 })
+        json,
+        json!({
+            "model": { "provider": "openai", "name": "qwen3" },
+            "endpoint": { "host": "localhost", "port": 11434 },
+            "tools": ["bash"],
+            "completion": "explicit",
+            "max_turns": 30,
+            "timeout_ms": 600_000,
+            "request": {
+                "max_tokens": 4096,
+                "temperature": null,
+                "thinking": "provider_default",
+                "effort": "low",
+                "seed": null,
+            },
+            "prompt_system_bytes": 120,
+            "prompt_user_bytes": 40,
+            "provider_retries": 1,
+            "provider_latency_total_ms": 900,
+            "provider_latency_max_ms": 500,
+            "finish_reasons": ["tool_use", "end_turn"],
+            "tool_calls_errors": 1,
+            "tool_calls_unknown": 0,
+            "tool_latency_total_ms": 35,
+            "tool_input_bytes": 18,
+            "tool_output_bytes": 2048,
+            "tool_calls_truncated": 1,
+            "per_tool": { "bash": { "calls": 1, "errors": 1, "latency_ms": 35 } },
+            "cost": 0.002,
+            "outcome": serde_json::to_value(outcome()).unwrap(),
+        })
     );
-    assert_eq!(json["completion"], json!("explicit"));
-    assert_eq!(json["timeout_ms"], json!(600_000));
-    assert_eq!(json["request"]["effort"], json!("low"));
-    assert_eq!(
-        json["per_tool"],
-        json!({ "bash": { "calls": 1, "errors": 1, "latency_ms": 35 } })
-    );
-    assert_eq!(json["finish_reasons"], json!(["tool_use", "end_turn"]));
-    assert_eq!(json["cost"], json!(0.002));
-    assert_eq!(json["max_turns"], json!(30));
 }
 
 #[test]

@@ -63,37 +63,56 @@ fn every_stop_reason_is_spelled_as_the_registry_spells_it() {
     }
 }
 
+const fn registry_completion_mode(mode: CompletionMode) -> LabletRunCompletionMode {
+    match mode {
+        CompletionMode::Natural => LabletRunCompletionMode::Natural,
+        CompletionMode::Explicit => LabletRunCompletionMode::Explicit,
+    }
+}
+
+const fn model_completion_mode(registry: LabletRunCompletionMode) -> CompletionMode {
+    match registry {
+        LabletRunCompletionMode::Natural => CompletionMode::Natural,
+        LabletRunCompletionMode::Explicit => CompletionMode::Explicit,
+    }
+}
+
 #[test]
 fn both_completion_modes_are_spelled_as_the_registry_spells_them() {
-    let pairs = [
-        (CompletionMode::Natural, LabletRunCompletionMode::Natural),
-        (CompletionMode::Explicit, LabletRunCompletionMode::Explicit),
-    ];
-    for (model, registry) in pairs {
-        assert_eq!(model.as_str(), registry.as_str());
-        let back = match registry {
-            LabletRunCompletionMode::Natural => CompletionMode::Natural,
-            LabletRunCompletionMode::Explicit => CompletionMode::Explicit,
-        };
-        assert_eq!(back, model);
+    for mode in [CompletionMode::Natural, CompletionMode::Explicit] {
+        let registry = registry_completion_mode(mode);
+        assert_eq!(mode.as_str(), registry.as_str());
+        assert_eq!(model_completion_mode(registry), mode);
+    }
+}
+
+const fn registry_tool_source(source: &ToolSource) -> LabletToolSource {
+    match source {
+        ToolSource::Builtin => LabletToolSource::Builtin,
+        ToolSource::Mcp { .. } => LabletToolSource::Mcp,
+    }
+}
+
+fn model_tool_source(registry: LabletToolSource) -> ToolSource {
+    match registry {
+        LabletToolSource::Builtin => ToolSource::Builtin,
+        LabletToolSource::Mcp => ToolSource::Mcp {
+            server: "docs".to_owned(),
+        },
     }
 }
 
 #[test]
 fn both_tool_sources_are_spelled_as_the_registry_spells_them() {
-    let mcp = ToolSource::Mcp {
-        server: "docs".to_owned(),
-    };
-    for (model, registry) in [
-        (ToolSource::Builtin, LabletToolSource::Builtin),
-        (mcp, LabletToolSource::Mcp),
+    for source in [
+        ToolSource::Builtin,
+        ToolSource::Mcp {
+            server: "docs".to_owned(),
+        },
     ] {
-        assert_eq!(model.as_str(), registry.as_str());
-        let expected = match registry {
-            LabletToolSource::Builtin => "builtin",
-            LabletToolSource::Mcp => "mcp",
-        };
-        assert_eq!(model.as_str(), expected);
+        let registry = registry_tool_source(&source);
+        assert_eq!(source.as_str(), registry.as_str());
+        assert_eq!(model_tool_source(registry), source);
     }
 }
 

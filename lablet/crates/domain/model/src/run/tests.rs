@@ -10,9 +10,19 @@ fn nz(count: u32) -> NonZeroU32 {
     NonZeroU32::new(count).expect("the caps in these tests are all above zero")
 }
 
-/// A call to a tool the run offered, which ended `ended`.
+/// A call to a built-in tool the run offered, which ended `ended`.
 fn ran(ended: ToolCallEnd) -> ToolCallStatus {
     ToolCallStatus::ran(ToolSource::Builtin, ended)
+}
+
+/// The same, for a tool served over MCP.
+fn ran_over_mcp(ended: ToolCallEnd) -> ToolCallStatus {
+    ToolCallStatus::ran(
+        ToolSource::Mcp {
+            server: "docs".to_owned(),
+        },
+        ended,
+    )
 }
 
 fn usd(usd: f64) -> Cost {
@@ -482,6 +492,29 @@ fn a_call_to_a_name_the_run_did_not_offer_counts_in_the_totals_and_gets_no_per_t
     assert_eq!(summary.per_tool.keys().collect::<Vec<_>>(), [&name("bash")]);
 }
 
+/// The summary asks the status whether a tool ran, not where it came from, so
+/// an MCP tool earns its per-tool entry exactly as a built-in one does. Every
+/// other test here runs built-in tools, which would leave the branch that
+/// separates a call that ran from one that didn't tested on one source only.
+#[test]
+fn a_call_to_a_tool_served_over_mcp_earns_a_per_tool_entry_like_any_other() {
+    let mut run = start();
+    tool_turn(
+        &mut run,
+        &["bash", "read_file"],
+        &[ran_over_mcp(ToolCallEnd::Ok), ran(ToolCallEnd::ToolError)],
+    );
+
+    let summary = finish(run, StopReason::Completed);
+    assert_eq!(summary.tool_calls_unknown, 0);
+    assert_eq!(
+        summary.per_tool.keys().collect::<Vec<_>>(),
+        [&name("bash"), &name("read_file")]
+    );
+    assert_eq!(summary.per_tool[&name("bash")].calls, 1);
+    assert_eq!(summary.per_tool[&name("bash")].errors, 0);
+}
+
 /// The summary asks the outcome what became of the call, not the tool list
 /// what the name looks like. The two agree in a run, because the executor
 /// resolves the name against that same list; this is what keeps them from
@@ -673,22 +706,46 @@ fn a_completion_is_refused_while_the_last_turns_tool_calls_are_unanswered() {
 }
 
 #[test]
-fn a_refused_completion_leaves_the_prompt_and_the_attempts_for_the_turn_that_is_accepted() {
-    let mut run = Run::start(setup(), "You fix tests.".to_owned(), "Go.".to_owned());
-    run.input.clear();
+fn a_refused_response_keeps_the_failed_attempts_for_the_turn_that_is_accepted() {
+    let mut run = start();
     run.failed_attempt(ms(1));
-
-    let refused = run.responded(response("Hi.", &[], FinishReason::EndTurn, 1), ms(0), ms(1));
+    let first = run
+        .responded(
+            response("On it.", &["bash"], FinishReason::ToolUse, 1),
+            ms(0),
+            ms(1),
+        )
+        .unwrap();
+    assert_eq!(first.record().attempts, 2);
     assert_eq!(
-        refused.unwrap_err(),
-        TranscriptError::NothingFromTheUser { turn: 1 }
+        run.transcript.turns()[0].input(),
+        [UserContent::Text("Fix the failing test.".to_owned())]
     );
 
-    run.input = vec![UserContent::Text("Go.".to_owned())];
-    let turn = run
-        .responded(response("Hi.", &[], FinishReason::EndTurn, 1), ms(0), ms(1))
+    // A second attempt fails, and then a response arrives while the first
+    // turn's calls are still unanswered, which the transcript refuses.
+    run.failed_attempt(ms(1));
+    assert!(matches!(
+        run.responded(
+            response("Done.", &[], FinishReason::EndTurn, 1),
+            ms(0),
+            ms(1)
+        ),
+        Err(TranscriptError::UnansweredCalls { turn: 1, .. })
+    ));
+
+    run.tool_calls(vec![outcome(0, ran(ToolCallEnd::Ok), "out", ms(1))])
         .unwrap();
-    assert_eq!(turn.record().attempts, 2);
+    let second = run
+        .responded(
+            response("Done.", &[], FinishReason::EndTurn, 1),
+            ms(0),
+            ms(1),
+        )
+        .unwrap();
+
+    // The refusal neither consumed the failed attempt nor counted itself.
+    assert_eq!(second.record().attempts, 2);
 }
 
 #[test]

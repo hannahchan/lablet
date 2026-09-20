@@ -116,6 +116,22 @@ fn the_length_error_states_the_limit() {
     );
 }
 
+/// A name that breaks both rules is refused for its characters, because the
+/// length message counts characters and only an ASCII name has as many
+/// characters as bytes. Checking the length first would report these 40
+/// characters as longer than 64, which is 80 bytes but a false sentence.
+#[test]
+fn a_name_that_is_both_too_long_in_bytes_and_not_ascii_is_refused_for_its_characters() {
+    let accented = "é".repeat(40);
+
+    assert_eq!(accented.chars().count(), 40);
+    assert!(accented.len() > ToolName::MAX_LEN);
+    assert_eq!(
+        ToolName::new(accented.clone()),
+        Err(IdError::ToolNameCharacter { value: accented })
+    );
+}
+
 #[test]
 fn an_identifier_serialises_as_a_bare_string() {
     assert_eq!(
