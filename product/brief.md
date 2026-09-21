@@ -39,3 +39,4 @@ Optimise an MCP server: run the same task suite against versions of the server, 
 - **Own loop, not a wrapped SDK**, so every step is instrumented on our terms.
 - **CLI and library** from the same composition root.
 - **Raw data, never reports.** One lablet's telemetry matters because it joins with ten thousand others. Every record is shaped for aggregation by the composing system; lablet itself never aggregates, reports, or visualises.
+- **Vendor and solution agnostic.** No model provider, eval framework, trajectory format, or observability product is privileged. Where an open standard exists lablet follows it: the GenAI semantic conventions over OTLP, which any collector receives. Where formats compete, each one lablet emits is a rendering of the run rather than a shape the run is held in. The model is shaped by what an agent loop is, so a format that can't hold all of it loses that in its own export and not in the model.

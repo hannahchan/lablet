@@ -499,3 +499,25 @@ Those stay, and the reason is worth stating. `Transcript` is read back with `#[s
 So the hypothesis behind the floor holds, with a boundary: coverage falling in these layers is a design signal, except where the uncovered code is one caller's handling of a failure another caller can genuinely cause. That case is a shared contract, not a guard.
 
 No floor is 100% mutants. An equivalent mutant can't be killed by any test, `lablet-run` carries one already (the default `RunObserver::trace_context` returning `None`, replaced by `None`), and whether a mutant is equivalent isn't decidable, so the number would be a promise about future code that nobody can keep.
+
+## 2026-09-21 Vendor and solution agnostic, written down
+
+A commitment the human has been holding since before the spec and never wrote: no model provider, eval framework, trajectory format, or observability product is privileged. It's in `brief.md` now, beside "raw data, never reports," because it has been deciding things unwritten and nothing in the repo let a reader reconstruct it.
+
+It surfaced while weighing whether `Transcript` should carry its own serde form, and it turned that question around. The argument for the split had been the domain's freedom to change. The argument that actually holds is this one: the transcript's serde form is lablet's native JSON, so the domain type **is** one of the formats, and being one of the formats is what a neutral model can't be.
+
+Two pieces of evidence, both already in the repo:
+
+- Phase 2's line in `build-plan.md` obliged the model to ATIF: "The transcript shape must map losslessly onto an ATIF v1.8 trajectory ... so the phase 10 export needs no model change." That's Harbor's format setting the domain's shape, as a standing requirement.
+- It doesn't hold anyway. Spec §3's own mapping table sends the outcome's `status`, `started_ms`, `latency_ms` and `truncated_from_bytes` to `ObservationResult.extra`, because ATIF has no slot for an error, a time, or a truncation. The escape hatch was there before anyone claimed field-for-field.
+
+So the model is shaped by format two and is format one, and neither is the run.
+
+What follows, and what doesn't:
+
+- **The obligation on the model is lifted.** `build-plan.md` is amended in this commit: the transcript maps onto ATIF, which is why phase 10 exports rather than reconstructs, but the shape is the run's and the export carries what ATIF has no slot for. Nothing built in phase 2 changes; what changes is which way the constraint points.
+- **Giving the transcript its own document type isn't decided here.** It's the open question this commitment gives a reason to ask, and it needs its own go-ahead: it would delete the transcript's read path, which nothing uses, and supersede the 2026-09-21 entry that priced eleven uncovered regions as the cost of one rule set serving two paths. The read path has no second caller, so that price was paid for nobody.
+- **The port isn't the answer**, and the distinction is worth keeping. One kind of thing maps the run to a format; a port is a trait the application ring depends on. The loop neither renders nor writes, and a failed disk write isn't a stop reason. A format writer is an adapter the composition root picks between; `run.transcript_format` already names two.
+- **Spec §3's "field for field" wants revisiting** when the transcript question is settled, since the table below it already says otherwise.
+
+This doesn't reopen the provider adapters or the telemetry conventions, which were agnostic by construction: provider wire formats are separate types in their own adapters, and OTLP reaches any collector.
