@@ -208,7 +208,7 @@ impl Turn {
     pub fn text(&self) -> String;                                     // the Text blocks, concatenated
     pub fn calls(&self, mode: CompletionMode) -> Calls;               // what the stop policy reads at point R
 }
-pub enum TranscriptError { Response(ResponseError), NothingFromTheUser { turn: usize }, UnansweredCalls { turn: usize, calls: Vec<String> }, AlreadyAnswered { turn: usize }, OutcomesDontAnswerCalls { calls: Vec<String>, outcomes: Vec<String> } }
+pub enum TranscriptError { NothingFromTheUser { turn: usize }, UnansweredCalls { turn: usize, calls: Vec<String> }, OutcomesDontAnswerCalls { calls: Vec<String>, outcomes: Vec<String> } }
 pub enum Calls { None, Tools, TaskComplete }   // how a completion mode reads a response; Turn::calls is the only producer
 
 // Provider

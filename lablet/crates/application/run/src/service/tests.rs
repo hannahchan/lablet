@@ -32,7 +32,6 @@ fn every_refusal_reads_as_a_defect_and_carries_its_own_words() {
             turn: 1,
             calls: vec!["call_0".to_owned()],
         },
-        TranscriptError::AlreadyAnswered { turn: 1 },
         TranscriptError::OutcomesDontAnswerCalls {
             calls: vec!["call_0".to_owned()],
             outcomes: Vec::new(),

@@ -202,9 +202,8 @@ impl Run {
     ///
     /// Returns [`TranscriptError::OutcomesDontAnswerCalls`] unless `outcomes`
     /// answers the tool calls of the last response, each once and in call
-    /// order, or both are empty; and [`TranscriptError::AlreadyAnswered`] when
-    /// the turn's calls were answered before. The loop builds one outcome for
-    /// each call, in order, so it never sees either.
+    /// order, or both are empty. The loop builds one outcome for each call,
+    /// in order, so it never sees one.
     pub fn tool_calls(&mut self, outcomes: Vec<ToolCallOutcome>) -> Result<(), TranscriptError> {
         self.transcript.answer(outcomes)
     }

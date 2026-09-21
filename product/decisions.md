@@ -593,3 +593,15 @@ They move together rather than in sequence, and that matters. Both documents lan
 **What phase 4 owes, which the build plan is amended with in this commit.** The transcript needs a checked-in fixture and a changelog-gate entry. That was recorded as an obligation when `TranscriptDocument::of` lost its compile-time drift guard, and the obligation never reached the plan work is actually done from. The outcome already has both, and its gate path doesn't change when the type moves.
 
 Nothing here reopens the provider adapters, which were never coupled: a provider's wire format is its own type in its own adapter, and that's been true since 2026-09-18.
+
+## 2026-09-21 `TranscriptError::AlreadyAnswered` is gone
+
+The variant and the check that produced it. `Transcript::answer` had four refusals and now has three, and `Run::tool_calls`'s contract is one sentence shorter.
+
+It went because the rule it held is nearly held by the rule beside it. Outcomes are matched against the call ids of the response, and those don't change when a turn is answered, so a second set naming other calls is refused as `OutcomesDontAnswerCalls` exactly as the first would have been. `AlreadyAnswered` only ever caught one case the other misses: a second set naming the same calls with different content, which silently replaces the first.
+
+That narrowing is the honest cost and it's smaller than it sounds, but it isn't nothing, and it sits against the rule recorded the same day: a check no caller can reach stays when what it buys is that a defect surfaces rather than corrupting data. The two `Stopped::defect` arms in the loop were kept on exactly that reasoning. This one goes because its remaining case needs a caller that answers the same turn twice, with the same call ids, carrying different outcomes, and `Run::tool_calls` has one caller, which builds its outcomes from the turn's own `tool_uses` and calls it once. Held against the other two, which guard a sequence the loop could get wrong in more than one way, this is a guard for a single contrived shape.
+
+Two stale lines in spec section 3 went with it: the `TranscriptError` listing still carried `AlreadyAnswered`, and also `Response(ResponseError)`, which was deleted with the transcript's read path a few entries above and never removed from the spec.
+
+`lablet-model` holds at 100% lines and regions on a smaller denominator, 768 and 917, since the deleted code was covered by the test that has gone with it.

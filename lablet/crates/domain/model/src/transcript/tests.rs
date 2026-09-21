@@ -412,8 +412,11 @@ fn a_refused_turn_leaves_the_input_as_the_caller_had_it() {
     assert_eq!(next, prompt());
 }
 
+/// Outcomes are matched against the calls the response made, and those don't
+/// change once a turn is answered, so a second set naming other calls is
+/// refused exactly as the first would have been.
 #[test]
-fn the_tool_calls_of_a_turn_are_answered_once() {
+fn outcomes_answer_the_calls_the_response_made_however_often_they_are_offered() {
     let mut transcript = transcript();
     turn(&mut transcript, prompt(), calls(&["call_a"])).unwrap();
 
@@ -427,9 +430,13 @@ fn the_tool_calls_of_a_turn_are_answered_once() {
     transcript
         .answer(vec![outcome("call_a", ran(ToolCallEnd::Ok), "done")])
         .unwrap();
+
     assert_eq!(
-        transcript.answer(vec![outcome("call_a", ran(ToolCallEnd::Ok), "again")]),
-        Err(TranscriptError::AlreadyAnswered { turn: 1 })
+        transcript.answer(vec![outcome("call_b", ran(ToolCallEnd::Ok), "other")]),
+        Err(TranscriptError::OutcomesDontAnswerCalls {
+            calls: vec!["call_a".to_owned()],
+            outcomes: vec!["call_b".to_owned()],
+        })
     );
     assert_eq!(transcript.turns()[0].tool_calls().len(), 1);
 }

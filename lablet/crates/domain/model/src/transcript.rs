@@ -122,12 +122,6 @@ pub enum TranscriptError {
         /// The ids of its calls, in order.
         calls: Vec<String>,
     },
-    /// A turn's tool calls are answered once.
-    #[error("turn {turn}'s tool calls already have their outcomes")]
-    AlreadyAnswered {
-        /// The turn whose calls were answered before, counted from 1.
-        turn: usize,
-    },
     /// Outcomes aren't those of the last turn's tool calls.
     #[error(
         "the outcomes {outcomes:?} don't answer the tool calls {calls:?}, each once and in call order"
@@ -233,7 +227,6 @@ impl Transcript {
         // The last turn is taken once, mutably, and every refusal is decided
         // against it. Asking for it again after the checks have passed would
         // be a branch that can't be taken and so can't be covered.
-        let number = self.turns.len();
         let Some(turn) = self.turns.last_mut() else {
             return if outcomes.is_empty() {
                 // No turn made a call, so an empty set of outcomes answers it.
@@ -245,9 +238,6 @@ impl Transcript {
                 })
             };
         };
-        if !turn.tool_calls.is_empty() {
-            return Err(TranscriptError::AlreadyAnswered { turn: number });
-        }
         let calls = turn.call_ids();
         if outcomes.is_empty() && calls.is_empty() {
             return Ok(());
