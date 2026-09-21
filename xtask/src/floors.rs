@@ -39,10 +39,11 @@ pub struct Floor {
 /// floor exists to raise: it means the type allows a state the caller has
 /// already ruled out.
 ///
-/// `lablet-run` is held at 98, a ratchet just under where it stands rather
-/// than a round number. Its uncovered regions are all one cluster: the loop
-/// handling a `TranscriptError` it can't receive, because the rules that
-/// error reports are ones the loop maintains as it goes.
+/// `lablet-run` is held at 99, which is where it stands. Its uncovered
+/// regions are one cluster of six: the two arms that take a
+/// `TranscriptError` from `Run::responded` and `Run::tool_calls`, which the
+/// loop can't receive, because the rules that error reports are ones the loop
+/// maintains as it goes.
 ///
 /// They're kept, and they're a third kind of uncovered code, neither of the
 /// two the domain floors are set for. A guard against a state the caller has
@@ -53,11 +54,18 @@ pub struct Floor {
 /// loop ends the run with a reported `provider_error` rather than writing a
 /// transcript that lies about what happened. For a tool whose whole value is
 /// being trustworthy about numbers, never silently wrong is worth more than
-/// two points of coverage.
+/// the last point of coverage.
 ///
-/// So the cluster is 11 regions and the crate can't reach 100. A floor at 90
-/// would have left eight points of silent drift; the margin at 98 is two
-/// regions, so anything new that no test can reach fails the gate.
+/// `Stopped::defect` itself is tested directly, because the sentence it
+/// builds is what an operator reads when one fires. That left the two call
+/// sites, which nothing can reach, so the crate stands at 99.1% regions and
+/// 99.6% lines and can't go further without deleting the checks.
+///
+/// The floor is therefore 99, with no headroom at all: 99% of 692 regions is
+/// 686, and 686 is what there are. One new region no test can reach turns the
+/// gate red on the commit that adds it, which is the point — a check of this
+/// third kind should be argued for when it's written, not discovered later.
+/// Lines have three of slack, since 522 of them round more kindly.
 pub const FLOORS: &[Floor] = &[
     Floor {
         package: "lablet-model",
@@ -73,8 +81,8 @@ pub const FLOORS: &[Floor] = &[
     },
     Floor {
         package: "lablet-run",
-        line_coverage: 98,
-        region_coverage: 98,
+        line_coverage: 99,
+        region_coverage: 99,
         mutants_caught: 80,
     },
 ];
@@ -370,10 +378,10 @@ mod tests {
             [
                 ("lablet-model", 100, 100, 80),
                 ("lablet-policy", 100, 100, 80),
-                // A ratchet under where the loop stands, not a round number:
-                // it can't reach 100 while it handles a refusal only the read
-                // path can produce.
-                ("lablet-run", 98, 98, 80),
+                // Where the loop stands, with no headroom in its regions:
+                // it can't reach 100 while it keeps the two arms that take a
+                // refusal the loop itself can't produce.
+                ("lablet-run", 99, 99, 80),
             ]
         );
     }
