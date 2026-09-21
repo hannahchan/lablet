@@ -34,18 +34,18 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::message::tool_uses;
-use crate::provider::distinct_tool_use_ids;
 use crate::whole_ms;
 use crate::{
-    Calls, CompletionMode, ContentBlock, FinishReason, Message, ProviderResponse, ResponseError,
-    ToolCallId, ToolCallOutcome, ToolResult, ToolUse, Usage, UserContent,
+    Calls, CompletionMode, ContentBlock, FinishReason, Message, ProviderResponse, ToolCallId,
+    ToolCallOutcome, ToolResult, ToolUse, Usage, UserContent,
 };
 
 /// The conversation of one run: the system prompt and the turns.
 ///
-/// A run builds one through its [`crate::Run`], and reading one from its
-/// serde form goes through the same steps, so every `Transcript` holds these
-/// rules:
+/// A run builds one through its [`crate::Run`], which is the only way one is
+/// built: lablet runs a loop and emits what it saw, and reading a transcript
+/// back belongs to the side that consumes it. So every `Transcript` holds
+/// these rules because the run enforced them as it went:
 ///
 /// - Something from the user comes before every response: a turn has input,
 ///   or the turn before it has tool call outcomes. So the first turn has
@@ -62,44 +62,10 @@ use crate::{
 ///
 /// A run takes one prompt, so only the first turn of a run's transcript has
 /// input. The shape leaves room for a user who speaks again.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "RawTranscript")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Transcript {
     system: String,
     turns: Vec<Turn>,
-}
-
-/// What a transcript is read from, so that reading one holds it to the rules.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawTranscript {
-    system: String,
-    turns: Vec<RawTurn>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawTurn {
-    input: Vec<UserContent>,
-    response: Vec<ContentBlock>,
-    record: TurnRecord,
-    tool_calls: Vec<ToolCallOutcome>,
-}
-
-impl TryFrom<RawTranscript> for Transcript {
-    type Error = TranscriptError;
-
-    fn try_from(raw: RawTranscript) -> Result<Self, TranscriptError> {
-        let mut transcript = Self::new(raw.system);
-        for mut turn in raw.turns {
-            distinct_tool_use_ids(&turn.response)?;
-            transcript.push(&mut turn.input, turn.response, turn.record)?;
-            if !turn.tool_calls.is_empty() {
-                transcript.answer(turn.tool_calls)?;
-            }
-        }
-        Ok(transcript)
-    }
 }
 
 /// One model response, with its input, its record, and its tool call outcomes.
@@ -133,12 +99,11 @@ pub struct TurnRecord {
     pub attempts: u32,
 }
 
-/// Why a transcript can't take what it was given, or can't be read.
+/// Why a transcript can't take what the run gave it. Only a defect in the
+/// loop produces one: the rules below are what the loop maintains as it goes,
+/// and nothing else builds a transcript.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TranscriptError {
-    /// A response in a transcript being read breaks the rule of a completion.
-    #[error(transparent)]
-    Response(#[from] ResponseError),
     /// A turn would put its response straight after another, or first of all.
     #[error(
         "turn {turn} has no input and no tool results come before it, so nothing from the user would precede its response"
@@ -427,6 +392,8 @@ fn ids<'a>(ids: impl Iterator<Item = &'a ToolCallId>) -> Vec<String> {
 fn is_blank(block: &UserContent) -> bool {
     matches!(block, UserContent::Text(text) if text.trim().is_empty())
 }
+
+pub mod document;
 
 #[cfg(test)]
 mod tests;

@@ -31,6 +31,7 @@ Optimise an MCP server: run the same task suite against versions of the server, 
 - Hosting MCP servers.
 - Writing Arrow or Parquet directly. The collector side does that.
 - Multi-agent coordination inside one process. One lablet, one loop.
+- Reading back what it emitted. The consuming side does that.
 
 ## Design commitments
 

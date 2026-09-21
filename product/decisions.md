@@ -521,3 +521,21 @@ What follows, and what doesn't:
 - **Spec §3's "field for field" wants revisiting** when the transcript question is settled, since the table below it already says otherwise.
 
 This doesn't reopen the provider adapters or the telemetry conventions, which were agnostic by construction: provider wire formats are separate types in their own adapters, and OTLP reaches any collector.
+
+## 2026-09-21 The transcript has no read path
+
+Follows the vendor-agnostic commitment above, and supersedes the 2026-09-21 entry "The domain crates are held to every line and every region" on the one point it got wrong.
+
+That entry priced eleven uncovered regions in `lablet-run` as the cost of one rule set serving two paths, the loop's and the serde reader's. The premise was checked and the conclusion wasn't: the reader has no caller. Nothing in lablet reads a `Transcript` back, and `brief.md` puts the consuming side outside lablet twice over, in "analysis belongs to the larger framework that composes lablets," and in "writing Arrow or Parquet directly: the collector side does that." A reader in `lablet-model` was lablet doing the composing framework's job. It's gone, along with `RawTranscript`, `RawTurn`, the `try_from` attribute, and `TranscriptError::Response`, whose only producer was that conversion. "Reading back what it emitted" is now in the brief's out-of-scope list so the question doesn't come back.
+
+`TranscriptDocument` takes the published form's place. It borrows a `Transcript`, adds `schema_version`, and serialises without reading back, which is the posture `RunSummary` and `FinishedRun` already had. The version had nowhere to live while the domain type was the wire form, since a transcript in memory has no version, and it had to land now rather than later: `RawTranscript` carried `deny_unknown_fields`, so a version key added afterwards would have been a break lablet's own reader enforced against lablet's own older documents. `TranscriptDocument::of` takes `Transcript` apart by pattern rather than through its reader methods, so a field added to the run's transcript is a compile error until this says whether it's published. That's why the module is a child of `transcript` and not a sibling.
+
+The eleven regions stay, and they needed a new justification because the old one is now false. They're a third kind of uncovered code, and the earlier entry's two categories don't hold them:
+
+- A guard against a state the caller has already ruled out should go, and the type should rule it out instead.
+- A shared contract, where a second caller can genuinely fail the check, stays, and that caller's tests cover it.
+- These are neither. No caller can reach them. What they buy is that a defect in the loop ends the run with a reported `provider_error` instead of publishing a transcript that lies about what happened. For a tool whose whole value is being trustworthy about numbers, never silently wrong is worth more than two points of coverage.
+
+So `lablet-run` stays at 98 and the floor's recorded reason is rewritten rather than the number moved. `lablet-model` is unchanged at 100% lines and regions: deleting the reader took its tests with it, and the document arrived with its own.
+
+Not done here, and worth naming so it isn't lost. `RunFinished` is emitted inside `RunService::run` while `Lablet::run` writes the file afterwards, so `lablet.run.transcript_path` is published before the file exists, and whether or not the write succeeds. Phase 4 either writes before the wide event or makes the attribute conditional. `TranscriptError::AlreadyAnswered` is also unreachable from production on what's now the only path, and its only producer is a unit test.

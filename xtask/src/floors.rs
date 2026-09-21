@@ -41,14 +41,23 @@ pub struct Floor {
 ///
 /// `lablet-run` is held at 98, a ratchet just under where it stands rather
 /// than a round number. Its uncovered regions are all one cluster: the loop
-/// handling a `TranscriptError` it can't receive. That error can't go away,
-/// because a `Transcript` is read back from its serde form through the same
-/// `push` and `answer` the loop writes through, so one rule set serves both
-/// paths; making the loop's calls infallible would mean a second copy of the
-/// rules for the read path. The cluster is 11 regions, so the crate can't
-/// reach 100, and a floor at 90 would have left eight points of silent drift.
-/// The margin at 98 is two regions: anything new that can't be reached fails
-/// the gate, which is the point.
+/// handling a `TranscriptError` it can't receive, because the rules that
+/// error reports are ones the loop maintains as it goes.
+///
+/// They're kept, and they're a third kind of uncovered code, neither of the
+/// two the domain floors are set for. A guard against a state the caller has
+/// already ruled out should go, and the type should rule it out instead. A
+/// shared contract, where a second caller can genuinely fail the check,
+/// should stay and is covered by that caller's tests. These are neither: no
+/// caller can reach them, and what they buy is that a future defect in the
+/// loop ends the run with a reported `provider_error` rather than writing a
+/// transcript that lies about what happened. For a tool whose whole value is
+/// being trustworthy about numbers, never silently wrong is worth more than
+/// two points of coverage.
+///
+/// So the cluster is 11 regions and the crate can't reach 100. A floor at 90
+/// would have left eight points of silent drift; the margin at 98 is two
+/// regions, so anything new that no test can reach fails the gate.
 pub const FLOORS: &[Floor] = &[
     Floor {
         package: "lablet-model",

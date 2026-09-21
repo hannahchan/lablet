@@ -46,6 +46,7 @@ pub use run::{BlankTask, Progress, Prompts, Run, RunSetup};
 pub use stop::{Calls, CompletionMode, StopClass, StopReason};
 pub use summary::{FinishedRun, RunContext, RunSummary, ToolStats};
 pub use tool::{ToolCallEnd, ToolCallOutcome, ToolCallStatus, ToolSource, ToolSpec};
+pub use transcript::document::{TRANSCRIPT_SCHEMA_VERSION, TranscriptDocument};
 pub use transcript::{Transcript, TranscriptError, Turn, TurnRecord};
 pub use usage::{TokenCounts, Usage};
 

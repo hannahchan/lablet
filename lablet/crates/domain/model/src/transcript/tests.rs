@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 
+use super::document::{TRANSCRIPT_SCHEMA_VERSION, TranscriptDocument};
 use super::*;
 use crate::{
     CompletionMode, ProviderKind, TokenCounts, ToolCallEnd, ToolCallStatus, ToolInput, ToolName,
@@ -776,138 +777,6 @@ fn a_transcript_has_one_json_form() {
         .unwrap();
 
     assert_eq!(serde_json::to_value(&transcript).unwrap(), document());
-    assert_eq!(
-        serde_json::from_value::<Transcript>(document()).unwrap(),
-        transcript
-    );
-}
-
-fn reading(document: Value) -> String {
-    serde_json::from_value::<Transcript>(document)
-        .unwrap_err()
-        .to_string()
-}
-
-#[test]
-fn a_document_whose_response_repeats_a_tool_call_id_is_not_a_transcript() {
-    let mut document = document();
-    let call = document["turns"][0]["response"][1].clone();
-    document["turns"][0]["response"]
-        .as_array_mut()
-        .unwrap()
-        .push(call);
-
-    assert_eq!(
-        reading(document),
-        r#"tool call id "call_a" is on more than one tool-use block of the response"#
-    );
-}
-
-#[test]
-fn a_document_whose_outcomes_do_not_answer_the_calls_is_not_a_transcript() {
-    let mut document = document();
-    document["turns"][0]["tool_calls"][0]["call_id"] = json!("call_z");
-
-    assert_eq!(
-        reading(document),
-        r#"the outcomes ["call_z"] don't answer the tool calls ["call_a"], each once and in call order"#
-    );
-}
-
-#[test]
-fn a_document_with_unanswered_calls_before_its_last_turn_is_not_a_transcript() {
-    let mut document = document();
-    document["turns"][0]["tool_calls"] = json!([]);
-
-    assert_eq!(
-        reading(document),
-        r#"turn 1 made the tool calls ["call_a"] and has no outcomes, which only the last turn may"#
-    );
-}
-
-#[test]
-fn a_document_whose_first_turn_has_no_input_is_not_a_transcript() {
-    let mut document = document();
-    document["turns"][0]["input"] = json!([]);
-
-    assert_eq!(
-        reading(document),
-        "turn 1 has no input and no tool results come before it, \
-         so nothing from the user would precede its response"
-    );
-}
-
-#[test]
-fn a_document_with_two_adjacent_responses_is_not_a_transcript() {
-    let mut document = document();
-    let last = document["turns"][1].clone();
-    document["turns"].as_array_mut().unwrap().push(last);
-
-    assert_eq!(
-        reading(document),
-        "turn 3 has no input and no tool results come before it, \
-         so nothing from the user would precede its response"
-    );
-}
-
-#[test]
-fn a_document_whose_first_input_is_blank_is_not_a_transcript() {
-    for blank in ["", "  "] {
-        let mut document = document();
-        document["turns"][0]["input"] = json!([{ "text": blank }]);
-
-        assert_eq!(
-            reading(document),
-            "turn 1 has no input and no tool results come before it, \
-             so nothing from the user would precede its response",
-            "{blank:?}"
-        );
-    }
-}
-
-#[test]
-fn a_document_whose_input_holds_a_tool_block_is_not_a_transcript() {
-    for block in [
-        json!({ "tool_use": { "id": "call_b", "name": "bash", "input": { "json": {} } } }),
-        json!({ "tool_result": { "call_id": "call_a", "content": [] } }),
-    ] {
-        let mut document = document();
-        document["turns"][1]["input"] = json!([block]);
-
-        assert!(reading(document).contains("unknown variant"));
-    }
-}
-
-#[test]
-fn a_document_may_end_on_a_turn_whose_tools_never_ran() {
-    let mut document = document();
-    document["turns"].as_array_mut().unwrap().pop();
-    document["turns"][0]["tool_calls"] = json!([]);
-
-    let transcript = serde_json::from_value::<Transcript>(document).unwrap();
-
-    assert_eq!(transcript.turns().len(), 1);
-    assert_eq!(transcript.turns()[0].tool_uses().count(), 1);
-    assert!(transcript.turns()[0].tool_calls().is_empty());
-}
-
-#[test]
-fn a_document_in_the_flat_message_form_or_short_of_a_field_is_not_a_transcript() {
-    let flat = json!({ "system": "", "messages": [], "turns": [] });
-    let mut no_record = document();
-    no_record["turns"][1]
-        .as_object_mut()
-        .unwrap()
-        .remove("record");
-    let mut no_input = document();
-    no_input["turns"][1]
-        .as_object_mut()
-        .unwrap()
-        .remove("input");
-
-    for document in [flat, no_record, no_input] {
-        assert!(serde_json::from_value::<Transcript>(document).is_err());
-    }
 }
 
 /// A transcript of `turns` turns, each calling `calls` tools and answering
@@ -939,12 +808,12 @@ fn grown(system: &str, prompt_text: &str, turns: usize, calls: usize) -> Transcr
 proptest::proptest! {
     #![proptest_config(proptest::prelude::ProptestConfig::with_cases(400))]
 
-    /// A transcript written and read back is the same transcript, so a grader
-    /// that reads the document and a run that produced it agree. Blank text
-    /// is dropped once on the way in, which is why the fixpoint is asserted
-    /// on a transcript the model built rather than on arbitrary JSON.
+    /// Whatever a run does, the document it publishes has the run's system
+    /// prompt, a turn for each of its turns, and a version. lablet doesn't
+    /// read one back, so what's held here is that publishing is total: no
+    /// shape a run can reach fails to render.
     #[test]
-    fn a_transcript_read_back_is_the_transcript_that_was_written(
+    fn every_transcript_a_run_can_build_publishes_as_a_document(
         system in "[ -~]{0,40}",
         prompt_text in "[ -~]{1,40}",
         turns in 1usize..4,
@@ -952,15 +821,18 @@ proptest::proptest! {
     ) {
         proptest::prop_assume!(!prompt_text.trim().is_empty());
         let transcript = grown(&system, &prompt_text, turns, calls);
-        let written = serde_json::to_string(&transcript).unwrap();
 
+        let value = serde_json::to_value(TranscriptDocument::of(&transcript)).unwrap();
+
+        proptest::prop_assert_eq!(&value["schema_version"], &json!(TRANSCRIPT_SCHEMA_VERSION));
+        proptest::prop_assert_eq!(value["system"].as_str().unwrap(), transcript.system());
         proptest::prop_assert_eq!(
-            serde_json::from_str::<Transcript>(&written).unwrap(),
-            transcript
+            value["turns"].as_array().unwrap().len(),
+            transcript.turns().len()
         );
         proptest::prop_assert_eq!(
-            serde_json::to_string(&serde_json::from_str::<Transcript>(&written).unwrap()).unwrap(),
-            written
+            &value["turns"],
+            &serde_json::to_value(transcript.turns()).unwrap()
         );
     }
 }
