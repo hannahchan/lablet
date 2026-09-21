@@ -12,6 +12,10 @@ An entry under `Unreleased` is mandatory for any change to one of the three cont
 
 ## [Unreleased]
 
+### Changed
+
+- `lablet.run.transcript_path` now reads "where the run's transcript is written," rather than "was written." The wide event is emitted inside `RunService::run` and the composition root writes the file afterwards, so the attribute names a destination rather than reporting a file that already exists. The key, its type, and its conditional requirement are unchanged.
+
 ### Added
 
 - Project scaffold: the `lablet/` Cargo workspace with an empty crate for every ring of the architecture, the root `xtask` gate crate (`lint-layers`, `lint-manifests`, `fmt`, `clippy`, `deny`, `doc`, `test`, `coverage`, `mutants`, `changelog`, `pre-commit`, `pre-push`, `ci`), the pinned Rust toolchain and `mise.toml` gate tools, `scripts/setup.sh` and the git hooks, the `cargo deny` policy, and the GitHub Actions workflow.

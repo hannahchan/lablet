@@ -195,7 +195,7 @@ attributes:
   - key: lablet.run.transcript_path
     type: string
     stability: development
-    brief: Where the run's transcript was written.
+    brief: Where the run's transcript is written.
     note: >
       Justification: `file.path` describes a file an operation acts on; this points from the
       telemetry to a separate artefact of the run, which no convention does.

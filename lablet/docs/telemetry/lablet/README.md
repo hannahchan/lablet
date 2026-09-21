@@ -55,7 +55,7 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 | <a id="lablet-run-max-turns">`lablet.run.max_turns`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | The configured cap on turns. [25] | `30` |
 | <a id="lablet-run-stop-reason">`lablet.run.stop_reason`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | Why the run ended. [26] | `completed`; `max_turns` |
 | <a id="lablet-run-timeout-ms">`lablet.run.timeout_ms`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | The configured run timeout, in milliseconds. [27] | `600000` |
-| <a id="lablet-run-transcript-path">`lablet.run.transcript_path`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | Where the run's transcript was written. [28] | `runs/01J9Z3/transcript.json` |
+| <a id="lablet-run-transcript-path">`lablet.run.transcript_path`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | Where the run's transcript is written. [28] | `runs/01J9Z3/transcript.json` |
 | <a id="lablet-run-turns">`lablet.run.turns`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of turns the run took. [29] | `7` |
 | <a id="lablet-skills-count">`lablet.skills.count`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of skill files appended to the system prompt. [30] | `2` |
 | <a id="lablet-tool-calls">`lablet.tool.calls`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of calls to one tool, `<key>` being the tool name. [31] | `[3]` |

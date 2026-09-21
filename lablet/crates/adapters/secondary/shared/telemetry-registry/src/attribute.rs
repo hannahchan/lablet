@@ -177,7 +177,7 @@ pub const LABLET_RUN_STOP_REASON: &str = "lablet.run.stop_reason";
 /// The configured run timeout, in milliseconds.
 pub const LABLET_RUN_TIMEOUT_MS: &str = "lablet.run.timeout_ms";
 
-/// Where the run's transcript was written.
+/// Where the run's transcript is written.
 pub const LABLET_RUN_TRANSCRIPT_PATH: &str = "lablet.run.transcript_path";
 
 /// Number of turns the run took.
