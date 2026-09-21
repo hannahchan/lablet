@@ -575,3 +575,21 @@ A typestate was considered, which would have deleted the runtime check and made 
 So the floor is 99 rather than 98, and it has no headroom in the regions at all. 99% of 692 is 686 and there are 686. One new region no test can reach turns the gate red on the commit that adds it, which is the intent: a check of the third kind recorded above should be argued for when it's written, not found later by a coverage report. Lines have three of slack, because 522 of them round more kindly.
 
 The risk this takes on is worth stating. A legitimate third-kind check added in phase 4 fails the gate the moment it lands, and whoever hits it has to either cover it, argue it, or move the number. That's the cost of a floor with no slack, and it's accepted on purpose.
+
+## 2026-09-21 Domain and application are in-memory models
+
+The general form of the three entries above, and it settles the outcome question the last one left open. Nothing below the adapters carries a published shape. A run's transcript, its outcome and everything they hold are values; collapsing one into bytes happens once, at the boundary, in an adapter. It's in `brief.md` as a design commitment.
+
+The application ring already satisfies it and always did. `lablet-run` has no serde derive at all, and `lablet-policy` has no serde anywhere. What the ring holds of JSON is `serde_json::Value` in five positions, all of them values that are JSON by the provider APIs' definition: a tool call's arguments, a tool's input schema, an opaque provider block, the completion schema, and the `task_complete` argument. So this is a domain-crate question, and the cost lands in `lablet-model` alone.
+
+**The outcome moves, with the transcript, in one change.** The previous entry left this open. The same facts decide it: nothing in production reads a `RunOutcome` back, since every `from_value::<RunOutcome>` in the workspace is in `outcome/tests.rs`, and spec section 10 still defers a schema version for the outcome JSON, which has nowhere to live while the domain type is the wire form. That's the wall the transcript hit, and it's what turned a tidy idea into a necessary one.
+
+Two things make the outcome easier than it looked. `RawOutcome` isn't only a read target: it's `pub(crate)` and doubles as the parts `Run::finish` fills in, so removing the read path doesn't delete it. It becomes the construction parts, `RunOutcome::closing` goes public as a checked constructor, and the rules stay in the domain enforced once. And `RunSummary` and `FinishedRun` derive `Serialize` for nothing at all, since the wide event is a field mapping against the generated key list rather than a serialisation, so those two and the six types reachable only through them lose their derives with no replacement anywhere.
+
+They move together rather than in sequence, and that matters. Both documents land in the same adapter crate, both need `Usage`, and both want the same mapping convention and the same fixture pattern. Doing the transcript in phase 4 and the outcome afterwards means building that crate and then reopening it, which is the whole of the objection to moving the outcome at all.
+
+**The one exception, stated so it isn't discovered later.** `Message` and `ToolResult` keep `Serialize`, and the rule is about published shapes rather than about the derive. `RequestBytes` sizes a provider request by rendering the conversation, so every provider reports growth the same way, and those bytes are counted and discarded. No consumer ever sees that encoding, and no field name in it reaches a contract. Measuring with a canonical rendering isn't publishing one; moving it to the adapters would make the number per-provider, which is the opposite of what it's for.
+
+**What phase 4 owes, which the build plan is amended with in this commit.** The transcript needs a checked-in fixture and a changelog-gate entry. That was recorded as an obligation when `TranscriptDocument::of` lost its compile-time drift guard, and the obligation never reached the plan work is actually done from. The outcome already has both, and its gate path doesn't change when the type moves.
+
+Nothing here reopens the provider adapters, which were never coupled: a provider's wire format is its own type in its own adapter, and that's been true since 2026-09-18.
