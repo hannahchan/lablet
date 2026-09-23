@@ -81,7 +81,9 @@ pub enum EventKind {
         /// How long the loop waits before the attempt that follows, or `None`
         /// when this attempt was the last. One field rather than a flag beside
         /// a duration, so "retrying after no wait" and "not retrying, after
-        /// this wait" can't be written down.
+        /// this wait" can't be written down. It's the decision made when the
+        /// attempt failed: a run cancelled during the wait ends before the
+        /// next attempt, and `RunFinished` says so.
         retry: Option<Duration>,
     },
     /// A tool call began.

@@ -397,7 +397,7 @@ impl RunService {
         started: Instant,
         capture: bool,
     ) -> Run {
-        let concurrency = |call: &ToolUse| self.tools.concurrency(&call.name);
+        let concurrency = |call: &ToolUse| self.tools.concurrency(call);
         let schedule = Schedule {
             max_concurrent: self.calls.max_concurrent_tool_calls,
             concurrency: &concurrency,

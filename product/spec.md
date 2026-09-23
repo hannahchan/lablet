@@ -314,7 +314,7 @@ Four rules remain that the transcript's fields don't hold, and the run's states 
 - A turn's outcomes answer exactly the tool calls of its response, each call id once and in call order, or the turn has no outcomes at all because its tools never ran: the response was cut short or refused, its `task_complete` call was intercepted, or the run was cancelled or reached a limit first. `Pending::answer` walks the turn's own calls, awaits one `Answer` for each, and adds each call's id itself, so the loop never holds a list whose length or order could be wrong. `Pending::finish` leaves the turn with no outcomes.
 - Only the last turn may have tool calls and no outcomes, whatever input the next turn would bring. A `Pending` that finishes is a run that ends, so an unanswered turn is always the last.
 
-`Pending::answer` is the domain's one function that returns a future. It creates no future of its own, reads no clock and names no runtime: it runs the futures `answer` returns in the groups §1 describes, using `schedule` to tell a shared call from an exclusive one, and collects them in call order through `futures-util`'s order-preserving `StreamExt::buffered`. It's in the domain because the thing that collects the answers has to be the thing that knows the calls, or the count could come back short (see `decisions.md`, 2026-09-23). `answer` takes each call by value and returns a plain future rather than being an `AsyncFn` over a borrowed call, because the future of an async closure over a borrow can't be shown `Send` when several are held at once (see `decisions.md`, 2026-09-23).
+`Pending::answer` is the domain's one function that returns a future. It reads no clock and names no runtime, and the only futures it makes wrap the ones `answer` returns with the id of their call: it runs those in the groups §1 describes, using `schedule` to tell a shared call from an exclusive one. A group is a pool on `futures-util`'s `FuturesUnordered`, so a call starts as soon as any call ahead of it in the group ends, and each answer carries its place so the outcomes are put back in call order. It's in the domain because the thing that collects the answers has to be the thing that knows the calls, or the count could come back short (see `decisions.md`, 2026-09-23). `answer` takes each call by value and returns a plain future rather than being an `AsyncFn` over a borrowed call, because the future of an async closure over a borrow can't be shown `Send` when several are held at once (see `decisions.md`, 2026-09-23).
 
 Whether a turn without outcomes called no tools or its tools never ran is read from whether its response holds tool calls; nothing else records it. The name and input of a call are in the response's `ToolUse` block and nowhere else, and an outcome's sizes are measured rather than stored (`ToolUse::input_bytes`, `ToolCallOutcome::output_bytes`), so nothing is written in two places that could disagree. The one size it stores is `truncated_from_bytes`, what the output measured before the cap cut it, which nothing left can measure.
 
@@ -428,7 +428,7 @@ pub enum EventKind {
     TurnStarted { turn },
     ProviderCallStarted { turn, attempt, request_bytes: u64 },
     ProviderCallFinished { turn, attempt, record: TurnRecord, response: Option<Vec<ContentBlock>> },   // the turn as the transcript stored it
-    ProviderCallFailed { turn, attempt, error, retry: Option<Duration> },   // Some(wait) means another attempt follows after it; None means the call is over
+    ProviderCallFailed { turn, attempt, error, retry: Option<Duration> },   // Some(wait) means the loop will try again after it, unless the run is cancelled during the wait; None means the call is over
     ToolCallStarted { turn, call_id, name, source: Option<ToolSource>, input_bytes, input: Option<Value> },   // source is None for a name no tool has
     ToolCallFinished { turn, call_id, status: ToolCallStatus, latency_ms: u64, output_bytes: u64, truncated_from_bytes: Option<u64>, mcp: Option<McpCallMeta>, output: Option<Vec<ToolResultContent>> },   // read from the call's ToolCallOutcome, except mcp, which the executor returned and the loop carries across
     RunFinished { context: RunContext, summary: RunSummary },
@@ -463,8 +463,8 @@ pub enum ToolSetError { DuplicateName { name: ToolName }, UnknownFilterName { na
 pub enum FilterList { Allow, Deny }
 impl ToolSet {
     pub async fn build(executors: Vec<Arc<dyn ToolExecutor>>, filter: &ToolFilter, completion: CompletionMode, completion_schema: Option<Value>) -> Result<ToolSet, ToolSetError>;
-    pub fn specs(&self) -> &[ToolSpec];  pub fn source(&self, name: &ToolName) -> Option<&ToolSource>;  pub fn is_task_complete(&self, name: &ToolName) -> bool;  pub fn completion(&self) -> CompletionMode;
-    pub fn concurrency(&self, name: &ToolName) -> ToolConcurrency;   // Shared for a name this run doesn't offer: the loop answers it without an executor
+    pub fn specs(&self) -> &[ToolSpec];  pub fn source(&self, name: &ToolName) -> Option<&ToolSource>;  pub fn completion(&self) -> CompletionMode;
+    pub fn concurrency(&self, call: &ToolUse) -> ToolConcurrency;   // Shared for a name this run doesn't offer or arguments that didn't parse: the loop answers either without an executor
 }
 ```
 
@@ -488,9 +488,9 @@ loop:
                                                        context_exhausted and fatal as themselves, with e.message
     match run.responded(response, began, latency):                         # the transcript's new turn; it takes the waiting input, and its record counts the attempts
         Final(f)   -> stop stop.after_final(&f.turn().record().finish, tools.completion())    # a response that called no tool always stops the run
-        Pending(p) -> structured = the input of the call named task_complete, if any
+        Pending(p) -> structured = p.completed_with(tools.completion()): the first task_complete call whose arguments parsed
                       if let Some(r) = stop.after_response(&p.turn().record().finish, tools.completion(), p.calls(tools.completion())): stop r
-    run = p.answer(Schedule { max_concurrent: max_concurrent_tool_calls, concurrency: |call| tools.concurrency(&call.name) }, async |call|:   # the name is resolved before the arguments are read
+    run = p.answer(Schedule { max_concurrent: max_concurrent_tool_calls, concurrency: |call| tools.concurrency(call) }, |call| async:   # the name is resolved before the arguments are read
         emit ToolCallStarted;  trace_context = observer.trace_context(&call.id);  began = now
         (status, content, mcp) = match tools.source(&call.name):        # the loop is the only hop from executor to observer, so mcp travels with the result
             None          -> (Unknown, [Text("no tool named ... is offered by this run")], None)

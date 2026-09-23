@@ -12,7 +12,7 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use futures_util::StreamExt as _;
-use futures_util::stream::FuturesOrdered;
+use futures_util::stream::FuturesUnordered;
 
 use crate::outcome::RawOutcome;
 use crate::whole_ms;
@@ -486,9 +486,10 @@ impl Pending {
     /// answers, so the loop never holds a list whose length or order could
     /// be wrong.
     ///
-    /// This composes the futures `answer` makes and makes none of its own. It
-    /// takes each call by value because the future an async closure returns
-    /// for a borrowed call can't be shown `Send` while several are held.
+    /// It runs no future of its own beyond wrapping each one `answer` makes
+    /// with the id of its call, and names no runtime. It takes each call by
+    /// value because the future an async closure returns for a borrowed call
+    /// can't be shown `Send` while several are held.
     pub async fn answer<F, Fut>(self, schedule: Schedule<'_>, answer: F) -> Run
     where
         F: Fn(ToolUse) -> Fut,
@@ -499,30 +500,41 @@ impl Pending {
         let max = usize::try_from(schedule.max_concurrent.get()).unwrap_or(usize::MAX);
         let mut outcomes = Vec::with_capacity(calls.len());
         let mut rest = calls.as_slice();
-        while let Some(first) = rest.first() {
+        while let Some((first, others)) = rest.split_first() {
             let shared = |call: &ToolUse| (schedule.concurrency)(call) == ToolConcurrency::Shared;
+            // Counted from the call after the first, so a group always holds
+            // the call it starts with and the loop always moves on.
             let len = if shared(first) {
-                rest.iter().take_while(|call| shared(call)).count()
+                1 + others.iter().take_while(|call| shared(call)).count()
             } else {
                 1
             };
             let (group, after) = rest.split_at(len);
             rest = after;
 
-            let mut waiting = group.iter();
-            let mut running = FuturesOrdered::new();
+            // A pool rather than an ordered queue: a call starts as soon as
+            // any call of its group ends, not only when the earliest one
+            // does, and each answer carries its place so the outcomes can be
+            // put back in call order.
+            let mut waiting = group.iter().enumerate();
+            let mut running = FuturesUnordered::new();
+            let mut answered = Vec::with_capacity(len);
             loop {
                 while running.len() < max {
-                    let Some(call) = waiting.next() else { break };
+                    let Some((at, call)) = waiting.next() else {
+                        break;
+                    };
                     let id = call.id.clone();
-                    let answered = answer(call.clone());
-                    running.push_back(async move { answered.await.answering(id) });
+                    let answering = answer(call.clone());
+                    running.push(async move { (at, answering.await.answering(id)) });
                 }
-                let Some(outcome) = running.next().await else {
+                let Some(done) = running.next().await else {
                     break;
                 };
-                outcomes.push(outcome);
+                answered.push(done);
             }
+            answered.sort_unstable_by_key(|(at, _)| *at);
+            outcomes.extend(answered.into_iter().map(|(_, outcome)| outcome));
         }
         turn.answered(outcomes);
         run.transcript.push(turn);

@@ -1839,9 +1839,11 @@ async fn consecutive_reads_run_together_and_a_write_runs_alone() {
 }
 
 /// A cap of 1 is the loop before calls could run together, which is what a
-/// test that asserts events exactly relies on.
+/// test that asserts events exactly relies on. The outcomes are compared
+/// rather than the whole transcript: the fakes share one clock, so calls that
+/// overlap can't be given timings of their own.
 #[tokio::test]
-async fn a_cap_of_one_runs_every_call_alone_and_records_the_same_transcript() {
+async fn a_cap_of_one_runs_every_call_alone_and_records_the_same_outcomes() {
     let (alone, spans) = grouped(1).await;
     let (together, _) = grouped(10).await;
 
@@ -1862,7 +1864,20 @@ async fn a_cap_of_one_runs_every_call_alone_and_records_the_same_transcript() {
         ["ToolCallStarted", "ToolCallFinished"].repeat(4),
         "each call's events close before the next call's open"
     );
-    assert_eq!(alone.finished.transcript, together.finished.transcript);
+    let outcomes = |run: &Run| {
+        run.finished.transcript.turns()[0]
+            .tool_calls()
+            .iter()
+            .map(|outcome| {
+                (
+                    outcome.call_id.clone(),
+                    outcome.status.clone(),
+                    outcome.content.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(outcomes(&alone), outcomes(&together));
 }
 
 // E11: a retry is a provider call, so it's polled for cancellation.
@@ -1882,4 +1897,18 @@ async fn a_run_cancelled_during_a_backoff_makes_no_further_attempt() {
     assert_eq!(run.provider.calls(), 1, "no attempt after the backoff");
     assert_eq!(run.clock.sleeps(), [ms(100)]);
     assert_eq!(run.turns(), 0);
+    // The failure reported the decision to retry, made before the wait; the
+    // run's end says why the retry never came.
+    let events = run.observer.events();
+    let [.., failed, finished] = events.as_slice() else {
+        panic!("a run that failed once has at least two events");
+    };
+    assert!(matches!(
+        failed.kind,
+        EventKind::ProviderCallFailed {
+            retry: Some(wait),
+            ..
+        } if wait == ms(100)
+    ));
+    assert!(matches!(finished.kind, EventKind::RunFinished { .. }));
 }

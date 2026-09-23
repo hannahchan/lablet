@@ -855,6 +855,11 @@ fn a_task_complete_call_whose_arguments_parsed_completes_an_explicit_run() {
                         "task_complete",
                         ToolInput::Json(json!({ "passed": true })),
                     ),
+                    tool_use(
+                        3,
+                        "task_complete",
+                        ToolInput::Json(json!({ "passed": false })),
+                    ),
                 ],
                 Usage::default(),
                 FinishReason::ToolUse,
@@ -1005,6 +1010,36 @@ fn consecutive_shared_calls_run_together_and_an_exclusive_call_runs_alone() {
         position(&log, "-2") < position(&log, "+3"),
         "the read after the write starts after it ends: {log:?}"
     );
+}
+
+#[test]
+fn consecutive_exclusive_calls_each_run_alone() {
+    let calling = calling(start(), &["write_file", "bash", "write_file"]);
+
+    let (_, log) = answered_over_time(calling, 10, |_| 2);
+
+    assert_eq!(log, ["+0", "-0", "+1", "-1", "+2", "-2"]);
+}
+
+/// The cap is a pool, not a window over the calls in order: when a later call
+/// ends first, the next call starts in its slot without waiting for the
+/// earliest.
+#[test]
+fn a_slow_call_does_not_hold_back_the_calls_after_it_in_its_group() {
+    let calling = calling(start(), &["read_file"; 3]);
+
+    let (run, log) = answered_over_time(calling, 2, |n| if n == 0 { 10 } else { 1 });
+
+    assert!(
+        position(&log, "+2") < position(&log, "-0"),
+        "the third read starts once the second ends, while the first still runs: {log:?}"
+    );
+    let ids: Vec<&str> = run.transcript.turns()[0]
+        .tool_calls()
+        .iter()
+        .map(|outcome| outcome.call_id.as_str())
+        .collect();
+    assert_eq!(ids, ["call_0", "call_1", "call_2"]);
 }
 
 #[test]

@@ -47,7 +47,7 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 | <a id="lablet-result-text">`lablet.result.text`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | The final assistant text. [17] | `The function returns early when the list is empty.` |
 | <a id="lablet-result-text-bytes">`lablet.result.text_bytes`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Size of the final assistant text in bytes. [18] | `834` |
 | <a id="lablet-retry-backoff-ms">`lablet.retry.backoff_ms`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | How long the loop waits before the next attempt, in milliseconds. [19] | `2000` |
-| <a id="lablet-retry-will-retry">`lablet.retry.will_retry`</a> | ![Development](https://img.shields.io/badge/-development-blue) | boolean | Whether the failed provider call is retried. [20] | `true` |
+| <a id="lablet-retry-will-retry">`lablet.retry.will_retry`</a> | ![Development](https://img.shields.io/badge/-development-blue) | boolean | Whether the loop decided to retry the failed provider call. [20] | `true` |
 | <a id="lablet-run-completion-mode">`lablet.run.completion_mode`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | How the run decides that the model has finished. [21] | `natural`; `explicit` |
 | <a id="lablet-run-cost-usd">`lablet.run.cost_usd`</a> | ![Development](https://img.shields.io/badge/-development-blue) | double | Cost of the run in US dollars, from the configured pricing. [22] | `0.0421` |
 | <a id="lablet-run-duration-ms">`lablet.run.duration_ms`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Wall-clock duration of the run, in milliseconds. [23] | `12345` |
@@ -117,7 +117,7 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 
 **[19] `lablet.retry.backoff_ms`:** Justification: the conventions have no attribute for a retry delay.
 
-**[20] `lablet.retry.will_retry`:** Justification: the conventions have no attribute for a retry decision.
+**[20] `lablet.retry.will_retry`:** Justification: the conventions have no attribute for a retry decision. The decision is made when the attempt fails; a run cancelled during the backoff ends before the retry, and its root span's stop reason says so.
 
 **[21] `lablet.run.completion_mode`:** Justification: the completion mode is a property of lablet's loop; the GenAI conventions don't describe how an agent decides that it's done.
 

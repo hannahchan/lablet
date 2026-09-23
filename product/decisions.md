@@ -668,3 +668,17 @@ The same spike found what the testability rule needs from its tests. A future th
 It used to complete an explicit run with a null structured result. In explicit mode that result is what the run is for, so a run reporting `completed` with nothing in it looks like success to a grader and holds none. It was also the one call with bad arguments that the model never saw an error for. Now `Pending::calls` reads such a response as `Tools`: the `task_complete` call is answered `malformed_input`, the response's other calls run, and the model can call it again. The result counts as a tool error, so a model that keeps failing reaches `tool_errors_exhausted`, and `max_turns` bounds it too.
 
 `ToolSet::source` answers for `task_complete` now, because it's offered: a real name with bad arguments is `malformed_input`, not `unknown`. When validating the argument against `run.completion_schema` lands, an argument that doesn't fit takes the same path.
+
+## 2026-09-24 A group of tool calls is a pool, not an ordered join
+
+Supersedes two sentences of "A run's states are types, and a turn's tool calls run together": that `Pending::answer` creates no future of its own, and that the join is `StreamExt::buffered`. The phase 3a review found both untrue of what was built, and found that an ordered join is the wrong one.
+
+An ordered join, `buffered` or `FuturesOrdered`, only starts a call when the earliest call still running ends. With a cap of 2 and a group of three reads taking 5s, 10ms and 10ms, the third waits the whole 5s for the first while a slot sits empty. The cap was meant as a pool, and lablet reports a turn's wall time as the thing a production harness would show. So a group now runs on `FuturesUnordered`: each answer carries its place in the group, a new call starts whenever any call ends, and the answers are sorted back into call order before they're recorded. The loop that fills the pool is about ten lines, which is less than the objection to a hand-written join supposed, because `FuturesUnordered` does the part that's hard to get right. The only future `answer` makes is the one that pairs a call's answer with its id and place.
+
+## 2026-09-24 What the phase 3a review changed
+
+Two reviewers, six findings, all medium, all confirmed and fixed. The pool that replaced the ordered join has its own entry above. The one that changed a contract rather than a line:
+
+- **`retry: Some(wait)` is the decision made when an attempt fails, not a promise.** Polling cancellation after the backoff means a run can report a retry and then end without it. Emitting the failure after the sleep would put its time in the wrong place, so the contract changes instead: the event's field, spec section 5, and `lablet.retry.will_retry` now say a run cancelled during the wait ends before the retry, and the root span's stop reason says so.
+
+The rest brought code and log back into agreement: a call whose arguments didn't parse counts as `Shared`, as the design entry says, so `ToolSet::concurrency` takes the whole call; `ToolSet::is_task_complete` had lost its last production caller to `Pending::completed_with` and is gone; and three tests claimed more than they held, the equal-transcript one because the fakes share one clock, so it now compares outcomes and says why.

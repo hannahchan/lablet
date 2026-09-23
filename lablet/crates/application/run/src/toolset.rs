@@ -3,7 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use lablet_model::{CompletionMode, ToolConcurrency, ToolName, ToolSource, ToolSpec};
+use lablet_model::{
+    CompletionMode, ToolConcurrency, ToolInput, ToolName, ToolSource, ToolSpec, ToolUse,
+};
 
 use crate::{ToolCall, ToolError, ToolErrorKind, ToolExecutor, ToolOutput};
 
@@ -94,7 +96,6 @@ pub struct ToolSet {
     routes: BTreeMap<ToolName, Arc<dyn ToolExecutor>>,
     offered: BTreeMap<ToolName, Offered>,
     specs: Vec<ToolSpec>,
-    task_complete: Option<ToolName>,
     completion: CompletionMode,
 }
 
@@ -164,11 +165,11 @@ impl ToolSet {
                 specs.push(spec);
             }
         }
-        let mut task_complete = None;
         if completion == CompletionMode::Explicit {
-            let name = ToolName::task_complete();
-            specs.push(task_complete_spec(name.clone(), completion_schema));
-            task_complete = Some(name);
+            specs.push(task_complete_spec(
+                ToolName::task_complete(),
+                completion_schema,
+            ));
         }
         let offered = specs
             .iter()
@@ -185,7 +186,6 @@ impl ToolSet {
             routes,
             offered,
             specs,
-            task_complete,
             completion,
         })
     }
@@ -214,20 +214,19 @@ impl ToolSet {
         self.offered.get(name).map(|offered| &offered.source)
     }
 
-    /// Whether a call to `name` may run beside other calls of its turn. A
-    /// name this run doesn't offer is answered by the loop without an
-    /// executor, so it changes nothing and may.
+    /// Whether `call` may run beside other calls of its turn: its tool's
+    /// concurrency. A call to a name this run doesn't offer, or whose
+    /// arguments didn't parse, is answered by the loop without an executor,
+    /// so it changes nothing and may.
     #[must_use]
-    pub fn concurrency(&self, name: &ToolName) -> ToolConcurrency {
-        self.offered
-            .get(name)
-            .map_or(ToolConcurrency::Shared, |offered| offered.concurrency)
-    }
-
-    /// Whether `name` is the tool that ends the run rather than one to run.
-    #[must_use]
-    pub fn is_task_complete(&self, name: &ToolName) -> bool {
-        self.task_complete.as_ref() == Some(name)
+    pub fn concurrency(&self, call: &ToolUse) -> ToolConcurrency {
+        match &call.input {
+            ToolInput::Json(_) => self
+                .offered
+                .get(&call.name)
+                .map_or(ToolConcurrency::Shared, |offered| offered.concurrency),
+            ToolInput::Unparsed(_) => ToolConcurrency::Shared,
+        }
     }
 
     /// Runs one call, on whichever executor serves its name.
@@ -269,7 +268,7 @@ impl core::fmt::Debug for ToolSet {
         f.debug_struct("ToolSet")
             .field("offered", &self.offered)
             .field("specs", &self.specs)
-            .field("task_complete", &self.task_complete)
+            .field("completion", &self.completion)
             .finish()
     }
 }

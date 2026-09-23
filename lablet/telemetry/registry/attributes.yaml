@@ -455,9 +455,11 @@ attributes:
   - key: lablet.retry.will_retry
     type: boolean
     stability: development
-    brief: Whether the failed provider call is retried.
+    brief: Whether the loop decided to retry the failed provider call.
     note: >
-      Justification: the conventions have no attribute for a retry decision.
+      Justification: the conventions have no attribute for a retry decision. The decision is
+      made when the attempt fails; a run cancelled during the backoff ends before the retry, and
+      its root span's stop reason says so.
     examples: [true]
   - key: lablet.retry.backoff_ms
     type: int

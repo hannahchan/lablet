@@ -3,7 +3,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use lablet_model::{CompletionMode, ToolCallId, ToolConcurrency, ToolName, ToolSource, ToolSpec};
+use lablet_model::{
+    CompletionMode, ToolCallId, ToolConcurrency, ToolInput, ToolName, ToolSource, ToolSpec, ToolUse,
+};
 
 use super::fakes::{Answers, FakeClock, FakeTools};
 use crate::{FilterList, ToolCall, ToolErrorKind, ToolExecutor, ToolFilter, ToolSet, ToolSetError};
@@ -186,21 +188,23 @@ async fn task_complete_is_offered_in_explicit_mode_only_and_never_routed() {
     .expect("distinct names");
 
     assert_eq!(offered(&natural), [&name("bash")]);
-    assert!(!natural.is_task_complete(&ToolName::task_complete()));
 
     assert_eq!(
         offered(&explicit),
         [&name("bash"), &ToolName::task_complete()],
         "the completion tool is offered last"
     );
-    assert!(explicit.is_task_complete(&ToolName::task_complete()));
     assert_eq!(
         explicit.source(&ToolName::task_complete()),
         Some(&ToolSource::Builtin),
         "it's offered, so a call to it with bad arguments names a real tool"
     );
     assert_eq!(
-        explicit.concurrency(&ToolName::task_complete()),
+        explicit.concurrency(&ToolUse {
+            id: ToolCallId::new("call_0").expect("a valid call id"),
+            name: ToolName::task_complete(),
+            input: ToolInput::Json(serde_json::json!({})),
+        }),
         ToolConcurrency::Shared,
         "it's never executed, so it can't change what another call sees"
     );
@@ -390,7 +394,6 @@ async fn natural_mode_lets_an_executor_serve_a_tool_called_task_complete() {
         set.source(&ToolName::task_complete()),
         Some(&ToolSource::Builtin)
     );
-    assert!(!set.is_task_complete(&ToolName::task_complete()));
 }
 
 /// The set is the run's one copy of the mode, so everything that needs it
@@ -522,11 +525,29 @@ async fn a_call_runs_beside_others_only_when_its_tool_says_it_may() {
     .await
     .expect("distinct names");
 
-    assert_eq!(set.concurrency(&name("read_file")), ToolConcurrency::Shared);
-    assert_eq!(set.concurrency(&name("bash")), ToolConcurrency::Exclusive);
+    let call = |tool: &str, input: ToolInput| ToolUse {
+        id: ToolCallId::new("call_0").expect("a valid call id"),
+        name: name(tool),
+        input,
+    };
+    let parsed = || ToolInput::Json(serde_json::json!({}));
+
     assert_eq!(
-        set.concurrency(&name("rm_rf")),
+        set.concurrency(&call("read_file", parsed())),
+        ToolConcurrency::Shared
+    );
+    assert_eq!(
+        set.concurrency(&call("bash", parsed())),
+        ToolConcurrency::Exclusive
+    );
+    assert_eq!(
+        set.concurrency(&call("rm_rf", parsed())),
         ToolConcurrency::Shared,
         "a name no tool has is answered without an executor, so it changes nothing"
+    );
+    assert_eq!(
+        set.concurrency(&call("bash", ToolInput::Unparsed("{".to_owned()))),
+        ToolConcurrency::Shared,
+        "nor are arguments that didn't parse"
     );
 }

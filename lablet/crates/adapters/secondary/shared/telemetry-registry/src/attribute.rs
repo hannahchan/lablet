@@ -153,7 +153,7 @@ pub const LABLET_RESULT_TEXT_BYTES: &str = "lablet.result.text_bytes";
 /// How long the loop waits before the next attempt, in milliseconds.
 pub const LABLET_RETRY_BACKOFF_MS: &str = "lablet.retry.backoff_ms";
 
-/// Whether the failed provider call is retried.
+/// Whether the loop decided to retry the failed provider call.
 pub const LABLET_RETRY_WILL_RETRY: &str = "lablet.retry.will_retry";
 
 /// How the run decides that the model has finished.

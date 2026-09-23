@@ -23,12 +23,12 @@ A provider call failed. Recorded as a span event on the chat span of the failed 
 | Key | Stability | [Requirement Level](https://opentelemetry.io/docs/specs/semconv/general/attribute-requirement-level/) | Value Type | Description | Example Values |
 | --- | --- | --- | --- | --- | --- |
 | [`lablet.attempt`](/lablet/docs/telemetry/lablet/README.md#lablet-attempt) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | One-based attempt number of a provider call within its turn. [1] | `1`; `2` |
-| [`lablet.retry.will_retry`](/lablet/docs/telemetry/lablet/README.md#lablet-retry-will-retry) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | boolean | Whether the failed provider call is retried. [2] | `true` |
+| [`lablet.retry.will_retry`](/lablet/docs/telemetry/lablet/README.md#lablet-retry-will-retry) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | boolean | Whether the loop decided to retry the failed provider call. [2] | `true` |
 | [`lablet.retry.backoff_ms`](/lablet/docs/telemetry/lablet/README.md#lablet-retry-backoff-ms) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the call is retried. | int | How long the loop waits before the next attempt, in milliseconds. [3] | `2000` |
 
 **[1] `lablet.attempt`:** Justification: `http.request.resend_count` counts resends of one HTTP request inside a client; lablet's retry is a new inference call with a span of its own.
 
-**[2] `lablet.retry.will_retry`:** Justification: the conventions have no attribute for a retry decision.
+**[2] `lablet.retry.will_retry`:** Justification: the conventions have no attribute for a retry decision. The decision is made when the attempt fails; a run cancelled during the backoff ends before the retry, and its root span's stop reason says so.
 
 **[3] `lablet.retry.backoff_ms`:** Justification: the conventions have no attribute for a retry delay.
 
