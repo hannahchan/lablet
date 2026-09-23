@@ -227,6 +227,8 @@ pub struct FakeTools {
     clock: Arc<FakeClock>,
     listing: Option<crate::ToolErrorKind>,
     taken: Mutex<Vec<ToolCall>>,
+    yielding: bool,
+    spans: Mutex<Vec<String>>,
 }
 
 impl FakeTools {
@@ -239,7 +241,25 @@ impl FakeTools {
             clock,
             listing: None,
             taken: Mutex::new(Vec::new()),
+            yielding: false,
+            spans: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Every call yields to the runtime once part-way, so calls the loop
+    /// runs together overlap instead of each finishing before the next is
+    /// polled.
+    pub const fn yielding(mut self) -> Self {
+        self.yielding = true;
+        self
+    }
+
+    /// When each call started and ended, as `+id` and `-id`, in order.
+    pub fn spans(&self) -> Vec<String> {
+        self.spans
+            .lock()
+            .expect("the fake executor isn't poisoned")
+            .clone()
     }
 
     /// Every call this executor was handed, in order.
@@ -289,6 +309,18 @@ impl ToolExecutor for FakeTools {
     }
 
     async fn execute(&self, call: ToolCall) -> Result<ToolOutput, ToolError> {
+        let id = call.id.as_str().to_owned();
+        self.spans
+            .lock()
+            .expect("the fake executor isn't poisoned")
+            .push(format!("+{id}"));
+        if self.yielding {
+            tokio::task::yield_now().await;
+        }
+        self.spans
+            .lock()
+            .expect("the fake executor isn't poisoned")
+            .push(format!("-{id}"));
         self.clock.advance(self.latency);
         self.taken
             .lock()

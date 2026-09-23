@@ -72,6 +72,10 @@ serde-saphyr = "=1.3.0"
 
 # Async runtime
 
+# The ordered join Pending::answer runs a turn's tool calls through, in the domain, which may
+# name no runtime. Default features are off: `alloc` is all FuturesOrdered and StreamExt need.
+futures-util = { version = "=0.3.34", default-features = false, features = ["alloc"] }
+
 # Runtime for the loop, child-process MCP servers, the bash tool, Ctrl-C, and test receivers.
 tokio = { version = "=1.53.1", features = [
   "rt-multi-thread",

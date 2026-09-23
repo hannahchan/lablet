@@ -18,6 +18,26 @@ pub struct ToolSpec {
     pub input_schema: serde_json::Value,
     /// Where the tool comes from.
     pub source: ToolSource,
+    /// Whether a call to it may run beside other calls in the same turn.
+    pub concurrency: ToolConcurrency,
+}
+
+/// Whether a call to a tool may run at the same time as other calls of its
+/// turn.
+///
+/// Consecutive calls to `Shared` tools form one group, which runs
+/// concurrently; a call to an `Exclusive` tool runs alone. Groups run in call
+/// order, so a read the model placed after a write still runs after it. A
+/// tool nobody classified is `Exclusive`, which is how every call ran before
+/// tools could say otherwise.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolConcurrency {
+    /// A call runs alone: the tool can change what another call sees.
+    #[default]
+    Exclusive,
+    /// A call may run beside other shared calls: the tool only reads.
+    Shared,
 }
 
 /// Where a tool comes from.
@@ -250,16 +270,31 @@ impl ToolResultContent {
     }
 }
 
-impl ToolCallOutcome {
-    /// The outcome of the call `call_id`, which started `started` into the
-    /// run and took `latency`.
+/// What the loop has to say about one tool call: its outcome, without the id
+/// of the call it answers.
+///
+/// Only [`crate::Pending::answer`] adds the id, from the call it asked about,
+/// so an answer can't be recorded against the wrong call. The loop reads the
+/// capped sizes from it before handing it over, so what it reports about the
+/// call is what the transcript will hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Answer {
+    status: ToolCallStatus,
+    started_ms: u64,
+    latency_ms: u64,
+    truncated_from_bytes: Option<u64>,
+    content: Vec<ToolResultContent>,
+}
+
+impl Answer {
+    /// The answer to a call that started `started` into the run and took
+    /// `latency`.
     ///
     /// `max_output_bytes` is the run's cap on `content`, `None` for no cap;
     /// it's applied here so that every tool's output is cut the same way: at a
     /// character boundary, with one last line that says what was cut.
     #[must_use]
     pub fn measured(
-        call_id: ToolCallId,
         status: ToolCallStatus,
         content: Vec<ToolResultContent>,
         max_output_bytes: Option<u64>,
@@ -271,7 +306,6 @@ impl ToolCallOutcome {
             None => (content, None),
         };
         Self {
-            call_id,
             status,
             started_ms: whole_ms(started),
             latency_ms: whole_ms(latency),
@@ -280,6 +314,58 @@ impl ToolCallOutcome {
         }
     }
 
+    /// What became of the call.
+    #[must_use]
+    pub const fn status(&self) -> &ToolCallStatus {
+        &self.status
+    }
+
+    /// How long the call took, in whole milliseconds.
+    #[must_use]
+    pub const fn latency_ms(&self) -> u64 {
+        self.latency_ms
+    }
+
+    /// The size in bytes of the output before the cap cut it; `None` when
+    /// nothing was cut.
+    #[must_use]
+    pub const fn truncated_from_bytes(&self) -> Option<u64> {
+        self.truncated_from_bytes
+    }
+
+    /// What the model is sent, after the cap.
+    #[must_use]
+    pub fn content(&self) -> &[ToolResultContent] {
+        &self.content
+    }
+
+    /// The size in bytes of what the model is sent.
+    #[must_use]
+    pub fn output_bytes(&self) -> u64 {
+        ToolResultContent::bytes(&self.content)
+    }
+
+    /// The outcome of the call `call_id`.
+    pub(crate) fn answering(self, call_id: ToolCallId) -> ToolCallOutcome {
+        let Self {
+            status,
+            started_ms,
+            latency_ms,
+            truncated_from_bytes,
+            content,
+        } = self;
+        ToolCallOutcome {
+            call_id,
+            status,
+            started_ms,
+            latency_ms,
+            truncated_from_bytes,
+            content,
+        }
+    }
+}
+
+impl ToolCallOutcome {
     /// The size in bytes of the output the model was sent, which is the size
     /// after the output cap and includes the line that says what was cut.
     #[must_use]

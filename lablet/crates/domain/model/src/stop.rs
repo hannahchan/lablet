@@ -129,19 +129,21 @@ impl StopReason {
 
 display_as_str!(CompletionMode, StopReason);
 
-/// The tool calls of a response, as far as completion reads them.
+/// The tool calls of a response that made at least one, as far as completion
+/// reads them. A response that made none is a [`crate::Final`], which has no
+/// calls to read.
 ///
-/// [`crate::Turn::calls`] is the only place a response is read this way, so the loop
-/// can't classify a response differently from how the stop policy expects it.
+/// [`crate::Pending::calls`] is the only place a response is read this way, so
+/// the loop can't classify a response differently from how the stop policy
+/// expects it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Calls {
-    /// The response called no tool.
-    None,
-    /// The response called tools, and `task_complete` wasn't one of them.
+    /// The response didn't complete the task: `task_complete` wasn't among
+    /// its calls, or no call to it had arguments that parsed.
     Tools,
-    /// The response called `task_complete`, alone or among other tools. Only
-    /// [`CompletionMode::Explicit`] has such a tool, so a natural-mode
-    /// response is never read as this.
+    /// The response called `task_complete` with arguments that parsed, alone
+    /// or among other tools. Only [`CompletionMode::Explicit`] has such a
+    /// tool, so a natural-mode response is never read as this.
     TaskComplete,
 }
 

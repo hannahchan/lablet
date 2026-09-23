@@ -14,6 +14,10 @@ An entry under `Unreleased` is mandatory for any change to one of the three cont
 
 ### Changed
 
+- In explicit mode, a `task_complete` call whose arguments aren't valid JSON no longer completes the run with a null result. It's answered as `malformed_input`, like any call with bad arguments, the response's other calls run, and the model can call `task_complete` again. It counts as a tool error.
+- Tool calls in one response run in groups rather than one at a time. Consecutive calls to tools that only read run together, at most `max_concurrent_tool_calls` at a time; any other call runs alone, and groups keep the order the model gave. Outcomes are recorded in call order whichever call finished first. Once calls overlap, `lablet.tool_calls.latency_ms.total` can exceed the run's wall time, since it sums each call's latency.
+- A run cancelled while it waits to retry a provider call stops with `cancelled` and makes no further attempt, instead of spending the retries it had left.
+- A tool filter that names a tool no executor serves is refused when the run's tools are built, so a misspelt `deny` entry can't leave the tool it meant to deny on offer.
 - `lablet.run.transcript_path` now reads "where the run's transcript is written," rather than "was written." The wide event is emitted inside `RunService::run` and the composition root writes the file afterwards, so the attribute names a destination rather than reporting a file that already exists. The key, its type, and its conditional requirement are unchanged.
 
 ### Added

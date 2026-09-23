@@ -36,8 +36,8 @@ use serde::{Deserialize, Serialize};
 use crate::message::tool_uses;
 use crate::whole_ms;
 use crate::{
-    Calls, CompletionMode, ContentBlock, FinishReason, Message, ProviderResponse, ToolCallId,
-    ToolCallOutcome, ToolResult, ToolUse, Usage, UserContent,
+    ContentBlock, FinishReason, Message, ProviderResponse, ToolCallOutcome, ToolResult, ToolUse,
+    Usage, UserContent,
 };
 
 /// The conversation of one run: the system prompt and the turns.
@@ -45,7 +45,7 @@ use crate::{
 /// A run builds one through its [`crate::Run`], which is the only way one is
 /// built: lablet runs a loop and emits what it saw, and reading a transcript
 /// back belongs to the side that consumes it. So every `Transcript` holds
-/// these rules because the run enforced them as it went:
+/// these rules, because the run's states offer no way to break them:
 ///
 /// - Something from the user comes before every response: a turn has input,
 ///   or the turn before it has tool call outcomes. So the first turn has
@@ -99,41 +99,6 @@ pub struct TurnRecord {
     pub attempts: u32,
 }
 
-/// Why a transcript can't take what the run gave it. Only a defect in the
-/// loop produces one: the rules below are what the loop maintains as it goes,
-/// and nothing else builds a transcript.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum TranscriptError {
-    /// A turn would put its response straight after another, or first of all.
-    #[error(
-        "turn {turn} has no input and no tool results come before it, so nothing from the user would precede its response"
-    )]
-    NothingFromTheUser {
-        /// The turn that was refused, counted from 1.
-        turn: usize,
-    },
-    /// A turn would follow one whose tool calls nothing answered.
-    #[error(
-        "turn {turn} made the tool calls {calls:?} and has no outcomes, which only the last turn may"
-    )]
-    UnansweredCalls {
-        /// The turn whose calls went unanswered, counted from 1.
-        turn: usize,
-        /// The ids of its calls, in order.
-        calls: Vec<String>,
-    },
-    /// Outcomes aren't those of the last turn's tool calls.
-    #[error(
-        "the outcomes {outcomes:?} don't answer the tool calls {calls:?}, each once and in call order"
-    )]
-    OutcomesDontAnswerCalls {
-        /// The ids of the calls the last response made, in order.
-        calls: Vec<String>,
-        /// The call ids of the outcomes, in order.
-        outcomes: Vec<String>,
-    },
-}
-
 impl Transcript {
     pub(crate) const fn new(system: String) -> Self {
         Self {
@@ -185,6 +150,11 @@ impl Transcript {
             .fold(Usage::default(), |sum, turn| sum + turn.record.usage)
     }
 
+    /// Adds `turn` as the last turn.
+    pub(crate) fn push(&mut self, turn: Turn) {
+        self.turns.push(turn);
+    }
+
     /// How many tool calls returned an error result since the last one that
     /// didn't. A turn without tool calls leaves the count as it was.
     pub(crate) fn consecutive_tool_errors(&self) -> u32 {
@@ -197,113 +167,46 @@ impl Transcript {
             .count();
         u32::try_from(errors).unwrap_or(u32::MAX)
     }
+}
 
-    /// Makes `completion` the next turn and takes `input` as its input. When
-    /// the turn is refused, `input` is left as it was. See
-    /// [`crate::Run::responded`] for the contract.
-    pub(crate) fn record(
-        &mut self,
-        input: &mut Vec<UserContent>,
-        completion: ProviderResponse,
+impl Turn {
+    /// The turn that `response` makes, answering `input`. The attempt that
+    /// returned it started `started` into the run, took `latency`, and was
+    /// the last of `attempts`.
+    ///
+    /// Text blocks that are empty or only whitespace are dropped from both
+    /// the input and the response; see [`crate::Run::responded`].
+    pub(crate) fn recorded(
+        mut input: Vec<UserContent>,
+        response: ProviderResponse,
         started: Duration,
         latency: Duration,
         attempts: u32,
-    ) -> Result<&Turn, TranscriptError> {
+    ) -> Self {
         let record = TurnRecord {
-            usage: completion.usage,
-            finish: completion.finish,
-            response_id: completion.response_id,
-            response_model: completion.response_model,
+            usage: response.usage,
+            finish: response.finish,
+            response_id: response.response_id,
+            response_model: response.response_model,
             started_ms: whole_ms(started),
             latency_ms: whole_ms(latency),
             attempts,
         };
-        self.push(input, completion.content, record)
-    }
-
-    /// Makes `outcomes` those of the last turn. See
-    /// [`crate::Run::tool_calls`] for the contract.
-    pub(crate) fn answer(&mut self, outcomes: Vec<ToolCallOutcome>) -> Result<(), TranscriptError> {
-        // The last turn is taken once, mutably, and every refusal is decided
-        // against it. Asking for it again after the checks have passed would
-        // be a branch that can't be taken and so can't be covered.
-        let Some(turn) = self.turns.last_mut() else {
-            return if outcomes.is_empty() {
-                // No turn made a call, so an empty set of outcomes answers it.
-                Ok(())
-            } else {
-                Err(TranscriptError::OutcomesDontAnswerCalls {
-                    calls: Vec::new(),
-                    outcomes: ids(outcomes.iter().map(|outcome| &outcome.call_id)),
-                })
-            };
-        };
-        let calls = turn.call_ids();
-        if outcomes.is_empty() && calls.is_empty() {
-            return Ok(());
-        }
-
-        let answered = ids(outcomes.iter().map(|outcome| &outcome.call_id));
-        if answered != calls {
-            return Err(TranscriptError::OutcomesDontAnswerCalls {
-                calls,
-                outcomes: answered,
-            });
-        }
-        turn.tool_calls = outcomes;
-        Ok(())
-    }
-
-    /// `response` has distinct tool call ids.
-    fn push(
-        &mut self,
-        input: &mut Vec<UserContent>,
-        mut response: Vec<ContentBlock>,
-        record: TurnRecord,
-    ) -> Result<&Turn, TranscriptError> {
-        let last = self.turns.last();
-        if let Some(last) = last
-            && last.tool_calls.is_empty()
-            && last.tool_uses().next().is_some()
-        {
-            return Err(TranscriptError::UnansweredCalls {
-                turn: self.turns.len(),
-                calls: last.call_ids(),
-            });
-        }
-        // Refused before `input` is touched, so a refusal leaves it as it was.
-        if input.iter().all(is_blank) && last.is_none_or(|last| last.tool_calls.is_empty()) {
-            return Err(TranscriptError::NothingFromTheUser {
-                turn: self.turns.len() + 1,
-            });
-        }
         input.retain(|block| !is_blank(block));
+        let mut response = response.content;
         response
             .retain(|block| !matches!(block, ContentBlock::Text(text) if text.trim().is_empty()));
-        self.turns.push(Turn {
-            input: std::mem::take(input),
+        Self {
+            input,
             response,
             record,
             tool_calls: Vec::new(),
-        });
-        Ok(&self.turns[self.turns.len() - 1])
-    }
-}
-
-impl Turn {
-    /// How `mode` reads the tool calls of the response.
-    #[must_use]
-    pub fn calls(&self, mode: CompletionMode) -> Calls {
-        let mut called = Calls::None;
-        for call in self.tool_uses() {
-            if mode == CompletionMode::Explicit
-                && call.name.as_str() == CompletionMode::TASK_COMPLETE
-            {
-                return Calls::TaskComplete;
-            }
-            called = Calls::Tools;
         }
-        called
+    }
+
+    /// Makes `outcomes` the answers to the response's calls.
+    pub(crate) fn answered(&mut self, outcomes: Vec<ToolCallOutcome>) {
+        self.tool_calls = outcomes;
     }
 
     /// What the user supplied to the turn: the task prompt for the first
@@ -353,10 +256,6 @@ impl Turn {
             })
             .collect()
     }
-
-    fn call_ids(&self) -> Vec<String> {
-        ids(self.tool_uses().map(|call| &call.id))
-    }
 }
 
 /// Adds the user message that holds `tool_results` and `input`, unless both
@@ -372,10 +271,6 @@ fn push_user<'a>(
             input,
         });
     }
-}
-
-fn ids<'a>(ids: impl Iterator<Item = &'a ToolCallId>) -> Vec<String> {
-    ids.map(|id| id.as_str().to_owned()).collect()
 }
 
 /// Text that's empty or only whitespace carries nothing, so it's not input.

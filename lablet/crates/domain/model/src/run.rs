@@ -7,15 +7,19 @@
 //! run ends, so a total can't disagree with the turns it sums.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::num::NonZeroU32;
 use std::time::Duration;
+
+use futures_util::StreamExt as _;
+use futures_util::stream::FuturesOrdered;
 
 use crate::outcome::RawOutcome;
 use crate::whole_ms;
 use crate::{
-    CompletionMode, Cost, Endpoint, FinishedRun, Message, ModelRef, ProviderResponse, Rates,
-    RequestParams, RunId, RunOutcome, RunSummary, StopReason, TaskResult, ToolCallOutcome,
-    ToolName, Transcript, TranscriptError, Turn, Usage, UserContent,
+    Answer, Calls, CompletionMode, Cost, Endpoint, FinishedRun, Message, ModelRef,
+    ProviderResponse, Rates, RequestParams, RunId, RunOutcome, RunSummary, StopReason, TaskResult,
+    ToolConcurrency, ToolInput, ToolName, ToolUse, Transcript, Turn, Usage, UserContent,
 };
 
 /// What the loop knows about a run before its first provider call, the
@@ -64,10 +68,10 @@ impl Prompts {
     /// # Errors
     ///
     /// Returns [`BlankTask`] when `task` is empty or only whitespace. The
-    /// transcript refuses a first turn whose input is blank, so without this
-    /// the run would spend a billed provider call and then throw the response
-    /// away, reporting zero turns and zero usage for tokens it did buy. An
-    /// empty `system` is a run with no system prompt, which is allowed.
+    /// first response needs something from the user before it, and the task
+    /// is all a run has, so a blank one is refused here, before a run can
+    /// spend a provider call on it. An empty `system` is a run with no system
+    /// prompt, which is allowed.
     pub fn new(system: impl Into<String>, task: impl Into<String>) -> Result<Self, BlankTask> {
         let task: String = task.into();
         if task.trim().is_empty() {
@@ -105,7 +109,19 @@ pub struct Progress {
     pub consecutive_tool_errors: u32,
 }
 
-/// One run, from its first provider call to the outcome it becomes.
+/// One run, from its first provider call to the outcome it becomes, while it
+/// waits for a provider response.
+///
+/// A run moves through three states, and each offers only what may happen
+/// next. A `Run` waits for a response; recording one consumes it and gives a
+/// [`Final`] when the response called no tool, which can only finish, or a
+/// [`Pending`] when it called at least one, which finishes or is answered and
+/// becomes a `Run` again. So something from the user comes before every
+/// response, every call of a turn that goes on is answered once and in call
+/// order, and only the last turn can have calls with no outcomes, because no
+/// method exists for anything else. A `Run` is made by [`Run::start`], whose
+/// task [`Prompts::new`] has refused to let be blank, and by
+/// [`Pending::answer`], which leaves at least one outcome.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Run {
     setup: RunSetup,
@@ -160,9 +176,9 @@ impl Run {
     }
 
     /// Records the provider call attempt that returned `response` as the
-    /// next turn, and returns it. The attempt started `started` into the run
-    /// and took `latency`; the record counts it and the failed attempts since
-    /// the turn before. The turn's input is what was waiting for it.
+    /// next turn. The attempt started `started` into the run and took
+    /// `latency`; the record counts it and the failed attempts since the turn
+    /// before. The turn's input is what was waiting for it.
     ///
     /// The turn's response is the response's content without its text
     /// blocks that are empty or only whitespace, and this is the one place
@@ -172,40 +188,23 @@ impl Run {
     /// the response instead would spend a retry on nothing. Everything reads
     /// the response after the drop, so [`Transcript::final_text`] and every
     /// size measured from [`Run::messages`] describe what's replayed.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TranscriptError::UnansweredCalls`] when the turn before made
-    /// tool calls and [`Run::tool_calls`] never answered them, and
-    /// [`TranscriptError::NothingFromTheUser`] when it made none, so that
-    /// this response would follow that one directly. The loop makes no
-    /// provider call in either state, so it never sees them. The record is
-    /// unchanged.
+    #[must_use]
     pub fn responded(
-        &mut self,
+        mut self,
         response: ProviderResponse,
         started: Duration,
         latency: Duration,
-    ) -> Result<&Turn, TranscriptError> {
+    ) -> Responded {
         let attempts = self.failed_attempts.saturating_add(1);
-        let turn = self
-            .transcript
-            .record(&mut self.input, response, started, latency, attempts)?;
         self.failed_attempts = 0;
-        Ok(turn)
-    }
-
-    /// Records what happened to the tool calls of the last turn. The
-    /// intercepted `task_complete` call isn't executed, so it has no outcome.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TranscriptError::OutcomesDontAnswerCalls`] unless `outcomes`
-    /// answers the tool calls of the last response, each once and in call
-    /// order, or both are empty. The loop builds one outcome for each call,
-    /// in order, so it never sees one.
-    pub fn tool_calls(&mut self, outcomes: Vec<ToolCallOutcome>) -> Result<(), TranscriptError> {
-        self.transcript.answer(outcomes)
+        let input = std::mem::take(&mut self.input);
+        let turn = Turn::recorded(input, response, started, latency, attempts);
+        let responded = Recorded { run: self, turn };
+        if responded.turn.tool_uses().next().is_none() {
+            Responded::Final(Final(responded))
+        } else {
+            Responded::Pending(Pending(responded))
+        }
     }
 
     /// How far the run has come, `elapsed` after it started.
@@ -318,6 +317,216 @@ impl Run {
 
     fn turns(&self) -> u32 {
         turns(&self.transcript)
+    }
+}
+
+/// What recording a response gives: which of the two states the run is in.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Responded {
+    /// The response called no tool.
+    Final(Final),
+    /// The response called at least one tool.
+    Pending(Pending),
+}
+
+/// A run whose last response called no tool. The stop policy stops every
+/// such run, so the only way on is to finish.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Final(Recorded);
+
+/// A run whose last response called at least one tool. It finishes, which
+/// leaves those calls unanswered, or is answered and waits for the next
+/// response.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pending(Recorded);
+
+/// A run and the turn it has just recorded, held apart until the run knows
+/// what becomes of the turn's calls.
+#[derive(Debug, Clone, PartialEq)]
+struct Recorded {
+    run: Run,
+    turn: Turn,
+}
+
+impl Recorded {
+    fn usage(&self) -> Usage {
+        self.run.usage() + self.turn.record().usage
+    }
+
+    fn finish(
+        self,
+        stop: StopReason,
+        duration: Duration,
+        structured: Option<serde_json::Value>,
+        error: Option<String>,
+        rates: Option<Rates>,
+        cost: Option<Cost>,
+    ) -> FinishedRun {
+        let Self { mut run, turn } = self;
+        run.transcript.push(turn);
+        run.finish(stop, duration, structured, error, rates, cost)
+    }
+}
+
+impl Final {
+    /// The turn the response made.
+    #[must_use]
+    pub const fn turn(&self) -> &Turn {
+        &self.0.turn
+    }
+
+    /// Usage summed over every turn, this one included.
+    #[must_use]
+    pub fn usage(&self) -> Usage {
+        self.0.usage()
+    }
+
+    /// Closes the record of the run; see [`Run::finish`].
+    #[must_use]
+    pub fn finish(
+        self,
+        stop: StopReason,
+        duration: Duration,
+        structured: Option<serde_json::Value>,
+        error: Option<String>,
+        rates: Option<Rates>,
+        cost: Option<Cost>,
+    ) -> FinishedRun {
+        self.0
+            .finish(stop, duration, structured, error, rates, cost)
+    }
+}
+
+/// How [`Pending::answer`] groups a turn's calls.
+#[derive(Clone, Copy)]
+pub struct Schedule<'a> {
+    /// How many calls of one group may run at once.
+    pub max_concurrent: NonZeroU32,
+    /// Whether a call may run beside others, read from the tool it names.
+    pub concurrency: &'a (dyn Fn(&ToolUse) -> ToolConcurrency + Sync),
+}
+
+impl core::fmt::Debug for Schedule<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Schedule")
+            .field("max_concurrent", &self.max_concurrent)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Pending {
+    /// The turn the response made.
+    #[must_use]
+    pub const fn turn(&self) -> &Turn {
+        &self.0.turn
+    }
+
+    /// Usage summed over every turn, this one included.
+    #[must_use]
+    pub fn usage(&self) -> Usage {
+        self.0.usage()
+    }
+
+    /// How `mode` reads the response's calls: [`Calls::TaskComplete`] when
+    /// [`Pending::completed_with`] has an argument, and [`Calls::Tools`]
+    /// otherwise.
+    #[must_use]
+    pub fn calls(&self, mode: CompletionMode) -> Calls {
+        if self.completed_with(mode).is_some() {
+            Calls::TaskComplete
+        } else {
+            Calls::Tools
+        }
+    }
+
+    /// The argument of the first `task_complete` call in the response whose
+    /// arguments parsed, in explicit mode, which is the run's structured
+    /// result. A call whose arguments didn't parse completes nothing: it's
+    /// answered like any other call with bad arguments, so the model can try
+    /// again.
+    #[must_use]
+    pub fn completed_with(&self, mode: CompletionMode) -> Option<&serde_json::Value> {
+        if mode != CompletionMode::Explicit {
+            return None;
+        }
+        self.0
+            .turn
+            .tool_uses()
+            .filter(|call| call.name.as_str() == CompletionMode::TASK_COMPLETE)
+            .find_map(|call| match &call.input {
+                ToolInput::Json(value) => Some(value),
+                ToolInput::Unparsed(_) => None,
+            })
+    }
+
+    /// Closes the record of the run, the turn's calls unanswered; see
+    /// [`Run::finish`].
+    #[must_use]
+    pub fn finish(
+        self,
+        stop: StopReason,
+        duration: Duration,
+        structured: Option<serde_json::Value>,
+        error: Option<String>,
+        rates: Option<Rates>,
+        cost: Option<Cost>,
+    ) -> FinishedRun {
+        self.0
+            .finish(stop, duration, structured, error, rates, cost)
+    }
+
+    /// Answers every call of the turn with what `answer` returns for it, and
+    /// gives back the run, waiting for its next response.
+    ///
+    /// The calls run in groups, in call order: consecutive calls that
+    /// `schedule` reads as [`ToolConcurrency::Shared`] form one group, whose
+    /// calls run concurrently, at most `schedule.max_concurrent` at a time;
+    /// any other call is a group of its own. Outcomes are recorded in call
+    /// order whichever call finished first, each with the id of the call it
+    /// answers, so the loop never holds a list whose length or order could
+    /// be wrong.
+    ///
+    /// This composes the futures `answer` makes and makes none of its own. It
+    /// takes each call by value because the future an async closure returns
+    /// for a borrowed call can't be shown `Send` while several are held.
+    pub async fn answer<F, Fut>(self, schedule: Schedule<'_>, answer: F) -> Run
+    where
+        F: Fn(ToolUse) -> Fut,
+        Fut: Future<Output = Answer>,
+    {
+        let Recorded { mut run, mut turn } = self.0;
+        let calls: Vec<ToolUse> = turn.tool_uses().cloned().collect();
+        let max = usize::try_from(schedule.max_concurrent.get()).unwrap_or(usize::MAX);
+        let mut outcomes = Vec::with_capacity(calls.len());
+        let mut rest = calls.as_slice();
+        while let Some(first) = rest.first() {
+            let shared = |call: &ToolUse| (schedule.concurrency)(call) == ToolConcurrency::Shared;
+            let len = if shared(first) {
+                rest.iter().take_while(|call| shared(call)).count()
+            } else {
+                1
+            };
+            let (group, after) = rest.split_at(len);
+            rest = after;
+
+            let mut waiting = group.iter();
+            let mut running = FuturesOrdered::new();
+            loop {
+                while running.len() < max {
+                    let Some(call) = waiting.next() else { break };
+                    let id = call.id.clone();
+                    let answered = answer(call.clone());
+                    running.push_back(async move { answered.await.answering(id) });
+                }
+                let Some(outcome) = running.next().await else {
+                    break;
+                };
+                outcomes.push(outcome);
+            }
+        }
+        turn.answered(outcomes);
+        run.transcript.push(turn);
+        run
     }
 }
 

@@ -34,38 +34,12 @@ pub struct Floor {
 /// Every crate with a floor. Changing a number or the list is a decision:
 /// it is stated in contributing/README.md and product/quality-bar.md too.
 ///
-/// The two domain crates are held to every line and every region. They have
-/// no unreachable code, and a branch that no test can take is the signal the
-/// floor exists to raise: it means the type allows a state the caller has
-/// already ruled out.
-///
-/// `lablet-run` is held at 99, which is where it stands. Its uncovered
-/// regions are one cluster of six: the two arms that take a
-/// `TranscriptError` from `Run::responded` and `Run::tool_calls`, which the
-/// loop can't receive, because the rules that error reports are ones the loop
-/// maintains as it goes.
-///
-/// They're kept, and they're a third kind of uncovered code, neither of the
-/// two the domain floors are set for. A guard against a state the caller has
-/// already ruled out should go, and the type should rule it out instead. A
-/// shared contract, where a second caller can genuinely fail the check,
-/// should stay and is covered by that caller's tests. These are neither: no
-/// caller can reach them, and what they buy is that a future defect in the
-/// loop ends the run with a reported `provider_error` rather than writing a
-/// transcript that lies about what happened. For a tool whose whole value is
-/// being trustworthy about numbers, never silently wrong is worth more than
-/// the last point of coverage.
-///
-/// `Stopped::defect` itself is tested directly, because the sentence it
-/// builds is what an operator reads when one fires. That left the two call
-/// sites, which nothing can reach, so the crate stands at 99.1% regions and
-/// 99.6% lines and can't go further without deleting the checks.
-///
-/// The floor is therefore 99, with no headroom at all: 99% of 692 regions is
-/// 686, and 686 is what there are. One new region no test can reach turns the
-/// gate red on the commit that adds it, which is the point — a check of this
-/// third kind should be argued for when it's written, not discovered later.
-/// Lines have three of slack, since 522 of them round more kindly.
+/// All three are held to every line and every region. They have no
+/// unreachable code, and a branch that no test can take is the signal the
+/// floor exists to raise: it means a type allows a state its caller has
+/// already ruled out, and the fix is to make the type rule it out instead.
+/// A check a second caller can genuinely fail stays, and that caller's tests
+/// cover it.
 pub const FLOORS: &[Floor] = &[
     Floor {
         package: "lablet-model",
@@ -81,8 +55,8 @@ pub const FLOORS: &[Floor] = &[
     },
     Floor {
         package: "lablet-run",
-        line_coverage: 99,
-        region_coverage: 99,
+        line_coverage: 100,
+        region_coverage: 100,
         mutants_caught: 80,
     },
 ];
@@ -378,10 +352,7 @@ mod tests {
             [
                 ("lablet-model", 100, 100, 80),
                 ("lablet-policy", 100, 100, 80),
-                // Where the loop stands, with no headroom in its regions:
-                // it can't reach 100 while it keeps the two arms that take a
-                // refusal the loop itself can't produce.
-                ("lablet-run", 99, 99, 80),
+                ("lablet-run", 100, 100, 80),
             ]
         );
     }

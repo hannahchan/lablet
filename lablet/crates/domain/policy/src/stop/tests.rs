@@ -28,6 +28,11 @@ fn explicit(finish: &FinishReason, calls: Calls) -> Option<StopReason> {
     limits().after_response(finish, CompletionMode::Explicit, calls)
 }
 
+/// The reason a response that called no tool stops a run in `mode`.
+fn final_in(mode: CompletionMode, finish: &FinishReason) -> StopReason {
+    limits().after_final(finish, mode)
+}
+
 /// One response in, one second gone, 100 tokens used.
 fn mid_run() -> Progress {
     Progress {
@@ -273,8 +278,8 @@ fn the_smallest_tool_error_cap_stops_the_run_on_the_first_error() {
 fn natural_mode_completes_on_a_response_with_no_tool_calls() {
     for finish in [FinishReason::EndTurn, FinishReason::ToolUse] {
         assert_eq!(
-            natural(&finish, Calls::None),
-            Some(StopReason::Completed),
+            final_in(CompletionMode::Natural, &finish),
+            StopReason::Completed,
             "{finish}"
         );
     }
@@ -284,11 +289,14 @@ fn natural_mode_completes_on_a_response_with_no_tool_calls() {
 fn natural_mode_completes_on_a_finish_reason_it_does_not_know() {
     let unknown = FinishReason::from("eos".to_owned());
 
-    assert_eq!(natural(&unknown, Calls::None), Some(StopReason::Completed));
+    assert_eq!(
+        final_in(CompletionMode::Natural, &unknown),
+        StopReason::Completed
+    );
     assert_eq!(natural(&unknown, Calls::Tools), None);
     assert_eq!(
-        explicit(&unknown, Calls::None),
-        Some(StopReason::EndedWithoutCompletion)
+        final_in(CompletionMode::Explicit, &unknown),
+        StopReason::EndedWithoutCompletion
     );
 }
 
@@ -319,8 +327,8 @@ fn explicit_mode_completes_when_task_complete_is_called() {
 #[test]
 fn explicit_mode_ends_without_completion_on_a_response_with_no_tool_calls() {
     assert_eq!(
-        explicit(&FinishReason::EndTurn, Calls::None),
-        Some(StopReason::EndedWithoutCompletion)
+        final_in(CompletionMode::Explicit, &FinishReason::EndTurn),
+        StopReason::EndedWithoutCompletion
     );
 }
 
@@ -331,7 +339,7 @@ fn explicit_mode_goes_on_when_the_response_calls_other_tools() {
 
 // A response the model didn't finish
 
-const EVERY_CALLS: [Calls; 3] = [Calls::None, Calls::Tools, Calls::TaskComplete];
+const EVERY_CALLS: [Calls; 2] = [Calls::Tools, Calls::TaskComplete];
 
 #[test]
 fn a_truncated_response_is_output_truncated_whatever_it_called_so_its_tools_never_run() {
@@ -343,6 +351,11 @@ fn a_truncated_response_is_output_truncated_whatever_it_called_so_its_tools_neve
                 "{calls:?}"
             );
         }
+        assert_eq!(
+            final_in(mode, &FinishReason::MaxTokens),
+            StopReason::OutputTruncated,
+            "{mode} with no calls"
+        );
     }
 }
 
@@ -356,6 +369,11 @@ fn a_response_cut_short_at_the_context_window_is_context_exhausted_whatever_it_c
                 "{calls:?}"
             );
         }
+        assert_eq!(
+            final_in(mode, &FinishReason::ContextWindow),
+            StopReason::ContextExhausted,
+            "{mode} with no calls"
+        );
     }
 }
 
@@ -369,6 +387,11 @@ fn a_refusal_is_refused_and_never_completed_whatever_it_called() {
                 "{calls:?}"
             );
         }
+        assert_eq!(
+            final_in(mode, &FinishReason::Refusal),
+            StopReason::Refused,
+            "{mode} with no calls"
+        );
     }
 }
 
@@ -394,8 +417,8 @@ fn a_response_is_judged_without_the_limits_so_one_that_finishes_completes_the_ru
         None
     );
     assert_eq!(
-        policy.after_response(&FinishReason::EndTurn, CompletionMode::Natural, Calls::None),
-        Some(StopReason::Completed)
+        policy.after_final(&FinishReason::EndTurn, CompletionMode::Natural),
+        StopReason::Completed
     );
 }
 

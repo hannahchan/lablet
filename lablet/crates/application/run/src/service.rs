@@ -1,11 +1,13 @@
 //! The loop: one run, from its first provider call to its outcome.
 
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use lablet_model::{
-    FinishedRun, Message, Progress, Prompts, ProviderErrorKind, ProviderResponse, RequestParams,
-    Run, RunContext, RunSetup, StopReason, ToolCallOutcome, ToolCallStatus, ToolInput, ToolUse,
+    Answer, Cost, Final, FinishedRun, Message, Pending, Progress, Prompts, ProviderErrorKind,
+    ProviderResponse, Rates, RequestParams, Responded, Run, RunContext, RunId, RunSetup, Schedule,
+    StopReason, ToolCallStatus, ToolInput, ToolUse, Turn, Usage,
 };
 use lablet_policy::{Pricing, RetryPolicy, StopPolicy};
 
@@ -14,8 +16,9 @@ use crate::{
     RunObserver, ToolCall, ToolSet,
 };
 
-/// What bounds one call, which is not a stop decision: the run's limits are
-/// the stop policy's business and these are the adapters'.
+/// What bounds the calls, which is not a stop decision: the run's limits are
+/// the stop policy's business and these are the adapters' and the tool
+/// phase's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CallLimits {
     /// How long one provider attempt may take.
@@ -24,6 +27,8 @@ pub struct CallLimits {
     pub tool_timeout: Duration,
     /// The cap on what a tool's output may be before the model sees it.
     pub max_tool_output_bytes: Option<u64>,
+    /// How many calls of one group may run at once; 1 runs every call alone.
+    pub max_concurrent_tool_calls: NonZeroU32,
 }
 
 /// One instrumented agent loop.
@@ -71,10 +76,55 @@ impl Settled {
     }
 }
 
-/// Why the loop stopped, and what it has to say about it.
+/// Why the loop stopped, and what it has to say about it: the error that
+/// ended it, and the argument of the `task_complete` call that completed it.
+/// The outcome keeps only what the stop reason allows.
 struct Stopped {
     reason: StopReason,
     error: Option<String>,
+    structured: Option<serde_json::Value>,
+}
+
+/// The state a run stopped in. Each can finish; they differ in whether the
+/// last turn is in the transcript yet.
+enum Ending {
+    /// Stopped before a response came back.
+    Waiting(Run),
+    /// Stopped by a response that called no tool.
+    Final(Final),
+    /// Stopped at a response's calls, or before running them.
+    Pending(Pending),
+}
+
+impl Ending {
+    fn usage(&self) -> Usage {
+        match self {
+            Self::Waiting(run) => run.usage(),
+            Self::Final(done) => done.usage(),
+            Self::Pending(pending) => pending.usage(),
+        }
+    }
+
+    fn finish(
+        self,
+        stopped: Stopped,
+        duration: Duration,
+        rates: Option<Rates>,
+        cost: Option<Cost>,
+    ) -> FinishedRun {
+        let Stopped {
+            reason,
+            error,
+            structured,
+        } = stopped;
+        match self {
+            Self::Waiting(run) => run.finish(reason, duration, structured, error, rates, cost),
+            Self::Final(done) => done.finish(reason, duration, structured, error, rates, cost),
+            Self::Pending(pending) => {
+                pending.finish(reason, duration, structured, error, rates, cost)
+            }
+        }
+    }
 }
 
 impl RunService {
@@ -144,31 +194,12 @@ impl RunService {
         )
         .await;
 
-        let mut run = Run::start(setup, prompts);
-        let mut bytes = RequestBytes::new(run.transcript().system(), self.tools.specs());
-        let mut structured = None;
-
-        let stopped = self
-            .drive(
-                &run_id,
-                &mut run,
-                &mut bytes,
-                &mut structured,
-                started,
-                capture,
-            )
-            .await;
+        let run = Run::start(setup, prompts);
+        let (ending, stopped) = self.drive(&run_id, run, started, capture).await;
 
         let rates = self.pricing.as_ref().map(Pricing::rates);
-        let cost = self.pricing.as_ref().and_then(|p| p.cost(&run.usage()));
-        let finished = run.finish(
-            stopped.reason,
-            self.elapsed(started),
-            structured,
-            stopped.error,
-            rates,
-            cost,
-        );
+        let cost = self.pricing.as_ref().and_then(|p| p.cost(&ending.usage()));
+        let finished = ending.finish(stopped, self.elapsed(started), rates, cost);
 
         self.emit(
             &run_id,
@@ -185,76 +216,82 @@ impl RunService {
     /// happens here.
     async fn drive(
         &self,
-        run_id: &lablet_model::RunId,
-        run: &mut Run,
-        bytes: &mut RequestBytes,
-        structured: &mut Option<serde_json::Value>,
+        run_id: &RunId,
+        mut run: Run,
         started: Instant,
         capture: bool,
-    ) -> Stopped {
+    ) -> (Ending, Stopped) {
+        let mode = self.tools.completion();
+        let mut bytes = RequestBytes::new(run.transcript().system(), self.tools.specs());
         loop {
             if self.cancel.is_cancelled() {
-                return Stopped::just(StopReason::Cancelled);
+                return (Ending::Waiting(run), Stopped::just(StopReason::Cancelled));
             }
-            if let Some(reason) = self.stop.before_call(&self.progress(run, started)) {
-                return Stopped::just(reason);
+            if let Some(reason) = self.stop.before_call(&self.progress(&run, started)) {
+                return (Ending::Waiting(run), Stopped::just(reason));
             }
 
-            let turn_index = u32::try_from(run.transcript().turns().len())
+            let turn = u32::try_from(run.transcript().turns().len())
                 .unwrap_or(u32::MAX)
                 .saturating_add(1);
-            self.emit(run_id, EventKind::TurnStarted { turn: turn_index })
-                .await;
+            self.emit(run_id, EventKind::TurnStarted { turn }).await;
 
-            let answered = match self.call(run_id, run, bytes, turn_index, started).await {
+            let answered = match self.call(run_id, &mut run, &mut bytes, turn, started).await {
                 Ok(answered) => answered,
-                Err(stopped) => return stopped,
+                Err(stopped) => return (Ending::Waiting(run), stopped),
             };
 
-            let turn = match run.responded(answered.response, answered.began, answered.latency) {
-                Ok(turn) => turn,
-                Err(refusal) => return Stopped::defect(&refusal),
+            let pending = match run.responded(answered.response, answered.began, answered.latency) {
+                Responded::Final(done) => {
+                    let reason = self.stop.after_final(&done.turn().record().finish, mode);
+                    self.report_response(run_id, turn, done.turn(), capture)
+                        .await;
+                    return (Ending::Final(done), Stopped::just(reason));
+                }
+                Responded::Pending(pending) => pending,
             };
-            let record = turn.record().clone();
-            let calls: Vec<ToolUse> = turn.tool_uses().cloned().collect();
             let reason = self.stop.after_response(
-                &record.finish,
-                self.tools.completion(),
-                turn.calls(self.tools.completion()),
+                &pending.turn().record().finish,
+                mode,
+                pending.calls(mode),
             );
-            let response_blocks = capture.then(|| turn.response().to_vec());
-
-            self.emit(
-                run_id,
-                EventKind::ProviderCallFinished {
-                    turn: turn_index,
-                    attempt: record.attempts,
-                    record: Box::new(record.clone()),
-                    response: response_blocks,
-                },
-            )
-            .await;
-
-            *structured = task_complete_argument(&self.tools, &calls).or(structured.take());
-
-            if let Some(reason) = reason {
-                return Stopped::just(reason);
-            }
-
-            let outcomes = self
-                .run_tools(run_id, &calls, turn_index, started, capture)
+            self.report_response(run_id, turn, pending.turn(), capture)
                 .await;
-            if let Err(refusal) = run.tool_calls(outcomes) {
-                return Stopped::defect(&refusal);
+            if let Some(reason) = reason {
+                let stopped = Stopped {
+                    reason,
+                    error: None,
+                    structured: pending.completed_with(mode).cloned(),
+                };
+                return (Ending::Pending(pending), stopped);
             }
+
+            run = self
+                .run_tools(run_id, pending, turn, started, capture)
+                .await;
 
             if self.cancel.is_cancelled() {
-                return Stopped::just(StopReason::Cancelled);
+                return (Ending::Waiting(run), Stopped::just(StopReason::Cancelled));
             }
-            if let Some(reason) = self.stop.after_tools(&self.progress(run, started)) {
-                return Stopped::just(reason);
+            if let Some(reason) = self.stop.after_tools(&self.progress(&run, started)) {
+                return (Ending::Waiting(run), Stopped::just(reason));
             }
         }
+    }
+
+    /// Tells the observer what the provider call behind `recorded` returned.
+    async fn report_response(&self, run_id: &RunId, turn: u32, recorded: &Turn, capture: bool) {
+        let record = recorded.record();
+        self.emit(
+            run_id,
+            EventKind::ProviderCallFinished {
+                turn,
+                attempt: record.attempts,
+                record: Box::new(record.clone()),
+                response: capture.then(|| recorded.response().to_vec()),
+            },
+        )
+        .await;
     }
 
     /// One provider call, with its retries.
@@ -264,7 +301,7 @@ impl RunService {
     /// this function is in a position to know either.
     async fn call(
         &self,
-        run_id: &lablet_model::RunId,
+        run_id: &RunId,
         run: &mut Run,
         bytes: &mut RequestBytes,
         turn: u32,
@@ -274,22 +311,18 @@ impl RunService {
         loop {
             let began = self.clock.now();
             let began_at = began.saturating_duration_since(started);
-            let request_bytes = {
-                let messages = run.messages();
-                bytes.measure(&messages)
-            };
-            self.emit(
-                run_id,
-                EventKind::ProviderCallStarted {
-                    turn,
-                    attempt,
-                    request_bytes,
-                },
-            )
-            .await;
-
             let result = {
                 let messages = run.messages();
+                let request_bytes = bytes.measure(&messages);
+                self.emit(
+                    run_id,
+                    EventKind::ProviderCallStarted {
+                        turn,
+                        attempt,
+                        request_bytes,
+                    },
+                )
+                .await;
                 self.provider
                     .complete(ProviderRequest {
                         system: run.transcript().system(),
@@ -335,6 +368,11 @@ impl RunService {
             match (wait, retry) {
                 (_, Some(wait)) => {
                     self.clock.sleep(wait).await;
+                    // A retry is a provider call, so it's held to the same
+                    // poll as the first attempt of one.
+                    if self.cancel.is_cancelled() {
+                        return Err(Stopped::just(StopReason::Cancelled));
+                    }
                     attempt += 1;
                 }
                 // A wait that would carry the run past its own timeout isn't
@@ -348,67 +386,85 @@ impl RunService {
         }
     }
 
-    /// The tool phase of one turn, in call order.
+    /// The tool phase of one turn: every call answered, in the groups the
+    /// tools' concurrency sets, and the run back waiting for its next
+    /// response.
     async fn run_tools(
         &self,
-        run_id: &lablet_model::RunId,
-        calls: &[ToolUse],
+        run_id: &RunId,
+        pending: Pending,
         turn: u32,
         started: Instant,
         capture: bool,
-    ) -> Vec<ToolCallOutcome> {
-        let mut outcomes = Vec::with_capacity(calls.len());
-        for call in calls {
-            let source = self.tools.source(&call.name).cloned();
-            let input = match &call.input {
-                ToolInput::Json(value) => Some(value.clone()),
-                ToolInput::Unparsed(_) => None,
-            };
-            self.emit(
-                run_id,
-                EventKind::ToolCallStarted {
-                    turn,
-                    call_id: call.id.clone(),
-                    name: call.name.clone(),
-                    source: source.clone(),
-                    input_bytes: call.input_bytes(),
-                    input: capture.then(|| input.clone()).flatten(),
-                },
-            )
-            .await;
-
-            let began = self.clock.now();
-            let trace_context = self.observer.trace_context(&call.id);
-            let settled = self.settle(call, source, trace_context).await;
-            let latency = self.clock.now().saturating_duration_since(began);
-
-            let outcome = ToolCallOutcome::measured(
-                call.id.clone(),
-                settled.status,
-                settled.content,
-                self.calls.max_tool_output_bytes,
-                self.elapsed(started).saturating_sub(latency),
-                latency,
-            );
-            self.emit(
-                run_id,
-                EventKind::ToolCallFinished {
-                    turn,
-                    call_id: outcome.call_id.clone(),
-                    status: outcome.status.clone(),
-                    latency_ms: outcome.latency_ms,
-                    output_bytes: outcome.output_bytes(),
-                    truncated_from_bytes: outcome.truncated_from_bytes,
-                    mcp: settled.mcp,
-                    output: capture.then(|| outcome.content.clone()),
-                },
-            )
-            .await;
-            outcomes.push(outcome);
-        }
-        outcomes
+    ) -> Run {
+        let concurrency = |call: &ToolUse| self.tools.concurrency(&call.name);
+        let schedule = Schedule {
+            max_concurrent: self.calls.max_concurrent_tool_calls,
+            concurrency: &concurrency,
+        };
+        pending
+            .answer(schedule, |call| {
+                self.answer(run_id, call, turn, started, capture)
+            })
+            .await
     }
 
+    /// One tool call, from the event that opens it to the event that closes
+    /// it.
+    async fn answer(
+        &self,
+        run_id: &RunId,
+        call: ToolUse,
+        turn: u32,
+        started: Instant,
+        capture: bool,
+    ) -> Answer {
+        let source = self.tools.source(&call.name).cloned();
+        let input = match &call.input {
+            ToolInput::Json(value) => Some(value),
+            ToolInput::Unparsed(_) => None,
+        };
+        self.emit(
+            run_id,
+            EventKind::ToolCallStarted {
+                turn,
+                call_id: call.id.clone(),
+                name: call.name.clone(),
+                source: source.clone(),
+                input_bytes: call.input_bytes(),
+                input: capture.then(|| input.cloned()).flatten(),
+            },
+        )
+        .await;
+
+        let began = self.clock.now();
+        let trace_context = self.observer.trace_context(&call.id);
+        let settled = self.settle(&call, source, trace_context).await;
+        let latency = self.clock.now().saturating_duration_since(began);
+
+        let answer = Answer::measured(
+            settled.status,
+            settled.content,
+            self.calls.max_tool_output_bytes,
+            began.saturating_duration_since(started),
+            latency,
+        );
+        self.emit(
+            run_id,
+            EventKind::ToolCallFinished {
+                turn,
+                call_id: call.id,
+                status: answer.status().clone(),
+                latency_ms: answer.latency_ms(),
+                output_bytes: answer.output_bytes(),
+                truncated_from_bytes: answer.truncated_from_bytes(),
+                mcp: settled.mcp,
+                output: capture.then(|| answer.content().to_vec()),
+            },
+        )
+        .await;
+        answer
+    }
     /// What became of one call, and what the model is sent back.
     ///
     /// The name is resolved before the arguments are read, so a call to a
@@ -489,7 +545,7 @@ impl RunService {
         self.clock.now().saturating_duration_since(started)
     }
 
-    async fn emit(&self, run_id: &lablet_model::RunId, kind: EventKind) {
+    async fn emit(&self, run_id: &RunId, kind: EventKind) {
         self.observer
             .on(RunEvent {
                 run_id: run_id.clone(),
@@ -504,6 +560,7 @@ impl Stopped {
         Self {
             reason,
             error: None,
+            structured: None,
         }
     }
 
@@ -511,17 +568,8 @@ impl Stopped {
         Self {
             reason,
             error: Some(error),
+            structured: None,
         }
-    }
-
-    /// The transcript refused a sequence this loop can't produce. The run
-    /// still has to come back with an outcome, so the refusal becomes the
-    /// error of a `provider_error`.
-    fn defect(refusal: &lablet_model::TranscriptError) -> Self {
-        Self::with(
-            StopReason::ProviderError,
-            format!("lablet defect: the transcript refused the loop's own sequence: {refusal}"),
-        )
     }
 }
 
@@ -582,17 +630,3 @@ const fn stop_reason_for(kind: ProviderErrorKind) -> StopReason {
         ProviderErrorKind::Fatal => StopReason::ProviderError,
     }
 }
-
-/// The argument of a `task_complete` call in this response, if it made one.
-fn task_complete_argument(tools: &ToolSet, calls: &[ToolUse]) -> Option<serde_json::Value> {
-    calls
-        .iter()
-        .find(|call| tools.is_task_complete(&call.name))
-        .and_then(|call| match &call.input {
-            ToolInput::Json(value) => Some(value.clone()),
-            ToolInput::Unparsed(_) => None,
-        })
-}
-
-#[cfg(test)]
-mod tests;

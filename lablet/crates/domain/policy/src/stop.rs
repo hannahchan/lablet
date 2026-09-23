@@ -39,8 +39,30 @@ impl StopPolicy {
         self.limit_reached(progress)
     }
 
-    /// The reason to stop after a provider response and before any tool runs,
-    /// or `None` to run the response's tool calls.
+    /// The reason a response that called no tool stops the run, which it
+    /// always does: there's nothing to run and nothing for the next turn to
+    /// answer.
+    ///
+    /// The finish reason is read first, as [`StopPolicy::after_response`]
+    /// reads it: `refused`, `output_truncated`, or `context_exhausted` when it
+    /// says so. Otherwise the response is the model's last word, which is
+    /// `completed` in natural mode and `ended_without_completion` in explicit
+    /// mode, where only `task_complete` completes a run.
+    ///
+    /// [`FinishReason::Other`] therefore completes a natural-mode run. A
+    /// reason lablet doesn't know, from an OpenAI-compatible server, is usually
+    /// that server's word for a normal end, and the wide event carries every
+    /// finish reason for whoever needs to tell.
+    #[must_use]
+    pub fn after_final(&self, finish: &FinishReason, completion: CompletionMode) -> StopReason {
+        cut_short(finish).unwrap_or(match completion {
+            CompletionMode::Natural => StopReason::Completed,
+            CompletionMode::Explicit => StopReason::EndedWithoutCompletion,
+        })
+    }
+
+    /// The reason to stop after a response that called at least one tool and
+    /// before any tool runs, or `None` to run its calls.
     ///
     /// It reads only the response, so a response that finishes the task
     /// completes the run even when it also used up a limit. The finish reason
@@ -53,14 +75,8 @@ impl StopPolicy {
     ///   call's arguments, and a cut-off input can still parse as a valid,
     ///   smaller one, so none of its calls may run and a `task_complete` among
     ///   them doesn't complete the run.
-    /// - Otherwise the calls decide. `task_complete` in explicit mode is
-    ///   `completed`; any other call goes on; no call is `completed` in
-    ///   natural mode and `ended_without_completion` in explicit mode.
-    ///
-    /// [`FinishReason::Other`] with no call therefore completes a natural-mode
-    /// run. A reason lablet doesn't know, from an OpenAI-compatible server, is
-    /// usually that server's word for a normal end, and the wide event carries
-    /// every finish reason for whoever needs to tell.
+    /// - Otherwise `task_complete` in explicit mode is `completed`, and any
+    ///   other call goes on.
     ///
     /// `completion` is passed rather than held, so the run keeps one copy of
     /// it: the tool set it decides the shape of. The same value must have
@@ -72,18 +88,10 @@ impl StopPolicy {
         completion: CompletionMode,
         calls: Calls,
     ) -> Option<StopReason> {
-        match finish {
-            FinishReason::Refusal => return Some(StopReason::Refused),
-            FinishReason::MaxTokens => return Some(StopReason::OutputTruncated),
-            FinishReason::ContextWindow => return Some(StopReason::ContextExhausted),
-            FinishReason::EndTurn | FinishReason::ToolUse | FinishReason::Other(_) => {}
-        }
-        match (completion, calls) {
-            (CompletionMode::Explicit, Calls::TaskComplete)
-            | (CompletionMode::Natural, Calls::None) => Some(StopReason::Completed),
-            (CompletionMode::Explicit, Calls::None) => Some(StopReason::EndedWithoutCompletion),
+        cut_short(finish).or(match (completion, calls) {
+            (CompletionMode::Explicit, Calls::TaskComplete) => Some(StopReason::Completed),
             (CompletionMode::Natural, Calls::TaskComplete) | (_, Calls::Tools) => None,
-        }
+        })
     }
 
     /// The reason to stop after the tool results of a turn are in, or `None`
@@ -127,6 +135,17 @@ impl StopPolicy {
         } else {
             None
         }
+    }
+}
+
+/// The stop reason a finish reason gives whatever the response called: one
+/// the model refused, or one cut short, whose calls may have been cut too.
+const fn cut_short(finish: &FinishReason) -> Option<StopReason> {
+    match finish {
+        FinishReason::Refusal => Some(StopReason::Refused),
+        FinishReason::MaxTokens => Some(StopReason::OutputTruncated),
+        FinishReason::ContextWindow => Some(StopReason::ContextExhausted),
+        FinishReason::EndTurn | FinishReason::ToolUse | FinishReason::Other(_) => None,
     }
 }
 

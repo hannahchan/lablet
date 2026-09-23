@@ -55,12 +55,14 @@ fn a_tool_spec_has_one_json_form() {
         description: "Search the docs.".to_owned(),
         input_schema: json!({ "type": "object" }),
         source: docs_server(),
+        concurrency: ToolConcurrency::Shared,
     };
     let expected = json!({
         "name": "search",
         "description": "Search the docs.",
         "input_schema": { "type": "object" },
         "source": { "mcp": { "server": "docs" } },
+        "concurrency": "shared",
     });
 
     assert_eq!(serde_json::to_value(&spec).unwrap(), expected);
@@ -152,13 +154,35 @@ fn block_texts(content: &[ToolResultContent]) -> Vec<&str> {
         .collect()
 }
 
+#[test]
+fn a_tool_nobody_classified_runs_its_calls_alone() {
+    assert_eq!(ToolConcurrency::default(), ToolConcurrency::Exclusive);
+    assert_eq!(
+        serde_json::to_value(ToolConcurrency::Exclusive).unwrap(),
+        json!("exclusive")
+    );
+}
+
+/// An outcome as the run records one: measured as an answer, then given the
+/// id of the call it answers.
+fn measured(
+    call_id: ToolCallId,
+    status: ToolCallStatus,
+    content: Vec<ToolResultContent>,
+    max_output_bytes: Option<u64>,
+    started: Duration,
+    latency: Duration,
+) -> ToolCallOutcome {
+    Answer::measured(status, content, max_output_bytes, started, latency).answering(call_id)
+}
+
 fn text(text: &str) -> Vec<ToolResultContent> {
     vec![ToolResultContent::Text(text.to_owned())]
 }
 
 #[test]
 fn an_outcome_holds_what_it_was_given_with_its_times_in_whole_milliseconds() {
-    let outcome = ToolCallOutcome::measured(
+    let outcome = measured(
         call_1(),
         ran(ToolCallEnd::Ok),
         text("hello"),
@@ -184,7 +208,7 @@ fn an_outcome_holds_what_it_was_given_with_its_times_in_whole_milliseconds() {
 #[test]
 fn the_result_the_model_is_sent_is_an_error_exactly_when_the_status_is_not_ok() {
     for (status, spelling) in STATUSES {
-        let outcome = ToolCallOutcome::measured(
+        let outcome = measured(
             call_1(),
             status,
             text("no"),
@@ -207,7 +231,7 @@ fn the_result_the_model_is_sent_is_an_error_exactly_when_the_status_is_not_ok() 
 
 #[test]
 fn output_over_the_cap_is_cut_and_the_outcome_holds_the_size_sent_and_the_size_before() {
-    let outcome = ToolCallOutcome::measured(
+    let outcome = measured(
         call_1(),
         ran(ToolCallEnd::Ok),
         text("0123456789"),
@@ -229,7 +253,7 @@ fn output_over_the_cap_is_cut_and_the_outcome_holds_the_size_sent_and_the_size_b
 
 #[test]
 fn output_that_just_fits_the_cap_is_not_cut() {
-    let outcome = ToolCallOutcome::measured(
+    let outcome = measured(
         call_1(),
         ran(ToolCallEnd::Ok),
         text("0123456789"),
@@ -244,7 +268,7 @@ fn output_that_just_fits_the_cap_is_not_cut() {
 
 #[test]
 fn without_a_cap_no_output_is_cut() {
-    let outcome = ToolCallOutcome::measured(
+    let outcome = measured(
         call_1(),
         ran(ToolCallEnd::Ok),
         text("0123456789"),
@@ -260,7 +284,7 @@ fn without_a_cap_no_output_is_cut() {
 
 #[test]
 fn a_tool_call_outcome_has_one_json_form_without_a_name_an_input_or_an_error_flag() {
-    let outcome = ToolCallOutcome::measured(
+    let outcome = measured(
         call_1(),
         ToolCallStatus::ran(docs_server(), ToolCallEnd::Timeout),
         text("timed out after 60s"),

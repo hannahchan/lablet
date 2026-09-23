@@ -52,7 +52,7 @@ The most repeated defect in the domain layer's history. Twelve of the fifteen do
 8. **Can these two fields disagree?** "The model called a tool the run doesn't have" was three facts that could: a missing source, a status, and a name that `finish` looked up a second time in the run's tool list.
 9. **Is a fact looked up twice by different routes?** If so, name the authoritative one and say what happens when they differ.
 10. **Is a derived value stored beside its inputs?** `RunSummary` reads the run totals from its `outcome` rather than repeating them.
-11. **Is there exactly one way to build this value?** `Turn::calls(mode)` is the only reading of a response's tool calls, so the loop can't classify one differently from how the stop policy expects. `whole_ms` is the one `Duration` conversion. One `add` raises every total.
+11. **Is there exactly one way to build this value?** `Pending::calls(mode)` is the only reading of a response's tool calls, so the loop can't classify one differently from how the stop policy expects. `whole_ms` is the one `Duration` conversion. One `add` raises every total.
 12. **Does a constant live in prose and nowhere in code?** `6b4d0d3` found `TASK_COMPLETE` and `ToolName::MAX_LEN` written in the spec and declared nowhere.
 
 ## Types and construction

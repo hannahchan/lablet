@@ -3,10 +3,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use lablet_model::{CompletionMode, ToolCallId, ToolName, ToolSource, ToolSpec};
+use lablet_model::{CompletionMode, ToolCallId, ToolConcurrency, ToolName, ToolSource, ToolSpec};
 
 use super::fakes::{Answers, FakeClock, FakeTools};
-use crate::{ToolCall, ToolErrorKind, ToolExecutor, ToolFilter, ToolSet, ToolSetError};
+use crate::{FilterList, ToolCall, ToolErrorKind, ToolExecutor, ToolFilter, ToolSet, ToolSetError};
 
 fn name(value: &str) -> ToolName {
     ToolName::new(value).expect("a test's tool name is valid")
@@ -18,6 +18,7 @@ fn spec(value: &str, source: ToolSource) -> ToolSpec {
         description: format!("The {value} tool."),
         input_schema: serde_json::json!({ "type": "object" }),
         source,
+        concurrency: ToolConcurrency::Exclusive,
     }
 }
 
@@ -195,8 +196,13 @@ async fn task_complete_is_offered_in_explicit_mode_only_and_never_routed() {
     assert!(explicit.is_task_complete(&ToolName::task_complete()));
     assert_eq!(
         explicit.source(&ToolName::task_complete()),
-        None,
-        "it's intercepted rather than routed, so it has no executor to name"
+        Some(&ToolSource::Builtin),
+        "it's offered, so a call to it with bad arguments names a real tool"
+    );
+    assert_eq!(
+        explicit.concurrency(&ToolName::task_complete()),
+        ToolConcurrency::Shared,
+        "it's never executed, so it can't change what another call sees"
     );
 }
 
@@ -405,4 +411,122 @@ async fn a_tool_set_reports_the_mode_it_was_built_for() {
 
     assert_eq!(natural.completion(), CompletionMode::Natural);
     assert_eq!(explicit.completion(), CompletionMode::Explicit);
+}
+
+#[tokio::test]
+async fn a_filter_name_that_no_executor_serves_is_refused() {
+    for (filter, list) in [
+        (
+            ToolFilter {
+                allow: vec![name("bash"), name("raed_file")],
+                deny: Vec::new(),
+            },
+            FilterList::Allow,
+        ),
+        (
+            ToolFilter {
+                allow: Vec::new(),
+                deny: vec![name("raed_file")],
+            },
+            FilterList::Deny,
+        ),
+    ] {
+        let refused = built(
+            vec![executor(vec![
+                spec("bash", ToolSource::Builtin),
+                spec("read_file", ToolSource::Builtin),
+            ])],
+            filter,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            refused,
+            ToolSetError::UnknownFilterName {
+                name: name("raed_file"),
+                list,
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_misspelt_deny_entry_is_named_in_words() {
+    let refused = built(
+        vec![executor(vec![spec("read_file", ToolSource::Builtin)])],
+        ToolFilter {
+            allow: Vec::new(),
+            deny: vec![name("raed_file")],
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(
+        refused.to_string(),
+        "the deny list names raed_file, which no tool is called"
+    );
+    assert_eq!(FilterList::Allow.to_string(), "allow");
+}
+
+/// The filter doesn't apply to `task_complete` in explicit mode, so naming it
+/// can only be a mistake. In natural mode an executor may serve a tool by
+/// that name, and filtering it is an ordinary filter.
+#[tokio::test]
+async fn task_complete_can_be_filtered_only_when_an_executor_serves_it() {
+    let deny = ToolFilter {
+        allow: Vec::new(),
+        deny: vec![ToolName::task_complete()],
+    };
+
+    let explicit = ToolSet::build(
+        vec![executor(vec![spec("bash", ToolSource::Builtin)])],
+        &deny,
+        CompletionMode::Explicit,
+        None,
+    )
+    .await;
+    let natural = built(
+        vec![executor(vec![spec(
+            CompletionMode::TASK_COMPLETE,
+            ToolSource::Builtin,
+        )])],
+        deny,
+    )
+    .await
+    .expect("an executor serves it");
+
+    assert_eq!(
+        explicit.unwrap_err(),
+        ToolSetError::UnknownFilterName {
+            name: ToolName::task_complete(),
+            list: FilterList::Deny,
+        }
+    );
+    assert!(offered(&natural).is_empty());
+}
+
+#[tokio::test]
+async fn a_call_runs_beside_others_only_when_its_tool_says_it_may() {
+    let set = built(
+        vec![executor(vec![
+            ToolSpec {
+                concurrency: ToolConcurrency::Shared,
+                ..spec("read_file", ToolSource::Builtin)
+            },
+            spec("bash", ToolSource::Builtin),
+        ])],
+        ToolFilter::default(),
+    )
+    .await
+    .expect("distinct names");
+
+    assert_eq!(set.concurrency(&name("read_file")), ToolConcurrency::Shared);
+    assert_eq!(set.concurrency(&name("bash")), ToolConcurrency::Exclusive);
+    assert_eq!(
+        set.concurrency(&name("rm_rf")),
+        ToolConcurrency::Shared,
+        "a name no tool has is answered without an executor, so it changes nothing"
+    );
 }

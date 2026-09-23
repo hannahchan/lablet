@@ -24,15 +24,13 @@ fn one_turn() -> Transcript {
         None,
     )
     .expect("distinct call ids");
-    transcript
-        .record(
-            &mut vec![UserContent::Text("Hi.".to_owned())],
-            response,
-            ms(0),
-            ms(5),
-            1,
-        )
-        .expect("the first turn takes the prompt");
+    transcript.push(Turn::recorded(
+        vec![UserContent::Text("Hi.".to_owned())],
+        response,
+        ms(0),
+        ms(5),
+        1,
+    ));
     transcript
 }
 

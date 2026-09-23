@@ -6,8 +6,8 @@ use std::time::Duration;
 use lablet_model::{
     CompletionMode, ContentBlock, Endpoint, FinishReason, ModelRef, Prompts, ProviderErrorKind,
     ProviderKind, ProviderResponse, Rates, RequestParams, RunContext, RunId, StopReason, Thinking,
-    TokenCounts, ToolCallEnd, ToolCallId, ToolCallStatus, ToolInput, ToolName, ToolSource,
-    ToolSpec, ToolUse, Usage,
+    TokenCounts, ToolCallEnd, ToolCallId, ToolCallStatus, ToolConcurrency, ToolInput, ToolName,
+    ToolSource, ToolSpec, ToolUse, Usage,
 };
 use lablet_policy::{Pricing, RetryPolicy, StopPolicy};
 
@@ -32,6 +32,7 @@ fn spec(value: &str) -> ToolSpec {
         description: format!("The {value} tool."),
         input_schema: serde_json::json!({ "type": "object" }),
         source: ToolSource::Builtin,
+        concurrency: ToolConcurrency::Exclusive,
     }
 }
 
@@ -128,6 +129,7 @@ impl Harness {
                 provider_timeout: Duration::from_secs(60),
                 tool_timeout: Duration::from_secs(30),
                 max_tool_output_bytes: Some(100_000),
+                max_concurrent_tool_calls: nz(10),
             },
             context: context(),
             completion: CompletionMode::Natural,
@@ -156,7 +158,7 @@ impl Harness {
             self.pricing,
             self.calls,
         );
-        let finished = service.run(self.context, prompts()).await;
+        let finished = movable(service.run(self.context, prompts())).await;
         Run {
             finished,
             observer: self.observer,
@@ -164,6 +166,13 @@ impl Harness {
             clock: self.clock,
         }
     }
+}
+
+/// A composition root runs the loop on a multi-threaded runtime, which may move
+/// the run's future between threads, so every scenario fails to compile if it
+/// can't be.
+const fn movable<F: Future + Send>(future: F) -> F {
+    future
 }
 
 struct Run {
@@ -780,6 +789,43 @@ async fn a_priced_run_reports_its_cost_and_the_rates_it_was_priced_at() {
             .cost
             .is_some_and(|cost| cost.usd() > 0.0)
     );
+}
+
+/// The cost is priced before the run is closed, from the state it stopped in,
+/// so each state has to count the turn it's holding. A run stopped at a
+/// response's calls holds a turn the transcript doesn't have yet.
+#[tokio::test]
+async fn a_run_is_priced_on_every_turn_it_took_whichever_state_it_stopped_in() {
+    let pricing = Pricing::new(Rates::new(4.0, 16.0, 0.5, 5.0).expect("ordinary rates"));
+    let answered = || Answer::now(says("On it.", &["bash"], FinishReason::ToolUse));
+    let stopped_at = [
+        // The response called no tool.
+        vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))],
+        // The response's calls were cut short, so they never ran.
+        vec![Answer::now(says(
+            "On it.",
+            &["bash"],
+            FinishReason::MaxTokens,
+        ))],
+        // Point A, waiting for a response, after a turn whose calls ran.
+        vec![answered(), Answer::fails(ProviderErrorKind::Fatal)],
+    ];
+
+    for script in stopped_at {
+        let mut harness = Harness::new(script);
+        harness.pricing = Some(pricing);
+
+        let run = harness.run().await;
+
+        let usage = run.finished.summary.outcome.usage;
+        assert!(usage.total() > 0, "{:?}", run.stop_reason());
+        assert_eq!(
+            run.finished.summary.cost,
+            pricing.cost(&usage),
+            "{:?}",
+            run.stop_reason()
+        );
+    }
 }
 
 #[tokio::test]
@@ -1466,6 +1512,7 @@ async fn what_a_tool_carried_back_over_mcp_reaches_the_observer() {
                 source: ToolSource::Mcp {
                     server: "docs".to_owned(),
                 },
+                concurrency: ToolConcurrency::Exclusive,
             }],
         )
         .answers(
@@ -1515,6 +1562,7 @@ async fn a_tool_that_failed_over_mcp_still_reports_how_it_was_reached() {
                 source: ToolSource::Mcp {
                     server: "docs".to_owned(),
                 },
+                concurrency: ToolConcurrency::Exclusive,
             }],
         )
         .answers(
@@ -1638,29 +1686,64 @@ async fn a_call_whose_arguments_did_not_parse_is_malformed_input_and_never_runs(
     assert_eq!(run.stop_reason(), StopReason::Completed);
 }
 
-/// A cut-off response can end inside `task_complete`'s own arguments. The call
-/// still completes the run in explicit mode, because the model said it was
-/// done, but nothing parsed, so the result carries no structured value.
+// L12: a `task_complete` call whose arguments didn't parse completes nothing.
+
+/// In explicit mode the structured result is what the run is for, so a
+/// `task_complete` call whose arguments didn't parse isn't a completion. It's
+/// answered like any other call with bad arguments, the response's other
+/// calls run, and the model can call it again.
 #[tokio::test]
-async fn a_task_complete_call_whose_arguments_did_not_parse_completes_without_a_result() {
-    let mut harness = Harness::new(vec![Answer::now(calls_with_unparsed_input(
-        CompletionMode::TASK_COMPLETE,
-        "{\"passed\": tr",
-    ))]);
+async fn a_task_complete_call_whose_arguments_did_not_parse_is_answered_and_the_run_goes_on() {
+    let argument = serde_json::json!({ "passed": true });
+    let first = ProviderResponse::new(
+        vec![
+            ContentBlock::ToolUse(ToolUse {
+                id: ToolCallId::new("call_0").expect("a valid call id"),
+                name: name("bash"),
+                input: ToolInput::Json(serde_json::json!({ "command": "cargo test" })),
+            }),
+            ContentBlock::ToolUse(ToolUse {
+                id: ToolCallId::new("call_1").expect("a valid call id"),
+                name: ToolName::task_complete(),
+                input: ToolInput::Unparsed("{\"passed\": tr".to_owned()),
+            }),
+        ],
+        Usage::default(),
+        FinishReason::ToolUse,
+        None,
+        None,
+    )
+    .expect("distinct call ids");
+    let second = ProviderResponse::new(
+        vec![ContentBlock::ToolUse(ToolUse {
+            id: ToolCallId::new("call_2").expect("a valid call id"),
+            name: ToolName::task_complete(),
+            input: ToolInput::Json(argument.clone()),
+        })],
+        Usage::default(),
+        FinishReason::ToolUse,
+        None,
+        None,
+    )
+    .expect("one call");
+    let mut harness = Harness::new(vec![Answer::now(first), Answer::now(second)]);
     harness.completion = CompletionMode::Explicit;
 
     let run = harness.run().await;
 
     assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(run.turns(), 2);
+    let outcome = &run.finished.summary.outcome;
+    assert_eq!(outcome.result().structured, Some(argument));
     assert_eq!(
-        run.finished.summary.outcome.result().structured,
-        None,
-        "nothing parsed, so there is no argument to report"
+        outcome.tool_calls, 2,
+        "turn 1's calls were both answered; turn 2's completion call is intercepted"
     );
-    assert_eq!(
-        run.finished.summary.outcome.tool_calls, 0,
-        "the completion call is intercepted rather than run"
-    );
+    let answered = run.finished.transcript.turns()[0].tool_calls();
+    assert_eq!(answered[0].status.as_str(), "ok", "the other call ran");
+    assert_eq!(answered[1].status, ToolCallStatus::MalformedInput);
+    assert!(answered[1].status.is_error(), "it counts as a tool error");
+    assert_eq!(run.finished.summary.tool_calls_errors, 1);
 }
 
 /// A response whose only call is unparsed, so `tool_uses` has one entry the
@@ -1687,4 +1770,116 @@ fn calls_with_unparsed_input(tool: &str, text: &str) -> ProviderResponse {
         None,
     )
     .expect("a test's response has distinct call ids")
+}
+
+// L11: a turn's tool calls run in groups.
+
+/// A run whose first response calls `read_file`, `read_file`, `write_file`,
+/// and `read_file`, on an executor whose calls yield part-way, with reads
+/// shared and writes exclusive; and when each call started and ended.
+async fn grouped(max_concurrent: u32) -> (Run, Vec<String>) {
+    let mut harness = Harness::new(vec![
+        Answer::now(says(
+            "Looking.",
+            &["read_file", "read_file", "write_file", "read_file"],
+            FinishReason::ToolUse,
+        )),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    let tools = Arc::new(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![
+                ToolSpec {
+                    concurrency: ToolConcurrency::Shared,
+                    ..spec("read_file")
+                },
+                spec("write_file"),
+            ],
+        )
+        .yielding(),
+    );
+    harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
+    harness.calls.max_concurrent_tool_calls = nz(max_concurrent);
+
+    let run = harness.run().await;
+    (run, tools.spans())
+}
+
+fn at(spans: &[String], span: &str) -> usize {
+    spans
+        .iter()
+        .position(|s| s == span)
+        .expect("every call starts and ends")
+}
+
+#[tokio::test]
+async fn consecutive_reads_run_together_and_a_write_runs_alone() {
+    let (run, spans) = grouped(10).await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert!(
+        at(&spans, "+call_1") < at(&spans, "-call_0"),
+        "the first two reads overlap: {spans:?}"
+    );
+    assert!(
+        at(&spans, "-call_0").max(at(&spans, "-call_1")) < at(&spans, "+call_2"),
+        "the write starts after both reads have ended: {spans:?}"
+    );
+    assert!(
+        at(&spans, "-call_2") < at(&spans, "+call_3"),
+        "the read after the write starts after it ends: {spans:?}"
+    );
+    let ids: Vec<&str> = run.finished.transcript.turns()[0]
+        .tool_calls()
+        .iter()
+        .map(|outcome| outcome.call_id.as_str())
+        .collect();
+    assert_eq!(ids, ["call_0", "call_1", "call_2", "call_3"]);
+}
+
+/// A cap of 1 is the loop before calls could run together, which is what a
+/// test that asserts events exactly relies on.
+#[tokio::test]
+async fn a_cap_of_one_runs_every_call_alone_and_records_the_same_transcript() {
+    let (alone, spans) = grouped(1).await;
+    let (together, _) = grouped(10).await;
+
+    assert_eq!(
+        spans,
+        [
+            "+call_0", "-call_0", "+call_1", "-call_1", "+call_2", "-call_2", "+call_3", "-call_3"
+        ]
+    );
+    let tool_events: Vec<&str> = alone
+        .observer
+        .names()
+        .into_iter()
+        .filter(|name| name.starts_with("ToolCall"))
+        .collect();
+    assert_eq!(
+        tool_events,
+        ["ToolCallStarted", "ToolCallFinished"].repeat(4),
+        "each call's events close before the next call's open"
+    );
+    assert_eq!(alone.finished.transcript, together.finished.transcript);
+}
+
+// E11: a retry is a provider call, so it's polled for cancellation.
+
+#[tokio::test]
+async fn a_run_cancelled_during_a_backoff_makes_no_further_attempt() {
+    let mut harness = Harness::new(vec![
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
+    ]);
+    // Answered once at point A, then true at the poll after the backoff.
+    harness.cancel = Arc::new(FakeCancel::after(1));
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Cancelled);
+    assert_eq!(run.provider.calls(), 1, "no attempt after the backoff");
+    assert_eq!(run.clock.sleeps(), [ms(100)]);
+    assert_eq!(run.turns(), 0);
 }

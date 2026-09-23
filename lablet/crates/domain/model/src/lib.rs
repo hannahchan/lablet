@@ -42,12 +42,14 @@ pub use provider::{
     ResponseError, Thinking, UnknownReason,
 };
 pub use provider_kind::ProviderKind;
-pub use run::{BlankTask, Progress, Prompts, Run, RunSetup};
+pub use run::{BlankTask, Final, Pending, Progress, Prompts, Responded, Run, RunSetup, Schedule};
 pub use stop::{Calls, CompletionMode, StopClass, StopReason};
 pub use summary::{FinishedRun, RunContext, RunSummary, ToolStats};
-pub use tool::{ToolCallEnd, ToolCallOutcome, ToolCallStatus, ToolSource, ToolSpec};
+pub use tool::{
+    Answer, ToolCallEnd, ToolCallOutcome, ToolCallStatus, ToolConcurrency, ToolSource, ToolSpec,
+};
 pub use transcript::document::{TRANSCRIPT_SCHEMA_VERSION, TranscriptDocument};
-pub use transcript::{Transcript, TranscriptError, Turn, TurnRecord};
+pub use transcript::{Transcript, Turn, TurnRecord};
 pub use usage::{TokenCounts, Usage};
 
 /// Whole milliseconds, truncated. The one conversion from a `Duration` in the
@@ -55,3 +57,6 @@ pub use usage::{TokenCounts, Usage};
 pub(crate) fn whole_ms(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
+
+#[cfg(test)]
+mod tests;
