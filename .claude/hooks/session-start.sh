@@ -25,6 +25,8 @@ elif [ -n "$branch" ] && git -C "$REPO" rev-parse -q --verify origin/main >/dev/
   fi
 fi
 
-if [ "$(git -C "$REPO" config --get core.hooksPath || true)" != "scripts/hooks" ]; then
+# --local reads the clone's config, where scripts/install-hooks.sh writes, and
+# skips the absolute per-worktree override that app-made worktrees carry.
+if [ "$(git -C "$REPO" config --local --get core.hooksPath || true)" != "scripts/hooks" ]; then
   echo "NOTE: the git hooks aren't installed in this clone. Run: cargo xtask setup"
 fi
