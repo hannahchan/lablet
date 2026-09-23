@@ -11,13 +11,16 @@ for dir in /opt/homebrew/bin "${HOME:-}/.local/bin" "${CARGO_HOME:-${HOME:-}/.ca
 done
 export PATH
 
+# Cargo finds the `xtask` alias only from the repository root or below. The
+# root is the worktree being committed or pushed, not this file's checkout: an
+# absolute core.hooksPath runs one checkout's hooks for every worktree. Asked
+# before the unset below, while git still names the repository.
+cd "$(git rev-parse --show-toplevel)"
+
 # Git points a hook at this repository through GIT_DIR and its relatives. The
 # gate runs git in temporary repositories too, which must not inherit them.
 # shellcheck disable=SC2046
 unset $(git rev-parse --local-env-vars)
-
-# Cargo finds the `xtask` alias only from the repository root or below.
-cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
 # No `mise exec`: from a hook it would trust mise.toml and install missing
 # pins on the spot, which is scripts/setup.sh's decision. xtask finds the tools.

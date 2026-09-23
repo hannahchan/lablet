@@ -282,4 +282,98 @@ mod tests {
         let (mode, _) = plan("ci", &[]).unwrap();
         assert!(matches!(mode, Mode::Gate("ci")));
     }
+
+    /// A clone whose `core.hooksPath` is absolute runs the main checkout's
+    /// hooks for a commit in any of its worktrees, so a hook that found the
+    /// repository from its own location gated the wrong files. A stand-in
+    /// `cargo` records where each hook ran it.
+    #[test]
+    fn a_hook_gates_the_worktree_it_runs_for_not_the_checkout_holding_it() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = workspace::fixture::TempDir::new("hooks");
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let (main, worktree) = (root.join("main"), root.join("worktree"));
+        let record = root.join("record");
+        dir.write(
+            "cargo-home/bin/cargo",
+            "#!/bin/sh\necho \"$(pwd -P) $*\" >> \"$XTASK_HOOK_RECORD\"\n",
+        );
+        let fake = root.join("cargo-home/bin/cargo");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let hooks = main.join("scripts/hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        for hook in ["pre-commit", "pre-push"] {
+            std::fs::copy(
+                workspace::repo_root().join("scripts/hooks").join(hook),
+                hooks.join(hook),
+            )
+            .unwrap();
+        }
+
+        // Pinned to the scratch directory and cut off from the developer's
+        // configuration, signing included, as changelog.rs's scratch_git is.
+        let git = |directory: &std::path::Path, args: &[&str]| {
+            let mut command = std::process::Command::new("git");
+            command
+                .args([
+                    "-c",
+                    "user.name=xtask",
+                    "-c",
+                    "user.email=x@example.invalid",
+                ])
+                .args(args)
+                .current_dir(directory);
+            for variable in process::GIT_REPOSITORY_ENV {
+                command.env_remove(variable);
+            }
+            let output = command
+                .env("GIT_CEILING_DIRECTORIES", &root)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", &root)
+                .env("CARGO_HOME", root.join("cargo-home"))
+                .env("XTASK_HOOK_RECORD", &record)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        };
+        git(&main, &["init", "--quiet", "--initial-branch=main"]);
+        git(
+            &main,
+            &["commit", "--quiet", "--allow-empty", "--message=base"],
+        );
+        git(
+            &main,
+            &["worktree", "add", "--quiet", "-b", "topic", "../worktree"],
+        );
+        assert_eq!(
+            git(&worktree, &["rev-parse", "--show-toplevel"]),
+            worktree.to_str().unwrap(),
+            "git resolved outside the scratch worktree"
+        );
+        git(&root, &["init", "--quiet", "--bare", "remote.git"]);
+        git(
+            &main,
+            &["config", "core.hooksPath", hooks.to_str().unwrap()],
+        );
+
+        git(
+            &worktree,
+            &["commit", "--quiet", "--allow-empty", "--message=topic"],
+        );
+        git(&worktree, &["push", "--quiet", "../remote.git", "topic"]);
+
+        let ran = std::fs::read_to_string(&record).unwrap();
+        let worktree = worktree.display();
+        assert_eq!(
+            ran,
+            format!("{worktree} xtask pre-commit\n{worktree} xtask pre-push\n")
+        );
+    }
 }
