@@ -628,7 +628,7 @@ Running every call at once is wrong for tools with side effects. So the rule is 
 - **`lablet.tool_calls.latency_ms.total` sums call time.** Once calls overlap, that can exceed the run's wall time. It already meant the sum, and the spec now says so, so nobody reads it as the time the tool phase took.
 - **`ToolExecutor::execute` may be called concurrently** for `Shared` tools. That's a new port obligation and a new case in the conformance set.
 
-**Why the domain composes futures, and the rule that changes.** Three properties are wanted, and any two are easy:
+**Why the domain composes futures, and the rule that changes.** Chosen by the human over two alternatives that kept the domain synchronous: tool calls answered one at a time, or a concurrent loop handing the domain a finished list and a count check that can't fail. Three properties are wanted, and any two are easy:
 
 1. The domain is synchronous, as `contributing/README.md` requires: "Anything async is application or outward."
 2. Calls in one turn run concurrently.
@@ -636,7 +636,13 @@ Running every call at once is wrong for tools with side effects. So the rule is 
 
 Sequential and synchronous works: the domain hands out one linear token per call, each answered in turn. Concurrent and synchronous works if the domain keeps a count check, which is where the loop is today. Concurrent with no unreachable branch needs whatever knows the calls to also collect the answers, because tokens that leave the domain and come back through a join the domain doesn't own can always come back short. Rust has no linear types to stop a token being dropped.
 
-So `Pending::answer` takes an `AsyncFn(&ToolUse) -> Answer` and returns a future. It composes rather than acts: it creates no future of its own, reads no clock, starts no task and names no runtime. It schedules futures its caller made, in the order the calls came and in groups the concurrency rule sets. The rule in `contributing/README.md` becomes: domain crates hold no runtime, no I/O, no clock and no port, and a domain function may compose futures its caller supplies when that's what lets it keep an invariant. `lablet-policy` stays synchronous.
+So `Pending::answer` takes an `AsyncFn(&ToolUse) -> Answer` and returns a future. It composes rather than acts: it creates no future of its own, reads no clock, starts no task and names no runtime. It schedules futures its caller made, in the order the calls came and in groups the concurrency rule sets. The rule the domain was synchronous for is testability, and that's what the rule in `contributing/README.md` now states. A domain crate has no runtime, no I/O, no clock, no port and no threads, and a plain `#[test]` can drive every function in it deterministically. An async function meets that when its tests poll it to completion with `std::task::Waker::noop()`, stable since Rust 1.85, and hand it futures the test controls. A future that reports "not ready" once and records when it starts and ends is enough to show that shared calls overlap, exclusive calls don't, and outcomes come back in call order, on one thread and with no dev-dependency. Anything that needs a runtime to test stays in the application or further out. `lablet-policy` stays synchronous because nothing in it waits.
+
+What the change costs, stated so it isn't found later:
+
+- **The domain schedules the tool phase.** Control flips: the domain calls back into the loop, and the grouping, the order and the cap are the domain's.
+- **The run lives inside the future while tools run.** Anything that abandons that future part-way, such as a timeout around it or a drop on cancellation, loses the run and its transcript with it. So interrupting a tool phase, still an open question, has to be built into `Pending::answer` rather than wrapped around it.
+- **`futures-util` is new to the domain,** below.
 
 The join is `futures-util`'s `StreamExt::buffered`, with default features off. It preserves order and bounds concurrency, which is exactly the group rule. It's new to the dependency graph, isn't on the domain's forbidden list, and replaces the other option: a hand-written, waker-correct, bounded, ordered join is code a lightweight project shouldn't own.
 

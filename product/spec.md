@@ -700,7 +700,7 @@ Config digest (`lablet.config.digest`) is a SHA-256 of the canonical JSON form o
 
 ## 9. Testing
 
-- Unit tests live beside the code in a sibling file declared `#[cfg(test)] mod tests;` (`src/foo.rs` with `src/foo/tests.rs`, or `src/tests.rs`), never as an inline `mod tests { ... }` body, so the coverage floor can exclude test code by file name instead of parsing Rust. The gate enforces this in the three floor crates (`lablet-model`, `lablet-policy`, `lablet-run`); elsewhere it's the convention. Policy and model crates are the bulk and need no async.
+- Unit tests live beside the code in a sibling file declared `#[cfg(test)] mod tests;` (`src/foo.rs` with `src/foo/tests.rs`, or `src/tests.rs`), never as an inline `mod tests { ... }` body, so the coverage floor can exclude test code by file name instead of parsing Rust. The gate enforces this in the three floor crates (`lablet-model`, `lablet-policy`, `lablet-run`); elsewhere it's the convention. Policy and model crates are the bulk and need no runtime: `Pending::answer`, the model's one async function, is polled to completion in its tests with `std::task::Waker::noop()` and futures the test controls.
 - `lablet-run` is tested end to end with hand-written fakes for every port, including a fake clock. No mocking framework.
 - Provider adapters are tested against `wiremock` with recorded payloads, including error classification and content-block round trips.
 - `lablet-conformance` holds case sets for `ToolExecutor` and `RunObserver`, pulled in as dev-dependencies by each adapter.
