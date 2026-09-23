@@ -10,17 +10,19 @@ A run takes a config and a task prompt and executes one agent loop:
 transcript = (system, turns: []);  input = prompt
 loop:
     if cancelled or stop policy says stop (timeout, tokens): break          # point A
-    response = provider.complete(system, messages(transcript, input), tool specs)   # retried per call on transient error
+    response = provider.complete(system, messages(transcript, input), tool specs)   # retried per call on transient error; cancellation is polled before each retry
     transcript.turns += turn(input, response);  input = nothing             # the input it answers, the response, and the record of its provider call
     if stop policy says stop (refused, output_truncated, context_exhausted, completed, ended_without_completion): break   # point R; a task_complete call is recorded here, never executed
-    outcomes = []
-    for each tool_use block in response: outcomes += tools.execute(call)    # errors become error results; output over the cap is cut
-    the turn's tool_calls = outcomes                                        # rendered as ONE message of results
+    for each group of the response's tool_use blocks, in call order:       # consecutive shared calls are one group, run concurrently; an exclusive call is a group of its own
+        run the group's calls                                               # errors become error results; output over the cap is cut
+    the turn's tool_calls = one outcome for each call, in call order        # rendered as ONE message of results
     if cancelled or stop policy says stop (tool errors, turns, timeout, tokens): break   # point B
 emit outcome
 ```
 
 A turn is one model response with what prompted it and what came of it: the input the user supplied, the record of the provider call that produced the response, and the outcome of each tool call it made. The first turn's input is the task prompt; a later turn follows a tool phase and has none. The flat list a provider call sends is rendered from the turns: before each response comes one user message holding the results of the previous turn's tool calls and then the turn's input. The loop never assembles a message.
+
+A turn's tool calls run in groups, in call order. Consecutive calls to tools marked `shared` form one group, which runs concurrently, at most `tools.max_concurrent_calls` at a time; a call to an `exclusive` tool is a group of its own. So a read the model placed after a write still runs after it. Outcomes are recorded in call order whichever call finished first, so the transcript and the results the model is sent don't depend on timing (§5).
 
 The stop policy is evaluated at three points: before each provider call (point A), after each provider response and before any tool runs (point R), and after each tool phase (point B). Cancellation, the run timeout, and the token budget are checked at A and B; the turn cap and the consecutive tool error cap at point B only. A run therefore never makes a provider call after the condition that should have stopped it. Point R reads only the response, so a response that finishes the task completes the run even when it also used up the timeout or the token budget. It reads the finish reason before the tool calls: a response the model refused, or one that was cut short, stops the run there and none of its tool calls runs.
 
@@ -62,7 +64,7 @@ Every provider call, tool call, retry, and stop decision is reported to an obser
 
 ### Cancellation
 
-Cancellation is polled at points A and B via the `Cancellation` port; the CLI wires it to Ctrl-C. A run in the middle of a long tool call stops after that call returns or times out. Interrupting a call in flight is an open question.
+Cancellation is polled at points A and B, and before each retry of a provider call, via the `Cancellation` port; the CLI wires it to Ctrl-C. A retry is a provider call, so a run cancelled during a backoff makes no further attempt and stops with `cancelled`. A run in the middle of a tool phase stops after the phase ends: every call of the turn runs until it returns or times out. Interrupting a call in flight, or stopping a phase between its groups, is an open question.
 
 ### Transcript
 
@@ -206,10 +208,8 @@ impl Turn {
     pub fn input(&self) -> &[UserContent]; pub fn response(&self) -> &[ContentBlock]; pub fn record(&self) -> &TurnRecord; pub fn tool_calls(&self) -> &[ToolCallOutcome];
     pub fn tool_uses(&self) -> impl Iterator<Item = &ToolUse>;        // the n-th outcome answers the n-th call
     pub fn text(&self) -> String;                                     // the Text blocks, concatenated
-    pub fn calls(&self, mode: CompletionMode) -> Calls;               // what the stop policy reads at point R
 }
-pub enum TranscriptError { NothingFromTheUser { turn: usize }, UnansweredCalls { turn: usize, calls: Vec<String> }, OutcomesDontAnswerCalls { calls: Vec<String>, outcomes: Vec<String> } }
-pub enum Calls { None, Tools, TaskComplete }   // how a completion mode reads a response; Turn::calls is the only producer
+pub enum Calls { Tools, TaskComplete }   // how a completion mode reads a response that called at least one tool; Pending::calls is the only producer
 
 // Provider
 pub enum ProviderKind { Anthropic, Openai, Fake }
@@ -240,19 +240,24 @@ pub enum Thinking { ProviderDefault, Adaptive, Budget(NonZeroU32), Disabled }   
 pub enum Effort { Low, Medium, High, XHigh, Max }
 
 // Tools
-pub struct ToolSpec { pub name: ToolName, pub description: String, pub input_schema: serde_json::Value, pub source: ToolSource }
+pub struct ToolSpec { pub name: ToolName, pub description: String, pub input_schema: serde_json::Value, pub source: ToolSource, pub concurrency: ToolConcurrency }
+pub enum ToolConcurrency { Exclusive, Shared }   // Default: Exclusive; whether calls to the tool may run beside other shared calls (§1)
 pub enum ToolSource { Builtin, Mcp { server: String } }   // Display: "builtin", "mcp:docs"; as_str: the variant only
 pub enum ToolCallStatus { Unknown, MalformedInput, Ran { source: ToolSource, ended: ToolCallEnd } }   // ran(source, ended); as_str flattens to `lablet.tool.status`, and to the span's error.type for every value but ok; source() -> Option<&ToolSource>
 pub enum ToolCallEnd { Ok, ToolError, Timeout, Failed }
 pub struct ToolCallOutcome { pub call_id: ToolCallId, pub status: ToolCallStatus, pub started_ms: u64, pub latency_ms: u64, pub truncated_from_bytes: Option<u64>, pub content: Vec<ToolResultContent> }
 impl ToolCallOutcome {
-    pub fn measured(call_id: ToolCallId, status: ToolCallStatus, content: Vec<ToolResultContent>, max_output_bytes: Option<u64>, started: Duration, latency: Duration) -> ToolCallOutcome;   // applies the output cap
     pub fn output_bytes(&self) -> u64;                                // summed byte length of the content the model was sent
+}
+pub struct Answer { status: ToolCallStatus, started_ms: u64, latency_ms: u64, truncated_from_bytes: Option<u64>, content: Vec<ToolResultContent> }   // an outcome without its call id, which only Pending::answer adds
+impl Answer {
+    pub fn measured(status: ToolCallStatus, content: Vec<ToolResultContent>, max_output_bytes: Option<u64>, started: Duration, latency: Duration) -> Answer;   // applies the output cap
+    pub fn status(&self) -> &ToolCallStatus; pub fn latency_ms(&self) -> u64; pub fn output_bytes(&self) -> u64; pub fn truncated_from_bytes(&self) -> Option<u64>; pub fn content(&self) -> &[ToolResultContent];   // what ToolCallFinished reads
 }
 
 // Run
 pub enum CompletionMode { Natural, Explicit }
-impl CompletionMode { pub const TASK_COMPLETE: &str; }   // "task_complete": the loop offers it, intercepts it, and Turn::calls reads it
+impl CompletionMode { pub const TASK_COMPLETE: &str; }   // "task_complete": the loop offers it, intercepts it, and Pending::calls reads it
 pub enum StopReason { Completed, EndedWithoutCompletion, MaxTurns, Timeout, MaxTotalTokens, OutputTruncated, ContextExhausted, RetriesExhausted, ToolErrorsExhausted, Cancelled, ProviderError, Refused }
 pub enum StopClass { Completed, Stopped, Failed }
 impl StopReason { pub fn class(self) -> StopClass; }                  // Failed: context_exhausted, retries_exhausted, tool_errors_exhausted, provider_error
@@ -276,12 +281,23 @@ impl Run {
     pub fn transcript(&self) -> &Transcript;
     pub fn messages(&self) -> Vec<Message<'_>>;                                 // what the next provider call sends
     pub fn failed_attempt(&mut self, latency: Duration);                        // a provider call attempt that failed
-    pub fn responded(&mut self, response: ProviderResponse, started: Duration, latency: Duration) -> Result<&Turn, TranscriptError>;   // one that succeeded becomes the next turn
-    pub fn tool_calls(&mut self, outcomes: Vec<ToolCallOutcome>) -> Result<(), TranscriptError>;   // what happened to the last turn's tool calls
+    pub fn responded(self, response: ProviderResponse, started: Duration, latency: Duration) -> Responded;   // one that succeeded becomes the next turn
     pub fn progress(&self, elapsed: Duration) -> Progress;
     pub fn usage(&self) -> Usage;                                               // what the run's cost is priced from
     pub fn finish(self, stop: StopReason, duration: Duration, structured: Option<serde_json::Value>, error: Option<String>, rates: Option<Rates>, cost: Option<Cost>) -> FinishedRun;
 }
+pub enum Responded { Final(Final), Pending(Pending) }            // Final: the response called no tool; Pending: it called at least one
+impl Final {                                                    // a run whose last response called no tool can only finish
+    pub fn turn(&self) -> &Turn; pub fn transcript(&self) -> &Transcript; pub fn progress(&self, elapsed: Duration) -> Progress; pub fn usage(&self) -> Usage;
+    pub fn finish(self, /* as Run::finish */) -> FinishedRun;
+}
+impl Pending {                                                  // finished at point R, or answered and carried on
+    pub fn turn(&self) -> &Turn; pub fn transcript(&self) -> &Transcript; pub fn progress(&self, elapsed: Duration) -> Progress; pub fn usage(&self) -> Usage;
+    pub fn calls(&self, mode: CompletionMode) -> Calls;         // what the stop policy reads at point R
+    pub fn finish(self, /* as Run::finish */) -> FinishedRun;   // the turn's calls stay unanswered
+    pub async fn answer<F>(self, schedule: Schedule<'_>, answer: F) -> Run where F: AsyncFn(&ToolUse) -> Answer;
+}
+pub struct Schedule<'a> { pub max_concurrent: NonZeroU32, pub concurrency: &'a dyn Fn(&ToolUse) -> ToolConcurrency }   // what groups the calls; the loop reads a call's concurrency from its ToolSet
 ```
 
 `RunContext` holds what only the composition root knows and hands to the loop. `RunSummary` holds what the loop knew and measured: the limits and request parameters it was built with, the model and endpoint its provider reports, and everything it counted. Observers don't reconstruct it, so every observer reports identical numbers. The wide event is the two flattened together. `RunSummary` doesn't repeat what its `outcome` already holds: `gen_ai.usage.*` comes from `outcome.usage`, `lablet.tool_calls.total` from `outcome.tool_calls`, `lablet.run.turns` from `outcome.turns`, `lablet.run.duration_ms` from `outcome.duration_ms`, and `lablet.run.stop_reason` and `lablet.run.error` from `outcome.stop_reason()` and `outcome.error()`. `lablet.tools.count` is the length of `tools`, so no two fields can disagree.
@@ -290,18 +306,20 @@ impl Run {
 
 `Run::messages()` renders the flat form for the next provider call, borrowing everything. Before each turn's response comes one `User` message that holds the results of the previous turn's tool calls, in call order, and then the turn's input, whichever of the two there are; the last message is the one the next turn will answer, made of the last turn's results and the input that's waiting; a finished run has neither, so its rendered list ends with the assistant. Anthropic accepts both in one user message, results first; an OpenAI-compatible server gets one `tool` message for each result and then a user message for the input. The rendered result's `is_error` is `ToolCallStatus::is_error`, true for every status but a tool that ran and ended `ok`, so the flag can't disagree with the status it comes from. Blocks are stored and rendered verbatim and in order, which Anthropic requires of `Thinking`, `RedactedThinking`, and `Opaque` blocks in the latest assistant turn. `Message` is an enum of the two roles, so `ContentBlock` needs no tool-result variant that a response could misuse.
 
-Four rules remain that a structure doesn't hold. They're enforced where a transcript changes, and nowhere else: lablet doesn't read a transcript back, so `Transcript` serialises and has no serde form to read. Only a defect in the loop can break one, and the loop reports that as a `provider_error` rather than publish a transcript that lies:
+Four rules remain that the transcript's fields don't hold, and the run's states hold three of them. A run is a `Run` while it waits for a response, and recording one consumes it and returns a `Responded`: `Final` when the response called no tool, and `Pending` when it called at least one. `Final` can only finish. `Pending` can finish, which is how point R stops a run, or be answered, which gives back a `Run`. So no method exists for a sequence the rules forbid, and nothing is left to refuse; `TranscriptError` doesn't exist:
 
-- Something from the user comes before every response: a turn has input, or the turn before it has tool call outcomes. Otherwise two assistant messages would be adjacent, or the conversation would open with one. So the first turn always has input. `Run::responded` refuses a turn that breaks this (`NothingFromTheUser`).
+- Something from the user comes before every response: a turn has input, or the turn before it has tool call outcomes. Otherwise two assistant messages would be adjacent, or the conversation would open with one. A `Run` is made in two ways, by `Run::start` with a task that `Prompts::new` has refused to let be blank, and by `Pending::answer` with at least one outcome, so every response has something before it. `Final` offers no way on, which is also what point R decides for a response that calls no tool.
 - The tool calls of one response have distinct ids. `ProviderResponse::new` refuses a repeat (`ResponseError::DuplicateToolUse`), which an adapter reports as `Malformed`, and a completion's `content` can't be set any other way.
-- A turn's outcomes answer exactly the tool calls of its response, each call id once and in call order, or the turn has no outcomes at all because its tools never ran: the response was cut short or refused, its `task_complete` call was intercepted, or the run was cancelled or reached a limit first. `Run::tool_calls` refuses anything else.
-- Only the last turn may have tool calls and no outcomes, whatever input the next turn would bring. `Run::responded` refuses a turn that would follow one (`UnansweredCalls`).
+- A turn's outcomes answer exactly the tool calls of its response, each call id once and in call order, or the turn has no outcomes at all because its tools never ran: the response was cut short or refused, its `task_complete` call was intercepted, or the run was cancelled or reached a limit first. `Pending::answer` walks the turn's own calls, awaits one `Answer` for each, and adds each call's id itself, so the loop never holds a list whose length or order could be wrong. `Pending::finish` leaves the turn with no outcomes.
+- Only the last turn may have tool calls and no outcomes, whatever input the next turn would bring. A `Pending` that finishes is a run that ends, so an unanswered turn is always the last.
+
+`Pending::answer` is the domain's one function that returns a future. It creates no future of its own, reads no clock and names no runtime: it runs the futures `answer` returns in the groups §1 describes, using `schedule` to tell a shared call from an exclusive one, and collects them in call order through `futures-util`'s order-preserving `StreamExt::buffered`. It's in the domain because the thing that collects the answers has to be the thing that knows the calls, or the count could come back short (see `decisions.md`, 2026-09-23). `answer` is an `AsyncFn` rather than an `AsyncFnMut` because the calls of one group borrow it at the same time.
 
 Whether a turn without outcomes called no tools or its tools never ran is read from whether its response holds tool calls; nothing else records it. The name and input of a call are in the response's `ToolUse` block and nowhere else, and an outcome's sizes are measured rather than stored (`ToolUse::input_bytes`, `ToolCallOutcome::output_bytes`), so nothing is written in two places that could disagree. The one size it stores is `truncated_from_bytes`, what the output measured before the cap cut it, which nothing left can measure.
 
 **Empty text.** When a provider response becomes a turn, `Text` blocks that are empty or only whitespace are dropped from the response, and from the turn's input by the same rule, which is why a prompt of only whitespace is nothing from the user. This is the only way a stored turn differs from what the provider sent and from what the loop was handed. Models do emit such blocks, typically just before a tool call, and Anthropic refuses both kinds when the response is replayed; rejecting the completion instead would mark it `Malformed` and spend a retry on a block that carries nothing. The drop happens once, before anything reads the turn, so `final_text()` and every byte count taken from `Run::messages()` describe what's replayed, and a published document never holds a blank block.
 
-**Time.** The domain reads no clock. The loop passes each offset and latency as a `Duration` measured on its `Clock`, and the model turns it into whole milliseconds in one function, so a total and the values it sums are cut the same way and no observer rounds for itself. A turn's record holds `started_ms`, the offset from the start of the run at which the successful attempt began, its `latency_ms`, and `attempts`, the number of attempts the call took; an outcome holds `started_ms` and `latency_ms` of its tool call. A duration that reaches telemetry as a `*_ms` attribute is a `u64` field named `*_ms` (`duration_ms`, `timeout_ms`, the latency fields). No serialised type holds a `Duration`; `RunSetup`, `Progress`, and the parameters of `Run` and `ToolCallOutcome::measured` do.
+**Time.** The domain reads no clock. The loop passes each offset and latency as a `Duration` measured on its `Clock`, and the model turns it into whole milliseconds in one function, so a total and the values it sums are cut the same way and no observer rounds for itself. A turn's record holds `started_ms`, the offset from the start of the run at which the successful attempt began, its `latency_ms`, and `attempts`, the number of attempts the call took; an outcome holds `started_ms` and `latency_ms` of its tool call. A duration that reaches telemetry as a `*_ms` attribute is a `u64` field named `*_ms` (`duration_ms`, `timeout_ms`, the latency fields). No serialised type holds a `Duration`; `RunSetup`, `Progress`, and the parameters of `Run` and `Answer::measured` do.
 
 **ATIF.** The transcript maps onto an ATIF v1.8 trajectory field for field, so the phase 10 export is a map and not a reconstruction. `system` is the `system` step that opens the trajectory, a turn's input, when it has any, is a step with source `user`, and the rest of the turn is one `agent` step with `llm_call_count` 1:
 
@@ -320,7 +338,7 @@ Whether a turn without outcomes called no tools or its tools never ran is read f
 
 `RedactedThinking` and `Opaque` blocks are replay material for the provider that sent them and have no place in a trajectory.
 
-**Tool calls.** A `ToolCallOutcome` is what happened to one call, and one value feeds the transcript, the totals, and the `execute_tool` span. `status` says in one value whether a tool ran: `Unknown`, no configured tool has the name, or `Ran { source, ended }`, where `ended` is `Ok`; `ToolError`, the tool ran and reported an error, as MCP's `isError` does; `Timeout`; or `Failed`, the executor failed. `as_str` flattens the two levels to the five `lablet.tool.status` values, of which every one but `ok` is the span's `error.type` (§5), and `source()` is a source exactly when a tool ran. So "the model called a tool the run doesn't have" is one fact, not a status, a missing source, and a name absent from `RunSetup::tools` that could disagree: `finish` reads the outcome's own status, and the executor, which resolved the name against the run's tools, is the only thing that decides it. `ToolCallOutcome::measured` is how the loop builds one: it converts the two durations and applies the output cap, `tools.max_output_bytes`, so every tool's output is cut the same way: text kept from the start up to the cap, at a character boundary, then the one line `[truncated: the first 100000 of 5242880 bytes]`, worded once in the model like the omitted-content line. `truncated_from_bytes` is the size before the cut, `None` when nothing was cut, and `output_bytes()` is the size the model was sent, that line included, which is why it can exceed the cap. Capping an output twice therefore cuts it twice; the loop applies the cap once, as each outcome is built. The cap is loop configuration (§5), not a model field.
+**Tool calls.** A `ToolCallOutcome` is what happened to one call, and one value feeds the transcript, the totals, and the `execute_tool` span. `status` says in one value whether a tool ran: `Unknown`, no configured tool has the name, or `Ran { source, ended }`, where `ended` is `Ok`; `ToolError`, the tool ran and reported an error, as MCP's `isError` does; `Timeout`; or `Failed`, the executor failed. `as_str` flattens the two levels to the five `lablet.tool.status` values, of which every one but `ok` is the span's `error.type` (§5), and `source()` is a source exactly when a tool ran. So "the model called a tool the run doesn't have" is one fact, not a status, a missing source, and a name absent from `RunSetup::tools` that could disagree: `finish` reads the outcome's own status, and the executor, which resolved the name against the run's tools, is the only thing that decides it. The loop builds an `Answer` with `Answer::measured`, and `Pending::answer` turns it into an outcome by adding the id of the call it asked about. `measured` converts the two durations and applies the output cap, `tools.max_output_bytes`, so every tool's output is cut the same way: text kept from the start up to the cap, at a character boundary, then the one line `[truncated: the first 100000 of 5242880 bytes]`, worded once in the model like the omitted-content line. `truncated_from_bytes` is the size before the cut, `None` when nothing was cut, and `output_bytes()` is the size the model was sent, that line included, which is why it can exceed the cap. Capping an output twice therefore cuts it twice; the loop applies the cap once, as each answer is measured. Every other field of an outcome is the answer's, so `ToolCallFinished`, which the loop emits from the answer before handing it over, reports what the transcript holds. The cap is loop configuration (§5), not a model field.
 
 **The run.** The loop doesn't assemble a `RunSummary` or a `Transcript` by hand. It starts a `Run` from a `RunSetup` and the two prompts, tells it each thing that happens, and `finish` turns it into the `FinishedRun`. It keeps the transcript and, beside it, only what a transcript doesn't hold: the input that waits for the next turn, which is the prompt until the first turn takes it, and the latencies of failed provider call attempts with how many the call in progress has had. Every total of the summary is computed from those when the run ends (usage, finish reasons, provider latency, retries, tool counts, bytes, per-tool shares, `result.text`, and the prompt sizes, where the task prompt's is the size of the first turn's input, or of the waiting input when no turn took it), so no quantity is held in two places and a summary always agrees with the transcript beside it. `progress` is computed the same way each time it's asked: a sum over the turns and a walk back from the last outcome to the last success, which is cheap next to a provider call. `turns` is the number of turns. A turn's `attempts` is the failed attempts since the turn before plus one, and the retries of a run are each turn's `attempts - 1` plus, for a call that never succeeded, its failed attempts less one: a retry is an attempt made beyond the first of its call, so a failure that nothing follows isn't one. Per-tool statistics exist only for a call whose status says a tool ran: the model can call any name, and a call to one the executor couldn't resolve counts in the totals and in `tool_calls_unknown` and creates no per-tool key. So the `lablet.tool.*.<name>` keys are bounded by what the executor resolves, not by `RunSetup::tools`. The two are the same set in a run, because a `ToolExecutor` resolves only the names it offered in `specs()` (§5) and `RunSetup::tools` is those names; the run reads the outcome rather than asking the tool list a second question it could answer differently. The intercepted `task_complete` call has no outcome, so it's in no total.
 
@@ -344,7 +362,8 @@ Pure functions over plain state, fully unit-testable without async:
 pub struct StopPolicy { pub max_turns: NonZeroU32, pub timeout: Duration, pub max_total_tokens: Option<u64>, pub max_consecutive_tool_errors: NonZeroU32 }
 impl StopPolicy {
     pub fn before_call(&self, progress: &Progress) -> Option<StopReason>;                        // point A of §1
-    pub fn after_response(&self, finish: &FinishReason, completion: CompletionMode, calls: Calls) -> Option<StopReason>;   // point R; the mode is passed, not held, so the run keeps one copy of it
+    pub fn after_final(&self, finish: &FinishReason, completion: CompletionMode) -> StopReason;   // point R for a response that called no tool, which always stops
+    pub fn after_response(&self, finish: &FinishReason, completion: CompletionMode, calls: Calls) -> Option<StopReason>;   // point R for one that called a tool; the mode is passed, not held, so the run keeps one copy of it
     pub fn after_tools(&self, progress: &Progress) -> Option<StopReason>;                        // point B
     pub fn allows_wait(&self, elapsed: Duration, wait: Duration) -> bool;                        // false when elapsed + wait reaches the timeout
 }
@@ -364,7 +383,7 @@ impl Pricing {
 }
 ```
 
-**Stop policy.** The three methods hold the order and the boundaries §1 gives for each point. Each takes only what its point reads, so an input can't contradict itself: the two limit checks take the `Progress` the run produces (§3), and the token budget reads `Progress::usage.total()`, the billed tokens of every call so far (§1), while `after_response` takes the finish reason, the completion mode, and a `Calls`, and sees no limit at all. The mode is passed rather than held, so a run has exactly one copy of it: the `ToolSet` whose shape it decided (§5). `Turn::calls(mode)` (§3) builds the `Calls`, and is the only thing that does, so the loop can't read a response differently from how the policy expects it: `TaskComplete` when the response calls `task_complete`, alone or among other tools, which only explicit mode offers; natural mode reads it as `Tools`. `Progress` lives in the model because the run produces it, and the policy depends on the model, never the reverse; the loop's call is `stop.before_call(&run.progress(elapsed))`. The policy decides nine of the stop reasons, `context_exhausted` among them when a response was cut short at the context window. The rest aren't its to decide: `cancelled` comes from the loop's poll of the `Cancellation` port, and `retries_exhausted`, `provider_error`, and `context_exhausted` for a rejected request from a failed provider call (`RetryPolicy::next` returning `None`, and the failure's `ProviderErrorKind`). `allows_wait` is here because stopping with `timeout` instead of sleeping is a reached-the-limit decision like the others. Every `StopPolicy` value is meaningful, so its fields are public and nothing is validated. `Prompts` is the exception on the other side of the boundary: a blank task is refused by `Prompts::new`, because the transcript refuses a first turn with no input and a run built from one would buy a provider call before finding out. The two counted caps are `NonZeroU32`, since a cap of zero has no reading other than one and two fields shouldn't reach that by two different routes; a zero `timeout` or token budget does stop the run at the first point A, which is a reading of its own.
+**Stop policy.** The methods hold the order and the boundaries §1 gives for each point. Each takes only what its point reads, so an input can't contradict itself: the two limit checks take the `Progress` the run produces (§3), and the token budget reads `Progress::usage.total()`, the billed tokens of every call so far (§1), while the two point R methods take the finish reason and the completion mode, `after_response` a `Calls` as well, and see no limit at all. Point R is split along the run's states (§3). A response that called no tool always stops the run, so `after_final` returns a `StopReason` rather than an `Option`: `refused`, `output_truncated`, or `context_exhausted` when the finish reason says so, and otherwise `completed` in natural mode and `ended_without_completion` in explicit mode. A response that called a tool goes to `after_response`, which returns `None` when the run goes on. The mode is passed rather than held, so a run has exactly one copy of it: the `ToolSet` whose shape it decided (§5). `Pending::calls(mode)` (§3) builds the `Calls`, and is the only thing that does, so the loop can't read a response differently from how the policy expects it: `TaskComplete` when the response calls `task_complete`, alone or among other tools, which only explicit mode offers; natural mode reads it as `Tools`. `Progress` lives in the model because the run produces it, and the policy depends on the model, never the reverse; the loop's call is `stop.before_call(&run.progress(elapsed))`. The policy decides nine of the stop reasons, `context_exhausted` among them when a response was cut short at the context window. The rest aren't its to decide: `cancelled` comes from the loop's poll of the `Cancellation` port, and `retries_exhausted`, `provider_error`, and `context_exhausted` for a rejected request from a failed provider call (`RetryPolicy::next` returning `None`, and the failure's `ProviderErrorKind`). `allows_wait` is here because stopping with `timeout` instead of sleeping is a reached-the-limit decision like the others. Every `StopPolicy` value is meaningful, so its fields are public and nothing is validated. `Prompts` is the exception on the other side of the boundary: a blank task is refused by `Prompts::new`, because the first response needs something from the user before it (§3), and refusing the task here costs nothing where a run built from one would buy a provider call first. The two counted caps are `NonZeroU32`, since a cap of zero has no reading other than one and two fields shouldn't reach that by two different routes; a zero `timeout` or token budget does stop the run at the first point A, which is a reading of its own.
 
 **Retry policy.** `max_retries` is `run.max_retries`, and 0 is valid: it never retries. `new` refuses a `base` longer than `max` and a `factor` that isn't a finite number of at least 1. `next(n, kind)` is a wait when `kind` is one another attempt could answer and `n` is at most `max_retries`, and `None` otherwise. It answers `None` at once for a failure another attempt can't change, so the policy owns the whole retry rule rather than half of it. It's total: attempt 0 is read as 1, and an attempt number or a factor large enough to overflow gives `max`, or zero when `base` is zero, never a panic or a NaN.
 
@@ -391,6 +410,7 @@ pub struct ToolCall { id: ToolCallId, name: ToolName, input: serde_json::Value, 
 pub struct ToolOutput { content: Vec<ToolResultContent>, is_error: bool, mcp: Option<McpCallMeta> }   // content is text (§3); is_error is the tool's own report, as MCP's isError
 pub struct ToolError { kind: ToolErrorKind, message: String, mcp: Option<McpCallMeta> }   // every kind becomes an error result for the model
 pub enum ToolErrorKind { Unknown, Timeout, Failed }                  // Unknown is ToolCallStatus::Unknown; the other two name a ToolCallEnd, and the loop pairs it with the source the executor resolved
+// execute may be called again before an earlier call returns, for tools whose spec is ToolConcurrency::Shared; lablet-conformance holds a case for it
 
 // Port and telemetry data. These are types of this crate, not of the model: nothing in the domain reads them.
 pub struct TraceContext { traceparent: String, tracestate: Option<String> }   // W3C strings; no OpenTelemetry types below the adapters
@@ -435,17 +455,19 @@ The `Clock` port is the only source of time for the loop, so `lablet-run` tests 
 
 ```rust
 pub struct RunService { provider: Arc<dyn ModelProvider>, tools: Arc<ToolSet>, observer: Arc<dyn RunObserver>, clock: Arc<dyn Clock>, cancel: Arc<dyn Cancellation>, stop: StopPolicy, retry: RetryPolicy, request: RequestParams, pricing: Option<Pricing>, calls: CallLimits }
-pub struct CallLimits { provider_timeout: Duration, tool_timeout: Duration, max_tool_output_bytes: Option<u64> }   // run.provider_timeout, run.tool_timeout, tools.max_output_bytes
+pub struct CallLimits { provider_timeout: Duration, tool_timeout: Duration, max_tool_output_bytes: Option<u64>, max_concurrent_tool_calls: NonZeroU32 }   // run.provider_timeout, run.tool_timeout, tools.max_output_bytes, tools.max_concurrent_calls
 impl RunService { pub async fn run(&mut self, context: RunContext, prompts: Prompts) -> FinishedRun }
 pub struct ToolFilter { allow: Vec<ToolName>, deny: Vec<ToolName> }   // an empty allow list offers everything; a name in both is denied
-pub enum ToolSetError { DuplicateName { name: ToolName }, Specs(Box<ToolError>) }
+pub enum ToolSetError { DuplicateName { name: ToolName }, UnknownFilterName { name: ToolName, list: FilterList }, Specs(Box<ToolError>) }
+pub enum FilterList { Allow, Deny }
 impl ToolSet {
     pub async fn build(executors: Vec<Arc<dyn ToolExecutor>>, filter: &ToolFilter, completion: CompletionMode, completion_schema: Option<Value>) -> Result<ToolSet, ToolSetError>;
     pub fn specs(&self) -> &[ToolSpec];  pub fn source(&self, name: &ToolName) -> Option<&ToolSource>;  pub fn is_task_complete(&self, name: &ToolName) -> bool;  pub fn completion(&self) -> CompletionMode;
+    pub fn concurrency(&self, name: &ToolName) -> ToolConcurrency;   // Shared for a name this run doesn't offer: the loop answers it without an executor
 }
 ```
 
-`run` never returns `Err`: every failure is a `RunOutcome` with a stop reason, so the caller always gets telemetry-consistent output. It returns one value, the model's `FinishedRun` (§3), which `Run::finish` builds: the `RunSummary`, whose `outcome` is the outcome document, and the `Transcript`, which is how the conversation leaves the loop. When `pricing` is set, the loop fills `RunSummary.cost` with `Pricing::cost` of the run's usage; otherwise it's `None`. The limits and request parameters in the summary come from the service's own `StopPolicy` and `RequestParams`, so they can't differ from what the run enforced. `CallLimits` holds what bounds one call and isn't a stop decision: the two per-call timeouts, which become the `deadline` of a request or a tool call, and the tool output cap, which the loop hands to `ToolCallOutcome::measured` for every call, so no executor cuts output itself.
+`run` never returns `Err`: every failure is a `RunOutcome` with a stop reason, so the caller always gets telemetry-consistent output. It returns one value, the model's `FinishedRun` (§3), which `Run::finish` builds: the `RunSummary`, whose `outcome` is the outcome document, and the `Transcript`, which is how the conversation leaves the loop. When `pricing` is set, the loop fills `RunSummary.cost` with `Pricing::cost` of the run's usage; otherwise it's `None`. The limits and request parameters in the summary come from the service's own `StopPolicy` and `RequestParams`, so they can't differ from what the run enforced. `CallLimits` holds what bounds the calls and isn't a stop decision: the two per-call timeouts, which become the `deadline` of a request or a tool call; the tool output cap, which the loop hands to `Answer::measured` for every call, so no executor cuts output itself; and how many calls of one group may run at once, which the loop hands to `Pending::answer`.
 
 The loop body, in the model's and the policy's terms. Every offset and latency is a `Duration` read from the `Clock`; the model turns them into milliseconds.
 
@@ -459,14 +481,16 @@ loop:
         result = { messages = run.messages(); provider.complete(ProviderRequest { system: run.transcript().system(), &messages, .. }) }
         Ok(r)  -> break (r, began, latency)                                # the attempt's timing leaves with it: only here knows either
         Err(e) -> run.failed_attempt(latency); ContextExhausted -> stop context_exhausted, e; Fatal -> stop provider_error, e
-                  retry.next(attempt, e.kind): Some(wait) if stop.allows_wait(elapsed, wait) -> sleep(wait), attempt += 1
+                  retry.next(attempt, e.kind): Some(wait) if stop.allows_wait(elapsed, wait) -> sleep(wait); if cancelled: stop cancelled; attempt += 1
                                                Some(_) -> stop timeout
                                                None -> stop retryable and malformed as retries_exhausted,
                                                        context_exhausted and fatal as themselves, with e.message
-    turn = run.responded(response, began, latency)?                        # the transcript's new turn; it takes the waiting input, and its record counts the attempts
-    calls = turn.tool_uses().cloned();  structured = the input of the call named task_complete, if any
-    if let Some(r) = stop.after_response(&turn.record().finish, tools.completion(), turn.calls(tools.completion())): stop r
-    outcomes = for call in calls:                                          # the name is resolved before the arguments are read
+    match run.responded(response, began, latency):                         # the transcript's new turn; it takes the waiting input, and its record counts the attempts
+        Final(f)   -> stop stop.after_final(&f.turn().record().finish, tools.completion())    # a response that called no tool always stops the run
+        Pending(p) -> structured = the input of the call named task_complete, if any
+                      if let Some(r) = stop.after_response(&p.turn().record().finish, tools.completion(), p.calls(tools.completion())): stop r
+    run = p.answer(Schedule { max_concurrent: max_concurrent_tool_calls, concurrency: |call| tools.concurrency(&call.name) }, async |call|:   # the name is resolved before the arguments are read
+        emit ToolCallStarted;  trace_context = observer.trace_context(&call.id);  began = now
         (status, content, mcp) = match tools.source(&call.name):        # the loop is the only hop from executor to observer, so mcp travels with the result
             None          -> (Unknown, [Text("no tool named ... is offered by this run")], None)
             Some(source)  -> match call.input:
@@ -474,14 +498,16 @@ loop:
                 Json(input)    -> match tools.execute(ToolCall { id, name, input, deadline: tool_timeout, trace_context }):
                     Ok(out) -> (ToolCallStatus::ran(source, if out.is_error { ToolError } else { Ok }), out.content, out.mcp)
                     Err(e)  -> (Unknown for ToolErrorKind::Unknown, else ran(source, e.kind), [Text(e.message)], e.mcp)
-        ToolCallOutcome::measured(call.id, status, content, max_tool_output_bytes, started, latency)
-    run.tool_calls(outcomes)?
+        answer = Answer::measured(status, content, max_tool_output_bytes, began - start of run, now - began)
+        emit ToolCallFinished from answer and mcp;  answer
+    ).await                                                                # outcomes in call order, whichever call finished first
     if cancelled: stop cancelled;  if let Some(r) = stop.after_tools(&run.progress(elapsed)): stop r
-rates = pricing.map(Pricing::rates); cost = pricing.and_then(|p| p.cost(&run.usage()))   # both from one Option<Pricing>; cost is None when the amount overflows
-return run.finish(reason, elapsed, structured, error, rates, cost)         # FinishedRun { summary, transcript }
+# `stop` leaves the loop holding the state it stopped in: a Run, a Final, or a Pending, each of which can finish
+rates = pricing.map(Pricing::rates); cost = pricing.and_then(|p| p.cost(&state.usage()))   # both from one Option<Pricing>; cost is None when the amount overflows
+return state.finish(reason, elapsed, structured, error, rates, cost)       # FinishedRun { summary, transcript }
 ```
 
-A call whose arguments didn't parse never reaches an executor, so it has no latency of its own and no `ToolCall` is built for it; the model is sent its own text back, which is what lets it correct itself. The messages are rendered inside the attempt because they borrow the run, which a failed attempt changes; rendering is one allocation and no copy of the conversation. The loop passes `finish` whatever `structured` and `error` it has, and the outcome keeps what the stop reason allows (§3), so the loop has no rule of its own about which stop reason carries which. The two calls marked `?` refuse only a sequence this loop can't produce: a response while the last turn's tool calls are unanswered or when it made none, which point R never lets through, and outcomes that aren't one for each call of the last turn, in order. `lablet-run`'s tests hold that neither is ever refused; if one were, `run` would end the run with `provider_error` and the refusal's text, because a `FinishedRun` must still come back.
+A call whose arguments didn't parse never reaches an executor, so it has no latency of its own and no `ToolCall` is built for it; the model is sent its own text back, which is what lets it correct itself. The messages are rendered inside the attempt because they borrow the run, which a failed attempt changes; rendering is one allocation and no copy of the conversation. The loop passes `finish` whatever `structured` and `error` it has, and the outcome keeps what the stop reason allows (§3), so the loop has no rule of its own about which stop reason carries which. Nothing in the loop can be refused by the transcript, because the run's states (§3) offer no method for a sequence it would refuse, which is why the pseudocode has no `?`. Point R is asked in the arm that knows the state, so neither arm holds a case that can't happen: a `Final` always stops, which `StopPolicy::after_final` returns as a bare `StopReason`, and a `Pending` stops when `after_response` says so and is answered otherwise.
 
 One `RunService` executes one run at a time, which `run` taking `&mut self` makes a compile error rather than a race. This ring has no runtime, so there's no mutex to reject a concurrent call at, and `run` returns a bare `FinishedRun` with nowhere to report a refusal; an exclusive borrow is the same answer the domain gives everywhere else.
 
@@ -489,7 +515,9 @@ One `RunService` executes one run at a time, which `run` taking `&mut self` make
 
 A `ToolExecutor` resolves only names it offered in `specs()`, and `ToolSet` fixes that set when the run is built, so no tool appears to a run part-way through. This is the port's obligation rather than a rule the model can hold, because a `ToolCallStatus` of `Ran` carries the source the executor resolved and the run believes it (§3). It's what keeps the per-tool attribute keys bounded, and it's the rule to hold an MCP executor to at phase 8, where a server may announce `notifications/tools/list_changed` mid-run: the new tool belongs to the next run, not this one.
 
-Tool calls within one turn are executed sequentially. Parallel execution is a later option; the observer events already carry enough to distinguish it.
+A turn's tool calls run in the groups §1 describes: consecutive calls whose tool is `Shared` run concurrently, at most `tools.max_concurrent_calls` at a time, and each `Exclusive` call runs alone, with groups in call order. The loop emits `ToolCallStarted` and `ToolCallFinished` from inside the future it gives `Pending::answer` for each call, so the events of calls in one group interleave. Observers key them by `call_id`, and an observer mustn't assume any order between the events of two calls in one group. The transcript, the rendered results and the consecutive-error count read outcomes in call order and don't depend on timing. With `tools.max_concurrent_calls: 1` every call runs alone and the event stream is the one the sequential loop produced, which is what a test that asserts events exactly uses. Once calls overlap, `lablet.tool_calls.latency_ms.total` still sums each call's latency, so it can exceed the run's wall time: it's call time, not the time the tool phases took.
+
+`ToolSet::build` refuses a name in `allow` or `deny` that no executor serves (`UnknownFilterName`), since a misspelt `deny` entry would otherwise leave the tool it meant to deny on offer. In explicit mode `task_complete` isn't served by an executor, so naming it in either list is refused too: the filter doesn't apply to it.
 
 ## 6. Adapters
 
@@ -520,13 +548,13 @@ Plays a scripted sequence of `ProviderResponse`s from a YAML or JSON file, read 
 
 ### `tools-builtin`
 
-Each tool is a small struct; the executor holds only those enabled in config. Initial set: `bash` (working directory and timeout from config, captures stdout, stderr, exit code), `read_file`, `write_file`. All paths are resolved under `tools.builtin.root` and rejected if they escape it. `task_complete` isn't here; see §5.
+Each tool is a small struct; the executor holds only those enabled in config. Initial set: `bash` (working directory and timeout from config, captures stdout, stderr, exit code), `read_file`, `write_file`. All paths are resolved under `tools.builtin.root` and rejected if they escape it. `read_file` is `ToolConcurrency::Shared`; `bash` and `write_file` are `Exclusive`, since either can change what another call reads. `task_complete` isn't here; see §5.
 
 Both executors report how a call ended in the port's terms, and the loop turns that into the call's `ToolCallStatus` (§5): a tool that ran and reports a failure of its own, such as a path outside the root or a file that can't be read, returns `ToolOutput` with `is_error: true` (`tool_error`); a name the executor doesn't have is `ToolErrorKind::Unknown`; a call that outlives its `deadline` is `Timeout`; and an executor that couldn't run the tool at all is `Failed`. Neither executor shortens output. Each returns what the tool produced, and the loop applies `tools.max_output_bytes` to every result the same way (§3).
 
 ### `tools-mcp`
 
-One `rmcp` client per configured server (version pinned in the workspace `Cargo.toml`). Tool names are exposed exactly as the server reports them, so measurements reflect the server as-is. A reported name, or a prefixed one, that isn't a valid `ToolName` (1 to 64 of `[a-zA-Z0-9_-]`, which is what both provider APIs accept) is a build error with the `mcp:` prefix naming the server and the tool, since no provider would accept it. A name collision across servers is a build error; a server with `prefix_tools: true` has its tools renamed `<server>__<tool>`, which is the escape hatch. `execute` forwards the call and maps `isError` results to `is_error: true`, which the loop records as the status `tool_error`; a JSON-RPC error, a broken transport, or a dead server is a `ToolError` of kind `Failed`, a call that outlives its `deadline` one of kind `Timeout`. Tool results are text (§3): a `text` item is carried unchanged and a text resource as its text, and an `image`, `audio`, or binary resource item becomes the one line `ToolResultContent::omitted` renders from its kind, MIME type, and decoded byte length, for example `[image omitted: image/png, 48213 bytes]`. When a result carries `structuredContent`, the MCP specification has the server repeat it as JSON text in `content`, so the adapter sends `content` alone and the model doesn't see the same data twice; only when `content` is empty is the structured value sent, as one item of compact JSON text. It injects the `ToolCall`'s `trace_context` into the request's `params._meta` as unprefixed `traceparent` and `tracestate`, per MCP SEP-414, and fills `lablet-run`'s `McpCallMeta` (§5: method, session id, protocol version, JSON-RPC request id, RPC status code on error, transport `pipe` for stdio or `tcp` for HTTP) on the output or error so the OTel observer can put `mcp.*`, `jsonrpc.*`, `rpc.*`, and `network.transport` on the `execute_tool` span; the conventions want one span carrying both `gen_ai.tool.*` and `mcp.*`, not a nested MCP span. Servers are started when the `Lablet` is built, with `tools.mcp[].startup_timeout`, live for the lifetime of the `Lablet` across runs, and are shut down by `Lablet::shutdown`. A stdio server's stderr is forwarded line by line to the diagnostic log at `debug`. HTTP servers receive `headers` verbatim. If a server exits or its transport breaks mid-run, every call to its tools returns a tool error naming the server, so the consecutive error cap ends the run; its tools stay listed so the model's behaviour is observable.
+One `rmcp` client per configured server (version pinned in the workspace `Cargo.toml`). Tool names are exposed exactly as the server reports them, so measurements reflect the server as-is. A tool is `ToolConcurrency::Shared` exactly when the server annotates it `readOnlyHint: true`, and `Exclusive` otherwise, including when it has no annotations: the hint is the server's word, trusted as its tool names are. A reported name, or a prefixed one, that isn't a valid `ToolName` (1 to 64 of `[a-zA-Z0-9_-]`, which is what both provider APIs accept) is a build error with the `mcp:` prefix naming the server and the tool, since no provider would accept it. A name collision across servers is a build error; a server with `prefix_tools: true` has its tools renamed `<server>__<tool>`, which is the escape hatch. `execute` forwards the call and maps `isError` results to `is_error: true`, which the loop records as the status `tool_error`; a JSON-RPC error, a broken transport, or a dead server is a `ToolError` of kind `Failed`, a call that outlives its `deadline` one of kind `Timeout`. Tool results are text (§3): a `text` item is carried unchanged and a text resource as its text, and an `image`, `audio`, or binary resource item becomes the one line `ToolResultContent::omitted` renders from its kind, MIME type, and decoded byte length, for example `[image omitted: image/png, 48213 bytes]`. When a result carries `structuredContent`, the MCP specification has the server repeat it as JSON text in `content`, so the adapter sends `content` alone and the model doesn't see the same data twice; only when `content` is empty is the structured value sent, as one item of compact JSON text. It injects the `ToolCall`'s `trace_context` into the request's `params._meta` as unprefixed `traceparent` and `tracestate`, per MCP SEP-414, and fills `lablet-run`'s `McpCallMeta` (§5: method, session id, protocol version, JSON-RPC request id, RPC status code on error, transport `pipe` for stdio or `tcp` for HTTP) on the output or error so the OTel observer can put `mcp.*`, `jsonrpc.*`, `rpc.*`, and `network.transport` on the `execute_tool` span; the conventions want one span carrying both `gen_ai.tool.*` and `mcp.*`, not a nested MCP span. Servers are started when the `Lablet` is built, with `tools.mcp[].startup_timeout`, live for the lifetime of the `Lablet` across runs, and are shut down by `Lablet::shutdown`. A stdio server's stderr is forwarded line by line to the diagnostic log at `debug`. HTTP servers receive `headers` verbatim. If a server exits or its transport breaks mid-run, every call to its tools returns a tool error naming the server, so the consecutive error cap ends the run; its tools stay listed so the model's behaviour is observable.
 
 ### Telemetry contract (`lablet/telemetry/`)
 
@@ -645,8 +673,9 @@ tools:
       transport: http
       url: http://localhost:8080/mcp
       headers: {}
-  allow: null # list of tool names; null means all
-  deny: [] # removed after allow is applied
+  allow: null # list of tool names; null means all; a name no tool has is an error
+  deny: [] # removed after allow is applied; a name no tool has is an error
+  max_concurrent_calls: 10 # calls to shared tools in one turn run together, at most this many at a time; 1 runs every call alone
   max_output_bytes: 100000 # a tool result longer than this is cut and ends with a line saying so; null means no cap
 
 telemetry:
@@ -683,8 +712,7 @@ Config digest (`lablet.config.digest`) is a SHA-256 of the canonical JSON form o
 
 Recorded here so they're not lost; none block the first build.
 
-- Parallel tool execution within a turn.
-- Interrupting a provider or tool call in flight on cancellation, rather than waiting for it.
+- Interrupting a provider or tool call in flight on cancellation, rather than waiting for it, and stopping a tool phase between its groups. Either needs a `ToolCallStatus` for a call that never ran, because a turn's outcomes answer all of its calls or none.
 - Loading skills through a tool rather than inlining.
 - Streaming responses (not needed for measurement, may be needed for very long outputs).
 - A `lablet.run` metric set alongside traces, once there is a consumer for it.

@@ -42,6 +42,7 @@ Acceptance: end-to-end tests with fakes prove natural and explicit completion, e
 
 ## Phase 4: Library and first traced run
 
+- The run's states as types, and a turn's tool calls in concurrent groups (`decisions.md`, 2026-09-23). In `lablet-model`: `Responded`, `Final`, `Pending` with `Pending::answer` and `Pending::calls`, `Answer`, `ToolConcurrency` on `ToolSpec`, and `TranscriptError` with the checks behind it deleted. In `lablet-policy`: `after_final`, and `Calls` without `None`. In `lablet-run`: the loop over the new states, `Schedule` from `ToolSet::concurrency`, `CallLimits::max_concurrent_tool_calls`, `Stopped::defect` deleted, cancellation polled before each retry, and `ToolSetError::UnknownFilterName`. `lablet-run`'s coverage floor rises to 100% lines and regions in the same change, in `xtask/src/floors.rs`, `contributing/README.md`, and `quality-bar.md`. The first thing checked is that the future `RunService::run` returns is still `Send`; the decision records the fallback if it isn't.
 - `provider-fake` with scripted completions, latency, and injected errors. The script format is this adapter's own type, read into the domain through `ProviderResponse::new`, so the file a user hand-writes isn't the domain's serde form. It keeps its validating read: a human writes it, so a mistyped key that read as a default would be a script that lies about what the model said.
 - `tools-builtin` with `bash`, `read_file`, `write_file`, and root escape rejection.
 - `telemetry-otel`: the observer mapping events to spans and log records built only on `telemetry-registry` constants (open spans in a map keyed by call id, explicit parent contexts, always-on sampler, per-run file path set on `RunStarted`, `force_flush` after the wide event), with unit tests asserting each span's name and required attributes against the generated key lists; root, chat, and tool spans with the spec §6 attributes, `lablet.turn` on children, the `gen_ai.client.operation.exception` log record and retry span event, the `lablet.run` wide-event log record with the root span's trace context, content records behind `capture_content`, resource attributes, bounded shutdown. Only the **OTLP/JSON file exporter** in this phase, serialised through `opentelemetry-proto`'s `with-serde` types and the `group_*_by_resource_and_scope` transforms, compact one request per line; with a reader in `lablet-conformance` that dispatches on `resourceSpans` or `resourceLogs` and parses the file back into spans and records for assertions.
@@ -53,9 +54,9 @@ Acceptance: end-to-end tests with fakes prove natural and explicit completion, e
 - Smoke test: `provider-fake` plus `tools-builtin` plus the file exporter through `build` and `run`, asserting the spans and records read back.
 - The wide-event mapping is held to the generated key list rather than written out by hand: every key the registry declares for `lablet.run` is filled exactly once, and a key added to the registry without a source in `RunSummary` fails to compile. Twelve of the summary's fields are bare `u64` bytes, milliseconds and counts, so two of them swapped in a hand-written mapping is a bug no gate would catch: the compiler sees one type, the registry declares every one of them `int`, and the summary's own JSON test checks how it serialises rather than how it reaches telemetry. Group `RunSummary`'s totals into value types with `Add` impls, as `Usage` already has, in the same change: `finish` then folds each turn's totals in rather than initialising twenty zeros and mutating them, and the real mapping shows which groups it wants.
 
-Landing order, riskiest first: `provider-fake`; observer plus file exporter plus reader (O1, O2, O4); library (C9, O8); built-in tools (E9, T2, T4). The exhaustive mapping and the summary grouping land together, after the observer exists and before the mapping is written out by hand.
+Landing order, riskiest first: the run's states and concurrent tool calls (L11, E11, T11); `provider-fake`; observer plus file exporter plus reader (O1, O2, O4); library (C9, O8); built-in tools (E9, T2, T4). The exhaustive mapping and the summary grouping land together, after the observer exists and before the mapping is written out by hand.
 
-Acceptance: a doctest builds a `Lablet` from a config string, runs twice, and asserts both outcomes and the file. Scenarios O1, O2, O4, O8, C9, E9, T2, and T4 pass.
+Acceptance: a doctest builds a `Lablet` from a config string, runs twice, and asserts both outcomes and the file. Scenarios O1, O2, O4, O8, C9, E9, E11, L11, T2, T4, and T11 pass. `lablet-run` holds 100% lines and regions.
 
 ## Phase 5: CLI and config surface
 
@@ -86,7 +87,7 @@ Acceptance: scenarios P1, P2, and P6 pass in CI against wiremock. Manual: `lable
 - `tools-mcp` over `rmcp`, stdio and streamable HTTP, collision rejection and `prefix_tools`, startup timeout, stderr forwarding, dead-server behaviour, lifetime tied to the `Lablet`, trace context in `params._meta`, and the `mcp.*` attributes reported to the observer.
 - `tools-mcp` added to the `ToolExecutor` conformance matrix.
 
-Acceptance: scenarios T1, T3, T5, T6, T7, T8, and T9 pass in CI against the test server. Manual: a run using a public MCP server over stdio completes, its tool spans carry the `mcp.*` attributes, and removing a tool via `tools.deny` changes the `RunStarted` tool list and nothing else.
+Acceptance: scenarios T1, T3, T5, T6, T7, T8, T9, and T12 pass in CI against the test server. Manual: a run using a public MCP server over stdio completes, its tool spans carry the `mcp.*` attributes, and removing a tool via `tools.deny` changes the `RunStarted` tool list and nothing else.
 
 ## Phase 9: Second provider
 

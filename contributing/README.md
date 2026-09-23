@@ -30,7 +30,7 @@ Explicit architecture. Inside `lablet/`, directory `foo/bar/` is package `lablet
 - Adapters implement ports and map their own errors into the port's error at the `impl` boundary. Adapter types never appear in application or domain signatures.
 - The composition root selects adapters from config in `build()`. Adding an adapter is a new crate plus a match arm.
 - No primary adapters: the binary and library entry points call the use case directly.
-- Domain crates contain types and pure functions only. Anything async is application or outward.
+- Domain crates contain types and pure functions only: no runtime, no I/O, no clock, no port. A domain function may compose futures its caller supplies when that's what lets it keep an invariant, as `Pending::answer` does; it never makes one of its own. Anything else async is application or outward.
 
 ## Code conventions
 

@@ -605,3 +605,48 @@ That narrowing is the honest cost and it's smaller than it sounds, but it isn't 
 Two stale lines in spec section 3 went with it: the `TranscriptError` listing still carried `AlreadyAnswered`, and also `Response(ResponseError)`, which was deleted with the transcript's read path a few entries above and never removed from the spec.
 
 `lablet-model` holds at 100% lines and regions on a smaller denominator, 768 and 917, since the deleted code was covered by the test that has gone with it.
+
+## 2026-09-23 A run's states are types, and a turn's tool calls run together
+
+Supersedes the 2026-09-21 entry "The loop's floor is 99, with no headroom" on its one argument, and closes the open question "Parallel tool execution within a turn" in spec section 10. Held to a review before any code: it changes one rule in `contributing/README.md`, and that change is argued below.
+
+**The typestate was refused for a reason that doesn't hold.** That entry said the correspondence between outcomes and calls is a length equality, and that the only ways to make it infallible are silent truncation or a panic. That's true only while the loop builds the list and hands it over. Turn it around and the equality holds by construction: the domain walks the calls of its own turn, asks the loop for one answer to each, and puts the call id on each answer itself. The loop never holds a list whose length could be wrong.
+
+The other two refusals go with it once the run's states are values. `Run::responded` consumes the run and returns a `Responded`, which is `Final` when the response called no tool and `Pending` when it called at least one. `Final` can only finish. `Pending` can finish, at point R, or be answered, which gives back a `Run` ready for the next call. So nothing records a response while calls wait for answers, and nothing records one straight after a response that called no tool, because neither sequence can be written. The policy already stops every turn that calls no tool, and now the type says so too. A later feature that lets the user speak again gives the run new input, which is the other way a `Run` is made.
+
+Point R splits along the same line, or the loop would trade two unreachable arms for a third. Matching `Responded` after `after_response` returned `None` leaves a `Final` arm that can't run, because the policy stops every response that called no tool. So the policy is asked inside each arm. `StopPolicy::after_final` takes a response that called no tool and returns a bare `StopReason`, since such a response always stops the run. `after_response` takes the rest, and `Calls` loses its `None` variant. `Pending::calls` replaces `Turn::calls` as its only producer.
+
+`TranscriptError` is deleted, `Run::responded` stops returning `Result`, `Run::tool_calls` is replaced by `Pending::answer`, and `Stopped::defect` goes with the two arms that called it. The transcript's checks are deleted rather than left unreachable, so `lablet-model` holds at 100%, and `lablet-run`'s floor rises to 100. The "third kind" of uncovered code, recorded in the entry "The transcript has no read path," has no member left. It stays a category a later check may argue for.
+
+**Tool calls in one turn run together, because that's what the field does.** Both provider APIs return several tool calls in one response by default: Anthropic has `disable_parallel_tool_use` to turn it off and OpenAI has `parallel_tool_calls`. The common harnesses run those calls concurrently. A measuring loop that runs them one at a time reports a turn's wall time as the sum of its calls where a production harness would report the longest, so lablet would measure something no one ships.
+
+Running every call at once is wrong for tools with side effects. So the rule is the one Claude Code uses. Each tool is `Shared` or `Exclusive`. A run of consecutive `Shared` calls forms a group that runs concurrently, up to `tools.max_concurrent_calls`. Each `Exclusive` call runs alone. Groups run in call order. Reordering, to run every `Shared` call first, was rejected: a read the model placed after a write would run before it.
+
+- **Classification is on `ToolSpec`**, as `concurrency: ToolConcurrency`, whose default is `Exclusive`, so a tool nobody classified keeps today's behaviour. `read_file` is `Shared`, and `bash` and `write_file` are `Exclusive`. An MCP tool is `Shared` exactly when the server annotates it `readOnlyHint: true`. That's the server's word, trusted as its tool names already are. A call the loop answers itself, to a name no tool has or with arguments that didn't parse, reaches no executor and counts as `Shared`.
+- **The cap defaults to 10, and 1 runs every call alone**, which is today's loop. That's the escape hatch for a script whose event order a test asserts exactly, and for a server that can't take concurrent requests.
+- **Outcomes stay in call order**, so the transcript, the rendered results and the consecutive-tool-error count read exactly as before. Events of calls in one group interleave, and observers already key them by `call_id`.
+- **`lablet.tool_calls.latency_ms.total` sums call time.** Once calls overlap, that can exceed the run's wall time. It already meant the sum, and the spec now says so, so nobody reads it as the time the tool phase took.
+- **`ToolExecutor::execute` may be called concurrently** for `Shared` tools. That's a new port obligation and a new case in the conformance set.
+
+**Why the domain composes futures, and the rule that changes.** Three properties are wanted, and any two are easy:
+
+1. The domain is synchronous, as `contributing/README.md` requires: "Anything async is application or outward."
+2. Calls in one turn run concurrently.
+3. There's no branch that no test can reach.
+
+Sequential and synchronous works: the domain hands out one linear token per call, each answered in turn. Concurrent and synchronous works if the domain keeps a count check, which is where the loop is today. Concurrent with no unreachable branch needs whatever knows the calls to also collect the answers, because tokens that leave the domain and come back through a join the domain doesn't own can always come back short. Rust has no linear types to stop a token being dropped.
+
+So `Pending::answer` takes an `AsyncFn(&ToolUse) -> Answer` and returns a future. It composes rather than acts: it creates no future of its own, reads no clock, starts no task and names no runtime. It schedules futures its caller made, in the order the calls came and in groups the concurrency rule sets. The rule in `contributing/README.md` becomes: domain crates hold no runtime, no I/O, no clock and no port, and a domain function may compose futures its caller supplies when that's what lets it keep an invariant. `lablet-policy` stays synchronous.
+
+The join is `futures-util`'s `StreamExt::buffered`, with default features off. It preserves order and bounds concurrency, which is exactly the group rule. It's new to the dependency graph, isn't on the domain's forbidden list, and replaces the other option: a hand-written, waker-correct, bounded, ordered join is code a lightweight project shouldn't own.
+
+`AsyncFn` rather than `AsyncFnMut`, because calls in one group borrow the closure at the same time. The one risk is `Send`. On stable Rust, a bound can't say that the future an async closure returns is `Send`, so the future `answer` returns is `Send` only because auto traits leak through opaque types at its one concrete call site, in `RunService::run`. That's the first thing the implementation checks. If it fails, the fallback is `Fn(ToolUse) -> Fut` with an owned `ToolUse`, which is the clone the loop already makes today.
+
+**What the loop needs from an answer.** `ToolCallFinished` reports the capped sizes, and the cap is applied when an outcome is built, so the loop has to see a measured answer before it hands it back. `Answer::measured` takes what `ToolCallOutcome::measured` took, less the call id: the status, the content, the cap, the start and the latency. It exposes what the event reads. The domain turns it into a `ToolCallOutcome` by adding the id of the call it asked about, and the outcome's fields don't change.
+
+**Not changed, and worth saying.** Cancellation is still polled at points A and B, and a turn's tool phase still runs to its end once it starts. Stopping between groups is now possible in one place, since the domain owns the phase. It needs a status for a call that never ran, because the transcript accepts all of a turn's outcomes or none, so it stays open. A turn's `task_complete` interception and point R's order are untouched.
+
+## 2026-09-23 Two fixes from the review of the loop
+
+- **Cancellation is polled before each retry**, after the backoff and before the next attempt. Spec section 1 says a run never makes a provider call after the condition that should have stopped it, and a retry is a provider call. Without the check, Ctrl-C during a run of provider failures paid for every retry left and slept through each backoff.
+- **A filter name that nothing serves is refused**, as `ToolSetError::UnknownFilterName`. A misspelt `deny` entry left the tool it meant to deny on offer, so a safety control could fail open without a word, and a misspelt `allow` entry offered nothing. Names are checked against what the executors serve. So in explicit mode, `task_complete` in either list is refused as well, since the filter doesn't apply to it and naming it can only be a mistake.
