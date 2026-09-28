@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{RunId, StopClass, StopReason, Usage};
+use crate::{RunId, RunLabels, StopClass, StopReason, Usage};
 
 /// The outcome document of a run. Its serde form is a public contract, held
 /// by `lablet/tests/fixtures/outcome.json`.
@@ -17,12 +17,15 @@ use crate::{RunId, StopClass, StopReason, Usage};
 pub struct RunOutcome {
     /// The run's id.
     pub run_id: RunId,
+    /// What the run request named the run's task, experiment and trial.
+    pub labels: RunLabels,
     stop_reason: StopReason,
     /// How many turns the transcript has, which is how many model responses
     /// the run received. A run whose first provider call failed took none.
     pub turns: u32,
     /// Usage summed over every successful provider call. `input_tokens`
-    /// includes the cached tokens; see [`Usage`].
+    /// includes the cached tokens, and a count no call reported is `None`;
+    /// see [`Usage`].
     pub usage: Usage,
     /// How many tool calls were executed. The intercepted `task_complete` call isn't one.
     pub tool_calls: u64,
@@ -38,6 +41,7 @@ pub struct RunOutcome {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawOutcome {
     pub(crate) run_id: RunId,
+    pub(crate) labels: RunLabels,
     pub(crate) stop_reason: StopReason,
     pub(crate) turns: u32,
     pub(crate) usage: Usage,
@@ -100,6 +104,7 @@ impl RunOutcome {
         let class = raw.stop_reason.class();
         Self {
             run_id: raw.run_id,
+            labels: raw.labels,
             stop_reason: raw.stop_reason,
             turns: raw.turns,
             usage: raw.usage,

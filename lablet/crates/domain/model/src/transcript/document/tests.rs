@@ -15,9 +15,9 @@ fn one_turn() -> Transcript {
         Usage::from_inclusive(TokenCounts {
             input: 10,
             output: 2,
-            reasoning: 0,
-            cache_read: 0,
-            cache_write: 0,
+            reasoning: Some(0),
+            cache_read: Some(0),
+            cache_write: Some(0),
         }),
         FinishReason::EndTurn,
         None,

@@ -1,24 +1,33 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{RunId, StopReason, TokenCounts, Usage};
+use crate::{RunId, RunLabels, StopReason, TokenCounts, Usage};
 
 #[test]
 fn an_unknown_stop_reason_does_not_deserialise() {
     assert!(serde_json::from_value::<StopReason>(json!("gave_up")).is_err());
 }
 
+fn labels() -> RunLabels {
+    RunLabels {
+        task: Some("fix-failing-test".to_owned()),
+        experiment: None,
+        trial: Some("3".to_owned()),
+    }
+}
+
 fn raw(stop_reason: StopReason, structured: Option<Value>, error: Option<&str>) -> RawOutcome {
     RawOutcome {
         run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").unwrap(),
+        labels: labels(),
         stop_reason,
         turns: 1,
         usage: Usage::from_inclusive(TokenCounts {
             input: 12,
             output: 3,
-            reasoning: 0,
-            cache_read: 8,
-            cache_write: 0,
+            reasoning: None,
+            cache_read: Some(8),
+            cache_write: Some(0),
         }),
         tool_calls: 2,
         duration_ms: 250,
@@ -43,6 +52,7 @@ fn an_outcome_is_read_through_its_getters() {
     let outcome = outcome();
 
     assert_eq!(outcome.run_id.as_str(), "01K5F3Z8Q4X9T2M7B6W1R0VNEC");
+    assert_eq!(outcome.labels, labels());
     assert_eq!(outcome.stop_reason(), StopReason::ProviderError);
     assert_eq!(outcome.turns, 1);
     assert_eq!(
@@ -50,9 +60,9 @@ fn an_outcome_is_read_through_its_getters() {
         Usage::from_inclusive(TokenCounts {
             input: 12,
             output: 3,
-            reasoning: 0,
-            cache_read: 8,
-            cache_write: 0
+            reasoning: None,
+            cache_read: Some(8),
+            cache_write: Some(0)
         })
     );
     assert_eq!(outcome.tool_calls, 2);
@@ -67,8 +77,10 @@ fn a_failed_natural_run_writes_these_exact_bytes() {
     assert_eq!(
         serde_json::to_string(&outcome()).unwrap(),
         concat!(
-            r#"{"run_id":"01K5F3Z8Q4X9T2M7B6W1R0VNEC","stop_reason":"provider_error","turns":1,"#,
-            r#""usage":{"input_tokens":12,"output_tokens":3,"reasoning_output_tokens":0,"cache_read_tokens":8,"cache_write_tokens":0},"#,
+            r#"{"run_id":"01K5F3Z8Q4X9T2M7B6W1R0VNEC","#,
+            r#""labels":{"task":"fix-failing-test","experiment":null,"trial":"3"},"#,
+            r#""stop_reason":"provider_error","turns":1,"#,
+            r#""usage":{"input_tokens":12,"output_tokens":3,"reasoning_output_tokens":null,"cache_read_tokens":8,"cache_write_tokens":0},"#,
             r#""tool_calls":2,"duration_ms":250,"result":{"text":"partial","structured":null},"#,
             r#""error":"provider: 401 unauthorized"}"#
         )
@@ -98,9 +110,10 @@ fn a_failure_that_came_without_an_error_says_what_failed() {
 fn document(stop_reason: &str, structured: &Value, error: &Value) -> Value {
     json!({
         "run_id": "01K5F3Z8Q4X9T2M7B6W1R0VNEC",
+        "labels": { "task": "fix-failing-test", "trial": "3" },
         "stop_reason": stop_reason,
         "turns": 1,
-        "usage": { "input_tokens": 12, "output_tokens": 3, "cache_read_tokens": 8 },
+        "usage": { "input_tokens": 12, "output_tokens": 3, "cache_read_tokens": 8, "cache_write_tokens": 0 },
         "tool_calls": 2,
         "duration_ms": 250,
         "result": { "text": "partial", "structured": structured },
@@ -118,6 +131,32 @@ fn an_outcome_document_with_a_field_the_model_does_not_know_is_refused() {
     let refused = serde_json::from_value::<RunOutcome>(document).unwrap_err();
     assert!(
         refused.to_string().contains("unknown field `stop_resaon`"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn an_outcome_document_with_a_label_the_model_does_not_know_is_refused() {
+    let mut document = document("completed", &Value::Null, &Value::Null);
+    document["labels"]["trail"] = json!("3");
+
+    let refused = serde_json::from_value::<RunOutcome>(document).unwrap_err();
+    assert!(
+        refused.to_string().contains("unknown field `trail`"),
+        "{refused}"
+    );
+}
+
+/// Every outcome lablet writes holds its labels, so a document without them
+/// isn't one, and reading it as a run that had none would be a guess.
+#[test]
+fn an_outcome_document_without_its_labels_is_refused() {
+    let mut document = document("completed", &Value::Null, &Value::Null);
+    document.as_object_mut().unwrap().remove("labels");
+
+    let refused = serde_json::from_value::<RunOutcome>(document).unwrap_err();
+    assert!(
+        refused.to_string().contains("missing field `labels`"),
         "{refused}"
     );
 }

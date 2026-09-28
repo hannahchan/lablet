@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use lablet_model::{
     Answer, Cost, Final, FinishedRun, Message, Pending, Progress, Prompts, ProviderErrorKind,
-    ProviderResponse, Rates, RequestParams, Responded, Run, RunContext, RunId, RunSetup, Schedule,
-    StopReason, ToolCallStatus, ToolInput, ToolUse, Turn, Usage,
+    ProviderResponse, Rates, RequestParams, Responded, Run, RunContext, RunId, RunLabels, RunSetup,
+    Schedule, StopReason, ToolCallStatus, ToolInput, ToolUse, Turn, Usage,
 };
 use lablet_policy::{Pricing, RetryPolicy, StopPolicy};
 
@@ -172,6 +172,7 @@ impl RunService {
 
         let setup = RunSetup {
             run_id: run_id.clone(),
+            labels: RunLabels::default(),
             model: self.provider.model().clone(),
             endpoint: self.provider.endpoint(),
             tools: self.tools.specs().iter().map(|s| s.name.clone()).collect(),

@@ -18,8 +18,9 @@ use crate::outcome::RawOutcome;
 use crate::whole_ms;
 use crate::{
     Answer, Calls, CompletionMode, Cost, Endpoint, FinishedRun, Message, ModelRef,
-    ProviderResponse, Rates, RequestParams, RunId, RunOutcome, RunSummary, StopReason, TaskResult,
-    ToolConcurrency, ToolInput, ToolName, ToolUse, Transcript, Turn, Usage, UserContent,
+    ProviderResponse, Rates, RequestParams, RunId, RunLabels, RunOutcome, RunSummary, StopReason,
+    TaskResult, ToolConcurrency, ToolInput, ToolName, ToolUse, Transcript, Turn, Usage,
+    UserContent,
 };
 
 /// What the loop knows about a run before its first provider call, the
@@ -28,6 +29,9 @@ use crate::{
 pub struct RunSetup {
     /// The run's id.
     pub run_id: RunId,
+    /// What the run request named the run's task, experiment and trial, which
+    /// the outcome echoes.
+    pub labels: RunLabels,
     /// The model the run calls.
     pub model: ModelRef,
     /// Where the provider's API is served; `None` for a provider that isn't
@@ -294,6 +298,7 @@ impl Run {
             cost,
             outcome: RunOutcome::closing(RawOutcome {
                 run_id: setup.run_id,
+                labels: setup.labels,
                 stop_reason: stop,
                 turns: turns(&transcript),
                 usage: transcript.usage(),

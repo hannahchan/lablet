@@ -49,9 +49,9 @@ const fn tokens(total: u64) -> Usage {
     Usage::from_inclusive(TokenCounts {
         input: total - total / 4,
         output: total / 4,
-        reasoning: 0,
-        cache_read: total / 2,
-        cache_write: 0,
+        reasoning: Some(0),
+        cache_read: Some(total / 2),
+        cache_write: Some(0),
     })
 }
 
@@ -194,9 +194,9 @@ fn the_token_budget_counts_input_plus_output_and_not_the_cache_fields_again() {
         usage: Usage::from_inclusive(TokenCounts {
             input: 700,
             output: 200,
-            reasoning: 0,
-            cache_read: 600,
-            cache_write: 100,
+            reasoning: Some(0),
+            cache_read: Some(600),
+            cache_write: Some(100),
         }),
         ..mid_run()
     };
@@ -206,14 +206,41 @@ fn the_token_budget_counts_input_plus_output_and_not_the_cache_fields_again() {
 }
 
 #[test]
+fn the_token_budget_counts_tokens_whose_parts_the_provider_did_not_report() {
+    let policy = StopPolicy {
+        max_total_tokens: Some(1_000),
+        ..limits()
+    };
+    let with = |input| Progress {
+        usage: Usage::from_inclusive(TokenCounts {
+            input,
+            output: 200,
+            ..TokenCounts::default()
+        }),
+        ..mid_run()
+    };
+
+    assert_eq!(with(800).usage.cache_read_tokens, None);
+    assert_eq!(policy.before_call(&with(799)), None);
+    assert_eq!(
+        policy.before_call(&with(800)),
+        Some(StopReason::MaxTotalTokens)
+    );
+    assert_eq!(
+        policy.after_tools(&with(800)),
+        Some(StopReason::MaxTotalTokens)
+    );
+}
+
+#[test]
 fn a_run_without_a_token_budget_is_never_stopped_for_tokens() {
     let progress = Progress {
         usage: Usage::from_inclusive(TokenCounts {
             input: u64::MAX,
             output: u64::MAX,
-            reasoning: 0,
-            cache_read: 0,
-            cache_write: 0,
+            reasoning: Some(0),
+            cache_read: Some(0),
+            cache_write: Some(0),
         }),
         ..mid_run()
     };

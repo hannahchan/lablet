@@ -36,15 +36,17 @@ fn tool_use(call_id: &str, tool: &str) -> ContentBlock {
     ContentBlock::ToolUse(call(call_id, tool))
 }
 
+/// A response from a provider that reports its input and output and no
+/// other count.
 fn response(content: Vec<ContentBlock>, input: u64, output: u64) -> ProviderResponse {
     ProviderResponse::new(
         content,
         Usage::from_inclusive(TokenCounts {
             input,
             output,
-            reasoning: 0,
-            cache_read: 0,
-            cache_write: 0,
+            reasoning: None,
+            cache_read: None,
+            cache_write: None,
         }),
         FinishReason::EndTurn,
         Some("msg_1".to_owned()),
@@ -172,9 +174,9 @@ fn a_completion_becomes_a_turn_that_takes_the_input_and_records_the_rest_with_th
             usage: Usage::from_inclusive(TokenCounts {
                 input: 12,
                 output: 3,
-                reasoning: 0,
-                cache_read: 0,
-                cache_write: 0
+                reasoning: None,
+                cache_read: None,
+                cache_write: None
             }),
             finish: FinishReason::EndTurn,
             response_id: Some("msg_1".to_owned()),
@@ -403,9 +405,9 @@ fn usage_is_summed_over_every_turn() {
         Usage::from_inclusive(TokenCounts {
             input: 280,
             output: 25,
-            reasoning: 0,
-            cache_read: 0,
-            cache_write: 0
+            reasoning: None,
+            cache_read: None,
+            cache_write: None
         })
     );
 }
@@ -456,9 +458,9 @@ fn document() -> Value {
                     "usage": {
                         "input_tokens": 100,
                         "output_tokens": 20,
-                        "reasoning_output_tokens": 0,
-                        "cache_read_tokens": 0,
-                        "cache_write_tokens": 0,
+                        "reasoning_output_tokens": null,
+                        "cache_read_tokens": null,
+                        "cache_write_tokens": null,
                     },
                     "finish": "tool_use",
                     "response_id": "msg_1",
@@ -485,7 +487,7 @@ fn document() -> Value {
                         "output_tokens": 5,
                         "reasoning_output_tokens": 0,
                         "cache_read_tokens": 100,
-                        "cache_write_tokens": 0,
+                        "cache_write_tokens": null,
                     },
                     "finish": "end_turn",
                     "response_id": null,
@@ -514,9 +516,9 @@ fn a_transcript_has_one_json_form() {
         Usage::from_inclusive(TokenCounts {
             input: 100,
             output: 20,
-            reasoning: 0,
-            cache_read: 0,
-            cache_write: 0,
+            reasoning: None,
+            cache_read: None,
+            cache_write: None,
         }),
         FinishReason::ToolUse,
         Some("msg_1".to_owned()),
@@ -528,9 +530,9 @@ fn a_transcript_has_one_json_form() {
         Usage::from_inclusive(TokenCounts {
             input: 180,
             output: 5,
-            reasoning: 0,
-            cache_read: 100,
-            cache_write: 0,
+            reasoning: Some(0),
+            cache_read: Some(100),
+            cache_write: None,
         }),
         FinishReason::EndTurn,
         None,

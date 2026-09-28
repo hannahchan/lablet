@@ -9,7 +9,7 @@ use crate::{
     RequestParams, Run, RunOutcome, RunSetup, StopReason, Thinking, TokenCounts, ToolName,
     ToolStats, Usage,
 };
-use crate::{RunId, TaskResult};
+use crate::{RunId, RunLabels, TaskResult};
 
 #[test]
 fn a_run_context_round_trips_through_json() {
@@ -117,7 +117,23 @@ fn a_run_summary_has_one_json_form() {
             "per_tool": { "bash": { "calls": 1, "errors": 1, "latency_ms": 35 } },
             "rates": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75 },
             "cost": 0.002,
-            "outcome": serde_json::to_value(outcome()).unwrap(),
+            "outcome": {
+                "run_id": "01K5F3Z8Q4X9T2M7B6W1R0VNEC",
+                "labels": { "task": "fix-failing-test", "experiment": null, "trial": "3" },
+                "stop_reason": "provider_error",
+                "turns": 1,
+                "usage": {
+                    "input_tokens": 12,
+                    "output_tokens": 3,
+                    "reasoning_output_tokens": null,
+                    "cache_read_tokens": 8,
+                    "cache_write_tokens": 0,
+                },
+                "tool_calls": 2,
+                "duration_ms": 250,
+                "result": { "text": "partial", "structured": null },
+                "error": "provider: 401 unauthorized",
+            },
         })
     );
 }
@@ -127,6 +143,7 @@ fn a_finished_run_carries_the_summary_and_the_conversation() {
     let summary = summary();
     let setup = RunSetup {
         run_id: summary.outcome.run_id.clone(),
+        labels: summary.outcome.labels.clone(),
         model: summary.model,
         endpoint: summary.endpoint,
         tools: summary.tools,
@@ -171,17 +188,26 @@ fn tool_stats_start_at_zero() {
     );
 }
 
+fn labels() -> RunLabels {
+    RunLabels {
+        task: Some("fix-failing-test".to_owned()),
+        experiment: None,
+        trial: Some("3".to_owned()),
+    }
+}
+
 fn raw(stop_reason: StopReason, structured: Option<Value>, error: Option<&str>) -> RawOutcome {
     RawOutcome {
         run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").unwrap(),
+        labels: labels(),
         stop_reason,
         turns: 1,
         usage: Usage::from_inclusive(TokenCounts {
             input: 12,
             output: 3,
-            reasoning: 0,
-            cache_read: 8,
-            cache_write: 0,
+            reasoning: None,
+            cache_read: Some(8),
+            cache_write: Some(0),
         }),
         tool_calls: 2,
         duration_ms: 250,

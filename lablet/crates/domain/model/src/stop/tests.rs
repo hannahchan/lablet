@@ -2,7 +2,9 @@ use serde_json::{Value, json};
 
 use crate::TaskResult;
 use crate::outcome::RawOutcome;
-use crate::{CompletionMode, RunId, RunOutcome, StopClass, StopReason, TokenCounts, Usage};
+use crate::{
+    CompletionMode, RunId, RunLabels, RunOutcome, StopClass, StopReason, TokenCounts, Usage,
+};
 
 // The literal spellings below are the members of `lablet.run.stop_reason` and
 // `lablet.run.completion_mode` in the generated telemetry-registry crate,
@@ -106,17 +108,26 @@ fn closing_keeps_an_error_only_for_a_failed_run() {
     }
 }
 
+fn labels() -> RunLabels {
+    RunLabels {
+        task: Some("fix-failing-test".to_owned()),
+        experiment: None,
+        trial: Some("3".to_owned()),
+    }
+}
+
 fn raw(stop_reason: StopReason, structured: Option<Value>, error: Option<&str>) -> RawOutcome {
     RawOutcome {
         run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").unwrap(),
+        labels: labels(),
         stop_reason,
         turns: 1,
         usage: Usage::from_inclusive(TokenCounts {
             input: 12,
             output: 3,
-            reasoning: 0,
-            cache_read: 8,
-            cache_write: 0,
+            reasoning: None,
+            cache_read: Some(8),
+            cache_write: Some(0),
         }),
         tool_calls: 2,
         duration_ms: 250,

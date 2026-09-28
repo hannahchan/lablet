@@ -19,6 +19,7 @@ An entry under `Unreleased` is mandatory for any change to one of the three cont
 - A run cancelled while it waits to retry a provider call stops with `cancelled` and makes no further attempt, instead of spending the retries it had left. `lablet.retry.will_retry` is the decision made when the attempt failed, so on such a run it's `true` for an attempt that never came, and the root span's stop reason says why.
 - A tool filter that names a tool no executor serves is refused when the run's tools are built, so a misspelt `deny` entry can't leave the tool it meant to deny on offer.
 - `lablet.run.transcript_path` now reads "where the run's transcript is written," rather than "was written." The wide event is emitted inside `RunService::run` and the composition root writes the file afterwards, so the attribute names a destination rather than reporting a file that already exists. The key, its type, and its conditional requirement are unchanged.
+- Outcome document: `usage.reasoning_output_tokens`, `usage.cache_read_tokens`, and `usage.cache_write_tokens` are `null` when the provider didn't report the count, where they were `0`, so a zero is a count of zero and never a gap. Several servers answer to one provider name and report different things, and a reader couldn't tell which zeros to believe. A run's total holds a count when any of its provider calls reported it, and the cost and the token budget read a missing count as nothing. The transcript's per-turn usage follows the same rule.
 
 ### Added
 
@@ -38,6 +39,7 @@ An entry under `Unreleased` is mandatory for any change to one of the three cont
 - Request settings on the wide event: `gen_ai.request.temperature` joins it, having been on the chat span alone, and the new `lablet.request.thinking` carries the thinking mode, its budget, and whether the reasoning text was asked for. A reasoning budget is the setting a run is most often varied by, and neither it nor the temperature reached the one row an analyst reads.
 
 - Tool arguments that aren't valid JSON: the call is kept with the model's own text, runs nowhere, and its outcome is the new `lablet.tool.status` member `malformed_input`, an error result the model can correct from. It counts in the tool statistics rather than as a retried provider error, because a model that can't serialise against an awkward tool schema is a tool-surface problem and reporting it as provider flakiness points at the wrong component. A `ToolUse` input is now written `{"json": {...}}` or `{"unparsed": "..."}`.
+- Run labels: the outcome document gains `labels`, which holds the `task`, the `experiment`, and the `trial` that the run request named, each a string, or `null` when the request named none. They're what a composer groups runs by, and the document echoes them so a composer doesn't have to keep a table of run ids. A label the document doesn't know is refused when it's read.
 
 ### Removed
 

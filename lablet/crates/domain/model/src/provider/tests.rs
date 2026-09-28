@@ -2,13 +2,14 @@ use serde_json::json;
 
 use super::*;
 
-const fn usage(input: u64, output: u64, cache_read: u64, cache_write: u64) -> Usage {
+/// What a provider that reports only its input and output gives.
+const fn usage(input: u64, output: u64) -> Usage {
     Usage::from_inclusive(TokenCounts {
         input,
         output,
-        reasoning: 0,
-        cache_read,
-        cache_write,
+        reasoning: None,
+        cache_read: None,
+        cache_write: None,
     })
 }
 use crate::{TokenCounts, ToolCallId, ToolInput, ToolName, ToolUse, Usage};
@@ -273,7 +274,7 @@ fn a_completion_reads_from_the_form_a_script_would_hold() {
     });
     let completion = ProviderResponse::new(
         vec![ContentBlock::Text("done".to_owned())],
-        usage(12, 3, 0, 0),
+        usage(12, 3),
         FinishReason::EndTurn,
         None,
         None,
@@ -291,9 +292,9 @@ fn a_completion_reads_from_the_form_a_script_would_hold() {
             "usage": {
                 "input_tokens": 12,
                 "output_tokens": 3,
-                "reasoning_output_tokens": 0,
-                "cache_read_tokens": 0,
-                "cache_write_tokens": 0,
+                "reasoning_output_tokens": null,
+                "cache_read_tokens": null,
+                "cache_write_tokens": null,
             },
             "finish": "end_turn",
             "response_id": null,
@@ -308,7 +309,7 @@ fn a_completion_whose_tool_calls_have_distinct_ids_holds_its_content_in_order() 
 
     let completion = ProviderResponse::new(
         content.clone(),
-        usage(12, 3, 0, 0),
+        usage(12, 3),
         FinishReason::ToolUse,
         Some("msg_1".to_owned()),
         Some("model-2026".to_owned()),
@@ -316,14 +317,14 @@ fn a_completion_whose_tool_calls_have_distinct_ids_holds_its_content_in_order() 
     .unwrap();
 
     assert_eq!(completion.content(), content);
-    assert_eq!(completion.usage, usage(12, 3, 0, 0));
+    assert_eq!(completion.usage, usage(12, 3));
     assert_eq!(completion.finish, FinishReason::ToolUse);
     assert_eq!(completion.response_id.as_deref(), Some("msg_1"));
     assert_eq!(completion.response_model.as_deref(), Some("model-2026"));
 }
 
 #[test]
-fn a_completion_without_usage_used_no_tokens() {
+fn a_completion_without_usage_used_no_tokens_and_reported_no_count() {
     let completion = serde_json::from_value::<ProviderResponse>(json!({
         "content": [],
         "finish": "end_turn",
@@ -332,7 +333,7 @@ fn a_completion_without_usage_used_no_tokens() {
     }))
     .unwrap();
 
-    assert_eq!(completion.usage, Usage::default());
+    assert_eq!(completion.usage, usage(0, 0));
     assert_eq!(completion.response_id.as_deref(), Some("msg_1"));
     assert_eq!(completion.response_model.as_deref(), Some("model-2026"));
 }

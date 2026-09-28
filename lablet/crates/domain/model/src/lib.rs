@@ -19,6 +19,7 @@ macro_rules! display_as_str {
 }
 
 mod id;
+mod labels;
 mod message;
 mod outcome;
 mod price;
@@ -32,6 +33,7 @@ mod transcript;
 mod usage;
 
 pub use id::{IdError, RunId, ToolCallId, ToolName};
+pub use labels::RunLabels;
 pub use message::{
     ContentBlock, Message, ToolInput, ToolResult, ToolResultContent, ToolUse, UserContent,
 };

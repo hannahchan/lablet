@@ -36,6 +36,9 @@ impl Pricing {
     /// need no rate: both providers bill them at the output rate, and
     /// `Usage::reasoning_output_tokens` is already part of `output_tokens`.
     ///
+    /// A cache count the provider didn't report is nothing to price and takes
+    /// nothing from the input, which is billed at the input rate.
+    ///
     /// A provider that reports cache counts above its own input count leaves
     /// no uncached part, so that run is priced for its cached tokens alone and
     /// comes out low. Refusing to price it would be the worse failure for a
@@ -43,11 +46,13 @@ impl Pricing {
     /// beside the cost, so a consumer can see the inconsistency.
     #[must_use]
     pub fn cost(&self, usage: &Usage) -> Option<Cost> {
+        let cache_read = usage.cache_read_tokens.unwrap_or(0);
+        let cache_write = usage.cache_write_tokens.unwrap_or(0);
         Cost::new(
             per_million(usage.uncached_input_tokens(), self.rates.input)
                 + per_million(usage.output_tokens, self.rates.output)
-                + per_million(usage.cache_read_tokens, self.rates.cache_read)
-                + per_million(usage.cache_write_tokens, self.rates.cache_write),
+                + per_million(cache_read, self.rates.cache_read)
+                + per_million(cache_write, self.rates.cache_write),
         )
         .ok()
     }

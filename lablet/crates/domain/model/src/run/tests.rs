@@ -7,8 +7,8 @@ use serde_json::json;
 use super::*;
 use crate::tests::block_on;
 use crate::{
-    ContentBlock, Effort, FinishReason, Prompts, ProviderKind, Rates, StopClass, Thinking,
-    TokenCounts, ToolCallEnd, ToolCallId, ToolCallOutcome, ToolCallStatus, ToolResult,
+    ContentBlock, Effort, FinishReason, Prompts, ProviderKind, Rates, RunLabels, StopClass,
+    Thinking, TokenCounts, ToolCallEnd, ToolCallId, ToolCallOutcome, ToolCallStatus, ToolResult,
     ToolResultContent, ToolSource, ToolStats,
 };
 
@@ -47,9 +47,18 @@ fn name(value: &str) -> ToolName {
     ToolName::new(value).unwrap()
 }
 
+fn labels() -> RunLabels {
+    RunLabels {
+        task: Some("fix-failing-test".to_owned()),
+        experiment: Some("terse-tool-descriptions".to_owned()),
+        trial: Some("3".to_owned()),
+    }
+}
+
 fn setup() -> RunSetup {
     RunSetup {
         run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").unwrap(),
+        labels: labels(),
         model: ModelRef {
             provider: ProviderKind::Anthropic,
             name: "claude-sonnet-5".to_owned(),
@@ -83,7 +92,7 @@ fn start() -> Run {
 }
 
 /// A completion that says `text` and then calls each of `tools`, the n-th
-/// under the id `call_n`.
+/// under the id `call_n`, from a provider that reports every count.
 fn response(text: &str, tools: &[&str], finish: FinishReason, input: u64) -> ProviderResponse {
     let mut content = vec![ContentBlock::Text(text.to_owned())];
     content.extend(tools.iter().enumerate().map(|(n, tool)| {
@@ -98,9 +107,9 @@ fn response(text: &str, tools: &[&str], finish: FinishReason, input: u64) -> Pro
         Usage::from_inclusive(TokenCounts {
             input,
             output: 20,
-            reasoning: 0,
-            cache_read: 0,
-            cache_write: 0,
+            reasoning: Some(0),
+            cache_read: Some(0),
+            cache_write: Some(0),
         }),
         finish,
         None,
@@ -331,6 +340,34 @@ fn finish_writes_the_run_id_the_duration_in_whole_milliseconds_and_the_final_tex
 }
 
 #[test]
+fn the_outcome_echoes_the_labels_the_run_was_set_up_with() {
+    let prompts = || Prompts {
+        system: String::new(),
+        task: "Go.".to_owned(),
+    };
+    let partly = RunLabels {
+        task: None,
+        experiment: Some("terse-tool-descriptions".to_owned()),
+        trial: None,
+    };
+    let close = |labels: RunLabels| {
+        let setup = RunSetup { labels, ..setup() };
+        let run = Run::start(setup, prompts());
+        finish(run, StopReason::Cancelled).outcome.labels
+    };
+
+    assert_eq!(close(labels()), labels());
+    assert_eq!(close(partly.clone()), partly);
+    assert_eq!(close(RunLabels::default()), RunLabels::default());
+    let answered =
+        done(start(), 1, ms(1)).finish(StopReason::Completed, ms(0), None, None, None, None);
+    assert_eq!(answered.summary.outcome.labels, labels());
+    let unanswered =
+        calling(start(), &["bash"]).finish(StopReason::MaxTurns, ms(0), None, None, None, None);
+    assert_eq!(unanswered.summary.outcome.labels, labels());
+}
+
+#[test]
 fn the_outcome_keeps_of_what_the_loop_passes_only_what_the_stop_reason_allows() {
     let argument = json!({ "passed": true });
     let close = |stop: StopReason| {
@@ -380,9 +417,9 @@ fn each_completion_is_a_turn_with_its_usage_and_finish_reason() {
         Usage::from_inclusive(TokenCounts {
             input: 280,
             output: 40,
-            reasoning: 0,
-            cache_read: 0,
-            cache_write: 0
+            reasoning: Some(0),
+            cache_read: Some(0),
+            cache_write: Some(0)
         })
     );
     let finished = run.finish(StopReason::Completed, ms(0), None, None, None, None);
@@ -396,12 +433,84 @@ fn each_completion_is_a_turn_with_its_usage_and_finish_reason() {
         Usage::from_inclusive(TokenCounts {
             input: 280,
             output: 40,
-            reasoning: 0,
-            cache_read: 0,
-            cache_write: 0
+            reasoning: Some(0),
+            cache_read: Some(0),
+            cache_write: Some(0)
         })
     );
     assert_eq!(finished.transcript.turns().len(), 2);
+}
+
+/// A run whose first response called a tool and reported `first`, and whose
+/// second has just been recorded, reporting `last`.
+fn after(first: TokenCounts, last: TokenCounts) -> Final {
+    let reporting = |tools: &[&str], finish: FinishReason, counts: TokenCounts| ProviderResponse {
+        usage: Usage::from_inclusive(counts),
+        ..response("On it.", tools, finish, 0)
+    };
+    let calling = pending(start().responded(
+        reporting(&["bash"], FinishReason::ToolUse, first),
+        ms(0),
+        ms(1),
+    ));
+    let run = answered(calling, &[answer(ran(ToolCallEnd::Ok), "out", ms(1))]);
+    final_run(run.responded(reporting(&[], FinishReason::EndTurn, last), ms(2), ms(1)))
+}
+
+#[test]
+fn a_count_no_call_reported_is_missing_from_the_run_s_usage_and_its_outcome() {
+    let bare = TokenCounts {
+        input: 100,
+        output: 20,
+        ..TokenCounts::default()
+    };
+    let run = after(bare, bare);
+    let nothing_reported = Usage {
+        input_tokens: 200,
+        output_tokens: 40,
+        reasoning_output_tokens: None,
+        cache_read_tokens: None,
+        cache_write_tokens: None,
+    };
+
+    assert_eq!(run.usage(), nothing_reported);
+    let finished = run.finish(StopReason::Completed, ms(0), None, None, None, None);
+    assert_eq!(finished.summary.outcome.usage, nothing_reported);
+    assert_eq!(finished.transcript.turns()[1].record().usage.total(), 120);
+}
+
+#[test]
+fn a_count_one_call_reported_is_in_the_run_s_usage_though_another_left_it_out() {
+    let first = TokenCounts {
+        input: 100,
+        output: 20,
+        reasoning: None,
+        cache_read: Some(0),
+        cache_write: Some(60),
+    };
+    let last = TokenCounts {
+        input: 180,
+        output: 20,
+        reasoning: Some(12),
+        cache_read: None,
+        cache_write: Some(30),
+    };
+    let reported = Usage {
+        input_tokens: 280,
+        output_tokens: 40,
+        reasoning_output_tokens: Some(12),
+        cache_read_tokens: Some(0),
+        cache_write_tokens: Some(90),
+    };
+
+    let run = after(first, last);
+
+    assert_eq!(run.usage(), reported);
+    let finished = run.finish(StopReason::Completed, ms(0), None, None, None, None);
+    assert_eq!(finished.summary.outcome.usage, reported);
+    let turns = finished.transcript.turns();
+    assert_eq!(turns[0].record().usage, Usage::from_inclusive(first));
+    assert_eq!(turns[1].record().usage, Usage::from_inclusive(last));
 }
 
 #[test]
@@ -686,9 +795,9 @@ fn progress_is_what_the_limits_are_held_against() {
             usage: Usage::from_inclusive(TokenCounts {
                 input: 100,
                 output: 20,
-                reasoning: 0,
-                cache_read: 0,
-                cache_write: 0
+                reasoning: Some(0),
+                cache_read: Some(0),
+                cache_write: Some(0)
             }),
             consecutive_tool_errors: 1,
         }

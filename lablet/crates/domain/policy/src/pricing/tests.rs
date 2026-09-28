@@ -33,12 +33,12 @@ fn a_million_tokens_of_each_kind_cost_that_kind_s_rate() {
     };
     let cache_read = Usage {
         input_tokens: 1_000_000,
-        cache_read_tokens: 1_000_000,
+        cache_read_tokens: Some(1_000_000),
         ..Usage::default()
     };
     let cache_write = Usage {
         input_tokens: 1_000_000,
-        cache_write_tokens: 1_000_000,
+        cache_write_tokens: Some(1_000_000),
         ..Usage::default()
     };
 
@@ -53,9 +53,9 @@ fn a_cost_is_the_sum_of_its_four_parts_in_proportion_to_the_tokens() {
     let usage = Usage {
         input_tokens: 1_000_000,
         output_tokens: 250_000,
-        reasoning_output_tokens: 0,
-        cache_read_tokens: 500_000,
-        cache_write_tokens: 250_000,
+        reasoning_output_tokens: Some(0),
+        cache_read_tokens: Some(500_000),
+        cache_write_tokens: Some(250_000),
     };
 
     // 250k uncached at 4, 250k output at 16, 500k read at 0.5, 250k written at 5.
@@ -67,9 +67,9 @@ fn cached_tokens_inside_the_input_count_are_billed_once() {
     let usage = Usage {
         input_tokens: 1_000_000,
         output_tokens: 0,
-        reasoning_output_tokens: 0,
-        cache_read_tokens: 500_000,
-        cache_write_tokens: 250_000,
+        reasoning_output_tokens: Some(0),
+        cache_read_tokens: Some(500_000),
+        cache_write_tokens: Some(250_000),
     };
     let double_counted = 1_000_000.0 * 4.0 / 1e6 + 500_000.0 * 0.5 / 1e6 + 250_000.0 * 5.0 / 1e6;
 
@@ -78,10 +78,52 @@ fn cached_tokens_inside_the_input_count_are_billed_once() {
 }
 
 #[test]
+fn a_cache_count_the_provider_did_not_report_is_nothing_to_price() {
+    let nothing_reported = Usage {
+        input_tokens: 1_000_000,
+        output_tokens: 250_000,
+        ..Usage::default()
+    };
+    let reads_only = Usage {
+        cache_read_tokens: Some(500_000),
+        ..nothing_reported
+    };
+    let writes_only = Usage {
+        cache_write_tokens: Some(250_000),
+        ..nothing_reported
+    };
+
+    assert_eq!(nothing_reported.cache_read_tokens, None);
+    assert_eq!(nothing_reported.cache_write_tokens, None);
+    // The input whole at 4 and the output at 16.
+    assert_eq!(cost(nothing_reported), usd(4.0 + 4.0));
+    // 500k uncached at 4, 500k read at 0.5.
+    assert_eq!(cost(reads_only), usd(2.0 + 4.0 + 0.25));
+    // 750k uncached at 4, 250k written at 5.
+    assert_eq!(cost(writes_only), usd(3.0 + 4.0 + 1.25));
+}
+
+#[test]
+fn a_reasoning_count_changes_no_cost_whether_or_not_it_was_reported() {
+    let unreported = Usage {
+        input_tokens: 1_000_000,
+        output_tokens: 250_000,
+        ..Usage::default()
+    };
+    let reported = Usage {
+        reasoning_output_tokens: Some(200_000),
+        ..unreported
+    };
+
+    assert_eq!(cost(reported), cost(unreported));
+    assert_eq!(cost(reported), usd(4.0 + 4.0));
+}
+
+#[test]
 fn an_input_that_is_all_cache_reads_pays_only_the_cache_read_rate() {
     let usage = Usage {
         input_tokens: 2_000_000,
-        cache_read_tokens: 2_000_000,
+        cache_read_tokens: Some(2_000_000),
         ..Usage::default()
     };
 
@@ -92,8 +134,8 @@ fn an_input_that_is_all_cache_reads_pays_only_the_cache_read_rate() {
 fn cache_counts_above_the_input_count_never_make_the_input_part_negative() {
     let usage = Usage {
         input_tokens: 100,
-        cache_read_tokens: 1_000_000,
-        cache_write_tokens: 1_000_000,
+        cache_read_tokens: Some(1_000_000),
+        cache_write_tokens: Some(1_000_000),
         ..Usage::default()
     };
 
@@ -115,9 +157,9 @@ fn the_largest_usage_has_a_finite_cost() {
     let usage = Usage {
         input_tokens: u64::MAX,
         output_tokens: u64::MAX,
-        reasoning_output_tokens: 0,
-        cache_read_tokens: u64::MAX,
-        cache_write_tokens: u64::MAX,
+        reasoning_output_tokens: Some(0),
+        cache_read_tokens: Some(u64::MAX),
+        cache_write_tokens: Some(u64::MAX),
     };
     let cost = cost(usage)
         .expect("rates this ordinary can't overflow")
@@ -144,9 +186,9 @@ fn free_pricing_costs_nothing() {
     let usage = Usage {
         input_tokens: 1_000_000,
         output_tokens: 1_000_000,
-        reasoning_output_tokens: 0,
-        cache_read_tokens: 10,
-        cache_write_tokens: 10,
+        reasoning_output_tokens: Some(0),
+        cache_read_tokens: Some(10),
+        cache_write_tokens: Some(10),
     };
 
     assert_eq!(free.cost(&usage), usd(0.0));
@@ -159,13 +201,14 @@ fn the_pricing_reports_the_rates_it_was_built_with() {
 
 proptest::prop_compose! {
     /// A usage whose cache counts are a part of its input, as every provider
-    /// that can count reports it.
+    /// that can count reports it, and which leaves out any count a provider
+    /// may.
     fn consistent_usage()(
         uncached in 0u64..10_000_000,
         output in 0u64..10_000_000,
-        reasoning in 0u64..1_000_000,
-        cache_read in 0u64..10_000_000,
-        cache_write in 0u64..10_000_000,
+        reasoning in proptest::option::of(0u64..1_000_000),
+        cache_read in proptest::option::of(0u64..10_000_000),
+        cache_write in proptest::option::of(0u64..10_000_000),
     ) -> Usage {
         Usage::from_uncached(TokenCounts {
             input: uncached,
@@ -196,6 +239,20 @@ proptest::proptest! {
             (parts - whole).abs() <= whole.abs() * 1e-9 + 1e-9,
             "{parts} != {whole}"
         );
+    }
+
+    /// A count the provider didn't report is priced as a count of zero is, so
+    /// leaving one out never changes what a run cost.
+    #[test]
+    fn a_missing_count_costs_what_a_count_of_zero_costs(usage in consistent_usage()) {
+        let zeroed = Usage {
+            reasoning_output_tokens: Some(usage.reasoning_output_tokens.unwrap_or(0)),
+            cache_read_tokens: Some(usage.cache_read_tokens.unwrap_or(0)),
+            cache_write_tokens: Some(usage.cache_write_tokens.unwrap_or(0)),
+            ..usage
+        };
+
+        proptest::prop_assert_eq!(pricing().cost(&usage), pricing().cost(&zeroed));
     }
 
     /// More tokens never cost less, whichever kind they are.

@@ -69,11 +69,24 @@ fn says(text: &str, tools: &[&str], finish: FinishReason) -> ProviderResponse {
         Usage::from_inclusive(TokenCounts {
             input: 100,
             output: 20,
-            reasoning: 0,
-            cache_read: 0,
-            cache_write: 0,
+            reasoning: Some(0),
+            cache_read: Some(0),
+            cache_write: Some(0),
         }),
         finish,
+        None,
+        None,
+    )
+    .expect("a test's response has distinct call ids")
+}
+
+/// The same, from a provider that reported `counts`.
+fn reporting(tools: &[&str], finish: FinishReason, counts: TokenCounts) -> ProviderResponse {
+    let said = says("On it.", tools, finish);
+    ProviderResponse::new(
+        said.content().to_vec(),
+        Usage::from_inclusive(counts),
+        said.finish,
         None,
         None,
     )
@@ -826,6 +839,89 @@ async fn a_run_is_priced_on_every_turn_it_took_whichever_state_it_stopped_in() {
             run.stop_reason()
         );
     }
+}
+
+/// A provider that reports no cache count has left a gap, not a zero: the
+/// gap reaches the outcome as it is, and the cost prices the input whole.
+#[tokio::test]
+async fn a_run_whose_provider_reported_no_cache_count_is_priced_on_its_whole_input() {
+    let counts = TokenCounts {
+        input: 1_000_000,
+        output: 250_000,
+        ..TokenCounts::default()
+    };
+    let mut harness = Harness::new(vec![Answer::now(reporting(
+        &[],
+        FinishReason::EndTurn,
+        counts,
+    ))]);
+    harness.pricing = Some(Pricing::new(
+        Rates::new(4.0, 16.0, 0.5, 5.0).expect("ordinary rates"),
+    ));
+
+    let run = harness.run().await;
+
+    let summary = &run.finished.summary;
+    assert_eq!(
+        summary.outcome.usage,
+        Usage {
+            input_tokens: 1_000_000,
+            output_tokens: 250_000,
+            reasoning_output_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+        }
+    );
+    assert_eq!(
+        summary.cost.map(lablet_model::Cost::usd),
+        Some(4.0 + 4.0),
+        "the input at 4 and a quarter of a million output tokens at 16"
+    );
+}
+
+/// Several servers answer to one provider name and report different things,
+/// and so can the calls of one run. The run's totals hold a count when any
+/// call reported it, and the observer is told what the caller is handed.
+#[tokio::test]
+async fn a_run_reports_a_count_when_any_of_its_calls_reported_it() {
+    let first = TokenCounts {
+        input: 100,
+        output: 20,
+        reasoning: None,
+        cache_read: Some(40),
+        cache_write: None,
+    };
+    let second = TokenCounts {
+        input: 150,
+        output: 10,
+        reasoning: None,
+        cache_read: None,
+        cache_write: None,
+    };
+    let run = Harness::new(vec![
+        Answer::now(reporting(&["bash"], FinishReason::ToolUse, first)),
+        Answer::now(reporting(&[], FinishReason::EndTurn, second)),
+    ])
+    .run()
+    .await;
+
+    let reported = Usage {
+        input_tokens: 250,
+        output_tokens: 30,
+        reasoning_output_tokens: None,
+        cache_read_tokens: Some(40),
+        cache_write_tokens: None,
+    };
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(run.finished.summary.outcome.usage, reported);
+    let turns = run.finished.transcript.turns();
+    assert_eq!(turns[0].record().usage, Usage::from_inclusive(first));
+    assert_eq!(turns[1].record().usage, Usage::from_inclusive(second));
+    let events = run.observer.events();
+    let Some(EventKind::RunFinished { summary, .. }) = events.last().map(|e| &e.kind) else {
+        panic!("the run's last event is RunFinished");
+    };
+    assert_eq!(summary.outcome.usage, reported);
 }
 
 #[tokio::test]
@@ -1761,9 +1857,9 @@ fn calls_with_unparsed_input(tool: &str, text: &str) -> ProviderResponse {
         Usage::from_inclusive(TokenCounts {
             input: 100,
             output: 20,
-            reasoning: 0,
-            cache_read: 0,
-            cache_write: 0,
+            reasoning: Some(0),
+            cache_read: Some(0),
+            cache_write: Some(0),
         }),
         FinishReason::ToolUse,
         None,
