@@ -1,6 +1,6 @@
 # mini-swe-agent
 
-The minimal baseline reference, pinned at v2.4.6 (2026-07-23). Researched 2026-09-24 from the source at that tag, its release notes and issues, and the SWE-bench leaderboards. The "Fit for lablet" section compares against choices under consideration on 2026-09-24, several of them not yet recorded in `decisions.md`. The [matrix](matrix.md) has lablet's current behaviour and the proposals.
+Evidence, and not a profile lablet reproduces: it was chosen as a minimal baseline on 2026-09-25 and made evidence on 2026-09-28 (`decisions.md`). Read at v2.4.6 (2026-07-23). Researched 2026-09-24 from the source at that tag, its release notes and issues, and the SWE-bench leaderboards. The "Fit for lablet" section compares against choices under consideration on 2026-09-24, several of them not yet recorded in `decisions.md`. The [matrix](matrix.md) has lablet's current behaviour and the proposals.
 
 Paths are `src/minisweagent/…` at [tag v2.4.6](https://github.com/SWE-agent/mini-swe-agent/tree/v2.4.6). `#n` means an issue or PR in that repo.
 

@@ -32,6 +32,7 @@ Optimise an MCP server: run the same task suite against versions of the server, 
 - Writing Arrow or Parquet directly. The collector side does that.
 - Multi-agent coordination inside one process. One lablet, one loop.
 - Reading back what it emitted. The consuming side does that.
+- Reproducing any one agent harness. A question about what a harness does is answered by running that harness.
 
 ## Design commitments
 
@@ -42,3 +43,4 @@ Optimise an MCP server: run the same task suite against versions of the server, 
 - **Raw data, never reports.** One lablet's telemetry matters because it joins with ten thousand others. Every record is shaped for aggregation by the composing system; lablet itself never aggregates, reports, or visualises.
 - **Domain and application are in-memory models.** Nothing below the adapters carries a published shape. A run's transcript, its outcome and everything they hold are values; collapsing one into bytes happens once, at the boundary, in an adapter. JSON is a value type where a value is JSON by definition, such as a tool's arguments, and a wire form nowhere.
 - **Vendor and solution agnostic.** No model provider, eval framework, trajectory format, or observability product is privileged. Where an open standard exists lablet follows it: the GenAI semantic conventions over OTLP, which any collector receives. Where formats compete, each one lablet emits is a rendering of the run rather than a shape the run is held in. The model is shaped by what an agent loop is, so a format that can't hold all of it loses that in its own export and not in the model.
+- **Close to the loops people use, not a copy of one.** Lablet names the agent loops it takes as references and takes its defaults from them, so that the variant that wins in lablet is the one that wins in use. It copies a behaviour only when that behaviour changes what the model is sent or how a run proceeds, bears on something a user varies, and is common to more than one harness. The loop doesn't change when the model does, and every known difference from a reference is written down. The references are chosen on how widely they're used, and following a loop's behaviour privileges no provider's API or format.
