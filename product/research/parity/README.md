@@ -70,6 +70,8 @@ The profile doesn't change when the model changes. A model comparison changes on
 
 The matrix is a list of suspects for the fourth check, not a list of work. Rows that only a capture can settle are marked in it.
 
+A capture stays out of the repository. It can hold text that isn't lablet's to publish, such as the wording of a reference's own tools, and paths from the machine it was made on. What a capture settles is written into the matrix and the reference's document, and a test that holds lablet to it is built from lablet's own content.
+
 ## Documents
 
 | Document                               | Covers                                                                                                                          |

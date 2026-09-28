@@ -2,7 +2,30 @@
 
 Phases 0 to 12, each ending with something runnable and tested. [acceptance.md](acceptance.md) names the scenarios each phase must turn green; a phase isn't done until they pass and the exit criteria below hold. An agent building lablet works one phase at a time, in order, and doesn't start a phase until the previous one is closed. Read [spec.md](spec.md), [quality-bar.md](quality-bar.md), and [../contributing/README.md](../contributing/README.md) first.
 
-Sequencing rationale: the loop is proven against fakes before any real adapter exists; OpenTelemetry comes before the first real provider because a wrong span shape is more expensive to fix late than a wrong provider mapping; the telemetry contract is a phase of its own because the Weaver Rust templates are the riskiest piece of the project and must not stall the scaffold; phases 3a to 3c settle the domain and the loop before anything is built on them; phase 12 holds what waits for the first release.
+Sequencing rationale: the loop is proven against fakes before any real adapter exists; OpenTelemetry comes before the first real provider because a wrong span shape is more expensive to fix late than a wrong provider mapping; the telemetry contract is a phase of its own because the Weaver Rust templates are the riskiest piece of the project and must not stall the scaffold; phases 3a and 3b settle the domain and the loop before anything is built on them; phase 7a, context management, waits for the capture that shows what the primary reference does; phase 12 holds what waits for the first release.
+
+## Status
+
+| Phase | What it delivers                                    | Status           |
+| ----- | --------------------------------------------------- | ---------------- |
+| 0     | Scaffold                                            | Done, 2026-09-19 |
+| 1     | Telemetry contract                                  | Done, 2026-09-20 |
+| 2     | Domain                                              | Done, 2026-09-20 |
+| 3     | The loop                                            | Done, 2026-09-21 |
+| 3a    | The run's states as types, and tool calls in groups | Done, 2026-09-24 |
+| 3b    | The domain and the loop after the design review     | Next             |
+| 4     | Library and first traced run                        | Not started      |
+| 5     | CLI and config surface                              | Not started      |
+| 6     | OTLP network export and live-check                  | Not started      |
+| 7     | Anthropic, and the capture of the primary reference | Not started      |
+| 7a    | Context management                                  | Not started      |
+| 8     | MCP, and the first transfer check                   | Not started      |
+| 9     | Second provider                                     | Not started      |
+| 10    | Features                                            | Not started      |
+| 11    | Hardening and release                               | Not started      |
+| 12    | After the release                                   | Not started      |
+
+A date is the date of the `decisions.md` entry that closed the phase. Spec §1, §3, §4 and §5 describe phase 3b's design, so until that phase closes the code is at phase 3a and the spec is ahead of it.
 
 ## Phase 0: Scaffold
 
@@ -72,23 +95,11 @@ Landing order, riskiest first: usage, which touches the most code; provider fail
 
 Acceptance: scenarios L13 to L15, E12 to E18, and T13 pass, and E7, E8, and T10 pass as rewritten. Two clauses of E15 are deferred, as L9's exit code was: the chat span's `error.type` to phase 4, and the exit code to phase 5. `lablet-model`, `lablet-policy`, and `lablet-run` hold 100% lines and regions, and every mutation floor is met. Every scenario of phases 3 and 3a still passes.
 
-## Phase 3c: Context management
-
-Decided on 2026-09-24 and 2026-09-28. Done before phase 4 because it changes what phase 4 publishes: the transcript document, the request size on a chat span, and what a chat span counts. The phase opens with its design commit, which edits spec §1, §3, §4 and §5 as phase 3a's did. When the first capture has been run by then, the trigger and the placeholder of masking come from it. When it hasn't, they're provisional, and `decisions.md` says so.
-
-- The record and the view. In `lablet-model`: the transcript stays the record of what happened, and `Run::messages` renders what's sent under the run's context policy.
-- Masking. In `lablet-policy`: when to mask, read from `Progress`. In `lablet-model`: a `Run` masks its older tool results in one step and is a `Run` again, the transition phase 12's summarisation will take too; each masked outcome records the turn from which the model was sent a placeholder in its place; and the placeholder is worded once. `run.context` is `full` or `mask`, and `full` is the default.
-- Request size. In `lablet-run`: `request_bytes` is measured from what each call sends, so a call after a masking step reports the smaller request.
-- Provider calls that aren't turns. In the registry: a chat span's purpose, with `turn` its one value until phase 12 adds another, and the rule that chat spans number `turns + retries` restated for the spans whose purpose is `turn`.
-- Room for compaction. The transcript document's rules say where a compaction entry goes, so that phase 12 adds to the document and changes nothing in it.
-
-Acceptance: scenarios K1 to K3 pass, the floors hold, and every earlier scenario still passes.
-
 ## Phase 4: Library and first traced run
 
 - `provider-fake` with scripted completions, latency, and injected errors, which may carry the usage a failed attempt reported and the wait a server asked for. The script format is this adapter's own type, read into the domain through `ProviderResponse::new`, so the file a user hand-writes isn't the domain's serde form. It keeps its validating read: a human writes it, so a mistyped key that read as a default would be a script that lies about what the model said.
 - `tools-builtin` with `bash`, `read_file`, `write_file`, and root escape rejection after symbolic links are resolved. None is enabled by default, and with one enabled the root is required and may not hold lablet's own files. `bash` starts a new process, in a process group of its own, for each command, with a short list of environment variables. It reports a non-zero exit as an ordinary result, and at its deadline the whole group is killed before `execute` returns. `read_file` takes an offset and a limit. Every tool feeds its output to a `KeptOutput`, so it keeps no more than the call's limit allows.
-- `telemetry-otel`: the observer mapping events to spans and log records built only on `telemetry-registry` constants (open spans in a map keyed by call id, explicit parent contexts, always-on sampler, per-run file path set on `RunStarted`, `force_flush` after the wide event), with unit tests asserting each span's name and required attributes against the generated key lists; root, chat, and tool spans with the spec §6 attributes, `lablet.turn` on children, the `gen_ai.client.operation.exception` log record and retry span event, the `lablet.run` wide-event log record with the root span's trace context, content records behind `capture_content`, with the tool specs as `gen_ai.tool.definitions` among them, resource attributes, bounded shutdown. The wide event goes in an export of its own after the content records are flushed, attributes have a length limit, and the wide event counts the records the exporter dropped. The run's labels are on every record, and the instrumentation scope carries the registry's schema URL. The registry declares every attribute the decisions of 2026-09-28 added, each with its justification and a changelog entry, before the observer emits it. Only the **OTLP/JSON file exporter** in this phase, serialised through `opentelemetry-proto`'s `with-serde` types and the `group_*_by_resource_and_scope` transforms, compact one request per line; with a reader in `lablet-conformance` that dispatches on `resourceSpans` or `resourceLogs` and parses the file back into spans and records for assertions.
+- `telemetry-otel`: the observer mapping events to spans and log records built only on `telemetry-registry` constants (open spans in a map keyed by call id, explicit parent contexts, always-on sampler, per-run file path set on `RunStarted`, `force_flush` after the wide event), with unit tests asserting each span's name and required attributes against the generated key lists; root, chat, and tool spans with the spec §6 attributes, `lablet.turn` on children, the `gen_ai.client.operation.exception` log record and retry span event, the `lablet.run` wide-event log record with the root span's trace context, content records behind `capture_content`, with the tool specs as `gen_ai.tool.definitions` among them, resource attributes, bounded shutdown. The wide event goes in an export of its own after the content records are flushed, attributes have a length limit, and the wide event counts the records the exporter dropped. The run's labels are on every record, a chat span carries its purpose, with `turn` its one value until a later phase adds a provider call that isn't a turn, and the instrumentation scope carries the registry's schema URL. The registry declares every attribute the decisions of 2026-09-28 added, each with its justification and a changelog entry, before the observer emits it. Only the **OTLP/JSON file exporter** in this phase, serialised through `opentelemetry-proto`'s `with-serde` types and the `group_*_by_resource_and_scope` transforms, compact one request per line; with a reader in `lablet-conformance` that dispatches on `resourceSpans` or `resourceLogs` and parses the file back into spans and records for assertions.
 - `lablet-conformance` with the `RunObserver` cases (exactly one wide event per run, its numbers equal the sum of the per-step events, an unwritable destination doesn't change the outcome) and the `ToolExecutor` cases run against `tools-builtin`, among them that a call past its deadline has stopped when `execute` returns and that an executor keeps no more output than its limit.
 - `lablet-documents` under `crates/adapters/secondary/shared/`: the transcript document, which gains the run id, the run's labels, the config digest, lablet's version, the model, the start time and the offered tool specs; the outcome document, which gains `schema_version`; and the shapes they nest, deriving serde, built from the domain by mappings that take their source apart by pattern, so a new domain field is a compile error. It's a shared kernel because `provider-fake`'s script, the transcript writer and the outcome share shapes, `Usage` among them, some read and some written. Both documents move in this one change rather than in sequence, since building the crate and then reopening it carries the whole objection to moving the outcome at all. `Transcript`, `Turn`, `RunOutcome` and the leaves they nest lose their derives when it lands, `RawOutcome` becomes the parts `Run::finish` fills in with `RunOutcome::closing` public as a checked constructor, and `RunSummary` and `FinishedRun` lose theirs with no replacement, since the wide event is a field mapping rather than a serialisation. `serde_json::Value` stays in the domain, which is vocabulary rather than a wire form, and `Message` keeps `Serialize` because `RequestBytes` measures with it and those bytes are counted and discarded.
 - `lablet/tests/fixtures/transcript.json`: a checked-in document built in code by a test, compared byte for byte and written back unchanged, as `outcome.json` already is, and added to the changelog gate's watched list beside it. It replaces the compile-time drift guard `TranscriptDocument::of` had while it lived beside the private fields it read.
@@ -125,15 +136,27 @@ Acceptance: a fake-provider run against the in-process receiver yields the same 
 
 Acceptance: scenarios P1, P2, P6, P8, and P11 pass in CI against wiremock. Manual: `lablet run --config examples/anthropic.yaml --prompt "..."` completes a real task against the Anthropic API and its trace passes live-check with no attribute added for it; the capture is recorded.
 
+## Phase 7a: Context management
+
+Decided on 2026-09-24 and 2026-09-28 as a phase before phase 4, and moved here on 2026-09-29. It follows phase 7 because its trigger and its placeholder come from the capture of the primary reference, which phase 7 records. It can follow phase 4 because everything it adds to a published contract is an addition: a field on a tool call's outcome in the transcript document, and a request size that can now fall as well as rise. The phase opens with its design commit, which edits spec §1, §3, §4 and §5 as phase 3a's did.
+
+- The record and the view. In `lablet-model`: the transcript stays the record of what happened, and `Run::messages` renders what's sent under the run's context policy.
+- Masking. In `lablet-policy`: when to mask, read from `Progress`. In `lablet-model`: a `Run` masks its older tool results in one step and is a `Run` again, the transition phase 12's summarisation will take too; each masked outcome records the turn from which the model was sent a placeholder in its place; and the placeholder is worded once. `run.context` is `full` or `mask`, and the default is what the capture shows the primary to do.
+- Request size. In `lablet-run`: `request_bytes` is measured from what each call sends, so a call after a masking step reports the smaller request.
+- Room for compaction. The transcript document's rules say where a compaction entry goes, so that phase 12 adds to the document and changes nothing in it.
+
+Acceptance: scenarios K1 to K3 pass, the floors hold, and every earlier scenario still passes.
+
 ## Phase 8: MCP
 
 - `lablet-test-mcp-server` (echo, sleep, exit-after-N, an image tool that returns a text item and an image item, a structured tool that returns `structuredContent` beside its text, a tool that reports the server's environment, a tool annotated `readOnlyHint`, server instructions, `--hang-startup`).
 - How a run ends when its servers can't be started, designed and recorded before anything else lands, since `tools.mcp_lifetime: run` starts servers at the start of a run.
 - `tools-mcp` over `rmcp`, stdio and streamable HTTP: names that carry the server's by default, and `names: own` with collision rejection; server instructions and the cap on descriptions; `tools.mcp_result`, and a resource link sent as text; `call_timeout`, with a cancellation notice at the deadline; a short list of environment variables for a stdio server; startup timeout, stderr forwarding, and dead-server behaviour; `tools.mcp_lifetime`; the server's name and version on the wide event; error messages held to the port's bound; trace context in `params._meta`, and the `mcp.*` attributes reported to the observer.
 - The capture of the matrix's MCP rows, run and compared as phase 7's was.
+- The first transfer check. One comparison of two tool surfaces, such as a server with one of its tools and without it, is run in lablet and in the primary reference as it ships, with its tool search on. The human runs the reference. When the two disagree on which surface did better and tool search is why, tool search leaves phase 12 for a phase of its own before phase 9, and `decisions.md` records the move.
 - `tools-mcp` added to the `ToolExecutor` conformance matrix.
 
-Acceptance: scenarios T1, T3, T5 to T9, T12, and T18 to T20 pass in CI against the test server. Manual: a run using a public MCP server over stdio completes, its tool spans carry the `mcp.*` attributes, and removing a tool via `tools.deny` changes the `RunStarted` tool list and nothing else; the capture is recorded.
+Acceptance: scenarios T1, T3, T5 to T9, T12, and T18 to T20 pass in CI against the test server. Manual: a run using a public MCP server over stdio completes, its tool spans carry the `mcp.*` attributes, and removing a tool via `tools.deny` changes the `RunStarted` tool list and nothing else; the capture and the transfer check are recorded.
 
 ## Phase 9: Second provider
 
@@ -161,9 +184,9 @@ Acceptance: a new user can follow `lablet/docs/getting-started.md` from clone to
 
 ## Phase 12: After the release
 
-Features that pass the first rule of `decisions.md`, 2026-09-28, and wait for the release. Each opens with its own design commit, as phase 3c does. The order below is the one expected today, and the transfer checks may change it.
+Features that pass the first rule of `decisions.md`, 2026-09-28, and wait for the release. Each opens with its own design commit, as phase 7a does. The order below is the one expected today, and the transfer checks may change it.
 
-- Tool search: tool schemas kept back until the model searches for them, with the tools offered to each turn recorded.
+- Tool search: tool schemas kept back until the model searches for them, with the tools offered to each turn recorded. It's here unless phase 8's transfer check has moved it.
 - Summarisation: the conversation summarised by a provider call that isn't a turn, and a request that's too long compacted and sent again.
 - Resuming after a response is cut off at `max_tokens`.
 - Reconnecting a remote MCP server.
@@ -183,7 +206,7 @@ A phase is closed when all of these hold, in addition to its acceptance line:
 6. Every new dependency has a justification comment and `cargo deny` is clean.
 7. No scenario has been moved to a later phase to close this one.
 
-Human sign-off, which the building agent can't do itself: phase 6 the Jaeger check and the file replay via docker compose; phase 7 the real Anthropic run and the capture of the primary reference; phase 8 the public MCP server run and the capture of the MCP rows; phase 9 the Ollama run (P5) and the capture of the secondary reference; phase 11 the timed getting-started walk and the release checklist, the transfer check among its items.
+Human sign-off, which the building agent can't do itself: phase 6 the Jaeger check and the file replay via docker compose; phase 7 the real Anthropic run and the capture of the primary reference; phase 8 the public MCP server run, the capture of the MCP rows and the first transfer check; phase 9 the Ollama run (P5) and the capture of the secondary reference; phase 11 the timed getting-started walk and the release checklist, the transfer check among its items.
 
 Delivery: work lands on `main` in small logical units, each fast-forwarded from a branch after `cargo xtask pre-push` passes locally, with the Actions run checked after the push. No pull requests for now. The bullet list of a phase is its landing plan. The building agent goes as far as it can in a phase and stops where a human is needed. A phase closes with a review of its diff that's scaled to risk and budgeted (see `contributing/README.md`, Reviews), a phase report (what landed, scenarios green, gate results, review cost against budget, architectural decisions, spec clarifications, human sign-off items, open risks, one demo command), and a stop for human review; the next phase starts only on an explicit go-ahead.
 
@@ -197,3 +220,5 @@ Signals of drift, any of which means stop and fix before continuing: the `lablet
 - Keep dependencies minimal and justify each new one with a comment in `Cargo.toml`.
 - Prefer a small change to the spec, made explicitly, over a workaround that makes the code disagree with it.
 - When a normative sentence in the spec has no test or gate, add a row to the traceability table in `acceptance.md` before implementing it.
+- When a phase closes, update its row in the status table at the top of this plan.
+- Keep a capture of a reference out of the repository. It can hold text that isn't lablet's to publish, such as the wording of the reference's own tools, and paths from the machine it was made on. Record what the capture settles in `product/research/parity/`, and build the test that holds lablet to it from lablet's own content.
