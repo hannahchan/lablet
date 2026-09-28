@@ -10,9 +10,9 @@ Optimising the things around an agent (an MCP server's tool surface, a skill, a 
 
 A lablet is one program that runs one agent loop. You give it:
 
-- a model (Anthropic, or anything speaking the OpenAI chat completions API, such as Ollama),
+- a model (Anthropic, OpenAI, or anything speaking the OpenAI chat completions API, such as Ollama),
 - a set of tools (MCP servers plus optional built-ins, each individually switchable),
-- a system prompt and optional inlined skills,
+- a system prompt and optional skills,
 - a task prompt,
 - stop conditions (completion, turns, timeout, retries).
 

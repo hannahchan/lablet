@@ -64,7 +64,7 @@ Found by the design reviews of 2026-09-24, and done before phase 4 for phase 3a'
 - The retry policy. In `lablet-policy`: `RetryPolicy::next` taking the server's hint and a salt, the cap on a hint, and jitter that's a pure function of the salt.
 - The stop policy. In `lablet-policy`: an optional turn cap, and the cap on consecutive invalid calls in place of the cap on tool errors. In `lablet-model`: `Progress::consecutive_invalid_calls`, and `StopReason::InvalidCallsExhausted`, renamed in the registry too, with its changelog entry.
 - `task_complete` alone. In `lablet-model`: `ToolCallStatus::Rejected`, with its registry value, and `Pending::completed_with` answering only for a response whose one call is `task_complete`. In `lablet-run`: the loop rejects a `task_complete` call that came with others, and runs the others.
-- The output cap. In `lablet-model`: `OutputCap` and `OutputCut`, applied by `Answer::measured`. In `lablet-run`: `ToolCall::output` and `ToolOutput::total_bytes`, so an executor keeps no more than the cut can use.
+- The output cap. In `lablet-model`: `OutputCap` and `OutputCut`, applied by `Answer::measured`. In `lablet-run`: `ToolCall::keep` and `ToolOutput::total_bytes`, so an executor keeps no more than the cut can use.
 - Deadlines. In `lablet-run`: a tool call's deadline is the time the run has left, a provider call's is the shorter of that and `run.provider_timeout`, `CallLimits::tool_timeout` is deleted, and `ToolExecutor` states that a call that timed out has stopped.
 - Labels and digests. In `lablet-model`: `RunLabels` in `RunSetup`, `RunContext` and `RunOutcome`, and the two digests in `RunContext`.
 
