@@ -43,7 +43,7 @@ fn summary() -> RunSummary {
         }),
         tools: vec![bash.clone()],
         completion: CompletionMode::Explicit,
-        max_turns: NonZeroU32::new(30).unwrap(),
+        max_turns: NonZeroU32::new(30),
         timeout_ms: 600_000,
         request: RequestParams {
             max_tokens: 4096,
@@ -150,6 +150,20 @@ fn a_run_summary_has_one_json_form() {
             },
         })
     );
+}
+
+/// `null` rather than a key left out, so every run's summary has the same
+/// keys.
+#[test]
+fn a_run_summary_without_a_turn_cap_writes_it_as_null() {
+    let uncapped = RunSummary {
+        max_turns: None,
+        ..summary()
+    };
+
+    let json = serde_json::to_value(uncapped).unwrap();
+    assert_eq!(json["max_turns"], Value::Null);
+    assert!(json.as_object().unwrap().contains_key("max_turns"));
 }
 
 #[test]

@@ -95,8 +95,8 @@ fn a_failure_that_came_without_an_error_says_what_failed() {
             "the response was cut short at the model's context window",
         ),
         (
-            StopReason::ToolErrorsExhausted,
-            "consecutive tool error results reached their cap",
+            StopReason::InvalidCallsExhausted,
+            "the turns in a row in which no call reached a tool reached their cap",
         ),
         (StopReason::RetriesExhausted, "a provider call failed"),
         (StopReason::ProviderError, "a provider call failed"),

@@ -48,7 +48,8 @@ events:
       - ref: lablet.run.completion_mode
         requirement_level: required
       - ref: lablet.run.max_turns
-        requirement_level: required
+        requirement_level:
+          conditionally_required: If `run.max_turns` is set.
       - ref: lablet.run.timeout_ms
         requirement_level: required
       - ref: lablet.tools.names

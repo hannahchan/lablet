@@ -4,17 +4,29 @@ use super::*;
 
 const TIMEOUT: Duration = Duration::from_secs(600);
 
-fn nz(count: u32) -> NonZeroU32 {
-    NonZeroU32::new(count).expect("the caps in these tests are all above zero")
+/// A cap of `count`, which is above zero in every test here: zero would be
+/// no cap.
+const fn cap(count: u32) -> Option<NonZeroU32> {
+    NonZeroU32::new(count)
 }
 
 /// Limits far from anything the progress below reaches.
 fn limits() -> StopPolicy {
     StopPolicy {
-        max_turns: nz(30),
+        max_turns: cap(30),
         timeout: TIMEOUT,
         max_total_tokens: None,
-        max_consecutive_tool_errors: nz(3),
+        max_consecutive_invalid_turns: cap(3),
+    }
+}
+
+/// No cap and no budget, so only the timeout is left to stop a run.
+fn uncapped() -> StopPolicy {
+    StopPolicy {
+        max_turns: None,
+        timeout: TIMEOUT,
+        max_total_tokens: None,
+        max_consecutive_invalid_turns: None,
     }
 }
 
@@ -39,7 +51,7 @@ fn mid_run() -> Progress {
         turns: 1,
         elapsed: Duration::from_secs(1),
         usage: tokens(100),
-        consecutive_tool_errors: 0,
+        consecutive_invalid_turns: 0,
     }
 }
 
@@ -58,10 +70,10 @@ const fn tokens(total: u64) -> Usage {
 /// Progress at which every limit and cap of `policy` is reached at once.
 fn everything_reached(policy: &StopPolicy) -> Progress {
     Progress {
-        turns: policy.max_turns.get(),
+        turns: policy.max_turns.unwrap().get(),
         elapsed: policy.timeout,
         usage: tokens(policy.max_total_tokens.unwrap()),
-        consecutive_tool_errors: policy.max_consecutive_tool_errors.get(),
+        consecutive_invalid_turns: policy.max_consecutive_invalid_turns.unwrap().get(),
     }
 }
 
@@ -87,7 +99,7 @@ fn a_fresh_run_makes_its_first_provider_call() {
 #[test]
 fn the_turn_cap_stops_the_run_after_the_tool_phase_of_the_capped_turn() {
     let policy = StopPolicy {
-        max_turns: nz(2),
+        max_turns: cap(2),
         ..limits()
     };
     let after = |turns| Progress { turns, ..mid_run() };
@@ -100,7 +112,7 @@ fn the_turn_cap_stops_the_run_after_the_tool_phase_of_the_capped_turn() {
 #[test]
 fn the_turn_cap_is_not_read_before_a_provider_call() {
     let policy = StopPolicy {
-        max_turns: nz(2),
+        max_turns: cap(2),
         ..limits()
     };
     let progress = Progress {
@@ -114,12 +126,26 @@ fn the_turn_cap_is_not_read_before_a_provider_call() {
 #[test]
 fn the_smallest_turn_cap_stops_the_run_after_one_turn() {
     let policy = StopPolicy {
-        max_turns: nz(1),
+        max_turns: cap(1),
         ..limits()
     };
 
     assert_eq!(policy.before_call(&Progress::default()), None);
     assert_eq!(policy.after_tools(&mid_run()), Some(StopReason::MaxTurns));
+}
+
+#[test]
+fn a_run_without_a_turn_cap_is_never_stopped_for_its_turns() {
+    let policy = StopPolicy {
+        max_turns: None,
+        ..limits()
+    };
+    let after = |turns| Progress { turns, ..mid_run() };
+
+    for turns in [1, 30, 41, u32::MAX] {
+        assert_eq!(policy.after_tools(&after(turns)), None, "{turns}");
+        assert_eq!(policy.before_call(&after(turns)), None, "{turns}");
+    }
 }
 
 // The timeout
@@ -250,53 +276,82 @@ fn a_run_without_a_token_budget_is_never_stopped_for_tokens() {
     assert_eq!(limits().after_tools(&progress), None);
 }
 
-// The consecutive tool-error cap
+// The cap on invalid turns in a row
+
+/// Progress after `consecutive_invalid_turns` invalid turns in a row.
+fn after_invalid(consecutive_invalid_turns: u32) -> Progress {
+    Progress {
+        consecutive_invalid_turns,
+        ..mid_run()
+    }
+}
 
 #[test]
-fn the_tool_error_cap_stops_the_run_on_the_error_that_reaches_it() {
-    let after = |consecutive_tool_errors| Progress {
-        consecutive_tool_errors,
-        ..mid_run()
-    };
-
-    assert_eq!(limits().max_consecutive_tool_errors, nz(3));
-    assert_eq!(limits().after_tools(&after(2)), None);
+fn the_invalid_turn_cap_stops_the_run_on_the_turn_that_reaches_it() {
+    assert_eq!(limits().max_consecutive_invalid_turns, cap(3));
+    assert_eq!(limits().after_tools(&after_invalid(2)), None);
     assert_eq!(
-        limits().after_tools(&after(3)),
-        Some(StopReason::ToolErrorsExhausted)
+        limits().after_tools(&after_invalid(3)),
+        Some(StopReason::InvalidCallsExhausted)
     );
     assert_eq!(
-        limits().after_tools(&after(4)),
-        Some(StopReason::ToolErrorsExhausted)
+        limits().after_tools(&after_invalid(4)),
+        Some(StopReason::InvalidCallsExhausted)
     );
 }
 
 #[test]
-fn the_tool_error_cap_is_not_read_before_a_provider_call() {
-    let progress = Progress {
-        consecutive_tool_errors: 3,
-        ..mid_run()
-    };
-
-    assert_eq!(limits().before_call(&progress), None);
+fn the_invalid_turn_cap_is_not_read_before_a_provider_call() {
+    assert_eq!(limits().before_call(&after_invalid(3)), None);
 }
 
 #[test]
-fn the_smallest_tool_error_cap_stops_the_run_on_the_first_error() {
+fn the_smallest_invalid_turn_cap_stops_the_run_on_the_first_invalid_turn() {
     let policy = StopPolicy {
-        max_consecutive_tool_errors: nz(1),
+        max_consecutive_invalid_turns: cap(1),
         ..limits()
     };
-    let after = |consecutive_tool_errors| Progress {
-        consecutive_tool_errors,
-        ..mid_run()
+
+    assert_eq!(policy.after_tools(&after_invalid(0)), None);
+    assert_eq!(
+        policy.after_tools(&after_invalid(1)),
+        Some(StopReason::InvalidCallsExhausted)
+    );
+}
+
+#[test]
+fn a_run_without_an_invalid_turn_cap_is_never_stopped_for_invalid_turns() {
+    let policy = StopPolicy {
+        max_consecutive_invalid_turns: None,
+        ..limits()
     };
 
-    assert_eq!(policy.after_tools(&after(0)), None);
-    assert_eq!(
-        policy.after_tools(&after(1)),
-        Some(StopReason::ToolErrorsExhausted)
-    );
+    for invalid in [1, 3, u32::MAX] {
+        assert_eq!(
+            policy.after_tools(&after_invalid(invalid)),
+            None,
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
+fn a_run_with_no_cap_and_no_budget_is_stopped_by_its_timeout_alone() {
+    let far = Progress {
+        turns: u32::MAX,
+        elapsed: TIMEOUT.checked_sub(Duration::from_nanos(1)).unwrap(),
+        usage: tokens(u64::MAX),
+        consecutive_invalid_turns: u32::MAX,
+    };
+    let timed_out = Progress {
+        elapsed: TIMEOUT,
+        ..far
+    };
+
+    for decide in [StopPolicy::before_call, StopPolicy::after_tools] {
+        assert_eq!(decide(&uncapped(), &far), None);
+        assert_eq!(decide(&uncapped(), &timed_out), Some(StopReason::Timeout));
+    }
 }
 
 // The response, in natural mode
@@ -429,10 +484,10 @@ fn a_response_is_judged_without_the_limits_so_one_that_finishes_completes_the_ru
     // `after_response` takes no progress: a policy whose every limit is
     // already reached still answers from the response alone.
     let policy = StopPolicy {
-        max_turns: nz(1),
+        max_turns: cap(1),
         timeout: Duration::ZERO,
         max_total_tokens: Some(0),
-        max_consecutive_tool_errors: nz(1),
+        max_consecutive_invalid_turns: cap(1),
     };
 
     assert_eq!(
@@ -463,19 +518,19 @@ fn before_a_provider_call_the_timeout_is_reported_ahead_of_the_token_budget() {
 }
 
 #[test]
-fn after_the_tool_phase_the_reasons_rank_tool_errors_then_turns_then_timeout_then_tokens() {
+fn after_the_tool_phase_the_reasons_rank_invalid_turns_then_turns_then_timeout_then_tokens() {
     let policy = StopPolicy {
         max_total_tokens: Some(1_000),
         ..limits()
     };
     let all = everything_reached(&policy);
-    let without_errors = Progress {
-        consecutive_tool_errors: 0,
+    let without_invalid_turns = Progress {
+        consecutive_invalid_turns: 0,
         ..all
     };
     let without_turns = Progress {
         turns: 1,
-        ..without_errors
+        ..without_invalid_turns
     };
     let without_timeout = Progress {
         elapsed: Duration::ZERO,
@@ -484,10 +539,10 @@ fn after_the_tool_phase_the_reasons_rank_tool_errors_then_turns_then_timeout_the
 
     assert_eq!(
         policy.after_tools(&all),
-        Some(StopReason::ToolErrorsExhausted)
+        Some(StopReason::InvalidCallsExhausted)
     );
     assert_eq!(
-        policy.after_tools(&without_errors),
+        policy.after_tools(&without_invalid_turns),
         Some(StopReason::MaxTurns)
     );
     assert_eq!(

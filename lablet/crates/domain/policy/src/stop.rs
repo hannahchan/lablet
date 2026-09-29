@@ -18,18 +18,24 @@ use lablet_model::{Calls, CompletionMode, FinishReason, Progress, StopReason};
 /// `provider_error` from a failed provider call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StopPolicy {
-    /// The number of turns after whose tool phase the run stops.
-    pub max_turns: NonZeroU32,
+    /// The number of turns after whose tool phase the run stops; `None` is no
+    /// cap, and the timeout and the token budget bound the run.
+    pub max_turns: Option<NonZeroU32>,
     /// The elapsed time at which the run stops. Zero stops it before the first
     /// provider call.
     pub timeout: Duration,
     /// The input plus output tokens, summed over every attempt of every
     /// provider call, a failed one's among them when the provider reported
-    /// them, at which the run stops; `None` is no budget. Context that's sent
-    /// again is counted again, as it's billed.
+    /// them, at which the run stops; `None` is no budget. It counts tokens,
+    /// not what they cost: a token read from the cache counts whole, and
+    /// context that's sent again is counted again.
     pub max_total_tokens: Option<u64>,
-    /// The run of consecutive tool error results at which the run stops.
-    pub max_consecutive_tool_errors: NonZeroU32,
+    /// The number of invalid turns in a row at which the run stops; `None` is
+    /// no cap. An invalid turn is one whose every call the model got wrong, so
+    /// none reached a tool. What a tool returned never counts: an error
+    /// result, a timeout, or an executor that failed is a call that reached
+    /// one.
+    pub max_consecutive_invalid_turns: Option<NonZeroU32>,
 }
 
 impl StopPolicy {
@@ -96,9 +102,9 @@ impl StopPolicy {
     }
 
     /// The reason to stop after the tool results of a turn are in, or `None`
-    /// to go on to the next turn: `tool_errors_exhausted`, then `max_turns`,
-    /// then `timeout`, then `max_total_tokens`. The tool-error cap leads
-    /// because it alone says the run was failing, not merely long.
+    /// to go on to the next turn: `invalid_calls_exhausted`, then `max_turns`,
+    /// then `timeout`, then `max_total_tokens`. The cap on invalid turns
+    /// leads because it alone says the run was failing, not merely long.
     #[must_use]
     pub fn after_tools(&self, progress: &Progress) -> Option<StopReason> {
         self.cap_reached(progress)
@@ -129,14 +135,22 @@ impl StopPolicy {
 
     /// The caps that only a finished tool phase can reach.
     fn cap_reached(&self, progress: &Progress) -> Option<StopReason> {
-        if progress.consecutive_tool_errors >= self.max_consecutive_tool_errors.get() {
-            Some(StopReason::ToolErrorsExhausted)
-        } else if progress.turns >= self.max_turns.get() {
+        if reached(
+            self.max_consecutive_invalid_turns,
+            progress.consecutive_invalid_turns,
+        ) {
+            Some(StopReason::InvalidCallsExhausted)
+        } else if reached(self.max_turns, progress.turns) {
             Some(StopReason::MaxTurns)
         } else {
             None
         }
     }
+}
+
+/// Whether `count` has reached `cap`, which no count does when there's none.
+fn reached(cap: Option<NonZeroU32>, count: u32) -> bool {
+    cap.is_some_and(|cap| count >= cap.get())
 }
 
 /// The stop reason a finish reason gives whatever the response called: one

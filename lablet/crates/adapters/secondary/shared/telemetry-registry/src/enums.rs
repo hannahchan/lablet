@@ -52,8 +52,8 @@ pub enum LabletRunStopReason {
     ContextExhausted,
     /// One provider call failed on every attempt `run.max_retries` allows.
     RetriesExhausted,
-    /// Consecutive tool error results reached `run.max_consecutive_tool_errors`.
-    ToolErrorsExhausted,
+    /// `run.max_consecutive_invalid_turns` turns in a row made no call that reached a tool.
+    InvalidCallsExhausted,
     /// The run was cancelled.
     Cancelled,
     /// The provider returned an error that isn't retryable.
@@ -75,7 +75,7 @@ impl LabletRunStopReason {
             Self::OutputTruncated => "output_truncated",
             Self::ContextExhausted => "context_exhausted",
             Self::RetriesExhausted => "retries_exhausted",
-            Self::ToolErrorsExhausted => "tool_errors_exhausted",
+            Self::InvalidCallsExhausted => "invalid_calls_exhausted",
             Self::Cancelled => "cancelled",
             Self::ProviderError => "provider_error",
             Self::Refused => "refused",

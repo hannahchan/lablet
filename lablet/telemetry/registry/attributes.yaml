@@ -130,9 +130,9 @@ attributes:
           value: retries_exhausted
           brief: One provider call failed on every attempt `run.max_retries` allows.
           stability: development
-        - id: tool_errors_exhausted
-          value: tool_errors_exhausted
-          brief: Consecutive tool error results reached `run.max_consecutive_tool_errors`.
+        - id: invalid_calls_exhausted
+          value: invalid_calls_exhausted
+          brief: "`run.max_consecutive_invalid_turns` turns in a row made no call that reached a tool."
           stability: development
         - id: cancelled
           value: cancelled

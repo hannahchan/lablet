@@ -178,6 +178,18 @@ impl ToolCallStatus {
         !matches!(self, Self::Unknown)
     }
 
+    /// Whether the call is one the model got wrong, so the loop answered it
+    /// and it reached no tool. A call that reached a tool isn't one whatever
+    /// the tool returned, and neither is a call the executor failed: those
+    /// say how the tools did, where this says the model can't call them.
+    #[must_use]
+    pub const fn is_invalid(&self) -> bool {
+        match self {
+            Self::Unknown | Self::MalformedInput => true,
+            Self::Ran { .. } => false,
+        }
+    }
+
     /// Whether the model is sent an error result. A name the run doesn't have
     /// is one, because the model is told so.
     #[must_use]

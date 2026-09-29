@@ -75,8 +75,8 @@ pub struct RunSummary {
     pub tools: Vec<ToolName>,
     /// How the run decided that the model had finished.
     pub completion: CompletionMode,
-    /// The cap on turns.
-    pub max_turns: NonZeroU32,
+    /// The cap on turns; `None` when the run had none.
+    pub max_turns: Option<NonZeroU32>,
     /// The run timeout, in whole milliseconds.
     pub timeout_ms: u64,
     /// The request parameters every provider call shared.

@@ -96,6 +96,24 @@ fn every_status_but_ok_is_an_error_result_for_the_model() {
 }
 
 #[test]
+fn a_call_is_invalid_when_no_tool_was_reached_and_never_when_one_was() {
+    assert!(ToolCallStatus::Unknown.is_invalid());
+    assert!(ToolCallStatus::MalformedInput.is_invalid());
+    for ended in [
+        ToolCallEnd::Ok,
+        ToolCallEnd::ToolError,
+        ToolCallEnd::Timeout,
+        ToolCallEnd::Failed,
+    ] {
+        assert!(!ran(ended).is_invalid(), "{ended}");
+        assert!(
+            !ToolCallStatus::ran(docs_server(), ended).is_invalid(),
+            "{ended} over MCP"
+        );
+    }
+}
+
+#[test]
 fn only_a_call_that_ran_has_a_source() {
     assert_eq!(ToolCallStatus::Unknown.source(), None);
     assert_eq!(

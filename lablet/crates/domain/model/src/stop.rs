@@ -54,8 +54,9 @@ pub enum StopReason {
     ContextExhausted,
     /// One provider call failed on every attempt the retry policy allows.
     RetriesExhausted,
-    /// Consecutive tool error results reached their cap.
-    ToolErrorsExhausted,
+    /// As many turns in a row as the cap allows made no call that reached a
+    /// tool: every call of each was one the model got wrong.
+    InvalidCallsExhausted,
     /// The run was cancelled.
     Cancelled,
     /// The provider returned an error that isn't retryable.
@@ -77,7 +78,7 @@ impl StopReason {
             Self::OutputTruncated => "output_truncated",
             Self::ContextExhausted => "context_exhausted",
             Self::RetriesExhausted => "retries_exhausted",
-            Self::ToolErrorsExhausted => "tool_errors_exhausted",
+            Self::InvalidCallsExhausted => "invalid_calls_exhausted",
             Self::Cancelled => "cancelled",
             Self::ProviderError => "provider_error",
             Self::Refused => "refused",
@@ -112,7 +113,7 @@ impl StopReason {
             | Self::Refused => StopClass::Stopped,
             Self::ContextExhausted
             | Self::RetriesExhausted
-            | Self::ToolErrorsExhausted
+            | Self::InvalidCallsExhausted
             | Self::ProviderError => StopClass::Failed,
         }
     }
@@ -121,7 +122,9 @@ impl StopReason {
     pub(crate) const fn failure_message(self) -> &'static str {
         match self {
             Self::ContextExhausted => "the response was cut short at the model's context window",
-            Self::ToolErrorsExhausted => "consecutive tool error results reached their cap",
+            Self::InvalidCallsExhausted => {
+                "the turns in a row in which no call reached a tool reached their cap"
+            }
             _ => "a provider call failed",
         }
     }

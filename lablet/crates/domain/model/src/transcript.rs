@@ -154,19 +154,6 @@ impl Transcript {
     pub(crate) fn push(&mut self, turn: Turn) {
         self.turns.push(turn);
     }
-
-    /// How many tool calls returned an error result since the last one that
-    /// didn't. A turn without tool calls leaves the count as it was.
-    pub(crate) fn consecutive_tool_errors(&self) -> u32 {
-        let errors = self
-            .turns
-            .iter()
-            .rev()
-            .flat_map(|turn| turn.tool_calls.iter().rev())
-            .take_while(|outcome| outcome.status.is_error())
-            .count();
-        u32::try_from(errors).unwrap_or(u32::MAX)
-    }
 }
 
 impl Turn {

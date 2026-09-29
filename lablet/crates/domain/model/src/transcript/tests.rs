@@ -412,37 +412,6 @@ fn usage_is_summed_over_every_turn() {
     );
 }
 
-#[test]
-fn consecutive_tool_errors_count_back_from_the_last_outcome_to_the_last_success() {
-    let mut transcript = transcript();
-    assert_eq!(transcript.consecutive_tool_errors(), 0);
-
-    let statuses = [
-        (ran(ToolCallEnd::Failed), ran(ToolCallEnd::Ok), 0),
-        (ran(ToolCallEnd::Ok), ran(ToolCallEnd::Timeout), 1),
-        (ToolCallStatus::Unknown, ran(ToolCallEnd::ToolError), 3),
-    ];
-    let mut input = prompt();
-    for (first, second, expected) in statuses {
-        turn(
-            &mut transcript,
-            std::mem::take(&mut input),
-            calls(&["call_a", "call_b"]),
-        );
-        answer(
-            &mut transcript,
-            vec![
-                outcome("call_a", first, "out"),
-                outcome("call_b", second, "out"),
-            ],
-        );
-        assert_eq!(transcript.consecutive_tool_errors(), expected);
-    }
-
-    turn(&mut transcript, Vec::new(), says("No tools."));
-    assert_eq!(transcript.consecutive_tool_errors(), 3);
-}
-
 /// A two-turn run with one tool call, as the document a grader reads.
 fn document() -> Value {
     json!({

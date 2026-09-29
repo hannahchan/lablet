@@ -145,6 +145,7 @@ pub struct FakeProvider {
     script: Mutex<VecDeque<Answer>>,
     clock: Arc<FakeClock>,
     calls: AtomicUsize,
+    sent: Mutex<Vec<serde_json::Value>>,
     ran_out: AtomicBool,
 }
 
@@ -157,6 +158,7 @@ impl FakeProvider {
             script: Mutex::new(script.into()),
             clock,
             calls: AtomicUsize::new(0),
+            sent: Mutex::new(Vec::new()),
             ran_out: AtomicBool::new(false),
         }
     }
@@ -170,6 +172,15 @@ impl FakeProvider {
     /// How many attempts the loop made.
     pub fn calls(&self) -> usize {
         self.calls.load(Ordering::Relaxed)
+    }
+
+    /// The messages each attempt was sent, in the model's serde form, so a
+    /// test can assert what the model was told rather than what was recorded.
+    pub fn sent(&self) -> Vec<serde_json::Value> {
+        self.sent
+            .lock()
+            .expect("the fake provider isn't poisoned")
+            .clone()
     }
 }
 
@@ -185,9 +196,13 @@ impl ModelProvider for FakeProvider {
 
     async fn complete(
         &self,
-        _request: ProviderRequest<'_>,
+        request: ProviderRequest<'_>,
     ) -> Result<ProviderResponse, ProviderError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
+        self.sent
+            .lock()
+            .expect("the fake provider isn't poisoned")
+            .push(serde_json::to_value(request.messages).expect("messages serialise"));
         let answer = self
             .script
             .lock()

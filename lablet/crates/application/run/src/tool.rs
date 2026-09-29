@@ -85,9 +85,9 @@ impl ToolError {
 
 /// Why an executor couldn't answer.
 ///
-/// Every kind becomes an error result for the model rather than ending the
-/// run: a tool that fails is something the model can work around, which is
-/// what the consecutive-error cap is for.
+/// Every kind becomes an error result for the model and none ends the run:
+/// a tool that fails is something the model can work around, and how it does
+/// is part of what a run measures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolErrorKind {
     /// No tool this executor serves has that name.

@@ -69,7 +69,7 @@ fn setup() -> RunSetup {
         }),
         tools: vec![name("bash"), name("read_file")],
         completion: CompletionMode::Explicit,
-        max_turns: nz(30),
+        max_turns: Some(nz(30)),
         timeout: Duration::from_secs(600),
         request: RequestParams {
             max_tokens: 4096,
@@ -205,7 +205,7 @@ fn a_run_that_did_nothing_has_a_summary_of_its_setup_and_zeros() {
     assert_eq!(summary.endpoint, setup().endpoint);
     assert_eq!(summary.tools, setup().tools);
     assert_eq!(summary.completion, CompletionMode::Explicit);
-    assert_eq!(summary.max_turns, nz(30));
+    assert_eq!(summary.max_turns, Some(nz(30)));
     assert_eq!(summary.timeout_ms, 600_000);
     assert_eq!(summary.request, setup().request);
     assert_eq!(summary.prompt_system_bytes, 14);
@@ -899,21 +899,115 @@ fn tool_calls_that_never_ran_are_in_no_total() {
 }
 
 #[test]
-fn consecutive_tool_errors_count_up_and_a_success_resets_them() {
-    let run = start();
-    let errors = |run: &Run| run.progress(ms(0)).consecutive_tool_errors;
+fn a_run_without_a_turn_cap_has_a_summary_that_holds_none() {
+    let run = Run::start(
+        RunSetup {
+            max_turns: None,
+            ..setup()
+        },
+        Prompts {
+            system: String::new(),
+            task: "Go.".to_owned(),
+        },
+    );
 
-    assert_eq!(errors(&run), 0);
+    assert_eq!(finish(run, StopReason::Completed).max_turns, None);
+}
+
+/// The invalid turns in a row that `run` ends with.
+fn invalid_turns(run: &Run) -> u32 {
+    run.progress(ms(0)).consecutive_invalid_turns
+}
+
+/// A turn whose one call is answered `status`.
+fn turn_answered(run: Run, status: ToolCallStatus) -> Run {
+    tool_turn(run, &["bash"], &[status])
+}
+
+#[test]
+fn invalid_turns_in_a_row_count_up_whichever_way_the_model_got_each_call_wrong() {
+    let run = start();
+    assert_eq!(invalid_turns(&run), 0);
+
+    let run = turn_answered(run, ToolCallStatus::Unknown);
+    assert_eq!(invalid_turns(&run), 1);
+    let run = turn_answered(run, ToolCallStatus::MalformedInput);
+    assert_eq!(invalid_turns(&run), 2);
     let run = tool_turn(
         run,
-        &["bash", "no_such_tool"],
-        &[ran(ToolCallEnd::Timeout), ToolCallStatus::Unknown],
+        &["no_such_tool", "bash"],
+        &[ToolCallStatus::Unknown, ToolCallStatus::MalformedInput],
     );
-    assert_eq!(errors(&run), 2);
-    let run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::Ok)]);
-    assert_eq!(errors(&run), 0);
-    let run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::Failed)]);
-    assert_eq!(errors(&run), 1);
+    assert_eq!(invalid_turns(&run), 3);
+}
+
+#[test]
+fn a_turn_counts_once_however_many_invalid_calls_it_made() {
+    let run = tool_turn(
+        start(),
+        &["no_such_tool", "nor_this", "bash"],
+        &[
+            ToolCallStatus::Unknown,
+            ToolCallStatus::Unknown,
+            ToolCallStatus::MalformedInput,
+        ],
+    );
+
+    assert_eq!(invalid_turns(&run), 1);
+}
+
+#[test]
+fn a_turn_in_which_a_call_reached_a_tool_ends_the_count_whatever_the_tool_returned() {
+    for ended in [
+        ToolCallEnd::Ok,
+        ToolCallEnd::ToolError,
+        ToolCallEnd::Timeout,
+        ToolCallEnd::Failed,
+    ] {
+        for reached in [ran(ended), ran_over_mcp(ended)] {
+            let run = turn_answered(start(), ToolCallStatus::Unknown);
+            let run = turn_answered(run, ToolCallStatus::MalformedInput);
+            assert_eq!(invalid_turns(&run), 2);
+
+            let run = turn_answered(run, reached.clone());
+            assert_eq!(invalid_turns(&run), 0, "{reached}");
+
+            let run = turn_answered(run, ToolCallStatus::Unknown);
+            assert_eq!(
+                invalid_turns(&run),
+                1,
+                "{reached}: the count starts again after the turn that ended it"
+            );
+        }
+    }
+}
+
+#[test]
+fn where_a_valid_call_sits_among_a_turn_s_calls_does_not_decide_the_count() {
+    let reached = ran(ToolCallEnd::ToolError);
+    let orders = [
+        [reached.clone(), ToolCallStatus::Unknown],
+        [ToolCallStatus::Unknown, reached],
+    ];
+    for statuses in orders {
+        let run = turn_answered(start(), ToolCallStatus::Unknown);
+        let run = tool_turn(run, &["bash", "bash"], &statuses);
+
+        assert_eq!(invalid_turns(&run), 0, "{statuses:?}");
+    }
+}
+
+#[test]
+fn turns_of_error_results_are_never_invalid_turns() {
+    let mut run = start();
+    for ended in [
+        ToolCallEnd::ToolError,
+        ToolCallEnd::Timeout,
+        ToolCallEnd::Failed,
+    ] {
+        run = turn_answered(run, ran(ended));
+        assert_eq!(invalid_turns(&run), 0, "{ended}");
+    }
 }
 
 #[test]
@@ -921,16 +1015,17 @@ fn progress_is_what_the_limits_are_held_against() {
     let run = start();
     assert_eq!(run.progress(ms(0)), Progress::default());
 
-    let mut run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::ToolError)]);
+    let run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::ToolError)]);
+    let mut run = tool_turn(run, &["no_such_tool"], &[ToolCallStatus::Unknown]);
     run.failed_attempt(ms(10), Some(billed(70, 5)));
 
     assert_eq!(
         run.progress(ms(830)),
         Progress {
-            turns: 1,
+            turns: 2,
             elapsed: ms(830),
-            usage: billed(170, 25),
-            consecutive_tool_errors: 1,
+            usage: billed(270, 45),
+            consecutive_invalid_turns: 1,
         }
     );
 }

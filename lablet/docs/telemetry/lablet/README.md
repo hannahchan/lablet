@@ -198,6 +198,7 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 | `completed` | The model finished, by a turn with no tool calls or by calling `task_complete`. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `context_exhausted` | The conversation outgrew the model's context. The provider rejected the request as too long, or cut the response short at the window. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `ended_without_completion` | In explicit mode, the model returned a turn with no tool calls and never called `task_complete`. | ![Development](https://img.shields.io/badge/-development-blue) |
+| `invalid_calls_exhausted` | `run.max_consecutive_invalid_turns` turns in a row made no call that reached a tool. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `max_total_tokens` | Input plus output tokens reached `run.max_total_tokens`. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `max_turns` | The run reached `run.max_turns`. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `output_truncated` | The last response hit the output token limit. Its tool calls, if any, weren't executed. | ![Development](https://img.shields.io/badge/-development-blue) |
@@ -205,7 +206,6 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 | `refused` | The model declined to answer, or a content filter withheld the response. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `retries_exhausted` | One provider call failed on every attempt `run.max_retries` allows. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `timeout` | The run reached `run.timeout`. | ![Development](https://img.shields.io/badge/-development-blue) |
-| `tool_errors_exhausted` | Consecutive tool error results reached `run.max_consecutive_tool_errors`. | ![Development](https://img.shields.io/badge/-development-blue) |
 
 ---
 

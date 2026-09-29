@@ -3,7 +3,7 @@
 //!
 //! The loop owns the clock and the run; this crate owns the decisions. Every
 //! comparison against a limit is "reached", never "exceeded": a run stops on
-//! the turn, the instant, the token, or the error that meets its limit.
+//! the turn, the instant, or the token that meets its limit.
 
 mod pricing;
 mod retry;

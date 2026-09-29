@@ -42,8 +42,8 @@ pub struct RunSetup {
     pub tools: Vec<ToolName>,
     /// How the run decides that the model has finished.
     pub completion: CompletionMode,
-    /// The cap on turns.
-    pub max_turns: NonZeroU32,
+    /// The cap on turns; `None` when the run has none.
+    pub max_turns: Option<NonZeroU32>,
     /// The run timeout.
     pub timeout: Duration,
     /// The request parameters every provider call shares.
@@ -110,8 +110,11 @@ pub struct Progress {
     /// Usage summed over every provider call attempt so far: every response,
     /// and every failed attempt that reported what it used.
     pub usage: Usage,
-    /// Tool error results since the last successful tool call.
-    pub consecutive_tool_errors: u32,
+    /// The turns in a row, counted back from the last, of which every call
+    /// was one the model got wrong ([`crate::ToolCallStatus::is_invalid`]). A
+    /// turn in which any call reached a tool ends the count, whatever the
+    /// tool returned.
+    pub consecutive_invalid_turns: u32,
 }
 
 /// One run, from its first provider call to the outcome it becomes, while it
@@ -232,8 +235,30 @@ impl Run {
             turns: self.turns(),
             elapsed,
             usage: self.spent(),
-            consecutive_tool_errors: self.transcript.consecutive_tool_errors(),
+            consecutive_invalid_turns: self.consecutive_invalid_turns(),
         }
+    }
+
+    /// The invalid turns the run ends with.
+    ///
+    /// Every turn of a run that waits for a response made at least one call
+    /// and has an outcome for each, because [`Pending::answer`] is the only
+    /// way a turn gets here. So each turn is read whole, once all its calls
+    /// have their outcomes: the order of a turn's calls never decides the
+    /// count, and one response adds one to it at most.
+    fn consecutive_invalid_turns(&self) -> u32 {
+        let invalid = self
+            .transcript
+            .turns()
+            .iter()
+            .rev()
+            .take_while(|turn| {
+                turn.tool_calls()
+                    .iter()
+                    .all(|outcome| outcome.status.is_invalid())
+            })
+            .count();
+        u32::try_from(invalid).unwrap_or(u32::MAX)
     }
 
     /// Usage summed over every turn so far, which is every provider call

@@ -164,10 +164,10 @@ impl Harness {
             cancel: Arc::new(FakeCancel::never()),
             filter: ToolFilter::default(),
             stop: StopPolicy {
-                max_turns: nz(10),
+                max_turns: None,
                 timeout: Duration::from_secs(600),
                 max_total_tokens: None,
-                max_consecutive_tool_errors: nz(3),
+                max_consecutive_invalid_turns: Some(nz(3)),
             },
             retry: retrying(settings()),
             pricing: None,
@@ -322,7 +322,7 @@ async fn the_turn_cap_stops_the_run_after_the_tool_phase_of_the_capped_turn() {
         Answer::now(says("Two.", &["bash"], FinishReason::ToolUse)),
         Answer::now(says("Three.", &["bash"], FinishReason::ToolUse)),
     ]);
-    harness.stop.max_turns = nz(2);
+    harness.stop.max_turns = Some(nz(2));
 
     let run = harness.run().await;
 
@@ -538,61 +538,72 @@ async fn a_backoff_that_would_reach_the_run_timeout_stops_the_run_instead_of_sle
     );
 }
 
-// E6 to E8: tool failures.
+// E7: what a tool returned never stops a run.
 
-#[tokio::test]
-async fn consecutive_tool_errors_stop_the_run_and_a_success_resets_the_count() {
-    let mut harness = Harness::new(vec![
-        Answer::now(says("One.", &["bash"], FinishReason::ToolUse)),
-        Answer::now(says("Two.", &["bash"], FinishReason::ToolUse)),
-        Answer::now(says("Three.", &["bash"], FinishReason::ToolUse)),
-        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
-    ]);
-    harness.stop.max_consecutive_tool_errors = nz(2);
-    harness.tools = vec![Arc::new(
-        FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")])
-            .answers("bash", Answers::ToolError("no".to_owned()))
-            .answers("bash", Answers::Text("yes".to_owned()))
-            .answers("bash", Answers::ToolError("no".to_owned())),
-    )];
+/// Makes the answer a fake tool is scripted with, afresh for each call,
+/// since an answer is handed over once.
+type Scripted = fn() -> Answers;
 
-    let run = harness.run().await;
-
-    assert_eq!(
-        run.stop_reason(),
-        StopReason::Completed,
-        "the success between them reset the count, so two errors never ran together"
+/// A run with a cap of three invalid turns, whose model calls `bash` five
+/// times and then ends, and whose `bash` answers `failure` every time.
+async fn calling_a_tool_that_always(failure: impl Fn() -> Answers) -> Run {
+    let mut script: Vec<Answer> = (0..5)
+        .map(|_| Answer::now(says("Again.", &["bash"], FinishReason::ToolUse)))
+        .collect();
+    script.push(Answer::now(says("Done.", &[], FinishReason::EndTurn)));
+    let mut harness = Harness::new(script);
+    harness.stop.max_consecutive_invalid_turns = Some(nz(3));
+    let tools = (0..5).fold(
+        FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")]),
+        |tools, _| tools.answers("bash", failure()),
     );
-    assert_eq!(run.finished.summary.tool_calls_errors, 2);
+    harness.tools = vec![Arc::new(tools)];
+    harness.run().await
 }
 
 #[tokio::test]
-async fn the_tool_error_cap_stops_the_run_on_the_error_that_reaches_it() {
-    let mut harness = Harness::new(vec![
-        Answer::now(says("One.", &["bash"], FinishReason::ToolUse)),
-        Answer::now(says("Two.", &["bash"], FinishReason::ToolUse)),
-        Answer::now(says("Three.", &["bash"], FinishReason::ToolUse)),
-    ]);
-    harness.stop.max_consecutive_tool_errors = nz(2);
-    harness.tools = vec![Arc::new(
-        FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")])
-            .answers("bash", Answers::ToolError("no".to_owned()))
-            .answers("bash", Answers::ToolError("no".to_owned())),
-    )];
+async fn a_tool_that_always_fails_never_stops_a_run_however_it_fails() {
+    let failures: [(Scripted, ToolCallEnd); 3] = [
+        (
+            || Answers::ToolError("1 failed".to_owned()),
+            ToolCallEnd::ToolError,
+        ),
+        (
+            || Answers::Fails(crate::ToolErrorKind::Timeout, "took too long".to_owned()),
+            ToolCallEnd::Timeout,
+        ),
+        (
+            || {
+                Answers::Fails(
+                    crate::ToolErrorKind::Failed,
+                    "the server is gone".to_owned(),
+                )
+            },
+            ToolCallEnd::Failed,
+        ),
+    ];
+    for (failure, ended) in failures {
+        let run = calling_a_tool_that_always(failure).await;
 
-    let run = harness.run().await;
-
-    assert_eq!(run.stop_reason(), StopReason::ToolErrorsExhausted);
-    assert_eq!(run.turns(), 2);
-    assert_eq!(
-        run.error(),
-        Some("consecutive tool error results reached their cap")
-    );
-    assert_eq!(
-        run.provider.calls(),
-        2,
-        "the error results that reached the cap are never sent back to the model"
-    );
+        assert_eq!(run.stop_reason(), StopReason::Completed, "{ended}");
+        assert_eq!(run.error(), None, "{ended}");
+        assert_eq!(run.turns(), 6, "{ended}");
+        assert_eq!(run.provider.calls(), 6, "{ended}");
+        assert_eq!(run.finished.summary.tool_calls_errors, 5, "{ended}");
+        let statuses: Vec<&ToolCallStatus> = run
+            .finished
+            .transcript
+            .turns()
+            .iter()
+            .flat_map(lablet_model::Turn::tool_calls)
+            .map(|outcome| &outcome.status)
+            .collect();
+        assert_eq!(
+            statuses,
+            [&ToolCallStatus::ran(ToolSource::Builtin, ended); 5],
+            "every call reached the tool, so no turn was an invalid one"
+        );
+    }
 }
 
 #[tokio::test]
@@ -991,7 +1002,7 @@ async fn an_unpriced_run_reports_neither_a_cost_nor_rates() {
 #[tokio::test]
 async fn the_summary_reports_the_limits_the_run_actually_enforced() {
     let mut harness = Harness::new(vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))]);
-    harness.stop.max_turns = nz(7);
+    harness.stop.max_turns = Some(nz(7));
     harness.stop.timeout = ms(1_234);
     harness.provider = Arc::new(
         FakeProvider::new(
@@ -1010,7 +1021,7 @@ async fn the_summary_reports_the_limits_the_run_actually_enforced() {
 
     let run = harness.run().await;
 
-    assert_eq!(run.finished.summary.max_turns, nz(7));
+    assert_eq!(run.finished.summary.max_turns, Some(nz(7)));
     assert_eq!(run.finished.summary.timeout_ms, 1_234);
     assert_eq!(
         run.finished.summary.endpoint,
@@ -1472,22 +1483,285 @@ async fn a_malformed_response_is_tried_again() {
     assert_eq!(run.finished.summary.provider_retries, 1);
 }
 
-// E8: an unknown name is an error result, and errors are errors whatever
-// made them.
+// E8: a name the run doesn't offer is an error result, and a turn that made
+// no other call is an invalid turn.
 
 #[tokio::test]
-async fn calls_to_a_name_the_run_does_not_offer_count_toward_the_tool_error_cap() {
+async fn the_model_is_sent_an_error_result_for_a_name_the_run_does_not_offer() {
+    let run = Harness::new(vec![
+        Answer::now(says("One.", &["invented"], FinishReason::ToolUse)),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ])
+    .run()
+    .await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    let sent = run.provider.sent();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(
+        sent[1].as_array().and_then(|messages| messages.last()),
+        Some(&serde_json::json!({
+            "user": {
+                "tool_results": [{
+                    "call_id": "call_0",
+                    "content": [{ "text": "no tool named invented is offered by this run" }],
+                    "is_error": true,
+                }],
+                "input": [],
+            },
+        })),
+        "the second call's last message is the result of the first turn's call"
+    );
+}
+
+#[tokio::test]
+async fn a_turn_whose_only_call_names_no_tool_is_an_invalid_turn() {
     let mut harness = Harness::new(vec![
         Answer::now(says("One.", &["invented"], FinishReason::ToolUse)),
-        Answer::now(says("Two.", &["invented"], FinishReason::ToolUse)),
         Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
     ]);
-    harness.stop.max_consecutive_tool_errors = nz(2);
+    harness.stop.max_consecutive_invalid_turns = Some(nz(1));
 
     let run = harness.run().await;
 
-    assert_eq!(run.stop_reason(), StopReason::ToolErrorsExhausted);
-    assert_eq!(run.finished.summary.tool_calls_unknown, 2);
+    assert_eq!(run.stop_reason(), StopReason::InvalidCallsExhausted);
+    assert_eq!(run.turns(), 1);
+    assert_eq!(run.provider.calls(), 1);
+    assert_eq!(run.finished.summary.tool_calls_unknown, 1);
+}
+
+#[tokio::test]
+async fn a_turn_that_names_no_tool_and_also_reaches_one_is_not_an_invalid_turn() {
+    let mut harness = Harness::new(vec![
+        Answer::now(says("One.", &["invented", "bash"], FinishReason::ToolUse)),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.stop.max_consecutive_invalid_turns = Some(nz(1));
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(run.turns(), 2);
+    assert_eq!(run.finished.summary.tool_calls_unknown, 1);
+}
+
+// E12: the cap on invalid turns in a row.
+
+const INVALID_TURNS_REACHED_THEIR_CAP: &str =
+    "the turns in a row in which no call reached a tool reached their cap";
+
+/// A response whose calls are `calls`, the n-th under the id `call_n`: a
+/// name and the arguments the model wrote for it, parsed or not.
+fn calling(calls: &[(&str, ToolInput)]) -> ProviderResponse {
+    let content = calls
+        .iter()
+        .enumerate()
+        .map(|(n, (tool, input))| {
+            ContentBlock::ToolUse(ToolUse {
+                id: ToolCallId::new(format!("call_{n}")).expect("a valid call id"),
+                name: name(tool),
+                input: input.clone(),
+            })
+        })
+        .collect();
+    ProviderResponse::new(content, tokens(100, 20), FinishReason::ToolUse, None, None)
+        .expect("a test's response has distinct call ids")
+}
+
+fn parsed() -> ToolInput {
+    ToolInput::Json(serde_json::json!({}))
+}
+
+fn unparsed() -> ToolInput {
+    ToolInput::Unparsed("{\"cmd\": ".to_owned())
+}
+
+/// Three turns in a row that reach no tool, each its own way: a name no
+/// tool has, arguments that don't parse, and two unknown names at once. The
+/// second turn also makes `beside`, when there is one.
+fn three_invalid_turns(beside: Option<(&str, ToolInput)>) -> Vec<Answer> {
+    let mut second = vec![("bash", unparsed())];
+    second.extend(beside);
+    vec![
+        Answer::now(calling(&[("invented", parsed())])),
+        Answer::now(calling(&second)),
+        Answer::now(calling(&[
+            ("invented", parsed()),
+            ("also_invented", parsed()),
+        ])),
+    ]
+}
+
+/// The status of every call of every turn, turn by turn.
+fn statuses(run: &Run) -> Vec<Vec<&str>> {
+    run.finished
+        .transcript
+        .turns()
+        .iter()
+        .map(|turn| {
+            turn.tool_calls()
+                .iter()
+                .map(|outcome| outcome.status.as_str())
+                .collect()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn the_third_invalid_turn_in_a_row_stops_the_run_and_no_provider_call_follows() {
+    let mut script = three_invalid_turns(None);
+    script.push(Answer::now(says(
+        "Never reached.",
+        &[],
+        FinishReason::EndTurn,
+    )));
+    let mut harness = Harness::new(script);
+    harness.stop.max_consecutive_invalid_turns = Some(nz(3));
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::InvalidCallsExhausted);
+    assert_eq!(run.error(), Some(INVALID_TURNS_REACHED_THEIR_CAP));
+    assert_eq!(run.turns(), 3);
+    assert_eq!(
+        run.provider.calls(),
+        3,
+        "the results of the third turn are never sent"
+    );
+    assert_eq!(
+        statuses(&run),
+        [
+            vec!["unknown"],
+            vec!["malformed_input"],
+            vec!["unknown", "unknown"]
+        ],
+        "every call was answered, the third turn's among them"
+    );
+    assert_eq!(run.observer.names().last(), Some(&"RunFinished"));
+}
+
+#[tokio::test]
+async fn a_turn_in_which_a_call_reached_a_tool_ends_the_count_whatever_the_tool_returned() {
+    let returns: [(Scripted, &str); 4] = [
+        (|| Answers::Text("ok".to_owned()), "ok"),
+        (|| Answers::ToolError("1 failed".to_owned()), "tool_error"),
+        (
+            || Answers::Fails(crate::ToolErrorKind::Timeout, "took too long".to_owned()),
+            "timeout",
+        ),
+        (
+            || {
+                Answers::Fails(
+                    crate::ToolErrorKind::Failed,
+                    "the server is gone".to_owned(),
+                )
+            },
+            "failed",
+        ),
+    ];
+    for (returned, reached) in returns {
+        let mut script = three_invalid_turns(Some(("read_file", parsed())));
+        script.push(Answer::now(calling(&[("invented", parsed())])));
+        script.push(Answer::now(says("Done.", &[], FinishReason::EndTurn)));
+        let mut harness = Harness::new(script);
+        harness.stop.max_consecutive_invalid_turns = Some(nz(3));
+        harness.tools = vec![Arc::new(
+            FakeTools::new(
+                Arc::clone(&harness.clock),
+                vec![spec("bash"), spec("read_file")],
+            )
+            .answers("read_file", returned()),
+        )];
+
+        let run = harness.run().await;
+
+        assert_eq!(
+            run.stop_reason(),
+            StopReason::Completed,
+            "{reached}: the two invalid turns after it are a count of two, not of three"
+        );
+        assert_eq!(run.turns(), 5, "{reached}");
+        assert_eq!(
+            statuses(&run),
+            [
+                vec!["unknown"],
+                vec!["malformed_input", reached],
+                vec!["unknown", "unknown"],
+                vec!["unknown"],
+                vec![],
+            ],
+            "{reached}: every call was answered, and the last turn made none"
+        );
+    }
+}
+
+#[tokio::test]
+async fn one_response_that_makes_three_invalid_calls_is_one_invalid_turn() {
+    let mut harness = Harness::new(vec![
+        Answer::now(calling(&[
+            ("invented", parsed()),
+            ("bash", unparsed()),
+            ("also_invented", parsed()),
+        ])),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.stop.max_consecutive_invalid_turns = Some(nz(3));
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(run.turns(), 2);
+    assert_eq!(
+        statuses(&run)[0],
+        ["unknown", "malformed_input", "unknown"],
+        "the model is told of all three before anything is counted against it"
+    );
+}
+
+#[tokio::test]
+async fn without_a_cap_on_invalid_turns_every_such_run_goes_on() {
+    let beside = [None, Some(("read_file", parsed()))];
+    for beside in beside {
+        let mut script = three_invalid_turns(beside);
+        script.extend((0..3).map(|_| Answer::now(calling(&[("invented", parsed())]))));
+        script.push(Answer::now(says("Done.", &[], FinishReason::EndTurn)));
+        let mut harness = Harness::new(script);
+        harness.stop.max_consecutive_invalid_turns = None;
+
+        let run = harness.run().await;
+
+        assert_eq!(run.stop_reason(), StopReason::Completed);
+        assert_eq!(run.turns(), 7);
+        assert_eq!(run.error(), None);
+    }
+}
+
+// L14: a run without a turn cap.
+
+#[tokio::test]
+async fn a_run_without_a_turn_cap_goes_on_until_the_model_ends_it() {
+    let mut script: Vec<Answer> = (0..40)
+        .map(|_| Answer::now(says("Again.", &["bash"], FinishReason::ToolUse)))
+        .collect();
+    script.push(Answer::now(says("Done.", &[], FinishReason::EndTurn)));
+    let mut harness = Harness::new(script);
+    harness.stop.max_turns = None;
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(run.turns(), 41);
+    assert_eq!(run.provider.calls(), 41);
+    assert_eq!(run.finished.summary.outcome.tool_calls, 40);
+    assert_eq!(run.finished.summary.max_turns, None);
+    let events = run.observer.events();
+    let Some(EventKind::RunFinished { summary, .. }) = events.last().map(|e| &e.kind) else {
+        panic!("the run's last event is RunFinished");
+    };
+    assert_eq!(
+        summary.max_turns, None,
+        "what an observer is handed holds no cap either"
+    );
 }
 
 // T10: the exact bytes the model is sent.

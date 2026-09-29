@@ -235,7 +235,6 @@ pub const EVENT_LABLET_RUN_REQUIRED: &[&str] = &[
     attribute::LABLET_RESULT_TEXT_BYTES,
     attribute::LABLET_RUN_COMPLETION_MODE,
     attribute::LABLET_RUN_DURATION_MS,
-    attribute::LABLET_RUN_MAX_TURNS,
     attribute::LABLET_RUN_STOP_REASON,
     attribute::LABLET_RUN_TIMEOUT_MS,
     attribute::LABLET_RUN_TURNS,
