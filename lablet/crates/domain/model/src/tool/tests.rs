@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use super::*;
-use crate::ToolResultContent;
+use crate::{OutputCut, ToolResultContent};
 
 fn docs_server() -> ToolSource {
     ToolSource::Mcp {
@@ -184,18 +184,6 @@ fn call_1() -> ToolCallId {
     ToolCallId::new("call_1").unwrap()
 }
 
-/// One content block, for the cap tests below.
-fn block(text: &str) -> ToolResultContent {
-    ToolResultContent::Text(text.to_owned())
-}
-
-fn block_texts(content: &[ToolResultContent]) -> Vec<&str> {
-    content
-        .iter()
-        .map(|ToolResultContent::Text(text)| text.as_str())
-        .collect()
-}
-
 #[test]
 fn a_tool_nobody_classified_runs_its_calls_alone() {
     assert_eq!(ToolConcurrency::default(), ToolConcurrency::Exclusive);
@@ -210,12 +198,17 @@ fn a_tool_nobody_classified_runs_its_calls_alone() {
 fn measured(
     call_id: ToolCallId,
     status: ToolCallStatus,
-    content: Vec<ToolResultContent>,
-    max_output_bytes: Option<u64>,
+    output: &str,
+    cap: Option<OutputCap>,
     started: Duration,
     latency: Duration,
 ) -> ToolCallOutcome {
-    Answer::measured(status, content, max_output_bytes, started, latency).answering(call_id)
+    Answer::measured(status, KeptOutput::whole(output), cap, started, latency).answering(call_id)
+}
+
+/// A cap that keeps the start.
+fn head(max_bytes: u64) -> OutputCap {
+    OutputCap::new(max_bytes, OutputCut::Head).unwrap()
 }
 
 fn text(text: &str) -> Vec<ToolResultContent> {
@@ -227,8 +220,8 @@ fn an_outcome_holds_what_it_was_given_with_its_times_in_whole_milliseconds() {
     let outcome = measured(
         call_1(),
         ran(ToolCallEnd::Ok),
-        text("hello"),
-        Some(100),
+        "hello",
+        Some(head(100)),
         Duration::from_micros(1_500_999),
         Duration::from_micros(42_999),
     );
@@ -250,14 +243,7 @@ fn an_outcome_holds_what_it_was_given_with_its_times_in_whole_milliseconds() {
 #[test]
 fn the_result_the_model_is_sent_is_an_error_exactly_when_the_status_is_not_ok() {
     for (status, spelling) in STATUSES {
-        let outcome = measured(
-            call_1(),
-            status,
-            text("no"),
-            None,
-            Duration::ZERO,
-            Duration::ZERO,
-        );
+        let outcome = measured(call_1(), status, "no", None, Duration::ZERO, Duration::ZERO);
 
         assert_eq!(
             outcome.result(),
@@ -276,8 +262,8 @@ fn output_over_the_cap_is_cut_and_the_outcome_holds_the_size_sent_and_the_size_b
     let outcome = measured(
         call_1(),
         ran(ToolCallEnd::Ok),
-        text("0123456789"),
-        Some(4),
+        "0123456789",
+        Some(head(4)),
         Duration::ZERO,
         Duration::ZERO,
     );
@@ -293,13 +279,46 @@ fn output_over_the_cap_is_cut_and_the_outcome_holds_the_size_sent_and_the_size_b
     assert_eq!(outcome.output_bytes(), 4 + 36);
 }
 
+/// The size the model was sent counts the line and both ends, so it can
+/// exceed the cap, which bounds the tool's own text.
+#[test]
+fn an_answer_holds_what_the_cap_s_cut_sends_of_what_an_executor_kept() {
+    let cap = OutputCap::new(10, OutputCut::HeadTail).unwrap();
+    let mut output = KeptOutput::new(Some(cap.keeps()));
+    output.push("0123456789abcdef");
+
+    let answer = Answer::measured(
+        ran(ToolCallEnd::ToolError),
+        output,
+        Some(cap),
+        Duration::ZERO,
+        Duration::ZERO,
+    );
+
+    assert_eq!(
+        answer.content(),
+        [
+            ToolResultContent::Text("01234".to_owned()),
+            ToolResultContent::Text("[truncated: 6 of 16 bytes left out]".to_owned()),
+            ToolResultContent::Text("bcdef".to_owned()),
+        ]
+    );
+    assert_eq!(answer.truncated_from_bytes(), Some(16));
+    assert_eq!(answer.output_bytes(), 5 + 35 + 5);
+    assert_eq!(
+        answer.status(),
+        &ran(ToolCallEnd::ToolError),
+        "a cut changes nothing else about the answer"
+    );
+}
+
 #[test]
 fn output_that_just_fits_the_cap_is_not_cut() {
     let outcome = measured(
         call_1(),
         ran(ToolCallEnd::Ok),
-        text("0123456789"),
-        Some(10),
+        "0123456789",
+        Some(head(10)),
         Duration::ZERO,
         Duration::ZERO,
     );
@@ -313,7 +332,7 @@ fn without_a_cap_no_output_is_cut() {
     let outcome = measured(
         call_1(),
         ran(ToolCallEnd::Ok),
-        text("0123456789"),
+        "0123456789",
         None,
         Duration::ZERO,
         Duration::ZERO,
@@ -329,8 +348,8 @@ fn a_tool_call_outcome_has_one_json_form_without_a_name_an_input_or_an_error_fla
     let outcome = measured(
         call_1(),
         ToolCallStatus::ran(docs_server(), ToolCallEnd::Timeout),
-        text("timed out after 60s"),
-        Some(8),
+        "timed out after 60s",
+        Some(head(8)),
         Duration::from_millis(2_000),
         Duration::from_millis(60_000),
     );
@@ -352,72 +371,5 @@ fn a_tool_call_outcome_has_one_json_form_without_a_name_an_input_or_an_error_fla
     assert_eq!(
         serde_json::from_value::<ToolCallOutcome>(expected).unwrap(),
         outcome
-    );
-}
-
-#[test]
-fn the_truncation_line_is_worded_one_way() {
-    assert_eq!(
-        ToolResultContent::truncated(100_000, 5_242_880),
-        block("[truncated: the first 100000 of 5242880 bytes]")
-    );
-}
-
-#[test]
-fn content_within_the_cap_is_returned_unchanged() {
-    let content = vec![block("0123456789")];
-
-    for cap in [10, 11, u64::MAX] {
-        assert_eq!(
-            ToolResultContent::capped(content.clone(), cap),
-            (content.clone(), None)
-        );
-    }
-}
-
-#[test]
-fn content_one_byte_over_the_cap_is_cut_and_says_so_in_one_last_line() {
-    let (capped, original) = ToolResultContent::capped(vec![block("0123456789")], 9);
-
-    assert_eq!(original, Some(10));
-    assert_eq!(
-        block_texts(&capped),
-        ["012345678", "[truncated: the first 9 of 10 bytes]"]
-    );
-}
-
-#[test]
-fn the_cut_falls_on_a_character_boundary_and_the_line_counts_what_was_kept() {
-    // Each of these characters is two bytes, so a cap of 5 lands inside the third.
-    let (capped, original) = ToolResultContent::capped(vec![block("\u{e9}\u{e9}\u{e9}\u{e9}")], 5);
-
-    assert_eq!(original, Some(8));
-    assert_eq!(
-        block_texts(&capped),
-        ["\u{e9}\u{e9}", "[truncated: the first 4 of 8 bytes]"]
-    );
-}
-
-#[test]
-fn the_cap_is_spent_across_the_pieces_in_order_and_what_is_left_over_is_dropped() {
-    let content = vec![block("aaaa"), block("bbbbbbbb"), block("cccc")];
-
-    let (capped, original) = ToolResultContent::capped(content, 10);
-
-    assert_eq!(original, Some(16));
-    assert_eq!(
-        block_texts(&capped),
-        ["aaaa", "bbbbbb", "[truncated: the first 10 of 16 bytes]"]
-    );
-}
-
-#[test]
-fn a_cap_of_zero_leaves_only_the_line_that_says_what_was_cut() {
-    let (capped, original) = ToolResultContent::capped(vec![block("0123456789")], 0);
-
-    assert_eq!(original, Some(10));
-    assert_eq!(
-        block_texts(&capped),
-        ["[truncated: the first 0 of 10 bytes]"]
     );
 }

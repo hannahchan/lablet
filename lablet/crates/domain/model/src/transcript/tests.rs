@@ -3,8 +3,8 @@ use serde_json::{Value, json};
 use super::document::{TRANSCRIPT_SCHEMA_VERSION, TranscriptDocument};
 use super::*;
 use crate::{
-    Answer, ProviderKind, TokenCounts, ToolCallEnd, ToolCallId, ToolCallStatus, ToolInput,
-    ToolName, ToolResultContent, ToolSource,
+    Answer, KeptOutput, ProviderKind, TokenCounts, ToolCallEnd, ToolCallId, ToolCallStatus,
+    ToolInput, ToolName, ToolResultContent, ToolSource,
 };
 
 /// A call to a tool the run offered, which ended `ended`.
@@ -64,14 +64,8 @@ fn calls(ids: &[&str]) -> ProviderResponse {
 }
 
 fn outcome(call_id: &str, status: ToolCallStatus, output: &str) -> ToolCallOutcome {
-    Answer::measured(
-        status,
-        vec![ToolResultContent::Text(output.to_owned())],
-        None,
-        ms(900),
-        ms(30),
-    )
-    .answering(id(call_id))
+    Answer::measured(status, KeptOutput::whole(output), None, ms(900), ms(30))
+        .answering(id(call_id))
 }
 
 fn ok(call_id: &str, output: &str) -> ToolCallOutcome {

@@ -4,10 +4,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lablet_model::{
-    CompletionMode, ContentBlock, Endpoint, FinishReason, ModelRef, Prompts, ProviderErrorKind,
-    ProviderKind, ProviderResponse, Rates, RequestParams, RunContext, RunId, StopReason, Thinking,
-    TokenCounts, ToolCallEnd, ToolCallId, ToolCallStatus, ToolConcurrency, ToolInput, ToolName,
-    ToolSource, ToolSpec, ToolUse, Usage,
+    CompletionMode, ContentBlock, Endpoint, FinishReason, ModelRef, OutputCap, OutputCut,
+    OutputKeep, Prompts, ProviderErrorKind, ProviderKind, ProviderResponse, Rates, RequestParams,
+    RunContext, RunId, StopReason, Thinking, TokenCounts, ToolCallEnd, ToolCallId, ToolCallStatus,
+    ToolConcurrency, ToolInput, ToolName, ToolSource, ToolSpec, ToolUse, Usage,
 };
 use lablet_policy::{Pricing, RetryPolicy, RetrySettings, StopPolicy};
 
@@ -126,6 +126,10 @@ fn tokens(input: u64, output: u64) -> Usage {
     })
 }
 
+fn output_cap(max_bytes: u64, cut: OutputCut) -> OutputCap {
+    OutputCap::new(max_bytes, cut).expect("a preview in these tests is within its cap")
+}
+
 /// Everything a run is built from, so a scenario states only what it varies.
 struct Harness {
     clock: Arc<FakeClock>,
@@ -174,7 +178,7 @@ impl Harness {
             calls: CallLimits {
                 provider_timeout: Duration::from_secs(60),
                 tool_timeout: Duration::from_secs(30),
-                max_tool_output_bytes: Some(100_000),
+                output_cap: Some(output_cap(50_000, OutputCut::Preview { bytes: 2_000 })),
                 max_concurrent_tool_calls: nz(10),
             },
             context: context(),
@@ -698,34 +702,282 @@ async fn a_cancelled_run_stops_at_the_next_point_it_is_polled() {
     );
 }
 
-// T10: the output cap.
+// T10: the output cap, cutting to the start.
 
-#[tokio::test]
-async fn a_tool_s_output_is_cut_by_the_loop_and_the_outcome_holds_both_sizes() {
+const SIXTEEN_BYTES: &str = "0123456789abcdef";
+const TEN_BYTES: &str = "0123456789";
+
+/// A run under `cap` whose first response calls `bash`, which writes 16
+/// bytes, and then `read_file`, which writes 10. The executor keeps of each
+/// what its call says to, or all of it when it's `hoarding`.
+async fn writing(cap: Option<OutputCap>, hoarding: bool) -> (Run, Arc<FakeTools>) {
     let mut harness = Harness::new(vec![
-        Answer::now(says("One.", &["bash"], FinishReason::ToolUse)),
+        Answer::now(says("One.", &["bash", "read_file"], FinishReason::ToolUse)),
         Answer::now(says("Done.", &[], FinishReason::EndTurn)),
     ]);
-    harness.calls.max_tool_output_bytes = Some(4);
+    harness.calls.output_cap = cap;
+    let tools = FakeTools::new(
+        Arc::clone(&harness.clock),
+        vec![spec("bash"), spec("read_file")],
+    )
+    .answers("bash", Answers::Text(SIXTEEN_BYTES.to_owned()))
+    .answers("read_file", Answers::Text(TEN_BYTES.to_owned()));
+    let tools = Arc::new(if hoarding { tools.hoarding() } else { tools });
+    harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
+    (harness.run().await, tools)
+}
+
+/// The tool results the model was sent with its second call, which are the
+/// first turn's.
+fn results_sent(run: &Run) -> serde_json::Value {
+    let sent = run.provider.sent();
+    assert_eq!(sent.len(), 2, "the run made two provider calls");
+    let last = sent[1]
+        .as_array()
+        .and_then(|messages| messages.last())
+        .expect("the second call sent messages");
+    last["user"]["tool_results"].clone()
+}
+
+/// A result that isn't an error, as the model is sent it.
+fn result_of(call_id: &str, texts: &[&str]) -> serde_json::Value {
+    let content: Vec<_> = texts
+        .iter()
+        .map(|text| serde_json::json!({ "text": text }))
+        .collect();
+    serde_json::json!({ "call_id": call_id, "content": content, "is_error": false })
+}
+
+#[tokio::test]
+async fn an_output_over_the_cap_is_cut_to_its_start_and_one_that_fits_is_sent_whole() {
+    let (run, _) = writing(Some(output_cap(10, OutputCut::Head)), false).await;
+
+    assert_eq!(
+        results_sent(&run),
+        serde_json::json!([
+            result_of(
+                "call_0",
+                &["0123456789", "[truncated: the first 10 of 16 bytes]"]
+            ),
+            result_of("call_1", &[TEN_BYTES]),
+        ])
+    );
+    let outcomes = run.finished.transcript.turns()[0].tool_calls();
+    assert_eq!(outcomes[0].truncated_from_bytes, Some(16));
+    assert_eq!(outcomes[1].truncated_from_bytes, None);
+    assert_eq!(run.finished.summary.tool_calls_truncated, 1);
+    for outcome in outcomes {
+        assert_eq!(
+            outcome.status,
+            ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok),
+            "the loop cut the output; the tool itself succeeded"
+        );
+    }
+    assert_eq!(run.finished.summary.tool_calls_errors, 0);
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+}
+
+/// The line is added on top of the cap, so the size that was sent is more
+/// than the cap allows of the tool's own text.
+#[tokio::test]
+async fn an_observer_is_told_what_was_sent_of_each_output_and_how_large_a_cut_one_was() {
+    let mut harness = Harness::new(vec![
+        Answer::now(says("One.", &["bash", "read_file"], FinishReason::ToolUse)),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.calls.output_cap = Some(output_cap(10, OutputCut::Head));
+    harness.calls.max_concurrent_tool_calls = nz(1);
+    harness.context.capture_content = true;
     harness.tools = vec![Arc::new(
-        FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")])
-            .answers("bash", Answers::Text("0123456789".to_owned())),
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![spec("bash"), spec("read_file")],
+        )
+        .answers("bash", Answers::Text(SIXTEEN_BYTES.to_owned()))
+        .answers("read_file", Answers::Text(TEN_BYTES.to_owned())),
     )];
 
     let run = harness.run().await;
 
-    let outcome = &run.finished.transcript.turns()[0].tool_calls()[0];
-    assert_eq!(outcome.truncated_from_bytes, Some(10));
-    assert_eq!(run.finished.summary.tool_calls_truncated, 1);
-    assert!(
-        outcome.output_bytes() > 4,
-        "the marker naming what was cut is added on top of the cap"
+    let line = "[truncated: the first 10 of 16 bytes]";
+    let text = |text: &str| lablet_model::ToolResultContent::Text(text.to_owned());
+    let told: Vec<_> = run
+        .observer
+        .events()
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            EventKind::ToolCallFinished {
+                output_bytes,
+                truncated_from_bytes,
+                output,
+                ..
+            } => Some((output_bytes, truncated_from_bytes, output)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        told,
+        [
+            (
+                10 + line.len() as u64,
+                Some(16),
+                Some(vec![text(TEN_BYTES), text(line)])
+            ),
+            (10, None, Some(vec![text(TEN_BYTES)])),
+        ]
     );
     assert_eq!(
-        outcome.status,
-        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok),
-        "the loop cut the output; the tool itself succeeded"
+        run.finished.summary.tool_output_bytes,
+        20 + line.len() as u64
     );
+}
+
+#[tokio::test]
+async fn without_a_cap_nothing_is_cut_and_an_executor_is_told_to_keep_everything() {
+    let (run, tools) = writing(None, false).await;
+
+    assert_eq!(
+        results_sent(&run),
+        serde_json::json!([
+            result_of("call_0", &[SIXTEEN_BYTES]),
+            result_of("call_1", &[TEN_BYTES]),
+        ])
+    );
+    let outcomes = run.finished.transcript.turns()[0].tool_calls();
+    assert_eq!(outcomes[0].truncated_from_bytes, None);
+    assert_eq!(outcomes[1].truncated_from_bytes, None);
+    assert_eq!(run.finished.summary.tool_calls_truncated, 0);
+    let keeps: Vec<_> = tools.taken().iter().map(|call| call.keep).collect();
+    assert_eq!(keeps, [None, None]);
+    assert_eq!(tools.kept(), [16, 10]);
+}
+
+/// An error result is a tool's output like any other, and so is what the
+/// loop says of a call that reached no tool. Cutting one changes nothing
+/// about what became of the call.
+#[tokio::test]
+async fn an_error_result_is_cut_as_any_other_output_is() {
+    let mut harness = Harness::new(vec![
+        Answer::now(says(
+            "One.",
+            &["bash", "read_file", "invented"],
+            FinishReason::ToolUse,
+        )),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.calls.output_cap = Some(output_cap(10, OutputCut::Head));
+    harness.tools = vec![Arc::new(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![spec("bash"), spec("read_file")],
+        )
+        .answers("bash", Answers::ToolError(SIXTEEN_BYTES.to_owned()))
+        .answers(
+            "read_file",
+            Answers::Fails(crate::ToolErrorKind::Failed, SIXTEEN_BYTES.to_owned()),
+        ),
+    )];
+
+    let run = harness.run().await;
+
+    let cut = |call_id: &str, texts: &[&str]| {
+        let mut result = result_of(call_id, texts);
+        result["is_error"] = serde_json::json!(true);
+        result
+    };
+    let sixteen = ["0123456789", "[truncated: the first 10 of 16 bytes]"];
+    assert_eq!(
+        results_sent(&run),
+        serde_json::json!([
+            cut("call_0", &sixteen),
+            cut("call_1", &sixteen),
+            cut(
+                "call_2",
+                &["no tool na", "[truncated: the first 10 of 45 bytes]"]
+            ),
+        ])
+    );
+    let statuses: Vec<_> = run.finished.transcript.turns()[0]
+        .tool_calls()
+        .iter()
+        .map(|outcome| outcome.status.as_str())
+        .collect();
+    assert_eq!(statuses, ["tool_error", "failed", "unknown"]);
+    assert_eq!(run.finished.summary.tool_calls_truncated, 3);
+}
+
+// T13: the other two ways to cut, and an executor that keeps only what the
+// call says to.
+
+#[tokio::test]
+async fn head_tail_sends_both_ends_of_a_long_output_around_a_line_that_says_what_was_left_out() {
+    let (run, tools) = writing(Some(output_cap(10, OutputCut::HeadTail)), true).await;
+
+    assert_eq!(
+        results_sent(&run),
+        serde_json::json!([
+            result_of(
+                "call_0",
+                &["01234", "[truncated: 6 of 16 bytes left out]", "bcdef"]
+            ),
+            result_of("call_1", &[TEN_BYTES]),
+        ])
+    );
+    let outcomes = run.finished.transcript.turns()[0].tool_calls();
+    assert_eq!(outcomes[0].truncated_from_bytes, Some(16));
+    assert_eq!(outcomes[1].truncated_from_bytes, None);
+    assert_eq!(run.finished.summary.tool_calls_truncated, 1);
+    assert_eq!(tools.kept(), [16, 10], "the executor held every byte");
+}
+
+#[tokio::test]
+async fn preview_sends_a_few_bytes_of_a_long_output_and_a_line_that_says_how_large_it_was() {
+    let (run, tools) = writing(Some(output_cap(10, OutputCut::Preview { bytes: 4 })), true).await;
+
+    assert_eq!(
+        results_sent(&run),
+        serde_json::json!([
+            result_of(
+                "call_0",
+                &["0123", "[output too large: the first 4 of 16 bytes]"]
+            ),
+            result_of("call_1", &[TEN_BYTES]),
+        ])
+    );
+    let outcomes = run.finished.transcript.turns()[0].tool_calls();
+    assert_eq!(outcomes[0].truncated_from_bytes, Some(16));
+    assert_eq!(outcomes[1].truncated_from_bytes, None);
+    assert_eq!(run.finished.summary.tool_calls_truncated, 1);
+    assert_eq!(tools.kept(), [16, 10], "the executor held every byte");
+}
+
+/// The cap's worth of the start is kept whatever the cut, so the 10-byte
+/// output arrives whole under a preview of 4 and is sent whole.
+#[tokio::test]
+async fn an_executor_that_keeps_what_its_call_says_to_gives_the_results_of_one_that_kept_it_all() {
+    for (cut, keep, kept) in [
+        (OutputCut::HeadTail, OutputKeep { head: 10, tail: 5 }, 15),
+        (
+            OutputCut::Preview { bytes: 4 },
+            OutputKeep { head: 10, tail: 0 },
+            10,
+        ),
+        (OutputCut::Head, OutputKeep { head: 10, tail: 0 }, 10),
+    ] {
+        let (whole, _) = writing(Some(output_cap(10, cut)), true).await;
+        let (fed, tools) = writing(Some(output_cap(10, cut)), false).await;
+
+        let keeps: Vec<_> = tools.taken().iter().map(|call| call.keep).collect();
+        assert_eq!(keeps, [Some(keep), Some(keep)], "{cut:?}");
+        assert_eq!(tools.kept(), [kept, 10], "{cut:?}");
+        assert_eq!(results_sent(&fed), results_sent(&whole), "{cut:?}");
+        assert_eq!(
+            fed.finished.transcript.turns()[0].tool_calls(),
+            whole.finished.transcript.turns()[0].tool_calls(),
+            "{cut:?}"
+        );
+        assert_eq!(fed.finished.summary, whole.finished.summary, "{cut:?}");
+    }
 }
 
 // The event stream, and the summary that closes it.
@@ -1762,54 +2014,6 @@ async fn a_run_without_a_turn_cap_goes_on_until_the_model_ends_it() {
         summary.max_turns, None,
         "what an observer is handed holds no cap either"
     );
-}
-
-// T10: the exact bytes the model is sent.
-
-#[tokio::test]
-async fn output_over_the_cap_is_cut_at_the_cap_and_says_what_was_cut() {
-    let mut harness = Harness::new(vec![
-        Answer::now(says("One.", &["bash"], FinishReason::ToolUse)),
-        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
-    ]);
-    harness.calls.max_tool_output_bytes = Some(10);
-    harness.tools = vec![Arc::new(
-        FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")])
-            .answers("bash", Answers::Text("0123456789abcdef".to_owned())),
-    )];
-
-    let run = harness.run().await;
-
-    let outcome = &run.finished.transcript.turns()[0].tool_calls()[0];
-    assert_eq!(
-        outcome.content,
-        vec![
-            lablet_model::ToolResultContent::Text("0123456789".to_owned()),
-            lablet_model::ToolResultContent::Text(
-                "[truncated: the first 10 of 16 bytes]".to_owned()
-            ),
-        ]
-    );
-    assert_eq!(outcome.truncated_from_bytes, Some(16));
-}
-
-#[tokio::test]
-async fn output_that_just_fits_the_cap_is_not_cut() {
-    let mut harness = Harness::new(vec![
-        Answer::now(says("One.", &["bash"], FinishReason::ToolUse)),
-        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
-    ]);
-    harness.calls.max_tool_output_bytes = Some(10);
-    harness.tools = vec![Arc::new(
-        FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")])
-            .answers("bash", Answers::Text("0123456789".to_owned())),
-    )];
-
-    let run = harness.run().await;
-
-    let outcome = &run.finished.transcript.turns()[0].tool_calls()[0];
-    assert_eq!(outcome.truncated_from_bytes, None);
-    assert_eq!(run.finished.summary.tool_calls_truncated, 0);
 }
 
 /// The central measurement of the provider group: how long its calls took.

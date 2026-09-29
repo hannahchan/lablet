@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use lablet_model::{
-    Endpoint, ModelRef, ProviderErrorKind, ProviderResponse, ToolName, ToolResultContent, ToolSpec,
+    Endpoint, KeptOutput, ModelRef, ProviderErrorKind, ProviderResponse, ToolName, ToolSpec,
 };
 
 use crate::{
@@ -259,6 +259,8 @@ pub struct FakeTools {
     taken: Mutex<Vec<ToolCall>>,
     yielding: bool,
     spans: Mutex<Vec<String>>,
+    hoarding: bool,
+    kept: Mutex<Vec<u64>>,
 }
 
 impl FakeTools {
@@ -273,7 +275,42 @@ impl FakeTools {
             taken: Mutex::new(Vec::new()),
             yielding: false,
             spans: Mutex::new(Vec::new()),
+            hoarding: false,
+            kept: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Every call's output is held whole, whatever the call says to keep,
+    /// as an executor does that reads a tool's output to its end before it
+    /// looks at the size.
+    pub const fn hoarding(mut self) -> Self {
+        self.hoarding = true;
+        self
+    }
+
+    /// How many bytes of each output this executor held when it returned
+    /// it, in order.
+    pub fn kept(&self) -> Vec<u64> {
+        self.kept
+            .lock()
+            .expect("the fake executor isn't poisoned")
+            .clone()
+    }
+
+    /// A tool's text, fed as a real executor feeds it: a piece at a time, to
+    /// what the call says to keep. A character is the smallest piece there
+    /// is, so every limit is met part-way through the text.
+    fn fed(&self, call: &ToolCall, text: &str) -> KeptOutput {
+        let mut output = KeptOutput::new(call.keep.filter(|_| !self.hoarding));
+        let mut piece = [0; 4];
+        for character in text.chars() {
+            output.push(character.encode_utf8(&mut piece));
+        }
+        self.kept
+            .lock()
+            .expect("the fake executor isn't poisoned")
+            .push(output.kept_bytes());
+        output
     }
 
     /// Every call yields to the runtime once part-way, so calls the loop
@@ -364,18 +401,18 @@ impl ToolExecutor for FakeTools {
         let answer = found.map(|at| answers.remove(at).1);
         match answer {
             Some(Answers::Text(text)) => Ok(ToolOutput {
-                content: vec![ToolResultContent::Text(text)],
+                output: self.fed(&call, &text),
                 is_error: false,
                 mcp: None,
             }),
             Some(Answers::ToolError(text)) => Ok(ToolOutput {
-                content: vec![ToolResultContent::Text(text)],
+                output: self.fed(&call, &text),
                 is_error: true,
                 mcp: None,
             }),
             Some(Answers::Fails(kind, message)) => Err(ToolError::new(kind, message)),
             Some(Answers::OverMcp(text, mcp)) => Ok(ToolOutput {
-                content: vec![ToolResultContent::Text(text)],
+                output: self.fed(&call, &text),
                 is_error: false,
                 mcp: Some(mcp),
             }),
@@ -385,7 +422,7 @@ impl ToolExecutor for FakeTools {
             // Nothing scripted: the tool ran and said so, which keeps a test
             // that only cares about the loop's shape short.
             None => Ok(ToolOutput {
-                content: vec![ToolResultContent::Text(format!("{} ran", call.name))],
+                output: self.fed(&call, &format!("{} ran", call.name)),
                 is_error: false,
                 mcp: None,
             }),

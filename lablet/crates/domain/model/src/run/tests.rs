@@ -7,9 +7,9 @@ use serde_json::json;
 use super::*;
 use crate::tests::block_on;
 use crate::{
-    ContentBlock, Effort, FinishReason, Prompts, ProviderKind, Rates, RunLabels, StopClass,
-    Thinking, TokenCounts, ToolCallEnd, ToolCallId, ToolCallOutcome, ToolCallStatus, ToolResult,
-    ToolResultContent, ToolSource, ToolStats,
+    ContentBlock, Effort, FinishReason, KeptOutput, OutputCap, OutputCut, Prompts, ProviderKind,
+    Rates, RunLabels, StopClass, Thinking, TokenCounts, ToolCallEnd, ToolCallId, ToolCallOutcome,
+    ToolCallStatus, ToolResult, ToolResultContent, ToolSource, ToolStats,
 };
 
 fn nz(count: u32) -> NonZeroU32 {
@@ -121,8 +121,8 @@ fn response(text: &str, tools: &[&str], finish: FinishReason, input: u64) -> Pro
 fn answer(status: ToolCallStatus, output: &str, latency: Duration) -> Answer {
     Answer::measured(
         status,
-        vec![ToolResultContent::Text(output.to_owned())],
-        Some(8),
+        KeptOutput::whole(output),
+        Some(OutputCap::new(8, OutputCut::Head).unwrap()),
         ms(0),
         latency,
     )
@@ -1523,8 +1523,8 @@ fn outcomes_are_in_call_order_and_answer_their_own_calls_whichever_finishes_firs
 fn an_answer_reports_what_the_outcome_will_hold() {
     let answer = Answer::measured(
         ran(ToolCallEnd::ToolError),
-        vec![ToolResultContent::Text("0123456789".to_owned())],
-        Some(4),
+        KeptOutput::whole("0123456789"),
+        Some(OutputCap::new(4, OutputCut::Head).unwrap()),
         ms(20),
         ms(7),
     );

@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use lablet_model::{ToolCallEnd, ToolCallId, ToolName, ToolResultContent, ToolSpec};
+use lablet_model::{KeptOutput, OutputKeep, ToolCallEnd, ToolCallId, ToolName, ToolSpec};
 
 use crate::{TraceContext, bounded};
 
@@ -23,6 +23,10 @@ pub struct ToolCall {
     pub input: serde_json::Value,
     /// How long the executor may take before it gives up.
     pub deadline: Duration,
+    /// How much of the tool's text the run's output cap can use, which is
+    /// what the executor's [`KeptOutput`] is made from. `None` when the run
+    /// has no cap, which keeps everything.
+    pub keep: Option<OutputKeep>,
     /// The span the observer opened for this call, for an executor that
     /// propagates one. `None` when no observer keeps spans.
     pub trace_context: Option<TraceContext>,
@@ -31,8 +35,10 @@ pub struct ToolCall {
 /// What a tool returned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolOutput {
-    /// What the model is sent, before the run's output cap.
-    pub content: Vec<ToolResultContent>,
+    /// What the executor kept of the tool's text, and the size of all of it.
+    /// The loop cuts it to the run's output cap, so no executor decides what
+    /// the model is sent of a long output.
+    pub output: KeptOutput,
     /// The tool's own report that it failed, as MCP's `isError`. A tool that
     /// ran and said so is not an executor failure.
     pub is_error: bool,
@@ -168,6 +174,11 @@ pub trait ToolExecutor: Send + Sync {
     async fn specs(&self) -> Result<Vec<ToolSpec>, ToolError>;
 
     /// Runs one call.
+    ///
+    /// The executor feeds the tool's text to a [`KeptOutput`] made from
+    /// [`ToolCall::keep`], as the text arrives, so it never holds more than
+    /// the run's cap can use however much the tool writes. An output kept
+    /// to any other limit is cut from what was kept, and says so.
     ///
     /// # Errors
     ///

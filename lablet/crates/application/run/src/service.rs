@@ -5,9 +5,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use lablet_model::{
-    Answer, Cost, Final, FinishedRun, Message, Pending, Progress, Prompts, ProviderErrorKind,
-    ProviderResponse, Rates, RequestParams, Responded, Run, RunContext, RunId, RunLabels, RunSetup,
-    Schedule, StopReason, ToolCallStatus, ToolInput, ToolUse, Turn, Usage,
+    Answer, Cost, Final, FinishedRun, KeptOutput, Message, OutputCap, Pending, Progress, Prompts,
+    ProviderErrorKind, ProviderResponse, Rates, RequestParams, Responded, Run, RunContext, RunId,
+    RunLabels, RunSetup, Schedule, StopReason, ToolCallStatus, ToolInput, ToolUse, Turn, Usage,
 };
 use lablet_policy::{Pricing, RetryPolicy, StopPolicy};
 
@@ -25,8 +25,11 @@ pub struct CallLimits {
     pub provider_timeout: Duration,
     /// How long one tool call may take.
     pub tool_timeout: Duration,
-    /// The cap on what a tool's output may be before the model sees it.
-    pub max_tool_output_bytes: Option<u64>,
+    /// The cap on what the model is sent of a tool's output, and how a
+    /// longer one is cut; `None` for no cap. The loop applies it to every
+    /// call's answer, and hands each executor what the cap can use of an
+    /// output, so none holds more.
+    pub output_cap: Option<OutputCap>,
     /// How many calls of one group may run at once; 1 runs every call alone.
     pub max_concurrent_tool_calls: NonZeroU32,
 }
@@ -61,16 +64,16 @@ struct Answered {
 /// or the `mcp.*` attributes have no way to be set.
 struct Settled {
     status: ToolCallStatus,
-    content: Vec<lablet_model::ToolResultContent>,
+    output: KeptOutput,
     mcp: Option<McpCallMeta>,
 }
 
 impl Settled {
     /// A call the loop answered itself, so no executor was reached.
-    fn local(status: ToolCallStatus, message: String) -> Self {
+    fn local(status: ToolCallStatus, message: &str) -> Self {
         Self {
             status,
-            content: vec![lablet_model::ToolResultContent::Text(message)],
+            output: KeptOutput::whole(message),
             mcp: None,
         }
     }
@@ -482,8 +485,8 @@ impl RunService {
 
         let answer = Answer::measured(
             settled.status,
-            settled.content,
-            self.calls.max_tool_output_bytes,
+            settled.output,
+            self.calls.output_cap,
             began.saturating_duration_since(started),
             latency,
         );
@@ -520,12 +523,12 @@ impl RunService {
         source: Option<lablet_model::ToolSource>,
         trace_context: Option<crate::TraceContext>,
     ) -> Settled {
-        use lablet_model::{ToolCallEnd, ToolResultContent};
+        use lablet_model::ToolCallEnd;
 
         let Some(source) = source else {
             return Settled::local(
                 ToolCallStatus::Unknown,
-                format!("no tool named {} is offered by this run", call.name),
+                &format!("no tool named {} is offered by this run", call.name),
             );
         };
         // The arguments are read here rather than handed in already unwrapped.
@@ -536,7 +539,7 @@ impl RunService {
             ToolInput::Unparsed(text) => {
                 return Settled::local(
                     ToolCallStatus::MalformedInput,
-                    format!(
+                    &format!(
                         "the arguments weren't valid JSON, so {} wasn't called: {text}",
                         call.name
                     ),
@@ -545,7 +548,7 @@ impl RunService {
             ToolInput::Json(_) if self.tools.completion().intercepts(&call.name) => {
                 return Settled::local(
                     ToolCallStatus::Rejected,
-                    format!(
+                    &format!(
                         "call {} on its own, once your other calls have returned",
                         call.name
                     ),
@@ -561,6 +564,7 @@ impl RunService {
                 name: call.name.clone(),
                 input,
                 deadline: self.calls.tool_timeout,
+                keep: self.calls.output_cap.map(OutputCap::keeps),
                 trace_context,
             })
             .await
@@ -573,7 +577,7 @@ impl RunService {
                 };
                 Settled {
                     status: ToolCallStatus::ran(source, ended),
-                    content: output.content,
+                    output: output.output,
                     mcp: output.mcp,
                 }
             }
@@ -583,7 +587,7 @@ impl RunService {
                 });
                 Settled {
                     status,
-                    content: vec![ToolResultContent::Text(error.message().to_owned())],
+                    output: KeptOutput::whole(error.message()),
                     mcp: error.mcp,
                 }
             }

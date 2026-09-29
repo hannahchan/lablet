@@ -284,10 +284,8 @@ async fn a_call_is_routed_to_whichever_executor_serves_its_name() {
         .expect("the second executor answers");
 
     assert_eq!(
-        output.content,
-        vec![lablet_model::ToolResultContent::Text(
-            "from the second".to_owned()
-        )]
+        output.output,
+        lablet_model::KeptOutput::whole("from the second")
     );
 }
 
@@ -315,6 +313,7 @@ fn call(name_: &str) -> ToolCall {
         name: name(name_),
         input: serde_json::json!({}),
         deadline: Duration::from_secs(30),
+        keep: None,
         trace_context: None,
     }
 }

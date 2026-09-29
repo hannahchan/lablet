@@ -22,6 +22,7 @@ mod id;
 mod labels;
 mod message;
 mod outcome;
+mod output;
 mod price;
 mod provider;
 mod provider_kind;
@@ -38,6 +39,7 @@ pub use message::{
     ContentBlock, Message, ToolInput, ToolResult, ToolResultContent, ToolUse, UserContent,
 };
 pub use outcome::{OutcomeError, RunOutcome, TaskResult};
+pub use output::{KeptOutput, OutputCap, OutputCapError, OutputCut, OutputKeep};
 pub use price::{Cost, CostError, RateError, Rates};
 pub use provider::{
     Effort, Endpoint, FinishReason, ModelRef, ProviderErrorKind, ProviderResponse, RequestParams,

@@ -119,6 +119,14 @@ impl ToolResultContent {
     pub fn omitted(kind: &str, mime_type: &str, bytes: u64) -> Self {
         Self::Text(format!("[{kind} omitted: {mime_type}, {bytes} bytes]"))
     }
+
+    /// The summed byte length of the text of `content`.
+    pub(crate) fn bytes(content: &[Self]) -> u64 {
+        content
+            .iter()
+            .map(|Self::Text(text)| text.len() as u64)
+            .fold(0, u64::saturating_add)
+    }
 }
 
 /// One message of the flat form a provider call sends, borrowed from the
