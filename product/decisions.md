@@ -850,3 +850,9 @@ What the review changed. Three reviewers read the phase, one for the loop, one f
 Dismissed, each with its reason: `ToolCallFinished` can hold `not_run` by its type, but the loop returns before any event for such a call; only a failure another attempt could answer is held to point A, which is what spec section 1 says; an executor that keeps less than its call asked still reports a true size; the jitter stays within its bound for every salt; and a run whose provider reported no cache counts is priced on its whole input, once. The pairing of a digest with its prompt is held for a caller of the loop and not for a caller of `Run::start`, and the documents now say so.
 
 The build took about 2.24 million tokens and the fix pass 0.33 million. The review took 0.45 million against a budget of 0.22 to 0.34 million, so it ran a third over: the domain reviewer read more than its lens needed. Phase 4's reviewers are given the files to read, not the diff.
+
+## 2026-09-29 The transcript document is part of the public contract
+
+Decided by the human. The public contract was the config schema, the outcome JSON and the telemetry registry, and the transcript was left out of it while spec section 1 called it what a grader or a composing framework reads. It's the fourth part now, and a breaking change to it needs a major bump like a breaking change to any of the other three.
+
+Nothing had to be built for this. The transcript document got its `schema_version` on 2026-09-21, and its fixture joined the changelog gate's watched list with the documents crate, so it was already held the way the outcome is. What was missing was the sentence that says a reader may rely on it.
