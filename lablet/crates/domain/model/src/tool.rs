@@ -328,6 +328,12 @@ impl Answer {
         &self.status
     }
 
+    /// When the call started, in whole milliseconds since the run started.
+    #[must_use]
+    pub const fn started_ms(&self) -> u64 {
+        self.started_ms
+    }
+
     /// How long the call took, in whole milliseconds.
     #[must_use]
     pub const fn latency_ms(&self) -> u64 {

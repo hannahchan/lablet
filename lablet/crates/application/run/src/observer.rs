@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use lablet_model::{
-    ContentBlock, Endpoint, ModelRef, RunContext, RunId, RunSummary, ToolCallId, ToolCallStatus,
-    ToolName, ToolResultContent, ToolSource, ToolSpec, TurnRecord,
+    ContentBlock, Endpoint, ModelRef, RequestParams, RunContext, RunId, RunSummary, ToolCallId,
+    ToolCallStatus, ToolName, ToolResultContent, ToolSource, ToolSpec, TurnRecord,
 };
 
 use crate::{McpCallMeta, ProviderError, TraceContext};
@@ -29,7 +29,8 @@ pub struct RunEvent {
 /// shouldn't emit; the byte counts beside them are always present.
 #[derive(Debug, Clone)]
 pub enum EventKind {
-    /// The run began. Carries what only the composition root knew.
+    /// The run began. Carries what only the composition root knew, and what
+    /// the loop is about to call the model with.
     RunStarted {
         /// The composer's half of the wide event.
         context: Box<RunContext>,
@@ -37,6 +38,10 @@ pub enum EventKind {
         model: ModelRef,
         /// Where the provider is served, when it's reached over the network.
         endpoint: Option<Endpoint>,
+        /// The request parameters every provider call of the run shares. An
+        /// observer reports them on each call as the call ends, which is
+        /// before the summary that holds them exists.
+        request: RequestParams,
         /// The tools offered to the model, after filtering.
         tools: Vec<ToolSpec>,
         /// The system prompt, when content is captured.
@@ -123,7 +128,11 @@ pub enum EventKind {
         /// What became of it, which is never
         /// [`ToolCallStatus::NotRun`]: no event reports such a call.
         status: ToolCallStatus,
-        /// How long it took.
+        /// When the call began, in whole milliseconds since the run started.
+        /// The call began once the observer had been told of it, so only
+        /// the event that ends the call can say when that was.
+        started_ms: u64,
+        /// How long it took, in whole milliseconds.
         latency_ms: u64,
         /// The size the model was sent, after the output cap.
         output_bytes: u64,

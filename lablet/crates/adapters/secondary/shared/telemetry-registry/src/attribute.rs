@@ -69,6 +69,9 @@ pub const GEN_AI_TOOL_CALL_ID: &str = "gen_ai.tool.call.id";
 /// The result returned by the tool call (if any and if execution was successful).
 pub const GEN_AI_TOOL_CALL_RESULT: &str = "gen_ai.tool.call.result";
 
+/// The list of tool definitions available to the GenAI agent or model.
+pub const GEN_AI_TOOL_DEFINITIONS: &str = "gen_ai.tool.definitions";
+
 /// The tool description.
 pub const GEN_AI_TOOL_DESCRIPTION: &str = "gen_ai.tool.description";
 
@@ -99,8 +102,20 @@ pub const JSONRPC_REQUEST_ID: &str = "jsonrpc.request.id";
 /// One-based attempt number of a provider call within its turn.
 pub const LABLET_ATTEMPT: &str = "lablet.attempt";
 
+/// What a provider call is for.
+pub const LABLET_CHAT_PURPOSE: &str = "lablet.chat.purpose";
+
 /// SHA-256 of the resolved config, in hex.
 pub const LABLET_CONFIG_DIGEST: &str = "lablet.config.digest";
+
+/// The experiment the run is part of, as the run request named it.
+pub const LABLET_EXPERIMENT_ID: &str = "lablet.experiment.id";
+
+/// How long the run's MCP servers live.
+pub const LABLET_MCP_LIFETIME: &str = "lablet.mcp.lifetime";
+
+/// The version each MCP server gave of itself when it started, in the order of `lablet.mcp.servers`.
+pub const LABLET_MCP_SERVER_VERSIONS: &str = "lablet.mcp.server_versions";
 
 /// Names of the configured MCP servers.
 pub const LABLET_MCP_SERVERS: &str = "lablet.mcp.servers";
@@ -120,8 +135,28 @@ pub const LABLET_PRICING_OUTPUT_USD_PER_MTOK: &str = "lablet.pricing.output_usd_
 /// Size of the system prompt in bytes, skills included.
 pub const LABLET_PROMPT_SYSTEM_BYTES: &str = "lablet.prompt.system_bytes";
 
+/// SHA-256 of the system prompt as it was sent, in hex.
+pub const LABLET_PROMPT_SYSTEM_DIGEST: &str = "lablet.prompt.system_digest";
+
+/// Size of the tool specs in bytes, as the run offered them.
+pub const LABLET_PROMPT_TOOLS_BYTES: &str = "lablet.prompt.tools_bytes";
+
 /// Size of the task prompt in bytes.
 pub const LABLET_PROMPT_USER_BYTES: &str = "lablet.prompt.user_bytes";
+
+/// The part of `lablet.provider.failed.input_tokens` served from the provider's prompt cache.
+pub const LABLET_PROVIDER_FAILED_CACHE_READ_INPUT_TOKENS: &str =
+    "lablet.provider.failed.cache_read.input_tokens";
+
+/// The part of `lablet.provider.failed.input_tokens` written to the provider's prompt cache.
+pub const LABLET_PROVIDER_FAILED_CACHE_WRITE_INPUT_TOKENS: &str =
+    "lablet.provider.failed.cache_write.input_tokens";
+
+/// Input tokens that failed provider call attempts reported, summed, cached tokens included.
+pub const LABLET_PROVIDER_FAILED_INPUT_TOKENS: &str = "lablet.provider.failed.input_tokens";
+
+/// Output tokens that failed provider call attempts reported, summed.
+pub const LABLET_PROVIDER_FAILED_OUTPUT_TOKENS: &str = "lablet.provider.failed.output_tokens";
 
 /// Latency of the slowest provider call attempt, in milliseconds.
 pub const LABLET_PROVIDER_LATENCY_MS_MAX: &str = "lablet.provider.latency_ms.max";
@@ -132,8 +167,17 @@ pub const LABLET_PROVIDER_LATENCY_MS_TOTAL: &str = "lablet.provider.latency_ms.t
 /// Number of provider call attempts made beyond the first of their call.
 pub const LABLET_PROVIDER_RETRIES: &str = "lablet.provider.retries";
 
+/// The API the run reached its model through.
+pub const LABLET_REQUEST_API: &str = "lablet.request.api";
+
 /// Size in bytes of the system prompt, messages, and tool specs sent in a provider call.
 pub const LABLET_REQUEST_BYTES: &str = "lablet.request.bytes";
+
+/// Which runs share what the provider caches of the run's requests.
+pub const LABLET_REQUEST_CACHE_SCOPE: &str = "lablet.request.cache_scope";
+
+/// Whether the reasoning of earlier responses was sent back on later calls.
+pub const LABLET_REQUEST_REASONING_REPLAYED: &str = "lablet.request.reasoning_replayed";
 
 /// How the model was asked to reason, as the config spells it.
 pub const LABLET_REQUEST_THINKING: &str = "lablet.request.thinking";
@@ -185,6 +229,12 @@ pub const LABLET_RUN_TURNS: &str = "lablet.run.turns";
 
 /// Number of skill files appended to the system prompt.
 pub const LABLET_SKILLS_COUNT: &str = "lablet.skills.count";
+
+/// The task the run attempts, as the run request named it.
+pub const LABLET_TASK_ID: &str = "lablet.task.id";
+
+/// Number of spans and log records of the run that lablet's exporters refused or dropped before the wide event was made.
+pub const LABLET_TELEMETRY_DROPPED_RECORDS: &str = "lablet.telemetry.dropped_records";
 
 /// Number of calls to one tool, `<key>` being the tool name.
 ///
@@ -246,8 +296,14 @@ pub const LABLET_TOOL_CALLS_UNKNOWN: &str = "lablet.tool_calls.unknown";
 /// Number of tools offered to the model.
 pub const LABLET_TOOLS_COUNT: &str = "lablet.tools.count";
 
+/// SHA-256 of the tool specs as the run offered them, in hex.
+pub const LABLET_TOOLS_DIGEST: &str = "lablet.tools.digest";
+
 /// Names of the tools offered to the model, after the allow and deny lists.
 pub const LABLET_TOOLS_NAMES: &str = "lablet.tools.names";
+
+/// Which repetition of the task the run is, as the run request named it.
+pub const LABLET_TRIAL: &str = "lablet.trial";
 
 /// One-based index of the turn a provider call or tool call belongs to.
 pub const LABLET_TURN: &str = "lablet.turn";

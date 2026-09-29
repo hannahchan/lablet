@@ -2,9 +2,13 @@
 //! closed values are compared here. Each match is exhaustive, so a variant
 //! added on either side fails to compile until the other side has it too.
 
-use lablet_model::{CompletionMode, StopReason, ToolCallEnd, ToolCallStatus, ToolSource};
+use lablet_model::{
+    CacheScope, CompletionMode, McpLifetime, ProviderApi, StopReason, ToolCallEnd, ToolCallStatus,
+    ToolSource,
+};
 use lablet_telemetry_registry::enums::{
-    LabletRunCompletionMode, LabletRunStopReason, LabletToolSource, LabletToolStatus,
+    LabletMcpLifetime, LabletRequestApi, LabletRequestCacheScope, LabletRunCompletionMode,
+    LabletRunStopReason, LabletToolSource, LabletToolStatus,
 };
 
 const fn registry_stop_reason(reason: StopReason) -> LabletRunStopReason {
@@ -163,5 +167,83 @@ fn every_tool_call_status_is_spelled_as_the_registry_spells_it() {
         let registry = registry_tool_status(&status);
         assert_eq!(status.as_str(), registry.as_str());
         assert_eq!(model_tool_status(registry), status);
+    }
+}
+
+const fn registry_api(api: ProviderApi) -> LabletRequestApi {
+    match api {
+        ProviderApi::Messages => LabletRequestApi::Messages,
+        ProviderApi::Responses => LabletRequestApi::Responses,
+        ProviderApi::ChatCompletions => LabletRequestApi::ChatCompletions,
+        ProviderApi::Script => LabletRequestApi::Script,
+    }
+}
+
+const fn model_api(registry: LabletRequestApi) -> ProviderApi {
+    match registry {
+        LabletRequestApi::Messages => ProviderApi::Messages,
+        LabletRequestApi::Responses => ProviderApi::Responses,
+        LabletRequestApi::ChatCompletions => ProviderApi::ChatCompletions,
+        LabletRequestApi::Script => ProviderApi::Script,
+    }
+}
+
+#[test]
+fn every_api_is_spelled_as_the_registry_spells_it() {
+    for api in [
+        ProviderApi::Messages,
+        ProviderApi::Responses,
+        ProviderApi::ChatCompletions,
+        ProviderApi::Script,
+    ] {
+        let registry = registry_api(api);
+        assert_eq!(api.as_str(), registry.as_str());
+        assert_eq!(model_api(registry), api);
+    }
+}
+
+const fn registry_cache_scope(scope: CacheScope) -> LabletRequestCacheScope {
+    match scope {
+        CacheScope::Shared => LabletRequestCacheScope::Shared,
+        CacheScope::Run => LabletRequestCacheScope::Run,
+    }
+}
+
+const fn model_cache_scope(registry: LabletRequestCacheScope) -> CacheScope {
+    match registry {
+        LabletRequestCacheScope::Shared => CacheScope::Shared,
+        LabletRequestCacheScope::Run => CacheScope::Run,
+    }
+}
+
+#[test]
+fn both_cache_scopes_are_spelled_as_the_registry_spells_them() {
+    for scope in [CacheScope::Shared, CacheScope::Run] {
+        let registry = registry_cache_scope(scope);
+        assert_eq!(scope.as_str(), registry.as_str());
+        assert_eq!(model_cache_scope(registry), scope);
+    }
+}
+
+const fn registry_lifetime(lifetime: McpLifetime) -> LabletMcpLifetime {
+    match lifetime {
+        McpLifetime::Run => LabletMcpLifetime::Run,
+        McpLifetime::Lablet => LabletMcpLifetime::Lablet,
+    }
+}
+
+const fn model_lifetime(registry: LabletMcpLifetime) -> McpLifetime {
+    match registry {
+        LabletMcpLifetime::Run => McpLifetime::Run,
+        LabletMcpLifetime::Lablet => McpLifetime::Lablet,
+    }
+}
+
+#[test]
+fn both_lifetimes_of_an_mcp_server_are_spelled_as_the_registry_spells_them() {
+    for lifetime in [McpLifetime::Run, McpLifetime::Lablet] {
+        let registry = registry_lifetime(lifetime);
+        assert_eq!(lifetime.as_str(), registry.as_str());
+        assert_eq!(model_lifetime(registry), lifetime);
     }
 }

@@ -8,6 +8,11 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[dependencies]
+opentelemetry-proto.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
 [dev-dependencies]
 lablet-model.workspace = true
 lablet-telemetry-registry.workspace = true

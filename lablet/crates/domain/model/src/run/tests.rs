@@ -1667,6 +1667,7 @@ fn an_answer_reports_what_the_outcome_will_hold() {
     );
     let reported = (
         answer.status().clone(),
+        answer.started_ms(),
         answer.latency_ms(),
         answer.output_bytes(),
         answer.truncated_from_bytes(),
@@ -1680,6 +1681,7 @@ fn an_answer_reports_what_the_outcome_will_hold() {
         reported,
         (
             outcome.status.clone(),
+            outcome.started_ms,
             outcome.latency_ms,
             outcome.output_bytes(),
             outcome.truncated_from_bytes,

@@ -57,7 +57,12 @@ deny = [
   # A ban covers the whole graph. If an upstream crate uses one of these
   # inside, keep the ban and list that crate under `wrappers`, with a comment
   # naming what pulls it in.
-  { crate = "anyhow", reason = "errors are thiserror enums, one per port or boundary (contributing)" },
+  # prost-derive, the derive macro behind opentelemetry-proto's OTLP messages,
+  # builds its own errors with anyhow at compile time. None of it reaches
+  # lablet's code or its binary.
+  { crate = "anyhow", reason = "errors are thiserror enums, one per port or boundary (contributing)", wrappers = [
+    "prost-derive",
+  ] },
   { crate = "eyre", reason = "errors are thiserror enums, one per port or boundary (contributing)" },
   { crate = "color-eyre", reason = "errors are thiserror enums, one per port or boundary (contributing)" },
   { crate = "mockall", reason = "test doubles are hand-written fakes; no mocking framework (contributing)" },

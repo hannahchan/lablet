@@ -16,7 +16,11 @@ Lablet's telemetry is a contract. An [OpenTelemetry Weaver](https://github.com/o
 
 The resource carries [`service.name`, `service.version`](telemetry/service/entities.md), what the [OpenTelemetry SDK adds](telemetry/telemetry/entities.md), and the `telemetry.resource` attributes from the config. Those last ones have keys the composer chooses, so the registry can't declare them, and they appear on the resource only.
 
-`gen_ai.conversation.id`, `session.id`, and `lablet.config.digest` are on every span and log record, so any of them groups a run's data without a join.
+`gen_ai.conversation.id`, `session.id`, and `lablet.config.digest` are on every span and log record, so any of them groups a run's data without a join. So are `lablet.task.id`, `lablet.experiment.id`, and `lablet.trial`, each when the run request named it.
+
+Every span starts when the loop measured its call to start and lasts as long as the loop measured it to take, so the durations of a run's spans sum to the latencies of its wide event.
+
+Captured content is a JSON string in the form the GenAI conventions give its attribute, and a text longer than 1 MiB is cut there. The wide event is exported alone and after everything else of its run, so a batch of content that a collector refuses for its size can't take it along. Its `lablet.telemetry.dropped_records` counts the run's spans and log records that were lost on the way.
 
 ## Rules of the contract
 

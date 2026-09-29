@@ -9,3 +9,26 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+async-trait.workspace = true
+lablet-model.workspace = true
+lablet-run.workspace = true
+lablet-telemetry-registry.workspace = true
+opentelemetry.workspace = true
+opentelemetry-proto.workspace = true
+opentelemetry_sdk.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+lablet-conformance.workspace = true
+lablet-policy.workspace = true
+lablet-provider-fake.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"

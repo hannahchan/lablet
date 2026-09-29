@@ -16,7 +16,7 @@
 
 Captured content. A log record in the context of the span whose content it carries, emitted only when `telemetry.capture_content` is on.
 
-A record for a chat span carries the messages; a record for a tool span carries the call's arguments and result. Content never appears on a span.
+A record for the root span carries the tool specs the run offered; a record for a chat span carries the messages; a record for a tool span carries the call's arguments and result. Content never appears on a span. Each value is a JSON string in the form the GenAI conventions give the attribute, and one longer than 1 MiB is cut there.
 
 **Requirement Level:** `Opt-In`
 
@@ -25,17 +25,21 @@ A record for a chat span carries the messages; a record for a tool span carries 
 | Key | Stability | [Requirement Level](https://opentelemetry.io/docs/specs/semconv/general/attribute-requirement-level/) | Value Type | Description | Example Values |
 | --- | --- | --- | --- | --- | --- |
 | `gen_ai.conversation.id` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The run id. [1] | `conv_5j66UpCpwteGg4YSxUnt7lPY` |
-| `gen_ai.operation.name` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The operation of the span the content belongs to, `chat` or `execute_tool`. [2] | `chat`; `generate_content`; `text_completion` |
+| `gen_ai.operation.name` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The operation of the span the content belongs to, `invoke_agent`, `chat`, or `execute_tool`. [2] | `chat`; `generate_content`; `text_completion` |
 | [`lablet.config.digest`](/lablet/docs/telemetry/lablet/README.md#lablet-config-digest) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | SHA-256 of the resolved config, in hex. [3] | `9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08` |
-| [`lablet.turn`](/lablet/docs/telemetry/lablet/README.md#lablet-turn) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | One-based index of the turn a provider call or tool call belongs to. [4] | `1`; `2` |
 | `session.id` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The run id, for backends that group by session. | `00112233-4455-6677-8899-aabbccddeeff` |
 | `gen_ai.tool.call.id` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` On a record for a tool span. | string | The tool call identifier. | `call_mszuSIzqtI65i1wAUOE8w5H4` |
 | `gen_ai.tool.name` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` On a record for a tool span. | string | Name of the tool utilized by the agent. | `Flights` |
-| `gen_ai.input.messages` | ![Development](https://img.shields.io/badge/-development-blue) | `Opt-In` | any | The chat history provided to the model as an input. [5] | <pre>[<br>  {<br>    "role": "user",<br>    "parts": [<br>      {<br>        "type": "text",<br>        "content": "Weather in Paris?"<br>      }<br>    ]<br>  },<br>  {<br>    "role": "assistant",<br>    "parts": [<br>      {<br>        "type": "tool_call",<br>        "id": "call_VSPygqKTWdrhaFErNvMV18Yl",<br>        "name": "get_weather",<br>        "arguments": {<br>          "location": "Paris"<br>        }<br>      }<br>    ]<br>  },<br>  {<br>    "role": "tool",<br>    "parts": [<br>      {<br>        "type": "tool_call_response",<br>        "id": "call_VSPygqKTWdrhaFErNvMV18Yl",<br>        "response": "rainy, 57°F"<br>      }<br>    ]<br>  }<br>]</pre> |
-| `gen_ai.output.messages` | ![Development](https://img.shields.io/badge/-development-blue) | `Opt-In` | any | Messages returned by the model where each message represents a specific model response (choice, candidate). [6] | <pre>[<br>  {<br>    "role": "assistant",<br>    "parts": [<br>      {<br>        "type": "text",<br>        "content": "The weather in Paris is currently rainy with a temperature of 57°F."<br>      }<br>    ]<br>  }<br>]</pre> |
-| `gen_ai.system_instructions` | ![Development](https://img.shields.io/badge/-development-blue) | `Opt-In` | any | The system message or instructions provided to the GenAI model separately from the chat history. [7] | <pre>[<br>  {<br>    "type": "text",<br>    "content": "You are an Agent that greet users, always use greetings tool to respond"<br>  }<br>]</pre>; <pre>[<br>  {<br>    "type": "text",<br>    "content": "You are a language translator."<br>  },<br>  {<br>    "type": "text",<br>    "content": "Your mission is to translate text in English to French."<br>  }<br>]</pre> |
-| `gen_ai.tool.call.arguments` | ![Development](https://img.shields.io/badge/-development-blue) | `Opt-In` | any | Parameters passed to the tool call. [8] | <pre>{<br>    "location": "San Francisco?",<br>    "date": "2025-10-01"<br>}</pre> |
-| `gen_ai.tool.call.result` | ![Development](https://img.shields.io/badge/-development-blue) | `Opt-In` | any | The result returned by the tool call (if any and if execution was successful). [9] | <pre>{<br>  "temperature_range": {<br>    "high": 75,<br>    "low": 60<br>  },<br>  "conditions": "sunny"<br>}</pre> |
+| [`lablet.experiment.id`](/lablet/docs/telemetry/lablet/README.md#lablet-experiment-id) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the run request named an experiment. | string | The experiment the run is part of, as the run request named it. [4] | `tool-descriptions-v2` |
+| [`lablet.task.id`](/lablet/docs/telemetry/lablet/README.md#lablet-task-id) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the run request named a task. | string | The task the run attempts, as the run request named it. [5] | `fix-failing-test`; `swe-bench/django-11099` |
+| [`lablet.trial`](/lablet/docs/telemetry/lablet/README.md#lablet-trial) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the run request named a trial. | string | Which repetition of the task the run is, as the run request named it. [6] | `1`; `seed-42` |
+| [`lablet.turn`](/lablet/docs/telemetry/lablet/README.md#lablet-turn) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` On a record for a chat span or a tool span. | int | One-based index of the turn a provider call or tool call belongs to. [7] | `1`; `2` |
+| `gen_ai.input.messages` | ![Development](https://img.shields.io/badge/-development-blue) | `Opt-In` | any | The chat history provided to the model as an input. [8] | <pre>[<br>  {<br>    "role": "user",<br>    "parts": [<br>      {<br>        "type": "text",<br>        "content": "Weather in Paris?"<br>      }<br>    ]<br>  },<br>  {<br>    "role": "assistant",<br>    "parts": [<br>      {<br>        "type": "tool_call",<br>        "id": "call_VSPygqKTWdrhaFErNvMV18Yl",<br>        "name": "get_weather",<br>        "arguments": {<br>          "location": "Paris"<br>        }<br>      }<br>    ]<br>  },<br>  {<br>    "role": "tool",<br>    "parts": [<br>      {<br>        "type": "tool_call_response",<br>        "id": "call_VSPygqKTWdrhaFErNvMV18Yl",<br>        "response": "rainy, 57°F"<br>      }<br>    ]<br>  }<br>]</pre> |
+| `gen_ai.output.messages` | ![Development](https://img.shields.io/badge/-development-blue) | `Opt-In` | any | Messages returned by the model where each message represents a specific model response (choice, candidate). [9] | <pre>[<br>  {<br>    "role": "assistant",<br>    "parts": [<br>      {<br>        "type": "text",<br>        "content": "The weather in Paris is currently rainy with a temperature of 57°F."<br>      }<br>    ]<br>  }<br>]</pre> |
+| `gen_ai.system_instructions` | ![Development](https://img.shields.io/badge/-development-blue) | `Opt-In` | any | The system message or instructions provided to the GenAI model separately from the chat history. [10] | <pre>[<br>  {<br>    "type": "text",<br>    "content": "You are an Agent that greet users, always use greetings tool to respond"<br>  }<br>]</pre>; <pre>[<br>  {<br>    "type": "text",<br>    "content": "You are a language translator."<br>  },<br>  {<br>    "type": "text",<br>    "content": "Your mission is to translate text in English to French."<br>  }<br>]</pre> |
+| `gen_ai.tool.call.arguments` | ![Development](https://img.shields.io/badge/-development-blue) | `Opt-In` | any | Parameters passed to the tool call. [11] | <pre>{<br>    "location": "San Francisco?",<br>    "date": "2025-10-01"<br>}</pre> |
+| `gen_ai.tool.call.result` | ![Development](https://img.shields.io/badge/-development-blue) | `Opt-In` | any | The result returned by the tool call (if any and if execution was successful). [12] | <pre>{<br>  "temperature_range": {<br>    "high": 75,<br>    "low": 60<br>  },<br>  "conditions": "sunny"<br>}</pre> |
+| `gen_ai.tool.definitions` | ![Development](https://img.shields.io/badge/-development-blue) | `Opt-In` | any | The list of tool definitions available to the GenAI agent or model. [13] | <pre>[<br>  {<br>    "type": "function",<br>    "name": "get_current_weather",<br>    "description": "Get the current weather in a given location",<br>    "parameters": {<br>      "type": "object",<br>      "properties": {<br>        "location": {<br>          "type": "string",<br>          "description": "The city and state, e.g. San Francisco, CA"<br>        },<br>        "unit": {<br>          "type": "string",<br>          "enum": [<br>            "celsius",<br>            "fahrenheit"<br>          ]<br>        }<br>      },<br>      "required": [<br>        "location",<br>        "unit"<br>      ]<br>    }<br>  }<br>]</pre> |
 
 **[1] `gen_ai.conversation.id`:** Instrumentations SHOULD populate conversation id when they have an identifier
 for the conversation readily available for a given operation, for example:
@@ -60,9 +64,15 @@ libraries.
 
 **[3] `lablet.config.digest`:** Justification: no convention identifies the configuration that produced a run, and grouping runs by configuration is what lablet's measurements are for.
 
-**[4] `lablet.turn`:** Justification: the conventions have no turn; the index groups a turn's chat and tool spans without adding a span level.
+**[4] `lablet.experiment.id`:** Justification: no convention names the comparison a run belongs to. It's what tells the runs of one comparison from the runs of another that attempt the same task.
 
-**[5] `gen_ai.input.messages`:** Messages MUST be provided in the order they were sent to the model.
+**[5] `lablet.task.id`:** Justification: the conventions identify a conversation and an agent, not the task a run was given. A composer runs one task many times and under many configs, and groups runs by it more than by anything else, so it's declared here rather than left to a resource attribute whose key the registry can't know.
+
+**[6] `lablet.trial`:** Justification: no convention numbers the repetitions of a task. A string, because the composer chooses it and lablet gives it no meaning of its own.
+
+**[7] `lablet.turn`:** Justification: the conventions have no turn; the index groups a turn's chat and tool spans without adding a span level.
+
+**[8] `gen_ai.input.messages`:** Messages MUST be provided in the order they were sent to the model.
 Instrumentations MAY provide a way for users to filter or truncate
 input messages.
 
@@ -76,7 +86,7 @@ Instrumentations MUST follow [JSON schema](/model/gen-ai/gen-ai-input-messages.j
 
 When the attribute is recorded on events, it MUST be recorded in structured form. When recorded on spans, it MAY be recorded as a JSON string if structured format is not supported and SHOULD be recorded in structured form otherwise.
 
-**[6] `gen_ai.output.messages`:** Each message represents a single output choice/candidate generated by
+**[9] `gen_ai.output.messages`:** Each message represents a single output choice/candidate generated by
 the model. Each message corresponds to exactly one generation
 (choice/candidate) and vice versa - one choice cannot be split across
 multiple messages or one message cannot contain parts from multiple choices.
@@ -96,7 +106,7 @@ Instrumentations MUST follow [JSON schema](/model/gen-ai/gen-ai-output-messages.
 
 When the attribute is recorded on events, it MUST be recorded in structured form. When recorded on spans, it MAY be recorded as a JSON string if structured format is not supported and SHOULD be recorded in structured form otherwise.
 
-**[7] `gen_ai.system_instructions`:** This attribute SHOULD be used when the corresponding provider or API
+**[10] `gen_ai.system_instructions`:** This attribute SHOULD be used when the corresponding provider or API
 allows to provide system instructions or messages separately from the
 chat history.
 
@@ -116,7 +126,7 @@ Instrumentations MUST follow [JSON schema](/model/gen-ai/gen-ai-system-instructi
 
 When the attribute is recorded on events, it MUST be recorded in structured form. When recorded on spans, it MAY be recorded as a JSON string if structured format is not supported and SHOULD be recorded in structured form otherwise.
 
-**[8] `gen_ai.tool.call.arguments`:**
+**[11] `gen_ai.tool.call.arguments`:**
 
 > [!WARNING]
 > This attribute may contain sensitive information.
@@ -129,7 +139,7 @@ Instrumentations MUST follow [JSON schema](/model/gen-ai/gen-ai-tool-call-argume
 
 When the attribute is recorded on events, it MUST be recorded in structured form. When recorded on spans, it MAY be recorded as a JSON string if structured format is not supported and SHOULD be recorded in structured form otherwise.
 
-**[9] `gen_ai.tool.call.result`:**
+**[12] `gen_ai.tool.call.result`:**
 
 > [!WARNING]
 > This attribute may contain sensitive information.
@@ -139,6 +149,19 @@ to the instrumentation, the instrumentation SHOULD do the best effort to
 deserialize it to an object.
 
 Instrumentations MUST follow [JSON schema](/model/gen-ai/gen-ai-tool-call-result.json).
+
+When the attribute is recorded on events, it MUST be recorded in structured form. When recorded on spans, it MAY be recorded as a JSON string if structured format is not supported and SHOULD be recorded in structured form otherwise.
+
+**[13] `gen_ai.tool.definitions`:**
+
+> [!WARNING]
+> This attribute may contain sensitive information.
+
+Since this attribute could be large, it's NOT RECOMMENDED to populate
+non-required properties by default. Instrumentations MAY provide a way
+to enable populating optional properties.
+
+Instrumentations MUST follow [JSON schema](/model/gen-ai/gen-ai-tool-definitions.json).
 
 When the attribute is recorded on events, it MUST be recorded in structured form. When recorded on spans, it MAY be recorded as a JSON string if structured format is not supported and SHOULD be recorded in structured form otherwise.
 
@@ -156,7 +179,7 @@ When the attribute is recorded on events, it MUST be recorded in structured form
 | `delete_memory_store` | Delete or deprovision a memory store | ![Development](https://img.shields.io/badge/-development-blue) |
 | `embeddings` | Embeddings operation such as [OpenAI Create embeddings API](https://platform.openai.com/docs/api-reference/embeddings/create) | ![Development](https://img.shields.io/badge/-development-blue) |
 | `execute_tool` | Execute a tool | ![Development](https://img.shields.io/badge/-development-blue) |
-| `fetch_response` | Fetch a previously generated model response by its identifier, without performing inference, such as [OpenAI Get a model response](https://platform.openai.com/docs/api-reference/responses/get) [10] | ![Development](https://img.shields.io/badge/-development-blue) |
+| `fetch_response` | Fetch a previously generated model response by its identifier, without performing inference, such as [OpenAI Get a model response](https://platform.openai.com/docs/api-reference/responses/get) [14] | ![Development](https://img.shields.io/badge/-development-blue) |
 | `generate_content` | Multimodal content generation operation such as [Gemini Generate Content](https://ai.google.dev/api/generate-content) | ![Development](https://img.shields.io/badge/-development-blue) |
 | `invoke_agent` | Invoke GenAI agent | ![Development](https://img.shields.io/badge/-development-blue) |
 | `invoke_workflow` | Invoke GenAI workflow | ![Development](https://img.shields.io/badge/-development-blue) |
@@ -167,7 +190,7 @@ When the attribute is recorded on events, it MUST be recorded in structured form
 | `update_memory` | Update existing memory records | ![Development](https://img.shields.io/badge/-development-blue) |
 | `upsert_memory` | Create or update memory records without the caller choosing which | ![Development](https://img.shields.io/badge/-development-blue) |
 
-**[10]:** Instrumentations SHOULD NOT report token usage (as attributes or metrics) for this operation.
+**[14]:** Instrumentations SHOULD NOT report token usage (as attributes or metrics) for this operation.
 
 ## `gen_ai.client.operation.exception`
 
@@ -183,30 +206,33 @@ A provider call failed. A log record of severity WARN in the context of the chat
 
 | Key | Stability | [Requirement Level](https://opentelemetry.io/docs/specs/semconv/general/attribute-requirement-level/) | Value Type | Description | Example Values |
 | --- | --- | --- | --- | --- | --- |
-| `exception.message` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | `Required` | string | The exception message. [11] | `Division by zero`; `Can't convert 'int' object to str implicitly` |
-| `exception.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | `Required` | string | The class of provider error: `retryable`, `context_exhausted`, `fatal`, or `malformed`. [12] | `java.net.ConnectException`; `OSError` |
-| `gen_ai.conversation.id` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The run id. [13] | `conv_5j66UpCpwteGg4YSxUnt7lPY` |
-| `gen_ai.operation.name` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | Always `chat`. [14] | `chat`; `generate_content`; `text_completion` |
-| `gen_ai.provider.name` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The Generative AI provider as identified by the client or server instrumentation. [15] | `openai`; `gcp.gen_ai`; `gcp.vertex_ai` |
+| `exception.message` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | `Required` | string | The exception message. [15] | `Division by zero`; `Can't convert 'int' object to str implicitly` |
+| `exception.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | `Required` | string | The class of provider error: `retryable`, `context_exhausted`, `auth`, `fatal`, or `malformed`. [16] | `java.net.ConnectException`; `OSError` |
+| `gen_ai.conversation.id` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The run id. [17] | `conv_5j66UpCpwteGg4YSxUnt7lPY` |
+| `gen_ai.operation.name` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | Always `chat`. [18] | `chat`; `generate_content`; `text_completion` |
+| `gen_ai.provider.name` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The Generative AI provider as identified by the client or server instrumentation. [19] | `openai`; `gcp.gen_ai`; `gcp.vertex_ai` |
 | `gen_ai.request.model` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The name of the GenAI model a request is being made to. | `gpt-4` |
-| [`lablet.attempt`](/lablet/docs/telemetry/lablet/README.md#lablet-attempt) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | One-based attempt number of a provider call within its turn. [16] | `1`; `2` |
-| [`lablet.config.digest`](/lablet/docs/telemetry/lablet/README.md#lablet-config-digest) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | SHA-256 of the resolved config, in hex. [17] | `9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08` |
-| [`lablet.turn`](/lablet/docs/telemetry/lablet/README.md#lablet-turn) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | One-based index of the turn a provider call or tool call belongs to. [18] | `1`; `2` |
+| [`lablet.attempt`](/lablet/docs/telemetry/lablet/README.md#lablet-attempt) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | One-based attempt number of a provider call within its turn. [20] | `1`; `2` |
+| [`lablet.config.digest`](/lablet/docs/telemetry/lablet/README.md#lablet-config-digest) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | SHA-256 of the resolved config, in hex. [21] | `9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08` |
+| [`lablet.turn`](/lablet/docs/telemetry/lablet/README.md#lablet-turn) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | One-based index of the turn a provider call or tool call belongs to. [22] | `1`; `2` |
 | `session.id` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The run id, for backends that group by session. | `00112233-4455-6677-8899-aabbccddeeff` |
+| [`lablet.experiment.id`](/lablet/docs/telemetry/lablet/README.md#lablet-experiment-id) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the run request named an experiment. | string | The experiment the run is part of, as the run request named it. [23] | `tool-descriptions-v2` |
+| [`lablet.task.id`](/lablet/docs/telemetry/lablet/README.md#lablet-task-id) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the run request named a task. | string | The task the run attempts, as the run request named it. [24] | `fix-failing-test`; `swe-bench/django-11099` |
+| [`lablet.trial`](/lablet/docs/telemetry/lablet/README.md#lablet-trial) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the run request named a trial. | string | Which repetition of the task the run is, as the run request named it. [25] | `1`; `seed-42` |
 
-**[11] `exception.message`:**
+**[15] `exception.message`:**
 
 > [!WARNING]
 >
 > This attribute may contain sensitive information.
 
-**[12] `exception.type`:** If the recorded exception type is a wrapper that is not meaningful for
+**[16] `exception.type`:** If the recorded exception type is a wrapper that is not meaningful for
 failure classification, instrumentation MAY use the type of the inner
 exception instead. For example, in Go, errors created with `fmt.Errorf`
 using `%w` MAY be unwrapped when the wrapper type does not help
 classify the failure.
 
-**[13] `gen_ai.conversation.id`:** Instrumentations SHOULD populate conversation id when they have an identifier
+**[17] `gen_ai.conversation.id`:** Instrumentations SHOULD populate conversation id when they have an identifier
 for the conversation readily available for a given operation, for example:
 
 - when the client framework being instrumented manages conversation history
@@ -225,9 +251,9 @@ Application developers that manage conversation history MAY add conversation id 
 spans or logs using custom span or log record processors or hooks provided by instrumentation
 libraries.
 
-**[14] `gen_ai.operation.name`:** If one of the predefined values applies, but specific system uses a different name it's RECOMMENDED to document it in the semantic conventions for specific GenAI system and use system-specific name in the instrumentation. If a different name is not documented, instrumentation libraries SHOULD use applicable predefined value.
+**[18] `gen_ai.operation.name`:** If one of the predefined values applies, but specific system uses a different name it's RECOMMENDED to document it in the semantic conventions for specific GenAI system and use system-specific name in the instrumentation. If a different name is not documented, instrumentation libraries SHOULD use applicable predefined value.
 
-**[15] `gen_ai.provider.name`:** Semantic conventions for individual GenAI operations SHOULD clarify which
+**[19] `gen_ai.provider.name`:** Semantic conventions for individual GenAI operations SHOULD clarify which
 kinds of providers (e.g. inference, embeddings, retrieval, memory, hosted
 agent providers) apply when it is not clear from context.
 
@@ -245,11 +271,17 @@ should have the `gen_ai.provider.name` set to `aws.bedrock` and include
 applicable `aws.bedrock.*` attributes and are not expected to include
 `openai.*` attributes.
 
-**[16] `lablet.attempt`:** Justification: `http.request.resend_count` counts resends of one HTTP request inside a client; lablet's retry is a new inference call with a span of its own.
+**[20] `lablet.attempt`:** Justification: `http.request.resend_count` counts resends of one HTTP request inside a client; lablet's retry is a new inference call with a span of its own.
 
-**[17] `lablet.config.digest`:** Justification: no convention identifies the configuration that produced a run, and grouping runs by configuration is what lablet's measurements are for.
+**[21] `lablet.config.digest`:** Justification: no convention identifies the configuration that produced a run, and grouping runs by configuration is what lablet's measurements are for.
 
-**[18] `lablet.turn`:** Justification: the conventions have no turn; the index groups a turn's chat and tool spans without adding a span level.
+**[22] `lablet.turn`:** Justification: the conventions have no turn; the index groups a turn's chat and tool spans without adding a span level.
+
+**[23] `lablet.experiment.id`:** Justification: no convention names the comparison a run belongs to. It's what tells the runs of one comparison from the runs of another that attempt the same task.
+
+**[24] `lablet.task.id`:** Justification: the conventions identify a conversation and an agent, not the task a run was given. A composer runs one task many times and under many configs, and groups runs by it more than by anything else, so it's declared here rather than left to a resource attribute whose key the registry can't know.
+
+**[25] `lablet.trial`:** Justification: no convention numbers the repetitions of a task. A string, because the composer chooses it and lablet gives it no meaning of its own.
 
 ---
 
@@ -265,7 +297,7 @@ applicable `aws.bedrock.*` attributes and are not expected to include
 | `delete_memory_store` | Delete or deprovision a memory store | ![Development](https://img.shields.io/badge/-development-blue) |
 | `embeddings` | Embeddings operation such as [OpenAI Create embeddings API](https://platform.openai.com/docs/api-reference/embeddings/create) | ![Development](https://img.shields.io/badge/-development-blue) |
 | `execute_tool` | Execute a tool | ![Development](https://img.shields.io/badge/-development-blue) |
-| `fetch_response` | Fetch a previously generated model response by its identifier, without performing inference, such as [OpenAI Get a model response](https://platform.openai.com/docs/api-reference/responses/get) [19] | ![Development](https://img.shields.io/badge/-development-blue) |
+| `fetch_response` | Fetch a previously generated model response by its identifier, without performing inference, such as [OpenAI Get a model response](https://platform.openai.com/docs/api-reference/responses/get) [26] | ![Development](https://img.shields.io/badge/-development-blue) |
 | `generate_content` | Multimodal content generation operation such as [Gemini Generate Content](https://ai.google.dev/api/generate-content) | ![Development](https://img.shields.io/badge/-development-blue) |
 | `invoke_agent` | Invoke GenAI agent | ![Development](https://img.shields.io/badge/-development-blue) |
 | `invoke_workflow` | Invoke GenAI workflow | ![Development](https://img.shields.io/badge/-development-blue) |
@@ -276,7 +308,7 @@ applicable `aws.bedrock.*` attributes and are not expected to include
 | `update_memory` | Update existing memory records | ![Development](https://img.shields.io/badge/-development-blue) |
 | `upsert_memory` | Create or update memory records without the caller choosing which | ![Development](https://img.shields.io/badge/-development-blue) |
 
-**[19]:** Instrumentations SHOULD NOT report token usage (as attributes or metrics) for this operation.
+**[26]:** Instrumentations SHOULD NOT report token usage (as attributes or metrics) for this operation.
 
 ---
 
@@ -290,9 +322,9 @@ applicable `aws.bedrock.*` attributes and are not expected to include
 | `azure.ai.openai` | [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-services/openai/overview) | ![Development](https://img.shields.io/badge/-development-blue) |
 | `cohere` | [Cohere](https://cohere.com/) | ![Development](https://img.shields.io/badge/-development-blue) |
 | `deepseek` | [DeepSeek](https://www.deepseek.com/) | ![Development](https://img.shields.io/badge/-development-blue) |
-| `gcp.gemini` | [Gemini](https://cloud.google.com/products/gemini) [20] | ![Development](https://img.shields.io/badge/-development-blue) |
-| `gcp.gen_ai` | Any Google generative AI endpoint [21] | ![Development](https://img.shields.io/badge/-development-blue) |
-| `gcp.vertex_ai` | [Vertex AI](https://cloud.google.com/vertex-ai) [22] | ![Development](https://img.shields.io/badge/-development-blue) |
+| `gcp.gemini` | [Gemini](https://cloud.google.com/products/gemini) [27] | ![Development](https://img.shields.io/badge/-development-blue) |
+| `gcp.gen_ai` | Any Google generative AI endpoint [28] | ![Development](https://img.shields.io/badge/-development-blue) |
+| `gcp.vertex_ai` | [Vertex AI](https://cloud.google.com/vertex-ai) [29] | ![Development](https://img.shields.io/badge/-development-blue) |
 | `groq` | [Groq](https://groq.com/) | ![Development](https://img.shields.io/badge/-development-blue) |
 | `ibm.watsonx.ai` | [IBM Watsonx AI](https://www.ibm.com/products/watsonx-ai) | ![Development](https://img.shields.io/badge/-development-blue) |
 | `mistral_ai` | [Mistral AI](https://mistral.ai/) | ![Development](https://img.shields.io/badge/-development-blue) |
@@ -301,8 +333,8 @@ applicable `aws.bedrock.*` attributes and are not expected to include
 | `perplexity` | [Perplexity](https://www.perplexity.ai/) | ![Development](https://img.shields.io/badge/-development-blue) |
 | `x_ai` | [xAI](https://x.ai/) | ![Development](https://img.shields.io/badge/-development-blue) |
 
-**[20]:** Used when accessing the 'generativelanguage.googleapis.com' endpoint. Also known as the AI Studio API.
+**[27]:** Used when accessing the 'generativelanguage.googleapis.com' endpoint. Also known as the AI Studio API.
 
-**[21]:** May be used when specific backend is unknown.
+**[28]:** May be used when specific backend is unknown.
 
-**[22]:** Used when accessing the 'aiplatform.googleapis.com' endpoint.
+**[29]:** Used when accessing the 'aiplatform.googleapis.com' endpoint.

@@ -11,7 +11,8 @@ events:
     note: >
       Emitted once, after the run ends and whatever the stop reason, in the trace context of the
       root span. The shape is flat and fixed. Values are raw counts, bytes, tokens, and
-      durations; ratios and averages belong to the aggregation.
+      durations; ratios and averages belong to the aggregation. It's exported alone, after the
+      run's other records, so a batch of them that a collector refuses can't take it along.
     attributes:
       # Identity
       - ref_group: attributes.lablet.join
@@ -20,6 +21,10 @@ events:
         requirement_level: required
       - ref: gen_ai.agent.version
         brief: The lablet version.
+        requirement_level: required
+      - ref: lablet.tools.digest
+        requirement_level: required
+      - ref: lablet.prompt.system_digest
         requirement_level: required
       # Setup
       - ref: gen_ai.provider.name
@@ -45,6 +50,12 @@ events:
           conditionally_required: If `model.temperature` is set.
       - ref: lablet.request.thinking
         requirement_level: required
+      - ref: lablet.request.api
+        requirement_level: required
+      - ref: lablet.request.reasoning_replayed
+        requirement_level: required
+      - ref: lablet.request.cache_scope
+        requirement_level: required
       - ref: lablet.run.completion_mode
         requirement_level: required
       - ref: lablet.run.max_turns
@@ -58,9 +69,17 @@ events:
         requirement_level: required
       - ref: lablet.mcp.servers
         requirement_level: required
+      - ref: lablet.mcp.server_versions
+        requirement_level:
+          conditionally_required: If the run has MCP servers.
+      - ref: lablet.mcp.lifetime
+        requirement_level:
+          conditionally_required: If the run has MCP servers.
       - ref: lablet.prompt.system_bytes
         requirement_level: required
       - ref: lablet.prompt.user_bytes
+        requirement_level: required
+      - ref: lablet.prompt.tools_bytes
         requirement_level: required
       - ref: lablet.skills.count
         requirement_level: required
@@ -85,6 +104,8 @@ events:
       - ref: lablet.run.transcript_path
         requirement_level:
           conditionally_required: If `run.transcript_path` is set.
+      - ref: lablet.telemetry.dropped_records
+        requirement_level: required
       # Provider
       - ref: lablet.provider.retries
         requirement_level: required
@@ -102,11 +123,26 @@ events:
         brief: >
           The part of the output tokens spent on reasoning, summed over every successful provider
           call. A part of `gen_ai.usage.output_tokens`, never added to it.
-        requirement_level: required
+        requirement_level:
+          conditionally_required: If a successful provider call reported the count.
       - ref: gen_ai.usage.cache_read.input_tokens
-        requirement_level: required
+        requirement_level:
+          conditionally_required: If a successful provider call reported the count.
       - ref: gen_ai.usage.cache_write.input_tokens
-        requirement_level: required
+        requirement_level:
+          conditionally_required: If a successful provider call reported the count.
+      - ref: lablet.provider.failed.input_tokens
+        requirement_level:
+          conditionally_required: If a failed provider call attempt reported what it used.
+      - ref: lablet.provider.failed.output_tokens
+        requirement_level:
+          conditionally_required: If a failed provider call attempt reported what it used.
+      - ref: lablet.provider.failed.cache_read.input_tokens
+        requirement_level:
+          conditionally_required: If a failed provider call attempt reported the count.
+      - ref: lablet.provider.failed.cache_write.input_tokens
+        requirement_level:
+          conditionally_required: If a failed provider call attempt reported the count.
       - ref: gen_ai.response.finish_reasons
         brief: The finish reason of each successful provider call, in order.
         requirement_level: required
@@ -175,7 +211,7 @@ events:
     attributes:
       - ref_group: attributes.lablet.join
       - ref: exception.type
-        brief: "The class of provider error: `retryable`, `context_exhausted`, `fatal`, or `malformed`."
+        brief: "The class of provider error: `retryable`, `context_exhausted`, `auth`, `fatal`, or `malformed`."
         requirement_level: required
       - ref: exception.message
         requirement_level: required
@@ -196,15 +232,20 @@ events:
     stability: development
     brief: Captured content. A log record in the context of the span whose content it carries, emitted only when `telemetry.capture_content` is on.
     note: >
-      A record for a chat span carries the messages; a record for a tool span carries the call's
-      arguments and result. Content never appears on a span.
+      A record for the root span carries the tool specs the run offered; a record for a chat
+      span carries the messages; a record for a tool span carries the call's arguments and
+      result. Content never appears on a span. Each value is a JSON string in the form the
+      GenAI conventions give the attribute, and one longer than 1 MiB is cut there.
     attributes:
       - ref_group: attributes.lablet.join
       - ref: gen_ai.operation.name
-        brief: The operation of the span the content belongs to, `chat` or `execute_tool`.
+        brief: The operation of the span the content belongs to, `invoke_agent`, `chat`, or `execute_tool`.
         requirement_level: required
       - ref: lablet.turn
-        requirement_level: required
+        requirement_level:
+          conditionally_required: On a record for a chat span or a tool span.
+      - ref: gen_ai.tool.definitions
+        requirement_level: opt_in
       - ref: gen_ai.system_instructions
         requirement_level: opt_in
       - ref: gen_ai.input.messages

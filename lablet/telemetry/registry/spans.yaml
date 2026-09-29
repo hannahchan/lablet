@@ -16,6 +16,15 @@ attribute_groups:
         requirement_level: required
       - ref: lablet.config.digest
         requirement_level: required
+      - ref: lablet.task.id
+        requirement_level:
+          conditionally_required: If the run request named a task.
+      - ref: lablet.experiment.id
+        requirement_level:
+          conditionally_required: If the run request named an experiment.
+      - ref: lablet.trial
+        requirement_level:
+          conditionally_required: If the run request named a trial.
 
 spans:
   - type: lablet.invoke_agent
@@ -56,11 +65,14 @@ spans:
       - ref: gen_ai.usage.output_tokens
         requirement_level: required
       - ref: gen_ai.usage.cache_read.input_tokens
-        requirement_level: required
+        requirement_level:
+          conditionally_required: If a successful provider call reported the count.
       - ref: gen_ai.usage.cache_write.input_tokens
-        requirement_level: required
+        requirement_level:
+          conditionally_required: If a successful provider call reported the count.
       - ref: gen_ai.usage.reasoning.output_tokens
-        requirement_level: required
+        requirement_level:
+          conditionally_required: If a successful provider call reported the count.
       - ref: lablet.run.cost_usd
         requirement_level:
           conditionally_required: If `model.pricing` is configured.
@@ -70,6 +82,10 @@ spans:
     kind: client
     stability: development
     brief: One attempt of a provider call, a child of the root span. Follows the GenAI inference span.
+    note: >
+      Every attempt has a span, a failed one included, which starts when the attempt began and
+      lasts as long as the attempt took. A failed attempt's span carries the usage the provider
+      reported for it, when it reported any.
     name:
       note: "`chat {gen_ai.request.model}`"
     attributes:
@@ -109,26 +125,28 @@ spans:
           conditionally_required: If the call succeeded.
       - ref: gen_ai.usage.input_tokens
         requirement_level:
-          conditionally_required: If the call succeeded.
+          conditionally_required: If the call succeeded, or failed and reported what it used.
       - ref: gen_ai.usage.output_tokens
         requirement_level:
-          conditionally_required: If the call succeeded.
+          conditionally_required: If the call succeeded, or failed and reported what it used.
       - ref: gen_ai.usage.reasoning.output_tokens
         requirement_level:
-          conditionally_required: If the call succeeded.
+          conditionally_required: If the provider reported the count for the attempt.
       - ref: gen_ai.usage.cache_read.input_tokens
         requirement_level:
-          conditionally_required: If the call succeeded.
+          conditionally_required: If the provider reported the count for the attempt.
       - ref: gen_ai.usage.cache_write.input_tokens
         requirement_level:
-          conditionally_required: If the call succeeded.
+          conditionally_required: If the provider reported the count for the attempt.
       - ref: error.type
-        brief: "The class of provider error: `retryable`, `context_exhausted`, `fatal`, or `malformed`."
+        brief: "The class of provider error: `retryable`, `context_exhausted`, `auth`, `fatal`, or `malformed`."
         requirement_level:
           conditionally_required: If the call failed.
       - ref: lablet.turn
         requirement_level: required
       - ref: lablet.attempt
+        requirement_level: required
+      - ref: lablet.chat.purpose
         requirement_level: required
       - ref: lablet.request.bytes
         requirement_level: required
@@ -162,10 +180,11 @@ spans:
           conditionally_required: If the tool is one the run offered to the model.
       - ref: error.type
         brief: >
-          How the call failed: `tool_error` when the tool ran and reported an error, `unknown`,
-          `timeout`, or `failed` when the executor did.
+          How the call failed, which is its `lablet.tool.status`: `tool_error` when the tool ran
+          and reported an error, `timeout` or `failed` when the executor did, and `unknown`,
+          `malformed_input`, or `rejected` when the loop answered the call itself.
         requirement_level:
-          conditionally_required: If the tool call returned an error result to the model.
+          conditionally_required: If the call's status isn't `ok`.
       - ref: lablet.turn
         requirement_level: required
       - ref: lablet.tool.status

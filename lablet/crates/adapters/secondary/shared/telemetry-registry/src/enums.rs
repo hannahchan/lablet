@@ -3,6 +3,121 @@
 //! The closed value sets: one enum for each lablet attribute whose type is a
 //! list of members.
 
+/// What a provider call is for.
+///
+/// The values of `lablet.chat.purpose`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LabletChatPurpose {
+    /// The call asks the model for the next turn of the conversation.
+    Turn,
+}
+
+impl LabletChatPurpose {
+    /// The value as it appears on the wire.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Turn => "turn",
+        }
+    }
+}
+
+impl core::fmt::Display for LabletChatPurpose {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// How long the run's MCP servers live.
+///
+/// The values of `lablet.mcp.lifetime`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LabletMcpLifetime {
+    /// The servers are started again for each run.
+    Run,
+    /// The servers are started once and serve every run of their `Lablet`.
+    Lablet,
+}
+
+impl LabletMcpLifetime {
+    /// The value as it appears on the wire.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Run => "run",
+            Self::Lablet => "lablet",
+        }
+    }
+}
+
+impl core::fmt::Display for LabletMcpLifetime {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The API the run reached its model through.
+///
+/// The values of `lablet.request.api`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LabletRequestApi {
+    /// Anthropic's Messages API.
+    Messages,
+    /// OpenAI's Responses API.
+    Responses,
+    /// OpenAI's chat completions, and every server that speaks them.
+    ChatCompletions,
+    /// The scripted provider's script.
+    Script,
+}
+
+impl LabletRequestApi {
+    /// The value as it appears on the wire.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Messages => "messages",
+            Self::Responses => "responses",
+            Self::ChatCompletions => "chat_completions",
+            Self::Script => "script",
+        }
+    }
+}
+
+impl core::fmt::Display for LabletRequestApi {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Which runs share what the provider caches of the run's requests.
+///
+/// The values of `lablet.request.cache_scope`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LabletRequestCacheScope {
+    /// Every run that sends the same prefix shares what the provider caches of it.
+    Shared,
+    /// Each request carries the run id as its cache key, so no other run reads what this one cached.
+    Run,
+}
+
+impl LabletRequestCacheScope {
+    /// The value as it appears on the wire.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Shared => "shared",
+            Self::Run => "run",
+        }
+    }
+}
+
+impl core::fmt::Display for LabletRequestCacheScope {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// How the run decides that the model has finished.
 ///
 /// The values of `lablet.run.completion_mode`.

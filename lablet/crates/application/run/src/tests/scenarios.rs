@@ -3807,14 +3807,18 @@ async fn an_attempt_whose_observer_took_the_last_of_the_run_s_time_is_given_none
     assert_eq!(run.stop_reason(), StopReason::Completed);
 }
 
-/// What the observer was told of each call's end, in order: how long the
-/// call took.
-fn tool_latencies(run: &Run) -> Vec<u64> {
+/// What the observer was told of each call's end, in order: when the call
+/// began and how long it took.
+fn tool_timings(run: &Run) -> Vec<(u64, u64)> {
     run.observer
         .events()
         .iter()
         .filter_map(|event| match &event.kind {
-            EventKind::ToolCallFinished { latency_ms, .. } => Some(*latency_ms),
+            EventKind::ToolCallFinished {
+                started_ms,
+                latency_ms,
+                ..
+            } => Some((*started_ms, *latency_ms)),
             _ => None,
         })
         .collect()
@@ -3857,7 +3861,11 @@ async fn the_time_an_observer_takes_over_the_start_of_a_tool_call_is_not_the_cal
     let outcome = &run.finished.transcript.turns()[0].tool_calls()[0];
     assert_eq!(outcome.status.as_str(), "ok");
     assert_eq!((outcome.started_ms, outcome.latency_ms), (5_000, 1_000));
-    assert_eq!(tool_latencies(&run), [1_000]);
+    assert_eq!(
+        tool_timings(&run),
+        [(5_000, 1_000)],
+        "the observer is told what the transcript holds"
+    );
     assert_eq!(run.finished.summary.tool_latency_total_ms, 1_000);
     assert_eq!(run.stop_reason(), StopReason::Completed);
 }
@@ -3877,6 +3885,7 @@ async fn a_tool_call_whose_observer_took_the_last_of_the_run_s_time_is_given_non
         ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Timeout)
     );
     assert_eq!((outcome.started_ms, outcome.latency_ms), (11_000, 0));
+    assert_eq!(tool_timings(&run), [(11_000, 0)]);
     assert_eq!(run.stop_reason(), StopReason::Timeout);
     assert_eq!(run.provider.calls(), 1);
 }
@@ -4232,7 +4241,7 @@ async fn the_summary_names_the_api_whether_reasoning_is_sent_back_and_the_cache_
 
     assert_eq!(summary(&run).model, reached);
     assert_eq!(summary(&run).request, asked);
-    let Some(EventKind::RunStarted { model, .. }) = run
+    let Some(EventKind::RunStarted { model, request, .. }) = run
         .observer
         .events()
         .first()
@@ -4241,6 +4250,10 @@ async fn the_summary_names_the_api_whether_reasoning_is_sent_back_and_the_cache_
         panic!("the first event is RunStarted");
     };
     assert_eq!(model, reached);
+    assert_eq!(
+        request, asked,
+        "an observer reports the parameters on each call, before there's a summary to read"
+    );
 }
 
 #[tokio::test]
