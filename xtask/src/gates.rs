@@ -419,14 +419,24 @@ pub fn test_steps() -> Vec<Step> {
     both(["test", "test (xtask)"], "test", WORKSPACE, &[]).into()
 }
 
-/// The line coverage floors; see [`coverage`].
-pub fn coverage_steps() -> Vec<Step> {
-    vec![Step::check("coverage", coverage::check)]
+/// The line and region floors, or with `branch` the branch floors, which are
+/// measured on a nightly toolchain; see [`coverage`].
+pub fn coverage_steps(branch: bool) -> Vec<Step> {
+    vec![if branch {
+        Step::check("coverage (branch)", coverage::check_branches)
+    } else {
+        Step::check("coverage", coverage::check)
+    }]
 }
 
-/// The mutation floors; see [`mutants`].
-pub fn mutants_steps() -> Vec<Step> {
-    vec![Step::check("mutants", mutants::check)]
+/// The exact mutation floor, or with `changed` the same judgement of only
+/// the mutants in what changed; see [`mutants`].
+pub fn mutants_steps(changed: bool) -> Vec<Step> {
+    vec![if changed {
+        Step::check("mutants (changed)", mutants::check_changed)
+    } else {
+        Step::check("mutants", mutants::check)
+    }]
 }
 
 /// The changelog gate; see [`changelog`].
@@ -459,8 +469,9 @@ pub fn pre_commit_steps() -> Vec<Step> {
     steps
 }
 
-/// The full local gate, cheap steps first; `ci` runs the same list.
-/// `coverage` and `mutants` are CI jobs of their own.
+/// The full local gate, cheap steps first; `ci` runs the same list. The
+/// floors are not in it: `coverage` is a CI job of its own on every push, and
+/// `mutants` and `coverage --branch` run daily.
 pub fn pre_push_steps() -> Vec<Step> {
     let mut steps = pre_commit_steps();
     steps.extend(deny_steps());
@@ -870,6 +881,30 @@ mod tests {
                 "{shadow} shadows the repository's clippy.toml"
             );
         }
+    }
+
+    #[test]
+    fn a_floor_task_with_its_flag_is_the_same_task_judging_something_else() {
+        let check = |steps: Vec<Step>| match steps.as_slice() {
+            [step] => match step.action {
+                Action::Check(check) => (step.label, check),
+                Action::Command { .. } => panic!("{} is not a check", step.label),
+            },
+            _ => panic!("a floor task is one step"),
+        };
+        let same = |ran: fn() -> CheckResult, expected: fn() -> CheckResult| {
+            std::ptr::fn_addr_eq(ran, expected)
+        };
+        let (label, ran) = check(coverage_steps(false));
+        assert!(label == "coverage" && same(ran, coverage::check));
+        let (label, ran) = check(coverage_steps(true));
+        assert!(label == "coverage (branch)" && same(ran, coverage::check_branches));
+        let (label, ran) = check(mutants_steps(false));
+        assert!(label == "mutants" && same(ran, mutants::check));
+        let (label, ran) = check(mutants_steps(true));
+        assert!(label == "mutants (changed)" && same(ran, mutants::check_changed));
+        assert_eq!(task_of("coverage (branch)"), "coverage");
+        assert_eq!(task_of("mutants (changed)"), "mutants");
     }
 
     #[test]

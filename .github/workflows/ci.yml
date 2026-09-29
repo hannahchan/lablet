@@ -1,5 +1,5 @@
-# What the gates check lives in xtask; this file only sets up a clean runner
-# and runs them, so another CI provider is a rewrite of this file alone.
+# What the gates check lives in xtask; this file and floors.yml only set up a
+# clean runner and run them, so another CI provider is a rewrite of the two.
 name: CI
 
 # No pull_request trigger: work is pushed to a branch and `main` is
@@ -22,13 +22,14 @@ concurrency:
 
 jobs:
   gate:
-    # The floors run beside `ci` so a slow mutation run never delays the
-    # gate's answer, and one failing does not cancel the others.
+    # Line and region coverage run beside `ci`, so neither waits for the other
+    # and one failing does not cancel the other. Mutation testing and branch
+    # coverage aren't here: they run daily and on demand, in floors.yml.
     name: ${{ matrix.task }}
     strategy:
       fail-fast: false
       matrix:
-        task: [ci, coverage, mutants]
+        task: [ci, coverage]
         # Not `ubuntu-latest`: it moves between images, and the build cache
         # would restore artefacts linked against another image's libraries.
         os: [ubuntu-24.04]
@@ -41,8 +42,9 @@ jobs:
     steps:
       # Actions are pinned by commit because a tag can be moved; the trailing
       # comment names the tag. Full history: the changelog gate diffs against a
-      # base commit a shallow clone lacks. No persisted credentials: nothing
-      # later talks to the remote, so builds and tests have no token to read.
+      # base commit a shallow clone lacks. No persisted credentials, and the
+      # token mise exports is blanked after it: nothing later talks to the
+      # remote.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -82,6 +84,11 @@ jobs:
         with:
           version: 2026.9.7
           cache: true
+
+      # mise-action exports the job's token to every later step. mise has
+      # installed the pins by now and needs no token after that.
+      - name: Keep the token from the build
+        run: echo "MISE_GITHUB_TOKEN=" >> "$GITHUB_ENV"
 
       - name: cargo xtask ${{ matrix.task }}
         run: cargo xtask ${{ matrix.task }}

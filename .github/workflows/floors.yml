@@ -1,0 +1,186 @@
+# The floors a push doesn't wait for: mutation testing, which takes a quarter
+# of an hour whatever the push changed, and branch coverage, which the compiler
+# measures only on a nightly toolchain. Line and region coverage stay in
+# ci.yml. A failure here isn't attached to a push, so someone has to look: the
+# latest run is read before work starts and before a phase closes, and so is
+# its date, since GitHub disables a scheduled workflow in a public repository
+# after 60 days without activity.
+name: Floors
+
+on:
+  schedule:
+    # 02:43 in UTC+10. Off the hour, where scheduled runs queue.
+    - cron: "43 16 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Whether the mutation run has anything new to judge. The only job whose
+  # token can do more than read this public repository, and it builds and runs
+  # nothing from the tree.
+  changed:
+    name: changed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      mutants: ${{ steps.decide.outputs.mutants }}
+    steps:
+      # Pinned by commit, as in ci.yml. Full history: the commit of the last
+      # green run is looked up in it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # A run on demand always tests. A scheduled run tests unless everything
+      # that feeds the floor crates is as the last green run of this workflow
+      # on `main` found it: their sources, what they build with, and what
+      # judges them. That run passed only if its own mutation run passed or
+      # was skipped on the same grounds, so the answer carries from run to run.
+      # A listing that fails counts as no green run, because a run too many
+      # costs minutes and a run too few hides a gap. Event data goes through
+      # `env` so the script never interpolates it.
+      - name: Decide whether the mutation run has anything new to judge
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          decide() {
+            echo "$2"
+            echo "mutants=$1" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          if [[ "$EVENT" != "schedule" ]]; then
+            decide yes "Run on demand."
+          fi
+          last=$(gh run list --repo "$REPOSITORY" --workflow floors.yml --branch main \
+            --status success --limit 1 --json headSha --jq '.[0].headSha // empty') || {
+            echo "::warning::The runs of this workflow couldn't be listed."
+            last=""
+          }
+          if [[ -z "$last" ]]; then
+            decide yes "No green run of this workflow on main was found."
+          fi
+          if ! git cat-file -e "${last}^{commit}" 2>/dev/null; then
+            decide yes "The last green run was of $last, which isn't in this clone."
+          fi
+          if git diff --quiet "$last" HEAD -- \
+            lablet/crates/domain \
+            lablet/crates/application \
+            lablet/Cargo.toml \
+            lablet/Cargo.lock \
+            lablet/.cargo \
+            rust-toolchain.toml \
+            mise.toml \
+            mise.lock \
+            xtask \
+            .github/workflows/floors.yml; then
+            decide no "Nothing that feeds the floor crates changed since $last, the last green run."
+          fi
+          decide yes "What feeds the floor crates changed since $last, the last green run."
+
+  # No `continue-on-error` here or below: a failed mutation run has to leave
+  # the whole run failed, or the next day's `changed` would take it for the
+  # last green one and skip the very mutants that were missed.
+  mutants:
+    name: mutants
+    needs: changed
+    if: needs.changed.outputs.mutants == 'yes'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      # Incremental artefacts are useless on a fresh runner and bloat the cache.
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      # No history: nothing here compares commits. No persisted credentials,
+      # and the token mise exports is blanked after it: nothing here talks to
+      # the remote.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Before mise, whose cargo backend needs a working cargo.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+
+      # After the toolchain: the cache key includes the rustc version. Only
+      # `main` saves, as in ci.yml, and a scheduled run is always of `main`.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            lablet
+            xtask
+          key: mutants-ubuntu-24.04
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # The mise version that wrote mise.lock; bump the two together.
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: 2026.9.7
+          cache: true
+
+      # mise-action exports the job's token to every later step. mise has
+      # installed the pins by now and needs no token after that.
+      - name: Keep the token from the build
+        run: echo "MISE_GITHUB_TOKEN=" >> "$GITHUB_ENV"
+
+      - name: cargo xtask mutants
+        run: cargo xtask mutants
+
+  # Every run, changed or not: it takes about a minute, too little to be worth
+  # skipping.
+  branches:
+    name: coverage --branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+      # The toolchain branch coverage is measured on. xtask/src/coverage.rs
+      # pins the same one, and a test there holds the two in step.
+      NIGHTLY: nightly-2026-08-25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The workspace's own toolchain: xtask is built on it, and mise's cargo
+      # backend needs a working cargo.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+
+      # The key names the nightly, so a new pin starts from a cache of its own
+      # rather than one full of the old compiler's artefacts.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            lablet
+            xtask
+          key: branches-ubuntu-24.04-${{ env.NIGHTLY }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: 2026.9.7
+          cache: true
+
+      # mise-action exports the job's token to every later step. mise has
+      # installed the pins by now and needs no token after that.
+      - name: Keep the token from the build
+        run: echo "MISE_GITHUB_TOKEN=" >> "$GITHUB_ENV"
+
+      # xtask installs no toolchain itself; it fails with this command when
+      # the nightly is missing.
+      - name: Install the pinned nightly toolchain
+        run: rustup toolchain install "$NIGHTLY" --profile minimal --component llvm-tools-preview
+
+      - name: cargo xtask coverage --branch
+        run: cargo xtask coverage --branch

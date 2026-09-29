@@ -244,7 +244,7 @@ fn parse<T: serde::de::DeserializeOwned>(path: &Path, text: &str) -> Result<T, S
 
 #[cfg(test)]
 pub mod fixture {
-    //! A throwaway workspace on disk, for the lints' tests.
+    //! A throwaway workspace or repository on disk, for the tests.
 
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -258,6 +258,39 @@ pub mod fixture {
         for (finding, phrase) in found.iter().zip(phrases) {
             assert!(finding.contains(phrase), "`{phrase}` is not in: {finding}");
         }
+    }
+
+    /// Git pinned to a scratch repository and cut off from the developer's own
+    /// configuration. Clearing the inherited variables isn't enough on its own:
+    /// under a hook, a command that missed that step would reach the real
+    /// repository, so the repository is named outright.
+    pub fn scratch_git(root: &Path, args: &[&str]) -> String {
+        let mut command = std::process::Command::new("git");
+        command
+            .args([
+                "-c",
+                "user.name=xtask",
+                "-c",
+                "user.email=x@example.invalid",
+            ])
+            .args(args)
+            .current_dir(root);
+        for variable in crate::process::GIT_REPOSITORY_ENV {
+            command.env_remove(variable);
+        }
+        let output = command
+            .env("GIT_DIR", root.join(".git"))
+            .env("GIT_WORK_TREE", root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
     }
 
     /// A directory under the system temporary directory, removed on drop.

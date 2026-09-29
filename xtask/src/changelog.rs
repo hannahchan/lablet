@@ -251,6 +251,7 @@ fn short(revision: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace::fixture::scratch_git;
 
     const BEFORE: &str = "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- The scaffold.\n\n## [0.1.0] - 2026-01-01\n\n- First.\n";
 
@@ -428,39 +429,6 @@ mod tests {
             skipped.starts_with("warning: skipped, no base commit to compare with"),
             "{skipped}"
         );
-    }
-
-    /// Git pinned to a scratch repository and cut off from the developer's own
-    /// configuration. Clearing the inherited variables isn't enough on its own:
-    /// under a hook, a command that missed that step would reach the real
-    /// repository, so the repository is named outright.
-    fn scratch_git(root: &std::path::Path, args: &[&str]) -> String {
-        let mut command = std::process::Command::new("git");
-        command
-            .args([
-                "-c",
-                "user.name=xtask",
-                "-c",
-                "user.email=x@example.invalid",
-            ])
-            .args(args)
-            .current_dir(root);
-        for variable in process::GIT_REPOSITORY_ENV {
-            command.env_remove(variable);
-        }
-        let output = command
-            .env("GIT_DIR", root.join(".git"))
-            .env("GIT_WORK_TREE", root)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8_lossy(&output.stdout).into_owned()
     }
 
     #[test]

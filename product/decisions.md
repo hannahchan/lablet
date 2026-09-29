@@ -179,7 +179,7 @@ Supersedes "Small pull requests, human merges." Branches, fast-forward to `main`
 - **No pedantic relaxations.** UsefulBytes allows `missing_errors_doc` and `missing_panics_doc`; lablet doesn't, so `# Errors` and `# Panics` sections are gate-enforced.
 - **One root `clippy.toml`** covers both workspaces and lets tests `unwrap`. Integration targets declare modules as `#[cfg(test)] mod name;` so helpers are covered.
 - **mise backends.** Weaver and cargo-llvm-cov come from GitHub releases with checksums in `mise.lock`; the `ubi` backend the Weaver research used is deprecated. cargo-mutants is compiled from source because upstream ships no arm64 macOS binary and the x86_64 fallback can't link under Rosetta.
-- **CI runs on every pushed branch** as a matrix of `ci`, `coverage`, and `mutants`, since there are no pull requests. On `main` the changelog base is the commit before the push; on branches it's the merge-base with `origin/main`.
+- **CI runs on every pushed branch** as a matrix of `ci`, `coverage`, and `mutants`, since there are no pull requests. On `main` the changelog base is the commit before the push; on branches it's the merge-base with `origin/main`. **Partly superseded on 2026-09-29 by "Mutation testing runs daily, and its floor is exact":** the matrix is `ci` and `coverage`, and `mutants` runs in the `Floors` workflow, daily and on demand. Running on every pushed branch and the changelog bases still hold.
 - **`scripts/setup.sh`** is the one command for a fresh clone.
 
 ## 2026-09-19 The lints reject what lablet doesn't use
@@ -474,6 +474,8 @@ The floor is 90%, the same as lines, because the number is what the existing flo
 
 Branch coverage was considered and left out. It's finer again in the other direction, because a condition that's never false has no uncovered region and only branch coverage sees it, but `-Z coverage-options=branch` needs nightly and `rust-toolchain.toml` pins stable 1.98.1. Measured on nightly before this change, it found nothing region coverage doesn't already flag: `lablet-policy` is 18 of 18 branches, and `lablet-run`'s two missed branches are both also missed regions. That's a fact about today's code rather than a property, and it's worth measuring again when the loop grows.
 
+**Partly superseded on 2026-09-29 by "Mutation testing runs daily, and its floor is exact":** branch coverage is measured on the nightly that `xtask/src/coverage.rs` pins and held to 100% in the daily `Floors` run. That only a nightly toolchain measures branches, and that the workspace stays on its pinned stable one, still hold.
+
 What stands between the domain and application crates and 100% regions, as of this commit, is one testable gap and a set of defensive branches:
 
 - `transcript.rs`, the `else` of `if let Some(turn) = self.turns.last_mut()`, never taken in 1,680 calls.
@@ -501,6 +503,8 @@ Those stay, and the reason is worth stating. `Transcript` is read back with `#[s
 So the hypothesis behind the floor holds, with a boundary: coverage falling in these layers is a design signal, except where the uncovered code is one caller's handling of a failure another caller can genuinely cause. That case is a shared contract, not a guard.
 
 No floor is 100% mutants. An equivalent mutant can't be killed by any test, `lablet-run` carries one already (the default `RunObserver::trace_context` returning `None`, replaced by `None`), and whether a mutant is equivalent isn't decidable, so the number would be a promise about future code that nobody can keep.
+
+**Partly superseded on 2026-09-29 by "Mutation testing runs daily, and its floor is exact":** the mutation floor is exact. Every viable mutant is caught except the ones a list names, each with its reason, and this equivalent mutant is the list's one entry. That whether a mutant is equivalent isn't decidable still holds, and it's why a person judges each one once and the gate doesn't.
 
 ## 2026-09-21 Vendor and solution agnostic, written down
 
@@ -901,3 +905,25 @@ Left open:
 - **Phase 5's `main.rs` should consider clearing the process's `PR_SET_DUMPABLE` flag on Linux,** which stops a command reading lablet's environment from `/proc`. It's a setting of the whole process, so it's the binary's to make and not the library's.
 
 The build took about 3.02 million tokens and the fix pass 0.47 million. The review took 0.60 million against a budget of 0.30 to 0.45 million, so it ran a third over for the second phase in a row. Giving reviewers the files held each one to its area, and the two that read the largest areas still took 0.18 million each.
+
+## 2026-09-29 Mutation testing runs daily, and its floor is exact
+
+Decided by the human. Mutation testing leaves the push path for a workflow of its own, `Floors`, which runs every day and on demand. Its floor changes from 80% of mutants caught to an exact one: every viable mutant of `lablet-model`, `lablet-policy` and `lablet-run` is caught, except the ones `EQUIVALENT_MUTANTS` in `xtask/src/floors.rs` names, each with the reason no test can catch it. The same workflow holds the three crates to every branch.
+
+- **Line and region coverage stay on every push.** The CI leg takes under a minute, which a push can wait for.
+- **Mutation testing runs daily.** It took 10 to 14 minutes of every push whatever the push changed, and its time grows with the code: 9 minutes at 338 mutants, 13 at 482. A scheduled run skips it when nothing that feeds the three crates has changed since the workflow's last green run on `main`: their sources, the manifests, the lockfile and cargo's configuration, the toolchain and tool pins, xtask, and the workflow itself. A run on demand always tests.
+- **The floor is exact, because no percentage is right.** At 100% a percentage fails `lablet-run` on its one equivalent mutant, since 60 of 61 is 98.4%, and anything lower leaves room on a larger crate that real gaps hide in. Whether a mutant is equivalent still isn't decidable by a tool, so each survivor is judged once by a person and written down. An entry names the package, the file and what the mutant does, never the line or column, which move with every edit. It excuses one mutant that the tests ran against and missed, so a timeout is never excused. The named mutants are still generated and tested, so the list can't rot: a full run fails on an entry that matches no missed mutant, because the code it named is gone or a test now catches it. The list starts with one entry, `RunObserver::trace_context` replaced by `None`, which is already its default body, and 367 of 368 viable mutants are caught.
+- **Branch coverage is held to 100%, in the daily run only.** The compiler measures branches only on a nightly toolchain, so `cargo xtask coverage --branch` runs on a nightly pinned by date in `xtask/src/coverage.rs`, and the workspace stays on its pinned stable toolchain. The workflow installs the same nightly, and a test holds the two in step. On 2026-09-21 branch coverage was measured once and left out, to be measured again when the loop grew. Measured again on 2026-09-29, every branch of the three crates is taken, 74 in `lablet-model`, 22 in `lablet-policy` and 46 in `lablet-run`, so the floor starts where the code already is. The job takes about a minute and runs every day, changed or not.
+- **A builder gets a quick answer.** `cargo xtask mutants --changed` tests only the mutants in what differs from the merge-base with `origin/main`: what's committed on the branch, in the index and in the working tree, and untracked files, since a new module is untracked until it's committed. Every mutant it tests is caught or named. It can't say whether the list is current or whether a crate was measured at all, so the full run judges both.
+
+The costs. A gap in the mutation floor can sit on `main` for up to a day before the scheduled run finds it, and for as long as the workflow stays disabled if GitHub turns it off after 60 days without activity, which is why the latest run's date is read too (see Gates in `contributing/README.md`). A failed scheduled run isn't attached to a push, so no push waits for it and no builder's gate turns red: the latest `Floors` run is read before work starts and before a phase closes, which is a convention and not a gate. A failed mutation run leaves the whole workflow run failed, so the next day's run doesn't take it for the last green one and skip the mutants that were missed.
+
+What the builder decided on the way:
+
+- **A listing that fails counts as no green run.** When `gh` can't list the workflow's runs, the scheduled run tests the mutants, since a run too many costs minutes and a run too few hides a gap.
+- **Without `origin/main`, the scoped run starts from the merge-base with `main`,** as the changelog gate does.
+- **Nothing but the list excuses a mutant.** `cargo xtask mutants` passes cargo-mutants `--no-config`, so a `.cargo/mutants.toml` can't stop a mutant from being made, and a production file of a floor crate may not carry `#[mutants::skip]`. Either would take a survivor out of the run without a name or a reason, which is the gap an exact floor exists to close.
+- **A mutant with no verdict counts as not caught.** A mutant is excused from the count only when it didn't build. One whose run ended any other way, as `Failure` does when cargo is killed, or with a summary a later cargo-mutants adds, fails the floor and is listed with its summary, since nothing showed that a test would have failed.
+- **The nightly runs through `rustup run`, in a target directory of its own.** A nested `cargo +toolchain` under `cargo xtask` can reach the real cargo rather than the `rustup` proxy, and a directory of its own keeps the nightly and stable builds from rebuilding each other's artefacts.
+
+It supersedes in part three earlier decisions: the 2026-09-19 bullet on the CI matrix, the 2026-09-21 paragraph that no floor is 100% mutants, and the 2026-09-21 decision to leave branch coverage out.

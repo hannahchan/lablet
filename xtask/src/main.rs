@@ -54,8 +54,8 @@ Quality gates:
   ci                       pre-push
 
 Analysis:
-  coverage                 Line coverage against the floors
-  mutants                  Mutation testing against the floors
+  coverage [--branch]      Line and region coverage floors (--branch: branches, on nightly)
+  mutants [--changed]      The exact mutation floor (--changed: only what changed)
 
 Project:
   setup                    Install the pinned toolchain, tools, and git hooks
@@ -81,6 +81,8 @@ fn plan(task: &str, args: &[String]) -> Result<(Mode, Vec<Step>), String> {
         ("build", _) => Some((Mode::Command, gates::build_steps(flag("--release")?))),
         ("fmt", _) => Some((Mode::Command, gates::fmt_steps(flag("--check")?))),
         ("lint-prose", _) => Some((Mode::Command, gates::lint_prose_steps(flag("--all")?))),
+        ("coverage", _) => Some((Mode::Command, gates::coverage_steps(flag("--branch")?))),
+        ("mutants", _) => Some((Mode::Command, gates::mutants_steps(flag("--changed")?))),
         ("weaver", [subtask]) if subtask == "check" => {
             Some((Mode::Command, gates::weaver_check_steps()))
         }
@@ -117,8 +119,6 @@ fn plan(task: &str, args: &[String]) -> Result<(Mode, Vec<Step>), String> {
         "pre-commit" => (Mode::Gate("pre-commit"), gates::pre_commit_steps()),
         "pre-push" => (Mode::Gate("pre-push"), gates::pre_push_steps()),
         "ci" => (Mode::Gate("ci"), gates::pre_push_steps()),
-        "coverage" => (Mode::Command, gates::coverage_steps()),
-        "mutants" => (Mode::Command, gates::mutants_steps()),
         "setup" => (Mode::Command, gates::setup_steps()),
         "clean" => (Mode::Command, gates::clean_steps()),
         other => return Err(format!("unknown task `{other}`")),
@@ -218,6 +218,14 @@ mod tests {
             error("run", &["--version"]).as_deref(),
             Some("`run` takes the binary's arguments after `--`")
         );
+        assert_eq!(
+            error("coverage", &["--branches"]).as_deref(),
+            Some("`coverage` takes only `--branch`")
+        );
+        assert_eq!(
+            error("mutants", &["--changed", "--branch"]).as_deref(),
+            Some("`mutants` takes only `--changed`")
+        );
         for args in [vec![], vec!["live-check"], vec!["check", "--v2"]] {
             assert_eq!(
                 error("weaver", &args).as_deref(),
@@ -237,6 +245,10 @@ mod tests {
             ("fmt", vec!["--check"]),
             ("build", vec!["--release"]),
             ("lint-prose", vec!["--all"]),
+            ("coverage", vec![]),
+            ("coverage", vec!["--branch"]),
+            ("mutants", vec![]),
+            ("mutants", vec!["--changed"]),
             ("run", vec!["--", "--version"]),
             ("weaver", vec!["check"]),
             ("weaver", vec!["generate"]),

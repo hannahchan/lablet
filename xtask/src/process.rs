@@ -80,6 +80,26 @@ pub fn command(program: &str, args: &[&str]) -> Result<Command, String> {
 
 /// [`command`], in a directory the caller names.
 fn command_in(directory: &Path, program: &str, args: &[&str]) -> Result<Command, String> {
+    let bin = if program == "cargo" {
+        cargo_plugin(args)
+    } else {
+        Some(program.to_owned())
+    };
+    command_running(directory, program, args, bin)
+}
+
+/// `cargo deny ...` runs the binary `cargo-deny`.
+fn cargo_plugin(args: &[&str]) -> Option<String> {
+    args.first().map(|subcommand| format!("cargo-{subcommand}"))
+}
+
+/// [`command_in`], for a program that ends up running `bin`.
+fn command_running(
+    directory: &Path,
+    program: &str,
+    args: &[&str],
+    bin: Option<String>,
+) -> Result<Command, String> {
     if !directory.is_dir() {
         return Err(format!(
             "{} does not exist, so `{program}` has nowhere to run",
@@ -87,12 +107,6 @@ fn command_in(directory: &Path, program: &str, args: &[&str]) -> Result<Command,
         ));
     }
     let tools = tools();
-    // `cargo deny ...` runs the binary `cargo-deny`.
-    let bin = if program == "cargo" {
-        args.first().map(|subcommand| format!("cargo-{subcommand}"))
-    } else {
-        Some(program.to_owned())
-    };
     if let Some(bin) = bin
         && TOOLS.iter().any(|tool| tool.bin == bin)
         && !tools.provides(&bin)
@@ -140,6 +154,36 @@ pub fn stream(program: &str, args: &[&str], env: &[(&str, &str)]) -> Result<Exit
     let mut command = command(program, args)?;
     command.envs(env.iter().copied());
     command.status().map_err(|e| could_not_run(program, &e))
+}
+
+/// `cargo <args>` on `toolchain`, as rustup is asked for it. By `rustup run`
+/// and not `cargo +toolchain`: only rustup's proxy takes `+toolchain`, and
+/// whether the `cargo` first on PATH is the proxy or a toolchain's own binary
+/// depends on how the machine was set up.
+fn on_toolchain<'a>(toolchain: &'a str, args: &[&'a str]) -> Vec<&'a str> {
+    [&["run", toolchain, "cargo"], args].concat()
+}
+
+/// [`stream`], for cargo on a toolchain other than the one
+/// `rust-toolchain.toml` pins. The caller checks that the toolchain is
+/// installed first, so that a missing one fails with the command that
+/// installs it.
+pub fn stream_on(
+    toolchain: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<ExitStatus, String> {
+    let rustup = on_toolchain(toolchain, args);
+    let mut command = command_running(&workspace_root(), "rustup", &rustup, cargo_plugin(args))?;
+    command.envs(env.iter().copied());
+    command.status().map_err(|e| could_not_run("rustup", &e))
+}
+
+/// [`command_failed`], for [`stream_on`].
+pub fn command_failed_on(toolchain: &str, args: &[&str]) -> String {
+    let (_, place) = working_directory("cargo");
+    let rustup = on_toolchain(toolchain, args);
+    format!("command failed (in {place}): rustup {}", rustup.join(" "))
 }
 
 /// A subprocess's stdout, or on failure its stderr or why it could not start.
@@ -346,6 +390,22 @@ mod tests {
             }
         }
         assert!(downloaded > 0, "mise.lock lists no downloaded tool");
+    }
+
+    #[test]
+    fn cargo_on_another_toolchain_runs_through_rustup_in_the_workspace() {
+        let args = ["llvm-cov", "--locked"];
+        assert_eq!(
+            on_toolchain("nightly-2026-08-25", &args),
+            ["run", "nightly-2026-08-25", "cargo", "llvm-cov", "--locked"]
+        );
+        assert_eq!(
+            command_failed_on("nightly-2026-08-25", &args),
+            "command failed (in lablet/): rustup run nightly-2026-08-25 cargo llvm-cov --locked"
+        );
+        // The plugin is a pinned tool on that toolchain as on any other.
+        assert_eq!(cargo_plugin(&args).as_deref(), Some("cargo-llvm-cov"));
+        assert!(TOOLS.iter().any(|tool| tool.bin == "cargo-llvm-cov"));
     }
 
     #[test]

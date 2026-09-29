@@ -1,12 +1,18 @@
 //! The coverage and mutation floors, as data (quality-bar item 12).
 //!
-//! Two things keep a floor honest without parsing Rust. A crate may measure
-//! nothing only while its `src/` defines no function. And test code is told
-//! from production code by file name: in a floor crate unit tests live in a
+//! Coverage is held to a percentage of lines, regions, and branches. Mutation
+//! testing is held to an exact floor: every viable mutant is caught, except
+//! the ones [`EQUIVALENT_MUTANTS`] names.
+//!
+//! Three things keep a floor honest without parsing Rust. A crate may measure
+//! nothing only while its `src/` defines no function. Test code is told from
+//! production code by file name: in a floor crate unit tests live in a
 //! sibling file declared as `#[cfg(test)] mod tests;`, which coverage leaves
 //! out with [`TEST_FILES`]. [`crates`] fails a crate whose production files
 //! carry any other attribute that mentions `test`, since those lines would
-//! count as covered production code.
+//! count as covered production code. And [`crates`] fails a production file
+//! that mentions `mutants::skip`, since cargo-mutants generates no mutant for
+//! what it marks and the exact floor would pass without judging that code.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -27,14 +33,19 @@ pub struct Floor {
     /// on their own. Lines are derived from regions and can only be kinder:
     /// one line holding three arms is covered when any one of them runs.
     pub region_coverage: u64,
-    /// The least share of viable mutants, in percent, its tests must catch.
-    pub mutants_caught: u64,
+    /// The least share of branches, in percent, its tests must take.
+    ///
+    /// A branch is one outcome of a condition, so an `if` has two. Regions
+    /// can't stand in for them: when one side of a `&&` or `||` went the same
+    /// way every time while the whole condition went both ways, every region
+    /// still ran.
+    pub branch_coverage: u64,
 }
 
 /// Every crate with a floor. Changing a number or the list is a decision:
 /// it is stated in contributing/README.md and product/quality-bar.md too.
 ///
-/// All three are held to every line and every region. They have no
+/// All three are held to every line, region, and branch. They have no
 /// unreachable code, and a branch that no test can take is the signal the
 /// floor exists to raise: it means a type allows a state its caller has
 /// already ruled out, and the fix is to make the type rule it out instead.
@@ -45,21 +56,53 @@ pub const FLOORS: &[Floor] = &[
         package: "lablet-model",
         line_coverage: 100,
         region_coverage: 100,
-        mutants_caught: 80,
+        branch_coverage: 100,
     },
     Floor {
         package: "lablet-policy",
         line_coverage: 100,
         region_coverage: 100,
-        mutants_caught: 80,
+        branch_coverage: 100,
     },
     Floor {
         package: "lablet-run",
         line_coverage: 100,
         region_coverage: 100,
-        mutants_caught: 80,
+        branch_coverage: 100,
     },
 ];
+
+/// A mutant no test can catch, because the code it leaves behaves as the code
+/// it replaced.
+#[derive(Debug, Clone, Copy)]
+pub struct Equivalent {
+    /// The package name, as in the crate's `Cargo.toml`.
+    pub package: &'static str,
+    /// The file, relative to the workspace root.
+    pub file: &'static str,
+    /// What the mutant does: the text cargo-mutants gives after `line:col: `.
+    /// The line and column aren't part of the name, since they move with
+    /// every edit to the file. An entry excuses one mutant, so two that read
+    /// the same are two entries.
+    pub mutant: &'static str,
+    /// Why no test can catch it.
+    pub reason: &'static str,
+}
+
+/// The mutants the exact floor excuses. Adding one is a decision, as changing
+/// [`FLOORS`] is.
+///
+/// The list exists because whether a mutant is equivalent isn't decidable by
+/// a tool, so each survivor is judged once by a person and written down here
+/// with the reason. cargo-mutants still generates and tests every one, so a
+/// full run fails on an entry that no longer matches a missed mutant: the code
+/// it named is gone, or a test now catches it.
+pub const EQUIVALENT_MUTANTS: &[Equivalent] = &[Equivalent {
+    package: "lablet-run",
+    file: "crates/application/run/src/observer.rs",
+    mutant: "replace RunObserver::trace_context -> Option<TraceContext> with None",
+    reason: "the default body of `RunObserver::trace_context` is already `None`",
+}];
 
 /// A `tests.rs` file or anything under a `tests/` directory, as a regex.
 pub const TEST_FILES: &str = r"(^|/)tests(\.rs|/)";
@@ -84,13 +127,13 @@ pub enum Standing {
 pub struct Line {
     /// The package name.
     pub package: &'static str,
-    /// How many units (lines, mutants) counted towards the floor.
+    /// How many units (lines, regions, branches) counted towards the floor.
     pub hit: u64,
     /// How many units there were.
     pub total: u64,
     /// The floor, in percent.
     pub floor: u64,
-    /// What `hit` counts, for the wording: "lines covered", "mutants caught".
+    /// What `hit` counts, for the wording: "production lines covered".
     pub unit: &'static str,
     /// What there was none of when `total` is zero: "coverable lines".
     pub none_of: &'static str,
@@ -129,14 +172,11 @@ impl fmt::Display for Line {
                 f,
                 "{package}: nothing to measure yet (no {none_of}); floor {floor}%"
             ),
-            Standing::NothingMeasured => write!(
-                f,
-                "{package}: NOTHING MEASURED (no {none_of}) though its src/ defines a function, \
-                 so the {floor}% floor was not applied. Either something hides the crate from \
-                 the tool (a filter, an ignore pattern, rewritten paths), or no function in \
-                 src/ is one the tool can measure yet (trait methods without a body, only \
-                 unviable mutants): land the first function with a body together with its test"
-            ),
+            Standing::NothingMeasured => f.write_str(&nothing_measured(
+                package,
+                none_of,
+                &format!("{floor}% floor"),
+            )),
             standing => {
                 // Tenths of a percent, rounded down so a miss never reads as the floor.
                 let tenths = hit * 1000 / total;
@@ -156,17 +196,25 @@ impl fmt::Display for Line {
     }
 }
 
+/// The line for a crate that defines a function and had nothing measured.
+/// `floor` names the floor that went unapplied: "100% floor", "exact floor".
+pub fn nothing_measured(package: &str, none_of: &str, floor: &str) -> String {
+    format!(
+        "{package}: NOTHING MEASURED (no {none_of}) though its src/ defines a function, so the \
+         {floor} was not applied. Either something hides the crate from the tool (a filter, an \
+         ignore pattern, rewritten paths), or no function in src/ is one the tool can measure \
+         yet (trait methods without a body, only unviable mutants): land the first function \
+         with a body together with its test"
+    )
+}
+
 /// A floor report as a step result: every line is shown either way, and any
 /// floor not met, or unmeasured though the crate defines a function, fails.
 ///
 /// The count is of floors rather than crates, because a crate can be held to
 /// more than one: coverage judges its lines and its regions apart.
 pub fn conclude(what: &str, lines: &[Line]) -> crate::gates::CheckResult {
-    let report = lines
-        .iter()
-        .map(|line| format!("  {line}"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let report = report(lines);
     let count = |standings: &[Standing]| {
         lines
             .iter()
@@ -187,6 +235,15 @@ pub fn conclude(what: &str, lines: &[Line]) -> crate::gates::CheckResult {
             lines.len()
         )
     }))
+}
+
+/// One indented line per entry, as every floor report lists its crates.
+pub fn report<L: fmt::Display>(lines: &[L]) -> String {
+    lines
+        .iter()
+        .map(|line| format!("  {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `target/xtask` under the workspace, where the floor checks keep their
@@ -213,10 +270,11 @@ pub struct FloorCrate {
 
 /// Every floor crate, read from disk. A floor naming a crate the workspace
 /// does not have is an error, so the list cannot rot silently; so is test
-/// code in a production file.
+/// code in a production file, and so is `mutants::skip` in one.
 pub fn crates(workspace: &Workspace) -> Result<Vec<FloorCrate>, String> {
     let mut crates = Vec::new();
     let mut misplaced = Vec::new();
+    let mut skipped = Vec::new();
     for floor in FLOORS {
         let member = workspace.member_named(floor.package).ok_or_else(|| {
             format!(
@@ -234,12 +292,25 @@ pub fn crates(workspace: &Workspace) -> Result<Vec<FloorCrate>, String> {
                 let relative = file.strip_prefix(&workspace.root).unwrap_or(&file);
                 misplaced.push(format!("  {}:{line}", relative.display()));
             }
+            if let Some(line) = skips_mutants(&source) {
+                let relative = file.strip_prefix(&workspace.root).unwrap_or(&file);
+                skipped.push(format!("  {}:{line}", relative.display()));
+            }
         }
         crates.push(FloorCrate {
             floor,
             directory,
             holds_code,
         });
+    }
+    if !skipped.is_empty() {
+        return Err(format!(
+            "`mutants::skip` in a production file of a crate with a mutation floor:\n\n{}\n\n\
+             cargo-mutants generates no mutant for what it marks, whatever a `cfg_attr` around it \
+             says, so the floor would pass without judging that code. Catch its mutants with a \
+             test, or name one no test can catch in EQUIVALENT_MUTANTS, with the reason.",
+            skipped.join("\n")
+        ));
     }
     if misplaced.is_empty() {
         return Ok(crates);
@@ -290,6 +361,18 @@ fn defines_a_function(line: &str) -> bool {
         })
 }
 
+/// The 1-based line of the first mention of `mutants::skip`, spaced or not,
+/// comments included: a mention in prose only asks for a rewording.
+fn skips_mutants(source: &str) -> Option<usize> {
+    source
+        .lines()
+        .position(|line| {
+            let unspaced: String = line.split_whitespace().collect();
+            unspaced.contains("mutants::skip")
+        })
+        .map(|at| at + 1)
+}
+
 /// The 1-based line of the first attribute that mentions `test` and is not
 /// `#[cfg(test)]` directly on `mod tests;`. An attribute mentions `test` when
 /// that is one of its words, so `#[tokio::test]` and `#[cfg(all(test, unix))]`
@@ -335,7 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn the_domain_crates_are_held_to_every_line_and_region_and_the_loop_to_a_ratchet() {
+    fn the_floor_crates_are_held_to_every_line_region_and_branch() {
         let coverage: Vec<(&str, u64, u64, u64)> = FLOORS
             .iter()
             .map(|floor| {
@@ -343,26 +426,52 @@ mod tests {
                     floor.package,
                     floor.line_coverage,
                     floor.region_coverage,
-                    floor.mutants_caught,
+                    floor.branch_coverage,
                 )
             })
             .collect();
         assert_eq!(
             coverage,
             [
-                ("lablet-model", 100, 100, 80),
-                ("lablet-policy", 100, 100, 80),
-                ("lablet-run", 100, 100, 80),
+                ("lablet-model", 100, 100, 100),
+                ("lablet-policy", 100, 100, 100),
+                ("lablet-run", 100, 100, 100),
             ]
         );
     }
 
-    /// No floor is 100% mutants: an equivalent mutant can't be killed by any
-    /// test, `lablet-run` already carries one, and whether a mutant is
-    /// equivalent isn't decidable.
     #[test]
-    fn no_crate_is_held_to_catching_every_mutant() {
-        assert!(FLOORS.iter().all(|floor| floor.mutants_caught < 100));
+    fn every_mutant_named_as_equivalent_is_in_a_floor_crate_and_says_why() {
+        let workspace = Workspace::load(&crate::workspace::workspace_root()).unwrap();
+        for named in EQUIVALENT_MUTANTS {
+            let Equivalent {
+                package,
+                file,
+                mutant,
+                reason,
+            } = named;
+            assert!(
+                FLOORS.iter().any(|floor| floor.package == *package),
+                "{package} has no floor"
+            );
+            let member = workspace.member_named(package).unwrap();
+            assert!(
+                file.starts_with(&format!("{}/src/", member.path)),
+                "{file} is not a source file of {package}"
+            );
+            assert!(workspace.root.join(file).is_file(), "{file} is gone");
+            // A position would go stale with the next edit to the file.
+            assert!(mutant.starts_with("replace ") || mutant.starts_with("delete "));
+            assert!(!reason.is_empty(), "{mutant} gives no reason");
+        }
+        let names: Vec<&str> = EQUIVALENT_MUTANTS
+            .iter()
+            .map(|named| named.mutant)
+            .collect();
+        assert_eq!(
+            names,
+            ["replace RunObserver::trace_context -> Option<TraceContext> with None"]
+        );
     }
 
     #[test]
@@ -481,6 +590,34 @@ mod tests {
         ] {
             assert_eq!(misplaced_test_code(misplaced), Some(line), "{misplaced}");
         }
+    }
+
+    #[test]
+    fn a_production_file_never_skips_mutants() {
+        assert_eq!(skips_mutants("pub fn add() {}\n"), None);
+        for (skipping, line) in [
+            ("#[mutants::skip]\nfn a() {}\n", 1),
+            (
+                "fn a() {}\n#[cfg_attr(windows, mutants::skip)]\nfn b() {}\n",
+                2,
+            ),
+            (
+                "#[cfg_attr(\n    any(),\n    mutants :: skip\n)]\nfn a() {}\n",
+                3,
+            ),
+            ("#[::mutants::skip]\nfn a() {}\n", 1),
+        ] {
+            assert_eq!(skips_mutants(skipping), Some(line), "{skipping}");
+        }
+        let skipped = crates_with(&[(
+            "skip.rs",
+            "#[cfg_attr(windows, mutants::skip)]\nfn a() {}\n",
+        )])
+        .unwrap_err();
+        assert!(
+            skipped.contains("crates/domain/model/src/skip.rs:1"),
+            "{skipped}"
+        );
     }
 
     /// The floor crates, `lablet-model` with `files` under its `src/`.
