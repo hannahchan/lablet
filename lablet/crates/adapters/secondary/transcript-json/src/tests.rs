@@ -393,6 +393,140 @@ fn a_write_replaces_a_link_at_the_path_and_leaves_what_it_led_to() {
     );
 }
 
+/// A name the file system takes at the path is one it takes for the
+/// temporary file too, since that name holds nothing of the path's.
+#[test]
+fn a_name_as_long_as_the_file_system_allows_is_written() {
+    let scratch = Scratch::new("long-name");
+    let name = format!("{}.json", "t".repeat(250));
+    let file = TranscriptFile::for_run(&scratch.path(&name), &id(FIRST)).unwrap();
+    let document = document(FIRST, "You fix tests.");
+
+    assert_eq!(file.write(&document), Ok(()));
+
+    assert_eq!(
+        std::fs::read_to_string(file.path()).unwrap(),
+        compact(&document)
+    );
+}
+
+fn temporary_name(number: u64) -> String {
+    format!(".lablet-{}-{number}.tmp", std::process::id())
+}
+
+#[test]
+fn a_temporary_file_is_made_beside_the_path_and_named_for_the_process_and_a_number() {
+    let scratch = Scratch::new("temporary-name");
+
+    let (temporary, _) = temporary_beside(&scratch.path("out.json"), NEW_FILE_MODE, || 7).unwrap();
+
+    assert_eq!(temporary, scratch.path(&temporary_name(7)));
+    assert!(temporary.is_file());
+}
+
+/// Another process can have this one's id, so a name can be taken, and
+/// what took it is left as it is: a file isn't written over, and a link
+/// isn't followed.
+#[test]
+fn a_temporary_name_that_is_taken_is_passed_over_and_what_took_it_is_left_alone() {
+    let scratch = Scratch::new("temporary-taken");
+    std::fs::write(scratch.path(&temporary_name(0)), "kept").unwrap();
+    std::os::unix::fs::symlink(
+        scratch.path("made-through-the-link"),
+        scratch.path(&temporary_name(1)),
+    )
+    .unwrap();
+    let mut numbers = 0..;
+
+    let (temporary, _) = temporary_beside(&scratch.path("out.json"), NEW_FILE_MODE, || {
+        numbers.next().unwrap()
+    })
+    .unwrap();
+
+    assert_eq!(temporary, scratch.path(&temporary_name(2)));
+    assert_eq!(
+        std::fs::read_to_string(scratch.path(&temporary_name(0))).unwrap(),
+        "kept"
+    );
+    assert!(scratch.path(&temporary_name(1)).is_symlink());
+    assert!(!scratch.path("made-through-the-link").exists());
+}
+
+#[test]
+fn a_write_whose_every_temporary_name_is_taken_fails_after_a_hundred() {
+    let scratch = Scratch::new("temporary-bound");
+    std::fs::write(scratch.path(&temporary_name(0)), "kept").unwrap();
+    let mut tried = 0;
+
+    let failed = temporary_beside(&scratch.path("out.json"), NEW_FILE_MODE, || {
+        tried += 1;
+        0
+    })
+    .unwrap_err();
+
+    assert_eq!(tried, 100);
+    assert_eq!(failed.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(
+        failed.to_string(),
+        "100 temporary names beside it were taken"
+    );
+}
+
+fn mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+#[test]
+fn a_temporary_file_is_made_no_more_open_than_the_mode_it_is_given() {
+    let scratch = Scratch::new("temporary-mode");
+    let (temporary, _) = temporary_beside(&scratch.path("out.json"), 0o600, || 1).unwrap();
+    assert_eq!(mode(&temporary), 0o600);
+}
+
+#[test]
+fn a_write_keeps_the_permissions_of_the_file_it_replaces() {
+    let scratch = Scratch::new("permissions");
+    let file = TranscriptFile::for_run(&scratch.path("transcript.json"), &id(FIRST)).unwrap();
+    let document = document(FIRST, "You fix tests.");
+
+    for kept in [0o600, 0o640, 0o444] {
+        file.write(&document).unwrap();
+        set_mode(file.path(), kept);
+
+        file.write(&document).unwrap();
+
+        assert_eq!(mode(file.path()), kept, "{kept:o}");
+    }
+}
+
+/// What the path showed was the file the link led to, so the file that
+/// takes the link's place shows no more than that one did.
+#[test]
+fn a_write_over_a_link_takes_the_permissions_of_the_file_it_led_to() {
+    let scratch = Scratch::new("permissions-link");
+    std::fs::write(scratch.path("elsewhere.json"), "kept").unwrap();
+    set_mode(&scratch.path("elsewhere.json"), 0o600);
+    std::os::unix::fs::symlink(
+        scratch.path("elsewhere.json"),
+        scratch.path("transcript.json"),
+    )
+    .unwrap();
+    let file = TranscriptFile::for_run(&scratch.path("transcript.json"), &id(FIRST)).unwrap();
+
+    file.write(&document(FIRST, "You fix tests.")).unwrap();
+
+    assert!(!file.path().is_symlink());
+    assert_eq!(mode(file.path()), 0o600);
+}
+
 #[test]
 fn a_path_that_names_no_file_is_an_error() {
     let scratch = Scratch::new("no-file");

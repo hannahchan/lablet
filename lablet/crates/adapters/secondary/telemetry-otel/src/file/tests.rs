@@ -493,12 +493,59 @@ fn a_write_that_was_interrupted_is_made_again() {
     assert!(!torn);
 }
 
+/// Standard error can't be handed a writer of the test's, so what it
+/// writes is held here, through the function both destinations write with.
+#[test]
+fn a_line_put_after_part_of_another_begins_a_line_of_its_own() {
+    let written = Written::default();
+    let mut to = Fills {
+        written: Arc::clone(&written),
+        room: ONE.len() + 4,
+    };
+    let mut torn = false;
+
+    put(&mut to, ONE, &mut torn).unwrap();
+    put(&mut to, TWO, &mut torn).unwrap_err();
+    assert!(torn);
+    put(&mut to, THREE, &mut torn).unwrap_err();
+    assert!(torn, "a newline that couldn't be written is still owed");
+    to.room = usize::MAX;
+    put(&mut to, THREE, &mut torn).unwrap();
+
+    assert!(!torn);
+    assert_eq!(
+        String::from_utf8(written.lock().unwrap().clone()).unwrap(),
+        format!("{ONE}{{\"re\n{THREE}")
+    );
+}
+
 #[tokio::test]
 async fn standard_error_takes_a_line_as_a_file_does() {
     let sink = Sink::new(FileTarget::Stderr);
     sink.start(&id(FIRST));
 
     spans_to(&sink).export(Vec::new()).await.unwrap();
+}
+
+fn stderr_is_torn(sink: &Sink) -> bool {
+    match sink.open.lock().unwrap().destination {
+        Destination::Stderr { torn } => torn,
+        ref other => panic!("{other:?} isn't standard error"),
+    }
+}
+
+/// Standard error is one stream across runs, so part of a line one run
+/// left there is ended by the next run's first line.
+#[tokio::test]
+async fn standard_error_ends_the_part_of_a_line_a_failed_write_left_whatever_run_writes_next() {
+    let sink = Sink::new(FileTarget::Stderr);
+    sink.open.lock().unwrap().destination = Destination::Stderr { torn: true };
+
+    sink.start(&id(SECOND));
+
+    assert!(stderr_is_torn(&sink), "a run's start leaves it as it was");
+    spans_to(&sink).export(Vec::new()).await.unwrap();
+    assert!(!stderr_is_torn(&sink));
 }
 
 // What a line holds

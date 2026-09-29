@@ -1,19 +1,20 @@
 //! The resolved config: what a config comes to once every default is filled
 //! in, and the digest that groups the runs made from it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 use super::model::{Api, CacheScope, Effort, Pricing, Provider, Thinking};
-use super::tools::{Builtin, McpLifetime, McpResult, McpServer, OutputCut, Tools};
-use super::written::path;
-use super::{Prompt, Run, Telemetry};
+use super::tools::{Builtin, BuiltinTool, McpLifetime, McpResult, McpServer, OutputCut, Tools};
+use super::written::{duration, path};
+use super::{Prompt, Run, Telemetry, when};
 
 /// A config with every default filled in.
 ///
@@ -84,7 +85,10 @@ pub struct ResolvedModel {
     #[serde(skip_serializing_if = "Applied::is_no")]
     pub api: Applied<Api>,
     /// The file of scripted responses a `fake` model plays.
-    #[serde(skip_serializing_if = "Applied::is_no", serialize_with = "script")]
+    #[serde(
+        skip_serializing_if = "Applied::is_no",
+        serialize_with = "applied_path"
+    )]
     pub script: Applied<Option<PathBuf>>,
     /// The provider's name for the model.
     pub name: String,
@@ -118,13 +122,23 @@ pub struct ResolvedModel {
     pub pricing: Option<Pricing>,
 }
 
-fn script<S: Serializer>(
-    script: &Applied<Option<PathBuf>>,
+fn applied_path<S: Serializer>(
+    path: &Applied<Option<PathBuf>>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    match script {
+    match path {
         Applied::No => serializer.serialize_none(),
-        Applied::Yes(script) => path::optional(script, serializer),
+        Applied::Yes(path) => path::optional(path, serializer),
+    }
+}
+
+fn applied_duration<S: Serializer>(
+    duration: &Applied<Duration>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match duration {
+        Applied::No => serializer.serialize_none(),
+        Applied::Yes(duration) => duration::serialize(duration, serializer),
     }
 }
 
@@ -132,18 +146,23 @@ fn script<S: Serializer>(
 ///
 /// What two configs state differently to the same effect is held one way,
 /// so they share a digest: a run asks of `allow` and `deny` only whether
-/// they hold a name, which makes each a set, and the length of a preview
-/// says nothing under a cut that makes none.
+/// they hold a name, which makes each a set, and a setting that nothing
+/// applies is left out. How an output is cut says nothing where nothing
+/// is cut, the length of a preview nothing under a cut that makes none,
+/// and the MCP settings nothing where there's no server.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedTools {
     /// The built-in tools.
-    pub builtin: Builtin,
+    pub builtin: ResolvedBuiltin,
     /// The MCP servers.
     pub mcp: Vec<McpServer>,
-    /// How long the MCP servers live.
-    pub mcp_lifetime: McpLifetime,
-    /// Which part the model is sent of an MCP result that has two.
-    pub mcp_result: McpResult,
+    /// How long the MCP servers live, where there are any.
+    #[serde(skip_serializing_if = "Applied::is_no")]
+    pub mcp_lifetime: Applied<McpLifetime>,
+    /// Which part the model is sent of an MCP result that has two, where
+    /// there are servers.
+    #[serde(skip_serializing_if = "Applied::is_no")]
+    pub mcp_result: Applied<McpResult>,
     /// The only tools offered; `None` offers every tool, which no list
     /// does, so it isn't a list of nothing.
     pub allow: Option<BTreeSet<String>>,
@@ -153,8 +172,9 @@ pub struct ResolvedTools {
     pub max_concurrent_calls: NonZeroU32,
     /// The size in bytes above which a tool result is cut.
     pub max_output_bytes: Option<u64>,
-    /// What's kept of a result that's cut.
-    pub output_cut: OutputCut,
+    /// What's kept of a result that's cut, where there's a cap to cut it.
+    #[serde(skip_serializing_if = "Applied::is_no")]
+    pub output_cut: Applied<OutputCut>,
     /// How many bytes a preview keeps, where the cut is a preview.
     #[serde(skip_serializing_if = "Applied::is_no")]
     pub output_preview_bytes: Applied<u64>,
@@ -179,21 +199,65 @@ impl From<&Tools> for ResolvedTools {
             max_description_chars,
         } = tools;
         let set = |names: &Vec<String>| names.iter().cloned().collect();
+        let cuts = max_output_bytes.is_some();
+        let serves_mcp = !mcp.is_empty();
         Self {
-            builtin: builtin.clone(),
+            builtin: builtin.into(),
             mcp: mcp.clone(),
-            mcp_lifetime: *mcp_lifetime,
-            mcp_result: *mcp_result,
+            mcp_lifetime: when(serves_mcp, *mcp_lifetime),
+            mcp_result: when(serves_mcp, *mcp_result),
             allow: allow.as_ref().map(set),
             deny: set(deny),
             max_concurrent_calls: *max_concurrent_calls,
             max_output_bytes: *max_output_bytes,
-            output_cut: *output_cut,
+            output_cut: when(cuts, *output_cut),
             output_preview_bytes: match output_cut {
-                OutputCut::Preview => Applied::Yes(*output_preview_bytes),
+                OutputCut::Preview => when(cuts, *output_preview_bytes),
                 OutputCut::Head | OutputCut::HeadTail => Applied::No,
             },
             max_description_chars: *max_description_chars,
+        }
+    }
+}
+
+/// The `tools.builtin` section with every default filled in. Its settings
+/// are left out where no built-in tool is enabled, since nothing applies
+/// them then.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResolvedBuiltin {
+    /// The tools to serve.
+    pub enabled: BTreeSet<BuiltinTool>,
+    /// The directory `bash` starts in and the file tools stay under.
+    #[serde(
+        skip_serializing_if = "Applied::is_no",
+        serialize_with = "applied_path"
+    )]
+    pub root: Applied<Option<PathBuf>>,
+    /// The longest a call may take.
+    #[serde(
+        skip_serializing_if = "Applied::is_no",
+        serialize_with = "applied_duration"
+    )]
+    pub timeout: Applied<Duration>,
+    /// Variables a command starts with beside the short list `bash` has.
+    #[serde(skip_serializing_if = "Applied::is_no")]
+    pub env: Applied<BTreeMap<String, String>>,
+}
+
+impl From<&Builtin> for ResolvedBuiltin {
+    fn from(builtin: &Builtin) -> Self {
+        let Builtin {
+            root,
+            enabled,
+            timeout,
+            env,
+        } = builtin;
+        let serves = !enabled.is_empty();
+        Self {
+            enabled: enabled.clone(),
+            root: when(serves, root.clone()),
+            timeout: when(serves, *timeout),
+            env: when(serves, env.clone()),
         }
     }
 }

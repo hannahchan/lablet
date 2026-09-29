@@ -280,15 +280,18 @@ impl KeptOutput {
     /// What the model is sent, and the size of the whole output when that's
     /// less than all of it.
     ///
-    /// An output no longer than the cap, its closing line counted, is sent
-    /// whole: the line goes on from the text before it, as if it had been
-    /// fed. A longer one is cut as the cap says, from what was kept, and so
-    /// is one of any length that wasn't all kept: it can't be sent whole, so
-    /// it says what's missing. The closing line follows whatever a cut
-    /// sends, as an item of its own.
+    /// An output whose text is no longer than the cap is sent whole, and its
+    /// closing line goes on from the text before it, as if it had been fed.
+    /// The closing line, like the line that says what was left out, is sent
+    /// on top of the cap, so it never makes an output that lost nothing say
+    /// that it did. A longer one is cut as the cap says, from what was kept,
+    /// and so is one of any length that wasn't all kept: it can't be sent
+    /// whole, so it says what's missing. The closing line follows whatever a
+    /// cut sends, as an item of its own.
     pub(crate) fn cut(self, cap: Option<OutputCap>) -> (Vec<ToolResultContent>, Option<u64>) {
         let cap = cap.unwrap_or(OutputCap::NONE);
         let total_bytes = self.total_bytes();
+        let fed_bytes = self.fed_bytes;
         let gap = self.kept_bytes() < total_bytes;
         let Self {
             mut content,
@@ -306,7 +309,7 @@ impl KeptOutput {
                 ..Self::new(None)
             };
             whole.push(&tail);
-            if total_bytes <= cap.max_bytes {
+            if fed_bytes <= cap.max_bytes {
                 // The line begins an item where the text before it ended
                 // one. The end is one run whatever items it was fed as, so
                 // a line that follows it goes on from it.

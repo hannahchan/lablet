@@ -728,24 +728,29 @@ fn an_output_within_the_cap_is_sent_as_if_its_closing_line_had_been_fed_last() {
     }
 }
 
-/// Nothing of the text is left out, and the size is still past the cap, as
-/// it was when the line was fed as text.
+/// The closing line is sent on top of the cap, as the line that says what
+/// was left out is, so an output that lost nothing doesn't say it did.
 #[test]
-fn an_output_that_its_closing_line_takes_past_the_cap_is_cut() {
+fn an_output_whose_text_fits_the_cap_is_sent_whole_whatever_its_closing_line_adds() {
+    for cut in CUTS {
+        for max_bytes in [16, 27] {
+            assert_eq!(
+                sent_closed(SIXTEEN, cap(max_bytes, cut)),
+                (strings(&["0123456789abcdefexit code: 3"]), None),
+                "{cut:?} at {max_bytes}"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_output_whose_text_is_one_byte_longer_than_the_cap_is_cut_and_closed() {
     assert_eq!(
-        sent_closed(SIXTEEN, cap(27, OutputCut::Head)),
-        (
-            strings(&[SIXTEEN, "[truncated: the first 16 of 28 bytes]", CLOSING]),
-            Some(28)
-        )
-    );
-    assert_eq!(
-        sent_closed(SIXTEEN, cap(27, OutputCut::HeadTail)),
+        sent_closed(SIXTEEN, cap(15, OutputCut::Head)),
         (
             strings(&[
-                "0123456789abc",
-                "[truncated: 0 of 28 bytes left out]",
-                "def",
+                "0123456789abcde",
+                "[truncated: the first 15 of 28 bytes]",
                 CLOSING
             ]),
             Some(28)
@@ -942,10 +947,10 @@ proptest::proptest! {
         proptest::prop_assert_eq!(kept.cut(Some(cap)), whole.cut(Some(cap)));
     }
 
-    /// An output is cut exactly when it's longer than the cap, its closing
-    /// line counted. What's sent of one that's cut is the output's own start
-    /// and its own end, within the cap between them, the line, and the
-    /// closing line whole.
+    /// An output is cut exactly when its text is longer than the cap, which
+    /// the closing line isn't counted against. What's sent of one that's cut
+    /// is the output's own start and its own end, within the cap between
+    /// them, the line, and the closing line whole.
     #[test]
     fn what_is_sent_is_the_start_and_the_end_of_the_output_within_the_cap(
         items in any_items(), closing in any_closing(), cap in any_cap(), step in 1_usize..6
@@ -957,7 +962,10 @@ proptest::proptest! {
         let (content, truncated_from_bytes) =
             closed_in_steps(Some(cap.keeps()), &items, step, &closing).cut(Some(cap));
 
-        proptest::prop_assert_eq!(truncated_from_bytes, (total > cap.max_bytes).then_some(total));
+        proptest::prop_assert_eq!(
+            truncated_from_bytes,
+            (text.len() as u64 > cap.max_bytes).then_some(total)
+        );
         let sent = texts(&content);
         if truncated_from_bytes.is_none() {
             let mut fed_last = fed_in_steps(None, &items, 16);

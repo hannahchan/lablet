@@ -1,5 +1,6 @@
-//! The wait for a group that was killed, on a clock the tests hold still:
-//! what looks for the group is the test's, so no process is started here.
+//! The wait for a group that was killed, on a clock the tests hold still.
+//! Most tests say what the look for the group sees; one starts a process in
+//! a group of its own, so the look that runs is held too.
 
 use std::cell::Cell;
 use std::os::unix::process::ExitStatusExt as _;
@@ -107,4 +108,32 @@ async fn a_shell_that_could_not_be_waited_for_is_a_failure_and_nothing_is_looked
         "the command was killed after 40ms, and the shell couldn't be waited for: no child"
     );
     assert_eq!(looked.get(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_real_group_is_waited_for_while_it_is_there_and_went_once_it_has_gone() {
+    use std::os::unix::process::CommandExt as _;
+
+    let mut sleep = std::process::Command::new("sleep")
+        .arg("60")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    // Dropped while it runs, it kills the sleep, so a test that fails
+    // leaves nothing running.
+    let mut group = Group {
+        id: Pid::from_raw(i32::try_from(sleep.id()).unwrap()),
+        running: true,
+    };
+    let began = Instant::now();
+
+    assert!(!group.went().await, "a group that's there hasn't gone");
+    assert_eq!(began.elapsed(), GONE_WITHIN);
+    assert!(group.running);
+
+    group.kill();
+    sleep.wait().unwrap();
+
+    assert!(group.went().await);
+    assert!(!group.running);
 }

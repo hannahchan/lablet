@@ -5,9 +5,10 @@
 //! belong.
 
 use std::ffi::OsString;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -17,10 +18,19 @@ use lablet_model::RunId;
 /// What a configured path holds where the run id belongs.
 const RUN_ID: &[u8] = b"{run_id}";
 
-/// How many transcripts this process has begun to write, which with the
-/// process's id is what keeps two writes from one temporary file, whether
-/// they're of one process or of two.
+/// How many temporary names this process has tried. With the process's id
+/// it keeps two writes of this process apart. It can't keep this process
+/// apart from another, which in another PID namespace can have the same
+/// id, so a temporary file is made new and a name that's taken is passed
+/// over.
 static WRITES: AtomicU64 = AtomicU64::new(0);
+
+/// How many temporary names a write tries before it fails.
+const TEMPORARY_NAMES: u32 = 100;
+
+/// The mode a new file is made with when no file is there, less the umask:
+/// what `File::create` gives.
+const NEW_FILE_MODE: u32 = 0o666;
 
 /// The file one run's transcript is written to.
 ///
@@ -108,8 +118,10 @@ impl TranscriptFile {
     ///
     /// The file holds the document whole or is left as it was. The document
     /// is written to a temporary file beside the path, which takes the
-    /// path's place once it's whole, so a symbolic link at the path is
-    /// replaced and what it led to is left alone.
+    /// path's place once it's whole and on the disk, so a symbolic link at
+    /// the path is replaced and what it led to is left alone. It takes the
+    /// permissions of the file the path held, through a link or not, so a
+    /// transcript that was made private stays private.
     ///
     /// # Errors
     ///
@@ -125,35 +137,76 @@ impl TranscriptFile {
     }
 
     /// Puts what `fill` writes in place of whatever the file held, once
-    /// `fill` has written all of it.
-    fn replace(&self, fill: impl FnOnce(File) -> io::Result<()>) -> io::Result<()> {
-        let Some(name) = self.path.file_name() else {
+    /// `fill` has written all of it and it's on the disk.
+    fn replace(&self, fill: impl FnOnce(&File) -> io::Result<()>) -> io::Result<()> {
+        if self.path.file_name().is_none() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "the path names no file",
             ));
-        };
+        }
         if let Some(directory) = self.path.parent() {
             std::fs::create_dir_all(directory)?;
         }
-        let mut temporary = OsString::from(".");
-        temporary.push(name);
-        temporary.push(format!(
-            ".{}-{}.tmp",
-            std::process::id(),
-            WRITES.fetch_add(1, Ordering::Relaxed)
-        ));
-        let temporary = self.path.with_file_name(temporary);
-
-        let replaced = File::create(&temporary)
-            .and_then(fill)
+        let held = std::fs::metadata(&self.path)
+            .ok()
+            .filter(std::fs::Metadata::is_file)
+            .map(|held| held.permissions());
+        // The file is made no more open than the one it replaces, so nobody
+        // the old file kept out can open it while it's written, and its mode
+        // is then set exactly, since the umask may have taken bits from it.
+        // The sync comes before the rename, or a crash could leave the path
+        // naming a file whose text never reached the disk, and it reports an
+        // error that closing the file would drop.
+        let (temporary, opened) = temporary_beside(
+            &self.path,
+            held.as_ref()
+                .map_or(NEW_FILE_MODE, |held| held.mode() & 0o7777),
+            || WRITES.fetch_add(1, Ordering::Relaxed),
+        )?;
+        let replaced = held
+            .map_or(Ok(()), |held| opened.set_permissions(held))
+            .and_then(|()| fill(&opened))
+            .and_then(|()| opened.sync_all())
             .and_then(|()| std::fs::rename(&temporary, &self.path));
         if replaced.is_err() {
-            // It may not have been made, and then there's nothing to remove.
             let _ = std::fs::remove_file(&temporary);
         }
         replaced
     }
+}
+
+/// Makes a file of this write's own beside `path`, named for this process
+/// and the first number `next` gives that names no file there, with `mode`
+/// less the umask, and says where it is.
+///
+/// The name holds nothing of the path's, so a name the file system takes
+/// at the path is one it takes here too. The file is made new: a name
+/// that's taken, by a file or a link, is left as it is and the next is
+/// tried, [`TEMPORARY_NAMES`] in all.
+fn temporary_beside(
+    path: &Path,
+    mode: u32,
+    mut next: impl FnMut() -> u64,
+) -> io::Result<(PathBuf, File)> {
+    for _ in 0..TEMPORARY_NAMES {
+        let temporary =
+            path.with_file_name(format!(".lablet-{}-{}.tmp", std::process::id(), next()));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode)
+            .open(&temporary)
+        {
+            Ok(file) => return Ok((temporary, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!("{TEMPORARY_NAMES} temporary names beside it were taken"),
+    ))
 }
 
 /// The run id as the bytes of one path component, which is a name that

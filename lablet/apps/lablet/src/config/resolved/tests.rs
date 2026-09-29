@@ -192,8 +192,6 @@ telemetry: { resource: { team: evals } }
                 "env": {},
             },
             "mcp": [],
-            "mcp_lifetime": "run",
-            "mcp_result": "structured",
             "allow": null,
             "deny": [],
             "max_concurrent_calls": 10,
@@ -261,10 +259,9 @@ const FAKE_CANONICAL: &str = concat!(
     r#""max_consecutive_invalid_turns":3,"max_retries":10,"max_total_tokens":null,"#,
     r#""max_turns":null,"provider_timeout":"10m","retry_backoff_base":"500ms","#,
     r#""retry_backoff_max":"32s","retry_hint_max":"1m","retry_jitter":0.25,"timeout":"10m"},"#,
-    r#""tools":{"allow":null,"builtin":{"enabled":[],"env":{},"root":null,"timeout":"2m"},"#,
-    r#""deny":[],"max_concurrent_calls":10,"max_description_chars":2048,"#,
-    r#""max_output_bytes":50000,"mcp":[],"mcp_lifetime":"run","mcp_result":"structured","#,
-    r#""output_cut":"preview","output_preview_bytes":2000}}"#,
+    r#""tools":{"allow":null,"builtin":{"enabled":[]},"deny":[],"max_concurrent_calls":10,"#,
+    r#""max_description_chars":2048,"max_output_bytes":50000,"mcp":[],"output_cut":"preview","#,
+    r#""output_preview_bytes":2000}}"#,
 );
 
 #[test]
@@ -276,7 +273,7 @@ fn the_digest_is_of_the_settings_that_say_what_a_run_does_with_every_default_fil
     assert_eq!(digest(""), expected);
     assert_eq!(
         expected,
-        "4ebd5348534834b52564b22d793709142a62d4a994f38620d2ad5e91f8a01098"
+        "e6697aa9d6abe9e6e64979c8df1665a3064073b72d7ce5495685245563756eb2"
     );
 }
 
@@ -454,6 +451,94 @@ fn the_length_of_a_preview_is_resolved_only_under_the_cut_that_makes_one() {
         json!(100)
     );
     assert_ne!(digest("tools: { output_preview_bytes: 100 }"), digest(""));
+}
+
+/// Pairs of configs with the same effect: the second states a setting that
+/// nothing of the config applies.
+const SAME_EFFECT: [(&str, &str); 8] = [
+    (
+        "tools: { max_output_bytes: null }",
+        "tools: { max_output_bytes: null, output_cut: head }",
+    ),
+    (
+        "tools: { max_output_bytes: null }",
+        "tools: { max_output_bytes: null, output_cut: head_tail }",
+    ),
+    (
+        "tools: { max_output_bytes: null }",
+        "tools: { max_output_bytes: null, output_preview_bytes: 100 }",
+    ),
+    ("", "tools: { mcp_lifetime: lablet }"),
+    ("", "tools: { mcp_result: content }"),
+    ("", "tools: { builtin: { root: work } }"),
+    ("", "tools: { builtin: { timeout: 5s } }"),
+    ("", "tools: { builtin: { env: { CI: '1' } } }"),
+];
+
+#[test]
+fn a_setting_that_nothing_applies_is_left_out_and_leaves_the_digest_as_it_was() {
+    for (plain, stated) in SAME_EFFECT {
+        let resolved = |more: &str| yaml(&format!("{FAKE}{more}")).resolved();
+
+        assert_eq!(digest(stated), digest(plain), "{stated}");
+        assert_eq!(resolved(stated), resolved(plain), "{stated}");
+    }
+    let tools = resolved_tools("tools: { max_output_bytes: null, output_cut: head }");
+    for key in [
+        "output_cut",
+        "output_preview_bytes",
+        "mcp_lifetime",
+        "mcp_result",
+    ] {
+        assert_eq!(tools.get(key), None, "{key}");
+    }
+    assert_eq!(tools["builtin"], json!({ "enabled": [] }));
+}
+
+const SERVER: &str = "{ transport: stdio, name: files, command: files-server }";
+
+/// The same settings as [`SAME_EFFECT`]'s, in configs that apply them.
+#[test]
+fn a_setting_that_is_applied_changes_the_digest() {
+    let served = format!("tools: {{ mcp: [{SERVER}] }}");
+    let enabled = "tools: { builtin: { root: work, enabled: [bash] } }";
+    for (plain, stated) in [
+        ("", "tools: { output_cut: head }".to_owned()),
+        ("", "tools: { output_cut: head_tail }".to_owned()),
+        ("", "tools: { output_preview_bytes: 100 }".to_owned()),
+        (
+            &served,
+            format!("tools: {{ mcp: [{SERVER}], mcp_lifetime: lablet }}"),
+        ),
+        (
+            &served,
+            format!("tools: {{ mcp: [{SERVER}], mcp_result: content }}"),
+        ),
+        (
+            enabled,
+            "tools: { builtin: { root: elsewhere, enabled: [bash] } }".to_owned(),
+        ),
+        (
+            enabled,
+            "tools: { builtin: { root: work, enabled: [bash], timeout: 5s } }".to_owned(),
+        ),
+        (
+            enabled,
+            "tools: { builtin: { root: work, enabled: [bash], env: { CI: '1' } } }".to_owned(),
+        ),
+    ] {
+        assert_ne!(digest(&stated), digest(plain), "{stated}");
+    }
+    assert_eq!(
+        resolved_tools(&served)["mcp_lifetime"],
+        json!("run"),
+        "a default that's applied is held as a stated value is"
+    );
+    assert_eq!(resolved_tools(&served)["mcp_result"], json!("structured"));
+    assert_eq!(
+        resolved_tools(enabled)["builtin"],
+        json!({ "root": "work", "enabled": ["bash"], "timeout": "2m", "env": {} })
+    );
 }
 
 #[test]

@@ -7,7 +7,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::future::{self, Future};
-use std::io::{self, Write as _};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -45,7 +45,12 @@ enum Destination {
     File(PathBuf),
     /// The run has no file, and why.
     Refused(String),
-    Stderr,
+    Stderr {
+        /// Whether a write that failed left part of a line on standard
+        /// error. It's one stream whatever run writes to it, so a run's
+        /// start leaves this as it is.
+        torn: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -99,20 +104,26 @@ impl<W: io::Write> Held<W> {
             Some(file) => file,
             None => self.file.insert(open(&self.path)?),
         };
-        // A line written straight after part of another would be one line
-        // with it, and an export that was written whole would be lost to
-        // one that wasn't.
-        if self.torn {
-            whole(file, "\n", &mut self.torn)?;
-        }
-        whole(file, line, &mut self.torn)?;
-        file.flush()
+        put(file, line, &mut self.torn)
     }
 
     /// Closes the file, which the next line opens again.
     fn let_go(&mut self) {
         self.file = None;
     }
+}
+
+/// Writes `line` whole to `to` and sees it through, after the newline that
+/// ends the part of a line `torn` says a failed write left there.
+fn put(to: &mut impl io::Write, line: &str, torn: &mut bool) -> io::Result<()> {
+    // A line written straight after part of another would be one line with
+    // it, and an export that was written whole would be lost to one that
+    // wasn't.
+    if *torn {
+        whole(to, "\n", torn)?;
+    }
+    whole(to, line, torn)?;
+    to.flush()
 }
 
 /// Writes all of `text` to `file`, and says in `torn` whether `file` then
@@ -168,7 +179,7 @@ impl Sink {
         let destination = match &target {
             FileTarget::EachRun { .. } => Destination::Unnamed,
             FileTarget::Path(path) => Destination::File(path.clone()),
-            FileTarget::Stderr => Destination::Stderr,
+            FileTarget::Stderr => Destination::Stderr { torn: false },
         };
         Self {
             target,
@@ -206,13 +217,8 @@ impl Sink {
                 Err("no run has started, so the telemetry has no file to go to".to_owned())
             }
             Destination::Refused(reason) => Err(reason.clone()),
-            Destination::Stderr => {
-                let mut stderr = io::stderr().lock();
-                stderr
-                    .write_all(line.as_bytes())
-                    .and_then(|()| stderr.flush())
-                    .map_err(|error| format!("standard error couldn't be written: {error}"))
-            }
+            Destination::Stderr { torn } => put(&mut io::stderr().lock(), line, torn)
+                .map_err(|error| format!("standard error couldn't be written: {error}")),
             Destination::File(path) => Held::append(held, path, line, to_append)
                 .map_err(|error| format!("{} couldn't be written: {error}", path.display())),
         }

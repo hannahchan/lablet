@@ -24,7 +24,7 @@ use serde::Deserialize;
 pub(crate) use model::Setting;
 pub use model::{Api, CacheScope, Effort, Model, Pricing, Provider, Thinking};
 pub use prompt::{Prompt, SkillsMode};
-pub use resolved::{Applied, ResolvedConfig, ResolvedModel, ResolvedTools};
+pub use resolved::{Applied, ResolvedBuiltin, ResolvedConfig, ResolvedModel, ResolvedTools};
 pub use run::{Completion, Context, Run, TranscriptFormat};
 pub use telemetry::{Otlp, OtlpProtocol, Telemetry, TelemetryFile};
 pub use tools::{
@@ -220,8 +220,10 @@ impl Config {
     }
 
     /// The config with every default filled in, and without the settings
-    /// that nothing of it applies: a default the provider can't apply, and
-    /// the length of a preview under a cut that makes none.
+    /// that nothing of it applies: a default the provider can't apply, how
+    /// an output is cut where nothing is, the length of a preview under a
+    /// cut that makes none, the MCP settings where there's no server, and
+    /// the built-in tools' settings where none is enabled.
     #[must_use]
     pub fn resolved(&self) -> ResolvedConfig {
         let Self {
@@ -272,8 +274,7 @@ impl Config {
     }
 }
 
-/// `value` as the setting of a provider that applies it, and nothing for
-/// one that can't.
+/// `value` as a setting that's applied, and nothing for one that isn't.
 fn when<T>(applied: bool, value: T) -> Applied<T> {
     if applied {
         Applied::Yes(value)
