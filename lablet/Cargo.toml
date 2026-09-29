@@ -11,6 +11,8 @@ members = [
   "crates/adapters/secondary/tools-builtin",
   "crates/adapters/secondary/tools-mcp",
   "crates/adapters/secondary/telemetry-otel",
+  "crates/adapters/secondary/transcript-json",
+  "crates/adapters/secondary/shared/documents",
   "crates/adapters/secondary/shared/telemetry-registry",
   "tests/conformance",
   "tests/mcp-server",
@@ -47,6 +49,10 @@ lablet-tools-builtin = { path = "crates/adapters/secondary/tools-builtin", versi
 lablet-tools-mcp = { path = "crates/adapters/secondary/tools-mcp", version = "0.1.0" }
 # Adapter: RunObserver mapping events to OTel spans and logs
 lablet-telemetry-otel = { path = "crates/adapters/secondary/telemetry-otel", version = "0.1.0" }
+# Adapter: writes a run's transcript document to a JSON file
+lablet-transcript-json = { path = "crates/adapters/secondary/transcript-json", version = "0.1.0" }
+# Adapter shared kernel: the transcript and outcome documents, and the shapes a script shares with them
+lablet-documents = { path = "crates/adapters/secondary/shared/documents", version = "0.1.0" }
 # Adapter shared kernel: generated attribute name constants and enums
 lablet-telemetry-registry = { path = "crates/adapters/secondary/shared/telemetry-registry", version = "0.1.0" }
 # Composition root: config, build(), and the library surface
@@ -63,7 +69,7 @@ thiserror = "=2.0.20"
 
 # Serialisation
 
-# Derives on the domain model and config types.
+# Derives on the document shapes and the config types, and on what the loop measures with.
 serde = { version = "=1.0.229", features = ["derive"] }
 # Transcript, tool inputs, OTLP/JSON file lines, and the config tree that --set edits.
 serde_json = "=1.0.151"

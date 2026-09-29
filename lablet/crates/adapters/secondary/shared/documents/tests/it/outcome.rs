@@ -1,65 +1,67 @@
 //! The outcome JSON is a public contract. The fixture is the contract's one
-//! example, shared by every crate that prints or reads an outcome, and the
-//! changelog gate watches it.
+//! example, and the changelog gate watches it.
 
-use lablet_model::{RunLabels, RunOutcome, StopReason, Usage};
+use lablet_documents::{OUTCOME_SCHEMA_VERSION, OutcomeDocument};
+use lablet_model::{
+    OutcomeParts, RunId, RunLabels, RunOutcome, StopReason, TaskResult, TokenCounts, Usage,
+};
 use serde_json::{Value, json};
+
+use crate::as_checked_in;
 
 // Compiled in, so the test reads the same file whatever directory it runs from.
 const FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../tests/fixtures/outcome.json"
+    "/../../../../../tests/fixtures/outcome.json"
 ));
 
+/// The outcome the fixture describes, built the way the loop closes a run.
 fn outcome() -> RunOutcome {
+    RunOutcome::closing(OutcomeParts {
+        run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").unwrap(),
+        labels: RunLabels {
+            task: Some("fix-failing-test".to_owned()),
+            experiment: None,
+            trial: Some("3".to_owned()),
+        },
+        stop_reason: StopReason::Completed,
+        turns: 7,
+        usage: Usage::from_inclusive(TokenCounts {
+            input: 48_211,
+            output: 1_840,
+            reasoning: Some(1_216),
+            cache_read: Some(39_104),
+            cache_write: None,
+        }),
+        tool_calls: 5,
+        duration_ms: 12_345,
+        result: TaskResult {
+            text: "The failing test is fixed.".to_owned(),
+            structured: Some(json!({ "files_changed": ["src/lib.rs"], "passed": true })),
+        },
+        error: None,
+    })
+}
+
+fn fixture() -> Value {
     serde_json::from_str(FIXTURE).unwrap()
 }
 
 #[test]
-fn the_fixture_deserialises_to_the_outcome_it_describes() {
-    let outcome = outcome();
+fn the_fixture_reads_as_the_outcome_it_describes() {
+    let document = serde_json::from_str::<OutcomeDocument>(FIXTURE).unwrap();
 
-    assert_eq!(outcome.run_id.as_str(), "01K5F3Z8Q4X9T2M7B6W1R0VNEC");
-    assert_eq!(
-        outcome.labels,
-        RunLabels {
-            task: Some("fix-failing-test".to_owned()),
-            experiment: None,
-            trial: Some("3".to_owned()),
-        }
-    );
-    assert_eq!(outcome.stop_reason(), StopReason::Completed);
-    assert_eq!(outcome.turns, 7);
-    assert_eq!(
-        outcome.usage,
-        Usage {
-            input_tokens: 48_211,
-            output_tokens: 1_840,
-            reasoning_output_tokens: Some(1_216),
-            cache_read_tokens: Some(39_104),
-            cache_write_tokens: None,
-        }
-    );
-    assert_eq!(outcome.tool_calls, 5);
-    assert_eq!(outcome.duration_ms, 12_345);
-    assert_eq!(outcome.result().text, "The failing test is fixed.");
-    assert_eq!(
-        outcome.result().structured,
-        Some(json!({ "passed": true, "files_changed": ["src/lib.rs"] }))
-    );
-    assert_eq!(outcome.error(), None);
+    assert_eq!(RunOutcome::try_from(document), Ok(outcome()));
 }
 
 #[test]
-fn the_outcome_serialises_back_to_the_fixture() {
-    let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
-
-    assert_eq!(serde_json::to_value(outcome()).unwrap(), fixture);
+fn the_outcome_is_written_back_as_the_fixture_byte_for_byte() {
+    assert_eq!(as_checked_in(&OutcomeDocument::from(outcome())), FIXTURE);
 }
 
 #[test]
 fn the_fixture_has_exactly_the_keys_the_spec_lists() {
-    let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+    let fixture = fixture();
     let keys = |value: &Value| -> Vec<String> {
         let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
         keys.sort();
@@ -74,6 +76,7 @@ fn the_fixture_has_exactly_the_keys_the_spec_lists() {
             "labels",
             "result",
             "run_id",
+            "schema_version",
             "stop_reason",
             "tool_calls",
             "turns",
@@ -96,12 +99,17 @@ fn the_fixture_has_exactly_the_keys_the_spec_lists() {
     assert!(fixture["error"].is_null());
 }
 
+#[test]
+fn the_fixture_states_the_version_this_crate_writes() {
+    assert_eq!(fixture()["schema_version"], json!(OUTCOME_SCHEMA_VERSION));
+}
+
 /// A count the provider didn't report and a label the request didn't name
 /// are in the document as `null`, so a reader finds every key in every
 /// outcome and never takes a gap for a zero.
 #[test]
 fn the_fixture_writes_what_is_missing_as_null() {
-    let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+    let fixture = fixture();
 
     assert!(fixture["usage"]["cache_write_tokens"].is_null());
     assert!(fixture["labels"]["experiment"].is_null());

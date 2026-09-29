@@ -26,15 +26,11 @@ fn finish_reasons() -> [(FinishReason, &'static str); 6] {
 }
 
 #[test]
-fn a_finish_reason_prints_what_it_serialises_as_and_reads_back_as_itself() {
+fn a_finish_reason_prints_as_it_is_written_down_and_reads_back_as_itself() {
     for (reason, spelling) in finish_reasons() {
+        assert_eq!(reason.as_str(), spelling);
         assert_eq!(reason.to_string(), spelling);
-        assert_eq!(String::from(reason.clone()), spelling);
-        assert_eq!(serde_json::to_value(&reason).unwrap(), json!(spelling));
-        assert_eq!(
-            serde_json::from_value::<FinishReason>(json!(spelling)).unwrap(),
-            reason
-        );
+        assert_eq!(FinishReason::from(spelling.to_owned()), reason);
     }
 }
 
@@ -55,11 +51,6 @@ fn every_provider_spelling_of_a_known_reason_gives_that_reason() {
     ] {
         assert_eq!(
             FinishReason::from(spelling.to_owned()),
-            reason,
-            "{spelling}"
-        );
-        assert_eq!(
-            serde_json::from_value::<FinishReason>(json!(spelling)).unwrap(),
             reason,
             "{spelling}"
         );
@@ -88,7 +79,7 @@ fn only_a_string_that_spells_no_known_reason_is_kept_as_other() {
 }
 
 #[test]
-fn an_effort_prints_what_it_serialises_as_and_xhigh_is_one_word() {
+fn an_effort_prints_its_spelling_and_xhigh_is_one_word() {
     for (effort, spelling) in [
         (Effort::Low, "low"),
         (Effort::Medium, "medium"),
@@ -96,12 +87,8 @@ fn an_effort_prints_what_it_serialises_as_and_xhigh_is_one_word() {
         (Effort::XHigh, "xhigh"),
         (Effort::Max, "max"),
     ] {
+        assert_eq!(effort.as_str(), spelling);
         assert_eq!(effort.to_string(), spelling);
-        assert_eq!(serde_json::to_value(effort).unwrap(), json!(spelling));
-        assert_eq!(
-            serde_json::from_value::<Effort>(json!(spelling)).unwrap(),
-            effort
-        );
     }
 }
 
@@ -111,83 +98,28 @@ fn thinking_defaults_to_the_providers_own_behaviour() {
 }
 
 #[test]
-fn thinking_has_a_form_a_person_can_write() {
-    for (thinking, form) in [
-        (Thinking::ProviderDefault, json!("provider_default")),
-        (Thinking::Adaptive, json!("adaptive")),
-        (
-            Thinking::Budget(NonZeroU32::new(2048).unwrap()),
-            json!({ "budget": 2048 }),
-        ),
-        (Thinking::Disabled, json!("disabled")),
-    ] {
-        assert_eq!(serde_json::to_value(thinking).unwrap(), form);
-        assert_eq!(serde_json::from_value::<Thinking>(form).unwrap(), thinking);
-    }
-}
-
-#[test]
-fn a_thinking_budget_of_zero_is_refused() {
-    assert!(serde_json::from_value::<Thinking>(json!({ "budget": 0 })).is_err());
-}
-
-#[test]
-fn request_defaults_have_one_json_form() {
-    let request = RequestParams {
-        max_tokens: 4096,
-        temperature: Some(0.7),
-        thinking: Thinking::Budget(NonZeroU32::new(1024).unwrap()),
-        effort: Some(Effort::High),
-        seed: Some(7),
-        cache_scope: CacheScope::Run,
-    };
-    let expected = json!({
-        "max_tokens": 4096,
-        "temperature": 0.7,
-        "thinking": { "budget": 1024 },
-        "effort": "high",
-        "seed": 7,
-        "cache_scope": "run",
-    });
-
-    assert_eq!(serde_json::to_value(&request).unwrap(), expected);
-    assert_eq!(
-        serde_json::from_value::<RequestParams>(expected).unwrap(),
-        request
-    );
-}
-
-#[test]
 fn runs_share_a_cache_unless_a_run_is_given_one_of_its_own() {
     assert_eq!(CacheScope::default(), CacheScope::Shared);
 }
 
 #[test]
-fn a_cache_scope_prints_what_it_serialises_as() {
+fn a_cache_scope_prints_its_spelling() {
     for (scope, spelling) in [(CacheScope::Shared, "shared"), (CacheScope::Run, "run")] {
+        assert_eq!(scope.as_str(), spelling);
         assert_eq!(scope.to_string(), spelling);
-        assert_eq!(serde_json::to_value(scope).unwrap(), json!(spelling));
-        assert_eq!(
-            serde_json::from_value::<CacheScope>(json!(spelling)).unwrap(),
-            scope
-        );
     }
 }
 
 #[test]
-fn a_provider_api_prints_what_it_serialises_as() {
+fn a_provider_api_prints_its_spelling() {
     for (api, spelling) in [
         (ProviderApi::Messages, "messages"),
         (ProviderApi::Responses, "responses"),
         (ProviderApi::ChatCompletions, "chat_completions"),
         (ProviderApi::Script, "script"),
     ] {
+        assert_eq!(api.as_str(), spelling);
         assert_eq!(api.to_string(), spelling);
-        assert_eq!(serde_json::to_value(api).unwrap(), json!(spelling));
-        assert_eq!(
-            serde_json::from_value::<ProviderApi>(json!(spelling)).unwrap(),
-            api
-        );
     }
 }
 
@@ -214,62 +146,6 @@ fn bash(id: &str) -> ContentBlock {
     })
 }
 
-#[test]
-fn a_script_cannot_give_a_completion_a_role_or_a_misspelt_field() {
-    for script in [
-        json!({ "role": "user", "content": [], "finish": "end_turn" }),
-        json!({ "message": { "role": "user", "content": [] }, "finish": "end_turn" }),
-        json!({ "content": [], "finish": "end_turn", "usage": { "input_token": 12 } }),
-        json!({ "content": [], "finish": "end_turn", "reponse_id": "msg_1" }),
-    ] {
-        assert!(
-            serde_json::from_value::<ProviderResponse>(script.clone()).is_err(),
-            "{script}"
-        );
-    }
-}
-
-#[test]
-fn a_script_cannot_put_a_tool_result_in_a_completion() {
-    let script = json!({
-        "content": [{ "tool_result": { "call_id": "a", "content": [] } }],
-        "finish": "end_turn",
-    });
-
-    assert!(serde_json::from_value::<ProviderResponse>(script).is_err());
-}
-
-#[test]
-fn a_model_ref_and_an_endpoint_have_one_json_form() {
-    let model = ModelRef {
-        api: ProviderApi::ChatCompletions,
-        name: "qwen3".to_owned(),
-        replays_reasoning: true,
-    };
-    let endpoint = Endpoint {
-        host: "api.anthropic.com".to_owned(),
-        port: 443,
-    };
-
-    assert_eq!(
-        serde_json::to_value(&model).unwrap(),
-        json!({
-            "api": "chat_completions",
-            "name": "qwen3",
-            "replays_reasoning": true,
-        }),
-        "the provider is read from the API, so the form holds none"
-    );
-    assert_eq!(
-        serde_json::from_value::<ModelRef>(serde_json::to_value(&model).unwrap()).unwrap(),
-        model
-    );
-    assert_eq!(
-        serde_json::to_value(&endpoint).unwrap(),
-        json!({ "host": "api.anthropic.com", "port": 443 })
-    );
-}
-
 /// The spellings are a failed chat span's `error.type`. That attribute is an
 /// open set in the conventions, so no generated enum can pin them and this
 /// does.
@@ -288,17 +164,12 @@ fn every_provider_error_kind_is_spelled_as_the_chat_span_reports_it() {
     ] {
         assert_eq!(kind.as_str(), spelling);
         assert_eq!(kind.to_string(), spelling);
-        assert_eq!(serde_json::to_value(kind).unwrap(), json!(spelling));
-        assert_eq!(
-            serde_json::from_value::<ProviderErrorKind>(json!(spelling)).unwrap(),
-            kind
-        );
         assert_eq!(kind.is_retryable(), retryable, "{spelling}");
     }
 }
 
 #[test]
-fn a_repeated_tool_use_id_is_refused_in_code_and_in_a_script() {
+fn a_repeated_tool_use_id_is_refused_and_the_error_names_it() {
     let repeated = ProviderResponse::new(
         vec![bash("a"), bash("b"), bash("a")],
         Usage::default(),
@@ -306,62 +177,14 @@ fn a_repeated_tool_use_id_is_refused_in_code_and_in_a_script() {
         None,
         None,
     );
-    let script = json!({
-        "content": [
-            { "tool_use": { "id": "a", "name": "bash", "input": { "json": {} } } },
-            { "tool_use": { "id": "a", "name": "bash", "input": { "json": {} } } },
-        ],
-        "finish": "tool_use",
-    });
 
     assert_eq!(
         repeated,
         Err(ResponseError::DuplicateToolUse { id: "a".to_owned() })
     );
-    let error = serde_json::from_value::<ProviderResponse>(script).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains(r#"tool call id "a" is on more than one tool-use block"#),
-        "{error}"
-    );
-}
-
-#[test]
-fn a_completion_reads_from_the_form_a_script_would_hold() {
-    let script = json!({
-        "content": [{ "text": "done" }],
-        "usage": { "input_tokens": 12, "output_tokens": 3 },
-        "finish": "stop",
-    });
-    let completion = ProviderResponse::new(
-        vec![ContentBlock::Text("done".to_owned())],
-        usage(12, 3),
-        FinishReason::EndTurn,
-        None,
-        None,
-    )
-    .unwrap();
-
     assert_eq!(
-        serde_json::from_value::<ProviderResponse>(script).unwrap(),
-        completion
-    );
-    assert_eq!(
-        serde_json::to_value(&completion).unwrap(),
-        json!({
-            "content": [{ "text": "done" }],
-            "usage": {
-                "input_tokens": 12,
-                "output_tokens": 3,
-                "reasoning_output_tokens": null,
-                "cache_read_tokens": null,
-                "cache_write_tokens": null,
-            },
-            "finish": "end_turn",
-            "response_id": null,
-            "response_model": null,
-        })
+        repeated.unwrap_err().to_string(),
+        r#"tool call id "a" is on more than one tool-use block of the response"#
     );
 }
 
@@ -385,21 +208,6 @@ fn a_completion_whose_tool_calls_have_distinct_ids_holds_its_content_in_order() 
     assert_eq!(completion.response_model.as_deref(), Some("model-2026"));
 }
 
-#[test]
-fn a_completion_without_usage_used_no_tokens_and_reported_no_count() {
-    let completion = serde_json::from_value::<ProviderResponse>(json!({
-        "content": [],
-        "finish": "end_turn",
-        "response_id": "msg_1",
-        "response_model": "model-2026",
-    }))
-    .unwrap();
-
-    assert_eq!(completion.usage, usage(0, 0));
-    assert_eq!(completion.response_id.as_deref(), Some("msg_1"));
-    assert_eq!(completion.response_model.as_deref(), Some("model-2026"));
-}
-
 proptest::proptest! {
     #![proptest_config(proptest::prelude::ProptestConfig::with_cases(2_000))]
 
@@ -408,13 +216,9 @@ proptest::proptest! {
     /// document can't drift.
     #[test]
     fn normalising_a_finish_reason_is_idempotent(reason in ".{0,24}") {
-        let once = FinishReason::from(reason.clone());
+        let once = FinishReason::from(reason);
         let twice = FinishReason::from(once.as_str().to_owned());
 
         proptest::prop_assert_eq!(&once, &twice);
-        proptest::prop_assert_eq!(
-            serde_json::from_value::<FinishReason>(json!(reason)).unwrap(),
-            once
-        );
     }
 }

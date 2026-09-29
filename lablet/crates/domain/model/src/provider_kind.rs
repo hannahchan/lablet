@@ -5,10 +5,13 @@
 //! understands its payload, and content can't depend on the provider protocol
 //! when the protocol is built from content.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// The provider families lablet has an adapter for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// It serialises because a [`crate::ContentBlock::Opaque`] holds one and the
+/// loop measures a request by serialising its messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
     /// The Anthropic Messages API.
@@ -20,7 +23,7 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
-    /// The serde spelling.
+    /// How a run's record spells it.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {

@@ -14,10 +14,9 @@ use std::time::Duration;
 use futures_util::StreamExt as _;
 use futures_util::stream::FuturesUnordered;
 
-use crate::outcome::RawOutcome;
 use crate::whole_ms;
 use crate::{
-    Answer, Calls, CompletionMode, Cost, Endpoint, FinishedRun, Message, ModelRef,
+    Answer, Calls, CompletionMode, Cost, Endpoint, FinishedRun, Message, ModelRef, OutcomeParts,
     ProviderResponse, Rates, RequestParams, RunId, RunLabels, RunOutcome, RunSummary, StopReason,
     TaskResult, ToolConcurrency, ToolInput, ToolName, ToolUse, Transcript, Turn, Usage,
     UserContent,
@@ -386,7 +385,7 @@ impl Run {
             per_tool: BTreeMap::new(),
             rates,
             cost,
-            outcome: RunOutcome::closing(RawOutcome {
+            outcome: RunOutcome::closing(OutcomeParts {
                 run_id: setup.run_id,
                 labels: setup.labels,
                 stop_reason: stop,

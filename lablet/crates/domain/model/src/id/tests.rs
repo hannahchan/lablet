@@ -1,5 +1,3 @@
-use serde_json::json;
-
 use super::*;
 
 #[test]
@@ -132,57 +130,17 @@ fn a_name_that_is_both_too_long_in_bytes_and_not_ascii_is_refused_for_its_charac
     );
 }
 
+/// The two identifiers a request holds are measured with it, so what each
+/// adds to a request's size is its own length and two quotes.
 #[test]
-fn an_identifier_serialises_as_a_bare_string() {
+fn a_call_id_and_a_tool_name_are_measured_as_bare_strings() {
     assert_eq!(
-        serde_json::to_value(RunId::new("run-1").unwrap()).unwrap(),
-        json!("run-1")
-    );
-    assert_eq!(
-        serde_json::to_value(ToolCallId::new("call_1").unwrap()).unwrap(),
-        json!("call_1")
+        serde_json::to_string(&ToolCallId::new("call_1").unwrap()).unwrap(),
+        r#""call_1""#
     );
     assert_eq!(
-        serde_json::to_value(ToolName::new("bash").unwrap()).unwrap(),
-        json!("bash")
-    );
-}
-
-#[test]
-fn deserialising_an_identifier_runs_the_same_validation() {
-    let tool: ToolName = serde_json::from_value(json!("bash")).unwrap();
-    assert_eq!(tool, ToolName::new("bash").unwrap());
-
-    let error = serde_json::from_value::<ToolName>(json!("no dots.please")).unwrap_err();
-    assert!(
-        error.to_string().contains("has a character other than"),
-        "{error}"
-    );
-
-    let error = serde_json::from_value::<RunId>(json!("")).unwrap_err();
-    assert!(error.to_string().contains("run id is empty"), "{error}");
-
-    let error = serde_json::from_value::<ToolCallId>(json!(" call_1")).unwrap_err();
-    assert!(
-        error.to_string().contains("leading or trailing whitespace"),
-        "{error}"
-    );
-}
-
-#[test]
-fn a_tool_name_is_a_json_map_key() {
-    let mut calls = std::collections::BTreeMap::new();
-    calls.insert(ToolName::new("bash").unwrap(), 2_u64);
-
-    let value = serde_json::to_value(&calls).unwrap();
-    assert_eq!(value, json!({ "bash": 2 }));
-    assert_eq!(
-        serde_json::from_value::<std::collections::BTreeMap<ToolName, u64>>(value).unwrap(),
-        calls
-    );
-    assert!(
-        serde_json::from_value::<std::collections::BTreeMap<ToolName, u64>>(json!({ "": 1 }))
-            .is_err()
+        serde_json::to_string(&ToolName::new("bash").unwrap()).unwrap(),
+        r#""bash""#
     );
 }
 

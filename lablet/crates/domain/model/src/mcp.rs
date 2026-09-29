@@ -1,14 +1,11 @@
 //! The MCP servers that serve a run, and how long they live.
 
-use serde::{Deserialize, Serialize};
-
 /// How long a run's MCP servers live.
 ///
 /// A server that outlives a run carries what the run left in it to the next,
 /// so two runs on one `Lablet` are comparable only when the record says
 /// which they had.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum McpLifetime {
     /// The servers are started again for each run.
     Run,
@@ -17,7 +14,7 @@ pub enum McpLifetime {
 }
 
 impl McpLifetime {
-    /// The serde spelling.
+    /// How a run's record spells it.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -33,8 +30,7 @@ display_as_str!(McpLifetime);
 ///
 /// The name and the version are one value because they're reported as two
 /// lists, and two lists held apart can differ in length or in order.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct McpServer {
     /// The server's name in the config.
     pub name: String,
@@ -47,30 +43,12 @@ pub struct McpServer {
 /// The lifetime is held with the servers it's the lifetime of, and there's
 /// at least one of those, so a run has both or neither: a lifetime says
 /// whether a server's state could have carried over from another run, which
-/// it says of no server when there's none. [`McpServers::new`] and
-/// deserialisation both refuse a set of no servers, and the fields aren't
-/// public.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(try_from = "RawMcpServers")]
+/// it says of no server when there's none. [`McpServers::new`] refuses a set
+/// of no servers, and the fields aren't public.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct McpServers {
     lifetime: McpLifetime,
     servers: Vec<McpServer>,
-}
-
-/// What a run's MCP servers are read from, so that reading them checks them.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawMcpServers {
-    lifetime: McpLifetime,
-    servers: Vec<McpServer>,
-}
-
-impl TryFrom<RawMcpServers> for McpServers {
-    type Error = NoMcpServers;
-
-    fn try_from(raw: RawMcpServers) -> Result<Self, NoMcpServers> {
-        Self::new(raw.lifetime, raw.servers)
-    }
 }
 
 /// A run's MCP servers were given as none at all.

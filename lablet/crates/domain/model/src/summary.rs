@@ -5,8 +5,6 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
-
 use crate::{
     CompletionMode, Cost, Endpoint, FinishReason, McpServers, ModelRef, Rates, RequestParams,
     RunId, RunLabels, RunOutcome, ToolName, Transcript, Turn, Usage,
@@ -19,7 +17,7 @@ use crate::{
 /// Neither digest of what the model was shown is here. The loop takes both
 /// from what it sends, so no caller of the loop can pair one with a prompt or
 /// a tool set it wasn't taken from.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunContext {
     /// The run's id.
     pub run_id: RunId,
@@ -50,7 +48,7 @@ pub struct RunContext {
 }
 
 /// One tool's share of a run.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct ToolStats {
     /// How many times the tool was called.
     pub calls: u64,
@@ -63,23 +61,21 @@ pub struct ToolStats {
 /// What the loop knew and measured over a run: its part of the wide event,
 /// built by [`crate::Run`].
 ///
-/// The run totals that the outcome document carries (`usage`, `tool_calls`,
-/// `turns`, `duration_ms`, `stop_reason`, `error`) are read from `outcome` and
-/// aren't repeated here, so no two fields can disagree. Every total of tool
-/// calls, there and here, counts the calls something was started for
+/// The run totals that the outcome carries (`usage`, `tool_calls`, `turns`,
+/// `duration_ms`, `stop_reason`, `error`) are read from `outcome` and aren't
+/// repeated here, so no two fields can disagree. Every total of tool calls,
+/// there and here, counts the calls something was started for
 /// ([`crate::ToolCallStatus::was_started`]): a call that was never run is in
 /// the transcript alone.
 ///
-/// It's written, never read: the wide event is emitted from it, and the
-/// documents lablet writes are the outcome and the transcript, each of which
-/// checks itself on the way in. A summary holds invariants that span its
-/// fields, such as one finish reason per turn of the outcome and totals that
-/// agree with the transcript beside them, and only [`crate::Run::finish`]
-/// establishes those. So there's no `Deserialize`, rather than one that would
-/// take a summary no run could have produced. The bound on the `per_tool`
-/// keys isn't among them: the tool executor establishes that one, and
-/// `finish` reads its answer.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// It has no written form of its own: the wide event is a mapping of its
+/// fields to attributes, and the documents lablet writes are the outcome and
+/// the transcript. A summary holds invariants that span its fields, such as
+/// one finish reason per turn of the outcome and totals that agree with the
+/// transcript beside them, and only [`crate::Run::finish`] establishes
+/// those. The bound on the `per_tool` keys isn't among them: the tool
+/// executor establishes that one, and `finish` reads its answer.
+#[derive(Debug, Clone, PartialEq)]
 pub struct RunSummary {
     /// The model the run called.
     pub model: ModelRef,
@@ -145,16 +141,16 @@ pub struct RunSummary {
     /// The cost of the run, when pricing is configured and the amount is a
     /// number.
     pub cost: Option<Cost>,
-    /// The outcome document.
+    /// The run's outcome.
     pub outcome: RunOutcome,
 }
 
 /// What a finished run hands back: everything measured, the outcome inside
-/// it, and the conversation. Written, never read, for the reason
-/// [`RunSummary`] gives.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// it, and the conversation.
+#[derive(Debug, Clone, PartialEq)]
 pub struct FinishedRun {
-    /// The run's summary, whose `outcome` is the outcome document.
+    /// The run's summary, whose `outcome` the outcome document is written
+    /// from.
     pub summary: RunSummary,
     /// The whole conversation, whatever the stop reason.
     pub transcript: Transcript,

@@ -170,6 +170,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lablet-documents"
+version = "0.1.0"
+dependencies = [
+ "lablet-model",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "lablet-model"
 version = "0.1.0"
 dependencies = [
@@ -233,6 +243,16 @@ version = "0.1.0"
 [[package]]
 name = "lablet-tools-mcp"
 version = "0.1.0"
+
+[[package]]
+name = "lablet-transcript-json"
+version = "0.1.0"
+dependencies = [
+ "lablet-documents",
+ "lablet-model",
+ "serde_json",
+ "thiserror",
+]
 
 [[package]]
 name = "libc"

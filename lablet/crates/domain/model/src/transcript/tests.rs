@@ -1,6 +1,5 @@
-use serde_json::{Value, json};
+use serde_json::json;
 
-use super::document::{TRANSCRIPT_SCHEMA_VERSION, TranscriptDocument};
 use super::*;
 use crate::{
     Answer, KeptOutput, ProviderKind, TokenCounts, ToolCallEnd, ToolCallId, ToolCallStatus,
@@ -406,171 +405,49 @@ fn usage_is_summed_over_every_turn() {
     );
 }
 
-/// A two-turn run with one tool call, as the document a grader reads.
-fn document() -> Value {
-    json!({
-        "system": "You fix tests.",
-        "turns": [
-            {
-                "input": [{ "text": "Fix the failing test." }],
-                "response": [
-                    { "text": "Looking." },
-                    { "tool_use": { "id": "call_a", "name": "bash", "input": { "json": { "command": "cargo test" } } } },
-                ],
-                "record": {
-                    "usage": {
-                        "input_tokens": 100,
-                        "output_tokens": 20,
-                        "reasoning_output_tokens": null,
-                        "cache_read_tokens": null,
-                        "cache_write_tokens": null,
-                    },
-                    "finish": "tool_use",
-                    "response_id": "msg_1",
-                    "response_model": "model-2026",
-                    "started_ms": 0,
-                    "latency_ms": 800,
-                    "attempts": 2,
-                },
-                "tool_calls": [{
-                    "call_id": "call_a",
-                    "status": { "ran": { "source": "builtin", "ended": "tool_error" } },
-                    "started_ms": 900,
-                    "latency_ms": 30,
-                    "truncated_from_bytes": null,
-                    "content": [{ "text": "1 failed" }],
-                }],
-            },
-            {
-                "input": [],
-                "response": [{ "text": "Fixed." }],
-                "record": {
-                    "usage": {
-                        "input_tokens": 180,
-                        "output_tokens": 5,
-                        "reasoning_output_tokens": 0,
-                        "cache_read_tokens": 100,
-                        "cache_write_tokens": null,
-                    },
-                    "finish": "end_turn",
-                    "response_id": null,
-                    "response_model": null,
-                    "started_ms": 1000,
-                    "latency_ms": 300,
-                    "attempts": 1,
-                },
-                "tool_calls": [],
-            },
-        ],
-    })
-}
-
+/// Every field of both, so a field that `into_parts` dropped or took from
+/// the wrong place fails here, before anything that writes a transcript
+/// down reads it.
 #[test]
-fn a_transcript_has_one_json_form() {
-    let mut transcript = transcript();
-    let looking = ProviderResponse::new(
-        vec![
-            text("Looking."),
-            ContentBlock::ToolUse(ToolUse {
-                input: ToolInput::Json(json!({ "command": "cargo test" })),
-                ..call("call_a", "bash")
-            }),
-        ],
-        Usage::from_inclusive(TokenCounts {
-            input: 100,
-            output: 20,
-            reasoning: None,
-            cache_read: None,
-            cache_write: None,
-        }),
-        FinishReason::ToolUse,
-        Some("msg_1".to_owned()),
-        Some("model-2026".to_owned()),
-    )
-    .unwrap();
-    let fixed = ProviderResponse::new(
-        vec![text("Fixed.")],
-        Usage::from_inclusive(TokenCounts {
-            input: 180,
-            output: 5,
-            reasoning: Some(0),
-            cache_read: Some(100),
-            cache_write: None,
-        }),
-        FinishReason::EndTurn,
-        None,
-        None,
-    )
-    .unwrap();
-    transcript.push(Turn::recorded(prompt(), looking, ms(0), ms(800), 2));
-    answer(
-        &mut transcript,
-        vec![outcome("call_a", ran(ToolCallEnd::ToolError), "1 failed")],
-    );
-    transcript.push(Turn::recorded(Vec::new(), fixed, ms(1_000), ms(300), 1));
+fn a_transcript_and_its_turns_come_apart_into_every_part_they_hold() {
+    let transcript = two_calls_in_one_turn();
+    let turns = transcript.turns().to_vec();
 
-    assert_eq!(serde_json::to_value(&transcript).unwrap(), document());
-}
+    let parts = transcript.into_parts();
 
-/// A transcript of `turns` turns, each calling `calls` tools and answering
-/// them, built the way a run builds one.
-fn grown(system: &str, prompt_text: &str, turns: usize, calls: usize) -> Transcript {
-    let mut transcript = Transcript::new(system.to_owned());
-    let mut input = said(prompt_text);
-    for turn_n in 0..turns {
-        let ids: Vec<String> = (0..calls).map(|n| format!("call_{turn_n}_{n}")).collect();
-        let blocks = ids
-            .iter()
-            .map(|id| tool_use(id, "bash"))
-            .chain(std::iter::once(text("On it.")))
-            .collect();
-        transcript.push(Turn::recorded(
-            std::mem::take(&mut input),
-            response(blocks, 1, 1),
-            ms(0),
-            ms(1),
-            1,
-        ));
-        if calls > 0 {
-            answer(
-                &mut transcript,
-                ids.iter().map(|id| ok(id, "out")).collect(),
-            );
-        } else {
-            break;
+    assert_eq!(
+        parts,
+        TranscriptParts {
+            system: "You fix tests.".to_owned(),
+            turns: turns.clone(),
         }
-    }
-    transcript
-}
-
-proptest::proptest! {
-    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(400))]
-
-    /// Whatever a run does, the document it publishes has the run's system
-    /// prompt, a turn for each of its turns, and a version. lablet doesn't
-    /// read one back, so what's held here is that publishing is total: no
-    /// shape a run can reach fails to render.
-    #[test]
-    fn every_transcript_a_run_can_build_publishes_as_a_document(
-        system in "[ -~]{0,40}",
-        prompt_text in "[ -~]{1,40}",
-        turns in 1usize..4,
-        calls in 0usize..3,
-    ) {
-        proptest::prop_assume!(!prompt_text.trim().is_empty());
-        let transcript = grown(&system, &prompt_text, turns, calls);
-
-        let value = serde_json::to_value(TranscriptDocument::of(&transcript)).unwrap();
-
-        proptest::prop_assert_eq!(&value["schema_version"], &json!(TRANSCRIPT_SCHEMA_VERSION));
-        proptest::prop_assert_eq!(value["system"].as_str().unwrap(), transcript.system());
-        proptest::prop_assert_eq!(
-            value["turns"].as_array().unwrap().len(),
-            transcript.turns().len()
-        );
-        proptest::prop_assert_eq!(
-            &value["turns"],
-            &serde_json::to_value(transcript.turns()).unwrap()
-        );
-    }
+    );
+    let [first, second] = <[Turn; 2]>::try_from(turns).unwrap();
+    assert_eq!(
+        first.clone().into_parts(),
+        TurnParts {
+            input: prompt(),
+            response: vec![
+                text("Looking."),
+                tool_use("call_a", "read_file"),
+                tool_use("call_b", "bash"),
+            ],
+            record: first.record().clone(),
+            tool_calls: vec![
+                ok("call_a", "fn main() {}"),
+                outcome("call_b", ran(ToolCallEnd::ToolError), "1 failed"),
+            ],
+        }
+    );
+    assert_eq!(first.record().usage.input_tokens, 100);
+    assert_eq!(
+        second.clone().into_parts(),
+        TurnParts {
+            input: Vec::new(),
+            response: vec![text("Fixed.")],
+            record: second.record().clone(),
+            tool_calls: Vec::new(),
+        }
+    );
+    assert_eq!(second.record().usage.input_tokens, 180);
 }

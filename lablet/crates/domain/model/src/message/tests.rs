@@ -54,8 +54,10 @@ fn omitted_content_is_worded_one_way() {
     );
 }
 
+/// The form a request is measured in. A change to it changes the request
+/// bytes every run reports, so it's written out here block by block.
 #[test]
-fn every_block_of_a_response_has_one_json_form() {
+fn every_block_of_a_response_is_measured_in_one_json_form() {
     let blocks = vec![
         ContentBlock::Text("hello".to_owned()),
         ContentBlock::Thinking {
@@ -80,55 +82,26 @@ fn every_block_of_a_response_has_one_json_form() {
     ]);
 
     assert_eq!(serde_json::to_value(&blocks).unwrap(), expected);
-    assert_eq!(
-        serde_json::from_value::<Vec<ContentBlock>>(expected).unwrap(),
-        blocks
-    );
 }
 
 #[test]
-fn a_tool_result_is_not_a_block_a_response_can_hold() {
-    let block = json!({ "tool_result": { "call_id": "a", "content": [{ "text": "ok" }] } });
-
-    assert!(serde_json::from_value::<ContentBlock>(block).is_err());
-}
-
-#[test]
-fn a_misspelt_field_of_a_tool_use_is_an_error() {
-    let call =
-        json!({ "tool_use": { "id": "a", "name": "bash", "input": { "json": {} }, "args": {} } });
-
-    assert!(serde_json::from_value::<ContentBlock>(call).is_err());
-}
-
-#[test]
-fn a_tool_use_with_an_invalid_name_does_not_deserialise() {
-    let block = json!({ "tool_use": { "id": "a", "name": "not a name", "input": { "json": {} } } });
-
-    assert!(serde_json::from_value::<ContentBlock>(block).is_err());
-}
-
-#[test]
-fn content_a_tool_returned_is_text_and_nothing_else() {
+fn content_a_tool_returned_is_measured_as_its_text() {
     assert_eq!(
         serde_json::to_value(text("exit 1")).unwrap(),
         json!({ "text": "exit 1" })
     );
-    assert!(serde_json::from_value::<ToolResultContent>(json!({ "json": { "code": 1 } })).is_err());
 }
 
 #[test]
-fn thinking_without_a_signature_is_null_not_an_empty_string() {
+fn thinking_without_a_signature_is_measured_with_a_null_not_an_empty_string() {
     let block = ContentBlock::Thinking {
         text: "hm".to_owned(),
         signature: None,
     };
-    let expected = json!({ "thinking": { "text": "hm", "signature": null } });
 
-    assert_eq!(serde_json::to_value(&block).unwrap(), expected);
     assert_eq!(
-        serde_json::from_value::<ContentBlock>(json!({ "thinking": { "text": "hm" } })).unwrap(),
-        block
+        serde_json::to_value(&block).unwrap(),
+        json!({ "thinking": { "text": "hm", "signature": null } })
     );
 }
 
@@ -161,24 +134,13 @@ fn each_message_serialises_under_its_role_to_these_exact_bytes() {
 }
 
 #[test]
-fn user_content_is_text_and_nothing_a_model_or_a_tool_produces() {
+fn user_content_is_measured_as_its_text() {
     let prompt = UserContent::Text("List the files.".to_owned());
 
     assert_eq!(
         serde_json::to_value(&prompt).unwrap(),
         json!({ "text": "List the files." })
     );
-    assert_eq!(
-        serde_json::from_value::<UserContent>(json!({ "text": "List the files." })).unwrap(),
-        prompt
-    );
-    for block in [
-        json!({ "tool_use": { "id": "a", "name": "bash", "input": { "json": {} } } }),
-        json!({ "tool_result": { "call_id": "a", "content": [] } }),
-        json!({ "thinking": { "text": "hm" } }),
-    ] {
-        assert!(serde_json::from_value::<UserContent>(block).is_err());
-    }
 }
 
 #[test]
@@ -227,14 +189,4 @@ fn arguments_that_are_not_json_are_kept_as_the_model_wrote_them() {
         serde_json::to_value(ToolInput::Json(json!({ "a": 1 }))).unwrap(),
         json!({ "json": { "a": 1 } })
     );
-    for form in [
-        json!({ "unparsed": r#"{"command": "ls"# }),
-        json!({ "json": { "a": 1 } }),
-    ] {
-        assert_eq!(
-            serde_json::to_value(serde_json::from_value::<ToolInput>(form.clone()).unwrap())
-                .unwrap(),
-            form
-        );
-    }
 }

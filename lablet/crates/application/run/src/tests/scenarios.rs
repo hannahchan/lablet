@@ -3945,17 +3945,15 @@ async fn the_labels_of_the_context_are_in_the_outcome_and_on_both_of_the_run_s_o
     }
 }
 
+/// How an outcome without labels is written down is the outcome document's
+/// to hold, which the loop doesn't know.
 #[tokio::test]
-async fn a_run_asked_for_under_no_label_has_none_and_its_outcome_writes_each_as_null() {
+async fn a_run_asked_for_under_no_label_has_none_in_its_outcome_or_on_its_events() {
     for script in a_short_run_and_a_failed_one() {
         let run = Harness::new(script).run().await;
 
         let outcome = &run.finished.summary.outcome;
         assert_eq!(outcome.labels, RunLabels::default());
-        assert_eq!(
-            serde_json::to_value(outcome).expect("an outcome serialises")["labels"],
-            serde_json::json!({ "task": null, "experiment": null, "trial": null })
-        );
         let (started, finished) = contexts(&run);
         assert_eq!(started.labels, RunLabels::default());
         assert_eq!(finished.labels, RunLabels::default());

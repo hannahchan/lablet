@@ -1,7 +1,6 @@
-//! Identifiers: string newtypes that hold only values that passed validation,
-//! whether built in code or deserialised.
+//! Identifiers: string newtypes that hold only values that passed validation.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// Why a string was refused as an identifier.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -34,13 +33,11 @@ pub enum IdError {
     },
 }
 
-/// Declares an identifier newtype whose only way in, serde included, is
-/// `$validate`.
+/// Declares an identifier newtype whose only way in is `$validate`.
 macro_rules! id {
-    ($(#[$doc:meta])* $name:ident, $validate:path) => {
-        $(#[$doc])*
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-        #[serde(try_from = "String", into = "String")]
+    ($(#[$attribute:meta])* $name:ident, $validate:path) => {
+        $(#[$attribute])*
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(String);
 
         impl $name {
@@ -57,14 +54,6 @@ macro_rules! id {
             #[must_use]
             pub fn as_str(&self) -> &str {
                 &self.0
-            }
-        }
-
-        impl TryFrom<String> for $name {
-            type Error = IdError;
-
-            fn try_from(value: String) -> Result<Self, IdError> {
-                Self::new(value)
             }
         }
 
@@ -86,6 +75,10 @@ id! {
 
 id! {
     /// Identifies one tool call within a conversation, as the provider issued it.
+    ///
+    /// It serialises, as a bare string, because a [`crate::Message`] holds
+    /// one and the loop measures a request by serialising its messages.
+    #[derive(Serialize)]
     ToolCallId, tool_call_id
 }
 
@@ -93,6 +86,10 @@ id! {
     /// The name a tool is offered and called under: 1 to [`ToolName::MAX_LEN`]
     /// ASCII letters, digits, `_`, or `-`, which is what both the Anthropic and
     /// the OpenAI tool-calling APIs accept.
+    ///
+    /// It serialises, as a bare string, because a [`crate::ToolSpec`] and a
+    /// [`crate::ToolUse`] hold one and the loop measures with both.
+    #[derive(Serialize)]
     ToolName, tool_name
 }
 

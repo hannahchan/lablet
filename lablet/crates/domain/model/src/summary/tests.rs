@@ -1,96 +1,11 @@
 use std::time::Duration;
 
-use serde_json::{Value, json};
-
 use super::*;
-use crate::outcome::RawOutcome;
 use crate::{
-    CacheScope, CompletionMode, Cost, Effort, Endpoint, FinishReason, McpLifetime, McpServer,
-    ModelRef, Prompts, ProviderApi, Rates, RequestParams, Run, RunOutcome, RunSetup, StopReason,
-    Thinking, TokenCounts, ToolName, ToolStats, Usage,
+    CacheScope, CompletionMode, Cost, Effort, Endpoint, FinishReason, ModelRef, OutcomeParts,
+    Prompts, ProviderApi, Rates, RequestParams, Run, RunId, RunLabels, RunOutcome, RunSetup,
+    StopReason, TaskResult, Thinking, TokenCounts, ToolName, ToolStats, Usage,
 };
-use crate::{RunId, RunLabels, TaskResult};
-
-/// Every field, because each one is a wide-event attribute or a join key of
-/// every record.
-#[test]
-fn a_run_context_has_one_json_form() {
-    let context = RunContext {
-        run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").unwrap(),
-        labels: labels(),
-        started_unix_ms: 1_790_000_000_123,
-        config_digest: "9f2c".to_owned(),
-        agent_version: "0.1.0".to_owned(),
-        resource: vec![("experiment.id".to_owned(), "exp-7".to_owned())],
-        transcript_path: Some(PathBuf::from("out/transcript.json")),
-        skills_count: 2,
-        mcp: Some(
-            McpServers::new(
-                McpLifetime::Lablet,
-                vec![
-                    McpServer {
-                        name: "docs".to_owned(),
-                        version: "1.4.0".to_owned(),
-                    },
-                    McpServer {
-                        name: "tickets".to_owned(),
-                        version: "0.9.2".to_owned(),
-                    },
-                ],
-            )
-            .unwrap(),
-        ),
-        capture_content: true,
-    };
-    let expected = json!({
-        "run_id": "01K5F3Z8Q4X9T2M7B6W1R0VNEC",
-        "labels": { "task": "fix-failing-test", "experiment": null, "trial": "3" },
-        "started_unix_ms": 1_790_000_000_123_u64,
-        "config_digest": "9f2c",
-        "agent_version": "0.1.0",
-        "resource": [["experiment.id", "exp-7"]],
-        "transcript_path": "out/transcript.json",
-        "skills_count": 2,
-        "mcp": {
-            "lifetime": "lablet",
-            "servers": [
-                { "name": "docs", "version": "1.4.0" },
-                { "name": "tickets", "version": "0.9.2" },
-            ],
-        },
-        "capture_content": true,
-    });
-
-    assert_eq!(serde_json::to_value(&context).unwrap(), expected);
-    assert_eq!(
-        serde_json::from_value::<RunContext>(expected).unwrap(),
-        context
-    );
-}
-
-#[test]
-fn a_run_without_mcp_servers_has_none_to_report_and_no_lifetime_for_them() {
-    let context = RunContext {
-        run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").unwrap(),
-        labels: RunLabels::default(),
-        started_unix_ms: 0,
-        config_digest: "9f2c".to_owned(),
-        agent_version: "0.1.0".to_owned(),
-        resource: Vec::new(),
-        transcript_path: None,
-        skills_count: 0,
-        mcp: None,
-        capture_content: false,
-    };
-
-    let json = serde_json::to_value(&context).unwrap();
-    assert_eq!(json["mcp"], Value::Null);
-    assert_eq!(
-        json["labels"],
-        json!({ "task": null, "experiment": null, "trial": null })
-    );
-    assert_eq!(serde_json::from_value::<RunContext>(json).unwrap(), context);
-}
 
 fn summary() -> RunSummary {
     let bash = ToolName::new("bash").unwrap();
@@ -152,95 +67,6 @@ fn summary() -> RunSummary {
     }
 }
 
-/// A summary is written, never read, so there's a written form to pin and no
-/// round trip to make.
-#[test]
-fn a_run_summary_has_one_json_form() {
-    let json = serde_json::to_value(summary()).unwrap();
-
-    // Every field, because each one is a wide-event attribute: a rename or a
-    // field that stops being written loses an attribute silently otherwise.
-    assert_eq!(
-        json,
-        json!({
-            "model": {
-                "api": "chat_completions",
-                "name": "qwen3",
-                "replays_reasoning": true,
-            },
-            "endpoint": { "host": "localhost", "port": 11434 },
-            "tools": ["bash"],
-            "completion": "explicit",
-            "max_turns": 30,
-            "timeout_ms": 600_000,
-            "request": {
-                "max_tokens": 4096,
-                "temperature": null,
-                "thinking": "provider_default",
-                "effort": "low",
-                "seed": null,
-                "cache_scope": "run",
-            },
-            "prompt_system_bytes": 120,
-            "prompt_user_bytes": 40,
-            "prompt_tools_bytes": 312,
-            "tools_digest": "5f70",
-            "system_prompt_digest": "c1a5",
-            "failed_usage": {
-                "input_tokens": 9,
-                "output_tokens": 0,
-                "reasoning_output_tokens": null,
-                "cache_read_tokens": 8,
-                "cache_write_tokens": null,
-            },
-            "provider_retries": 1,
-            "provider_latency_total_ms": 900,
-            "provider_latency_max_ms": 500,
-            "finish_reasons": ["tool_use", "end_turn"],
-            "tool_calls_errors": 1,
-            "tool_calls_unknown": 0,
-            "tool_latency_total_ms": 35,
-            "tool_input_bytes": 18,
-            "tool_output_bytes": 2048,
-            "tool_calls_truncated": 1,
-            "per_tool": { "bash": { "calls": 1, "errors": 1, "latency_ms": 35 } },
-            "rates": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75 },
-            "cost": 0.002,
-            "outcome": {
-                "run_id": "01K5F3Z8Q4X9T2M7B6W1R0VNEC",
-                "labels": { "task": "fix-failing-test", "experiment": null, "trial": "3" },
-                "stop_reason": "provider_error",
-                "turns": 1,
-                "usage": {
-                    "input_tokens": 12,
-                    "output_tokens": 3,
-                    "reasoning_output_tokens": null,
-                    "cache_read_tokens": 8,
-                    "cache_write_tokens": 0,
-                },
-                "tool_calls": 2,
-                "duration_ms": 250,
-                "result": { "text": "partial", "structured": null },
-                "error": "provider: 401 unauthorized",
-            },
-        })
-    );
-}
-
-/// `null` rather than a key left out, so every run's summary has the same
-/// keys.
-#[test]
-fn a_run_summary_without_a_turn_cap_writes_it_as_null() {
-    let uncapped = RunSummary {
-        max_turns: None,
-        ..summary()
-    };
-
-    let json = serde_json::to_value(uncapped).unwrap();
-    assert_eq!(json["max_turns"], Value::Null);
-    assert!(json.as_object().unwrap().contains_key("max_turns"));
-}
-
 #[test]
 fn a_finished_run_carries_the_summary_and_the_conversation() {
     let summary = summary();
@@ -271,15 +97,13 @@ fn a_finished_run_carries_the_summary_and_the_conversation() {
         None,
     );
 
-    let json = serde_json::to_value(&finished).unwrap();
     assert_eq!(
-        json["summary"]["outcome"]["stop_reason"],
-        json!("cancelled")
+        finished.summary.outcome.stop_reason(),
+        StopReason::Cancelled
     );
-    assert_eq!(
-        json["transcript"],
-        json!({ "system": "Be brief.", "turns": [] })
-    );
+    assert_eq!(finished.summary.outcome.duration_ms, 250);
+    assert_eq!(finished.transcript.system(), "Be brief.");
+    assert!(finished.transcript.turns().is_empty());
 }
 
 #[test]
@@ -302,11 +126,11 @@ fn labels() -> RunLabels {
     }
 }
 
-fn raw(stop_reason: StopReason, structured: Option<Value>, error: Option<&str>) -> RawOutcome {
-    RawOutcome {
+fn outcome() -> RunOutcome {
+    RunOutcome::closing(OutcomeParts {
         run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").unwrap(),
         labels: labels(),
-        stop_reason,
+        stop_reason: StopReason::ProviderError,
         turns: 1,
         usage: Usage::from_inclusive(TokenCounts {
             input: 12,
@@ -319,16 +143,8 @@ fn raw(stop_reason: StopReason, structured: Option<Value>, error: Option<&str>) 
         duration_ms: 250,
         result: TaskResult {
             text: "partial".to_owned(),
-            structured,
+            structured: None,
         },
-        error: error.map(str::to_owned),
-    }
-}
-
-fn outcome() -> RunOutcome {
-    RunOutcome::closing(raw(
-        StopReason::ProviderError,
-        None,
-        Some("provider: 401 unauthorized"),
-    ))
+        error: Some("provider: 401 unauthorized".to_owned()),
+    })
 }

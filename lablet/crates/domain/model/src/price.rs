@@ -3,16 +3,12 @@
 //! The arithmetic is a policy and lives in `lablet-policy`; the amounts live
 //! here because a run reports them, on its wide event and in its summary.
 
-use serde::{Deserialize, Serialize};
-
 /// An amount of money in US dollars: finite, and never negative.
 ///
-/// JSON has no infinity or NaN, so serde writes either as `null`, which is
-/// how the wide event and the summary also write "no pricing was configured":
-/// a cost that overflowed would be indistinguishable from one that was never
-/// asked for. A negative cost is no more meaningful.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(into = "f64", try_from = "f64")]
+/// JSON has no infinity or NaN, so an amount that overflowed would be written
+/// as `null`, which is how a record says that no pricing was configured: the
+/// two would be indistinguishable. A negative cost is no more meaningful.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Cost(f64);
 
 /// Why an amount isn't a cost.
@@ -40,20 +36,6 @@ impl Cost {
     }
 }
 
-impl TryFrom<f64> for Cost {
-    type Error = CostError;
-
-    fn try_from(usd: f64) -> Result<Self, CostError> {
-        Self::new(usd)
-    }
-}
-
-impl From<Cost> for f64 {
-    fn from(cost: Cost) -> Self {
-        cost.0
-    }
-}
-
 /// A model's prices in US dollars per million tokens, each finite and at
 /// least 0.
 ///
@@ -64,8 +46,7 @@ impl From<Cost> for f64 {
 /// cached tokens alone, and the rates are what let a consumer see that.
 /// Reasoning tokens need no rate of their own: they're billed at the output
 /// rate and are already part of `output_tokens`.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "RawRates", deny_unknown_fields)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rates {
     /// Per million input tokens that touched no cache.
     pub input: f64,
@@ -75,16 +56,6 @@ pub struct Rates {
     pub cache_read: f64,
     /// Per million input tokens written to the prompt cache.
     pub cache_write: f64,
-}
-
-/// What rates are read from, so that reading them checks them.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawRates {
-    input: f64,
-    output: f64,
-    cache_read: f64,
-    cache_write: f64,
 }
 
 /// Why a number isn't a rate.
@@ -133,14 +104,6 @@ impl Rates {
             }
         }
         Ok(self)
-    }
-}
-
-impl TryFrom<RawRates> for Rates {
-    type Error = RateError;
-
-    fn try_from(raw: RawRates) -> Result<Self, RateError> {
-        Self::new(raw.input, raw.output, raw.cache_read, raw.cache_write)
     }
 }
 

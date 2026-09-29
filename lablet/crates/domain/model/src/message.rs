@@ -1,14 +1,21 @@
 //! The content a user supplies, a model produces, and a tool returns, and the
 //! flat message form a provider call sends.
+//!
+//! These types serialise, and nothing else about a conversation does. The
+//! loop measures the size of a request by rendering its messages as compact
+//! JSON, so that every provider's requests are sized the same way, and those
+//! bytes are counted and discarded. No document is written from this form
+//! and nothing reads it: what lablet publishes has shapes of its own, in the
+//! adapters.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::{ProviderKind, ToolCallId, ToolName};
 
 /// One piece of what the user supplies to a turn. It's text; the type is an
-/// enum so that another kind of content can arrive without changing the serde
-/// form, and so that a turn's input can hold nothing only a model produces.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// enum so that another kind of content can arrive beside it, and so that a
+/// turn's input can hold nothing only a model produces.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UserContent {
     /// Text input, such as the task prompt.
@@ -28,7 +35,7 @@ impl UserContent {
 ///
 /// A tool result isn't one: results are [`crate::ToolCallOutcome`]s of a turn
 /// and reach a provider in a [`Message::User`], so no response can hold one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContentBlock {
     /// Plain text.
@@ -57,8 +64,7 @@ pub enum ContentBlock {
 }
 
 /// The model's request to call a tool.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ToolUse {
     /// The call's id, which its outcome answers to.
     pub id: ToolCallId,
@@ -76,9 +82,7 @@ pub struct ToolUse {
 /// its outcome is [`crate::ToolCallStatus::MalformedInput`]. Refusing the
 /// whole response instead spends a retry re-rolling the same prompt, and
 /// reports a tool-surface problem as provider flakiness.
-///
-/// Written `{"json": {...}}` or `{"unparsed": "..."}`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolInput {
     /// Arguments that parsed.
@@ -101,9 +105,8 @@ impl ToolUse {
 }
 
 /// One piece of what a tool returned. Tool results are text; the type is an
-/// enum so that another kind of content can arrive without changing the serde
-/// form.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// enum so that another kind of content can arrive beside it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolResultContent {
     /// Text output.

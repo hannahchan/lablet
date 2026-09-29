@@ -1,13 +1,15 @@
 //! The domain model: the transcript and its turns, tools, usage, stop reasons,
-//! run identity, and the run summary, as plain types and pure functions with
-//! serde derives.
+//! run identity, and the run summary, as plain types and pure functions.
 //!
-//! The derived serde form of these types is the one JSON form of a
-//! conversation: the transcript, the outcome document, and the fake provider's
-//! scripts all reuse it.
+//! These are values in memory, and none of them is a published shape: the
+//! documents lablet writes and the scripts it reads have shapes of their
+//! own, in the adapters, mapped from and to these. JSON is here as
+//! `serde_json::Value`, for what a provider API defines as JSON, and as the
+//! `Serialize` of the message form and the tool specs, which the loop
+//! measures with and publishes nowhere.
 
 /// Implements `Display` through the type's `as_str`, so what a type prints is
-/// what it serialises as.
+/// what a record spells it as.
 macro_rules! display_as_str {
     ($($name:ty),+ $(,)?) => {$(
         impl core::fmt::Display for $name {
@@ -40,7 +42,7 @@ pub use mcp::{McpLifetime, McpServer, McpServers, NoMcpServers};
 pub use message::{
     ContentBlock, Message, ToolInput, ToolResult, ToolResultContent, ToolUse, UserContent,
 };
-pub use outcome::{OutcomeError, RunOutcome, TaskResult};
+pub use outcome::{OutcomeError, OutcomeParts, RunOutcome, TaskResult};
 pub use output::{KeptOutput, OutputCap, OutputCapError, OutputCut, OutputKeep};
 pub use price::{Cost, CostError, RateError, Rates};
 pub use provider::{
@@ -56,8 +58,7 @@ pub use summary::{FinishedRun, RunContext, RunSummary, ToolStats};
 pub use tool::{
     Answer, ToolCallEnd, ToolCallOutcome, ToolCallStatus, ToolConcurrency, ToolSource, ToolSpec,
 };
-pub use transcript::document::{TRANSCRIPT_SCHEMA_VERSION, TranscriptDocument};
-pub use transcript::{Transcript, Turn, TurnRecord};
+pub use transcript::{Transcript, TranscriptParts, Turn, TurnParts, TurnRecord};
 pub use usage::{TokenCounts, Usage};
 
 /// Whole milliseconds, truncated. The one conversion from a `Duration` in the

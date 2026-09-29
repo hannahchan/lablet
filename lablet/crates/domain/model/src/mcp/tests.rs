@@ -1,5 +1,3 @@
-use serde_json::json;
-
 use super::*;
 
 fn server(name: &str, version: &str) -> McpServer {
@@ -18,14 +16,10 @@ fn docs_and_tickets() -> McpServers {
 }
 
 #[test]
-fn an_mcp_lifetime_prints_what_it_serialises_as() {
+fn an_mcp_lifetime_prints_its_spelling() {
     for (lifetime, spelling) in [(McpLifetime::Run, "run"), (McpLifetime::Lablet, "lablet")] {
+        assert_eq!(lifetime.as_str(), spelling);
         assert_eq!(lifetime.to_string(), spelling);
-        assert_eq!(serde_json::to_value(lifetime).unwrap(), json!(spelling));
-        assert_eq!(
-            serde_json::from_value::<McpLifetime>(json!(spelling)).unwrap(),
-            lifetime
-        );
     }
 }
 
@@ -53,50 +47,9 @@ fn the_servers_say_how_long_they_live() {
 }
 
 #[test]
-fn a_set_of_no_servers_is_refused_whichever_way_it_comes() {
+fn a_set_of_no_servers_is_refused() {
     assert_eq!(
         McpServers::new(McpLifetime::Run, Vec::new()),
         Err(NoMcpServers)
     );
-
-    let error = serde_json::from_value::<McpServers>(json!({ "lifetime": "run", "servers": [] }))
-        .unwrap_err();
-    assert_eq!(error.to_string(), NoMcpServers.to_string());
-}
-
-#[test]
-fn the_servers_have_one_json_form() {
-    let servers = docs_and_tickets();
-    let expected = json!({
-        "lifetime": "lablet",
-        "servers": [
-            { "name": "docs", "version": "1.4.0" },
-            { "name": "tickets", "version": "0.9.2" },
-        ],
-    });
-
-    assert_eq!(serde_json::to_value(&servers).unwrap(), expected);
-    assert_eq!(
-        serde_json::from_value::<McpServers>(expected).unwrap(),
-        servers
-    );
-}
-
-/// A version with no name beside it, or a lifetime with no servers, was what
-/// the lists held apart could say. Each is a document that doesn't read.
-#[test]
-fn a_server_without_its_version_and_a_lifetime_without_servers_do_not_read() {
-    for document in [
-        json!({ "lifetime": "run", "servers": [{ "name": "docs" }] }),
-        json!({ "lifetime": "run", "servers": [{ "version": "1.4.0" }] }),
-        json!({ "lifetime": "run" }),
-        json!({ "servers": [{ "name": "docs", "version": "1.4.0" }] }),
-        json!({ "lifetime": "run", "servers": [{ "name": "docs", "version": "1.4.0" }], "versions": ["1.4.0"] }),
-        json!({ "lifetime": "run", "servers": [{ "name": "docs", "version": "1.4.0", "build": 7 }] }),
-    ] {
-        assert!(
-            serde_json::from_value::<McpServers>(document.clone()).is_err(),
-            "{document}"
-        );
-    }
 }

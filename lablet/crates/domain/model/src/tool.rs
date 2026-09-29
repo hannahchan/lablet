@@ -2,13 +2,19 @@
 
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::whole_ms;
 use crate::{KeptOutput, OutputCap, ToolCallId, ToolName, ToolResult, ToolResultContent};
 
 /// A tool as it's offered to the model.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// A spec serialises, with the source and the concurrency it holds, because
+/// the loop measures what a run offers by it: the size of the specs and
+/// their digest are taken from each spec as compact JSON. Those bytes are
+/// counted, hashed and discarded. A change to this form changes the digest
+/// of every run, so runs from before and after it would no longer group.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ToolSpec {
     /// The name the model calls it by.
     pub name: ToolName,
@@ -30,7 +36,7 @@ pub struct ToolSpec {
 /// order, so a read the model placed after a write still runs after it. A
 /// tool nobody classified is `Exclusive`, which is how every call ran before
 /// tools could say otherwise.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolConcurrency {
     /// A call runs alone: the tool can change what another call sees.
@@ -41,7 +47,7 @@ pub enum ToolConcurrency {
 }
 
 /// Where a tool comes from.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolSource {
     /// One of lablet's built-in tools.
@@ -54,8 +60,8 @@ pub enum ToolSource {
 }
 
 impl ToolSource {
-    /// The serde spelling of the variant, which is the `lablet.tool.source`
-    /// value; the server name isn't part of it.
+    /// The `lablet.tool.source` value, which is the variant alone; the
+    /// server name isn't part of it.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -92,11 +98,7 @@ impl core::fmt::Display for ToolSource {
 /// Every status but [`ToolCallEnd::Ok`] is an error result for the model, and
 /// [`ToolCallStatus::as_str`] is the `error.type` of the span; a call that
 /// ended `ok` has no `error.type`, and a call that was never run has no span.
-///
-/// Written `"unknown"`, `"malformed_input"`, `"rejected"`, `"not_run"`, or
-/// `{"ran": {"source": "builtin", "ended": "ok"}}`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ToolCallStatus {
     /// No configured tool has the name the model called, so nothing ran.
     Unknown,
@@ -127,8 +129,7 @@ pub enum ToolCallStatus {
 }
 
 /// How a tool that ran ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolCallEnd {
     /// The tool returned a result.
     Ok,
@@ -143,7 +144,7 @@ pub enum ToolCallEnd {
 }
 
 impl ToolCallEnd {
-    /// The serde spelling.
+    /// The `lablet.tool.status` value of a call to a tool that ran.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -261,8 +262,7 @@ impl core::fmt::Display for ToolCallStatus {
 /// [`crate::ToolUse`] block with the same id holds them. Nor are the sizes:
 /// [`crate::ToolUse::input_bytes`] and [`ToolCallOutcome::output_bytes`]
 /// measure what's stored. Error and source are read from `status`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCallOutcome {
     /// The id of the [`crate::ToolUse`] this answers.
     pub call_id: ToolCallId,

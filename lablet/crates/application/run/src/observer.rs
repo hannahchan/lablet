@@ -139,7 +139,8 @@ pub enum EventKind {
     RunFinished {
         /// The composer's half of the wide event.
         context: Box<RunContext>,
-        /// The loop's half, whose `outcome` is the outcome document.
+        /// The loop's half, whose `outcome` the outcome document is written
+        /// from.
         summary: Box<RunSummary>,
     },
 }

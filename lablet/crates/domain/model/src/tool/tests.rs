@@ -28,28 +28,10 @@ fn a_tool_source_prints_the_server_of_an_mcp_tool() {
     assert_eq!(docs_server().to_string(), "mcp:docs");
 }
 
+/// The bytes a run's tools digest is taken from, key order included: a
+/// change to them changes the digest of every run.
 #[test]
-fn a_tool_source_serialises_under_the_spelling_it_prints() {
-    assert_eq!(
-        serde_json::to_value(ToolSource::Builtin).unwrap(),
-        json!("builtin")
-    );
-    assert_eq!(
-        serde_json::to_value(docs_server()).unwrap(),
-        json!({ "mcp": { "server": "docs" } })
-    );
-    assert_eq!(
-        serde_json::from_value::<ToolSource>(json!({ "mcp": { "server": "docs" } })).unwrap(),
-        docs_server()
-    );
-    assert_eq!(
-        serde_json::from_value::<ToolSource>(json!("builtin")).unwrap(),
-        ToolSource::Builtin
-    );
-}
-
-#[test]
-fn a_tool_spec_has_one_json_form() {
+fn a_tool_spec_is_measured_as_these_exact_bytes() {
     let spec = ToolSpec {
         name: ToolName::new("search").unwrap(),
         description: "Search the docs.".to_owned(),
@@ -57,16 +39,29 @@ fn a_tool_spec_has_one_json_form() {
         source: docs_server(),
         concurrency: ToolConcurrency::Shared,
     };
-    let expected = json!({
-        "name": "search",
-        "description": "Search the docs.",
-        "input_schema": { "type": "object" },
-        "source": { "mcp": { "server": "docs" } },
-        "concurrency": "shared",
-    });
+    let builtin = ToolSpec {
+        name: ToolName::new("bash").unwrap(),
+        source: ToolSource::Builtin,
+        concurrency: ToolConcurrency::Exclusive,
+        ..spec.clone()
+    };
 
-    assert_eq!(serde_json::to_value(&spec).unwrap(), expected);
-    assert_eq!(serde_json::from_value::<ToolSpec>(expected).unwrap(), spec);
+    assert_eq!(
+        serde_json::to_string(&spec).unwrap(),
+        concat!(
+            r#"{"name":"search","description":"Search the docs.","#,
+            r#""input_schema":{"type":"object"},"#,
+            r#""source":{"mcp":{"server":"docs"}},"concurrency":"shared"}"#
+        )
+    );
+    assert_eq!(
+        serde_json::to_string(&builtin).unwrap(),
+        concat!(
+            r#"{"name":"bash","description":"Search the docs.","#,
+            r#""input_schema":{"type":"object"},"#,
+            r#""source":"builtin","concurrency":"exclusive"}"#
+        )
+    );
 }
 
 // Every spelling but `ok` and `not_run` is a value of `error.type` on the
@@ -160,44 +155,6 @@ fn something_was_started_for_every_call_but_one_that_was_never_run() {
     }
 }
 
-/// The flattening that `as_str` does is for telemetry; the document keeps the
-/// two levels, so a reader can tell a built-in failure from an MCP one.
-#[test]
-fn a_status_serialises_as_the_two_levels_it_holds() {
-    for (status, written) in [
-        (ToolCallStatus::Unknown, "unknown"),
-        (ToolCallStatus::MalformedInput, "malformed_input"),
-        (ToolCallStatus::Rejected, "rejected"),
-        (ToolCallStatus::NotRun, "not_run"),
-    ] {
-        assert_eq!(serde_json::to_value(&status).unwrap(), json!(written));
-        assert_eq!(
-            serde_json::from_value::<ToolCallStatus>(json!(written)).unwrap(),
-            status
-        );
-    }
-
-    let timed_out = ToolCallStatus::ran(docs_server(), ToolCallEnd::Timeout);
-    let expected = json!({
-        "ran": { "source": { "mcp": { "server": "docs" } }, "ended": "timeout" },
-    });
-
-    assert_eq!(serde_json::to_value(&timed_out).unwrap(), expected);
-    assert_eq!(
-        serde_json::from_value::<ToolCallStatus>(expected).unwrap(),
-        timed_out
-    );
-}
-
-#[test]
-fn a_status_that_ran_without_saying_where_the_tool_came_from_is_not_a_status() {
-    let no_source = json!({ "ran": { "ended": "ok" } });
-    let unknown_field = json!({ "ran": { "source": "builtin", "ended": "ok", "why": "?" } });
-
-    assert!(serde_json::from_value::<ToolCallStatus>(no_source).is_err());
-    assert!(serde_json::from_value::<ToolCallStatus>(unknown_field).is_err());
-}
-
 fn call_1() -> ToolCallId {
     ToolCallId::new("call_1").unwrap()
 }
@@ -205,10 +162,6 @@ fn call_1() -> ToolCallId {
 #[test]
 fn a_tool_nobody_classified_runs_its_calls_alone() {
     assert_eq!(ToolConcurrency::default(), ToolConcurrency::Exclusive);
-    assert_eq!(
-        serde_json::to_value(ToolConcurrency::Exclusive).unwrap(),
-        json!("exclusive")
-    );
 }
 
 /// An outcome as the run records one: measured as an answer, then given the
@@ -359,35 +312,4 @@ fn without_a_cap_no_output_is_cut() {
     assert_eq!(outcome.content, text("0123456789"));
     assert_eq!(outcome.output_bytes(), 10);
     assert_eq!(outcome.truncated_from_bytes, None);
-}
-
-#[test]
-fn a_tool_call_outcome_has_one_json_form_without_a_name_an_input_or_an_error_flag() {
-    let outcome = measured(
-        call_1(),
-        ToolCallStatus::ran(docs_server(), ToolCallEnd::Timeout),
-        "timed out after 60s",
-        Some(head(8)),
-        Duration::from_millis(2_000),
-        Duration::from_millis(60_000),
-    );
-    let expected = json!({
-        "call_id": "call_1",
-        "status": {
-            "ran": { "source": { "mcp": { "server": "docs" } }, "ended": "timeout" },
-        },
-        "started_ms": 2_000,
-        "latency_ms": 60_000,
-        "truncated_from_bytes": 19,
-        "content": [
-            { "text": "timed ou" },
-            { "text": "[truncated: the first 8 of 19 bytes]" },
-        ],
-    });
-
-    assert_eq!(serde_json::to_value(&outcome).unwrap(), expected);
-    assert_eq!(
-        serde_json::from_value::<ToolCallOutcome>(expected).unwrap(),
-        outcome
-    );
 }

@@ -3,8 +3,6 @@
 use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 
-use serde::{Deserialize, Serialize};
-
 use crate::message::tool_uses;
 use crate::{ContentBlock, ProviderKind, Usage};
 
@@ -18,7 +16,7 @@ use crate::{ContentBlock, ProviderKind, Usage};
 /// The provider isn't a field, because the API decides it
 /// ([`ProviderApi::provider`]): a field beside `api` could name a provider
 /// that API doesn't belong to.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ModelRef {
     /// The API the adapter speaks to the model's provider.
     pub api: ProviderApi,
@@ -30,8 +28,7 @@ pub struct ModelRef {
 }
 
 /// The API an adapter reaches its provider through.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProviderApi {
     /// Anthropic's Messages API.
     Messages,
@@ -44,7 +41,7 @@ pub enum ProviderApi {
 }
 
 impl ProviderApi {
-    /// The serde spelling.
+    /// How a run's record spells it.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -68,7 +65,7 @@ impl ProviderApi {
 }
 
 /// Where a provider's API is served, for `server.address` and `server.port`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Endpoint {
     /// The host name or address.
     pub host: String,
@@ -83,8 +80,7 @@ pub struct Endpoint {
 /// The spellings are the `error.type` of a failed `lablet.chat` span. That
 /// attribute is an open set in the conventions, so nothing generated can pin
 /// them; a unit test does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProviderErrorKind {
     /// Transport failure, rate limit, 5xx, overloaded, or a per-call timeout.
     Retryable,
@@ -102,7 +98,7 @@ pub enum ProviderErrorKind {
 }
 
 impl ProviderErrorKind {
-    /// The serde spelling, which is the span's `error.type`.
+    /// The `error.type` of a failed chat span.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -124,12 +120,11 @@ impl ProviderErrorKind {
 /// Why the model stopped generating, normalised across providers.
 ///
 /// [`FinishReason::from`] is how a provider's string becomes a reason, and
-/// serde reads through it: every spelling either provider API uses for a known
+/// the only way one does: every spelling either provider API uses for a known
 /// reason gives that reason, and only a string that spells none of them is
-/// kept as [`FinishReason::Other`]. A reason serialises as its
-/// [`FinishReason::as_str`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(from = "String", into = "String")]
+/// kept as [`FinishReason::Other`]. A reason is written down as its
+/// [`FinishReason::as_str`], which reads back as the same reason.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FinishReason {
     /// The model finished its turn, or reached a stop sequence.
     EndTurn,
@@ -164,8 +159,8 @@ impl UnknownReason {
 }
 
 impl FinishReason {
-    /// The serde spelling: lablet's name for a known reason, the provider's
-    /// own string for another.
+    /// How a reason is written down: lablet's name for a known reason, the
+    /// provider's own string for another.
     #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
@@ -193,23 +188,14 @@ impl From<String> for FinishReason {
     }
 }
 
-impl From<FinishReason> for String {
-    fn from(reason: FinishReason) -> Self {
-        reason.as_str().to_owned()
-    }
-}
-
 /// One successful provider call: the response and what the provider said
 /// about it.
 ///
 /// A completion's tool calls have distinct ids, because an outcome couldn't
-/// otherwise say which call it answers. [`ProviderResponse::new`] and
-/// deserialisation both refuse a repeated id, and `content` isn't public, so
-/// no completion breaks the rule: an adapter reports the error as a malformed
-/// response. Deserialisation also refuses a field it doesn't know, so a
-/// hand-written script that misspells one is an error.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "RawProviderResponse")]
+/// otherwise say which call it answers. [`ProviderResponse::new`] refuses a
+/// repeated id, and `content` isn't public, so no completion breaks the rule:
+/// an adapter reports the error as a malformed response.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderResponse {
     pub(crate) content: Vec<ContentBlock>,
     /// The tokens the call used.
@@ -220,32 +206,6 @@ pub struct ProviderResponse {
     pub response_id: Option<String>,
     /// The model that answered, which may be more specific than the one requested.
     pub response_model: Option<String>,
-}
-
-/// What a completion is read from, so that reading one checks it.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawProviderResponse {
-    content: Vec<ContentBlock>,
-    #[serde(default)]
-    usage: Usage,
-    finish: FinishReason,
-    response_id: Option<String>,
-    response_model: Option<String>,
-}
-
-impl TryFrom<RawProviderResponse> for ProviderResponse {
-    type Error = ResponseError;
-
-    fn try_from(raw: RawProviderResponse) -> Result<Self, ResponseError> {
-        Self::new(
-            raw.content,
-            raw.usage,
-            raw.finish,
-            raw.response_id,
-            raw.response_model,
-        )
-    }
 }
 
 /// Why content can't be the response of a completion.
@@ -304,7 +264,7 @@ pub(crate) fn distinct_tool_use_ids(content: &[ContentBlock]) -> Result<(), Resp
 }
 
 /// The request parameters every provider call of a run shares.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RequestParams {
     /// The cap on output tokens for each call.
     pub max_tokens: u32,
@@ -329,8 +289,7 @@ pub struct RequestParams {
 /// A run that reads what another wrote costs less and answers sooner than it
 /// would have alone, so what it measures depends on which run came before
 /// it. [`CacheScope::Run`] keeps runs apart that are compared on either.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum CacheScope {
     /// Every run that sends the same prefix shares what's cached of it.
     #[default]
@@ -341,7 +300,7 @@ pub enum CacheScope {
 }
 
 impl CacheScope {
-    /// The serde spelling.
+    /// How a run's record spells it.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -352,11 +311,7 @@ impl CacheScope {
 }
 
 /// How the model is asked to reason before it answers.
-///
-/// Written `"provider_default"`, `"adaptive"`, `{"budget": 2048}`, or
-/// `"disabled"`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Thinking {
     /// Nothing is sent, so the provider's default applies.
     #[default]
@@ -370,8 +325,7 @@ pub enum Thinking {
 }
 
 /// A reasoning effort level, reported as `gen_ai.request.reasoning.level`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Effort {
     /// The least effort.
     Low,
@@ -379,15 +333,14 @@ pub enum Effort {
     Medium,
     /// High effort.
     High,
-    /// Above high. One word on the wire, as the config spells it.
-    #[serde(rename = "xhigh")]
+    /// Above high. One word where it's written, as the config spells it.
     XHigh,
     /// The most effort the provider offers.
     Max,
 }
 
 impl Effort {
-    /// The serde spelling.
+    /// The `gen_ai.request.reasoning.level` value.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {

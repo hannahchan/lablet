@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "run_id": "01K5F3Z8Q4X9T2M7B6W1R0VNEC",
+  "labels": {
+    "task": "fix-failing-test",
+    "experiment": null,
+    "trial": "3"
+  },
+  "config_digest": "9f2c6a1d0b7e4c35a8f1d2e3b4c5a6978877665544332211ffeeddccbbaa0099",
+  "lablet_version": "0.1.0",
+  "model": {
+    "provider": "anthropic",
+    "api": "messages",
+    "name": "model-2026",
+    "replays_reasoning": true
+  },
+  "started_unix_ms": 1790000000123,
+  "tools": [
+    {
+      "name": "bash",
+      "description": "Runs a command in a shell.",
+      "input_schema": {
+        "properties": {
+          "command": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "type": "object"
+      },
+      "source": "builtin",
+      "concurrency": "exclusive"
+    },
+    {
+      "name": "search",
+      "description": "Searches the docs.",
+      "input_schema": {
+        "type": "object"
+      },
+      "source": {
+        "mcp": {
+          "server": "docs"
+        }
+      },
+      "concurrency": "shared"
+    }
+  ],
+  "system": "You fix tests.",
+  "turns": [
+    {
+      "input": [
+        {
+          "text": "Fix the failing test."
+        }
+      ],
+      "response": [
+        {
+          "thinking": {
+            "text": "The test names the function.",
+            "signature": "c2lnbmF0dXJl"
+          }
+        },
+        {
+          "text": "Looking."
+        },
+        {
+          "tool_use": {
+            "id": "call_a",
+            "name": "bash",
+            "input": {
+              "json": {
+                "command": "cargo test"
+              }
+            }
+          }
+        },
+        {
+          "tool_use": {
+            "id": "call_b",
+            "name": "search",
+            "input": {
+              "unparsed": "{\"query\": \"assert_eq"
+            }
+          }
+        }
+      ],
+      "record": {
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 20,
+          "reasoning_output_tokens": null,
+          "cache_read_tokens": null,
+          "cache_write_tokens": null
+        },
+        "finish": "tool_use",
+        "response_id": "msg_01",
+        "response_model": "model-2026-09-01",
+        "started_ms": 300,
+        "latency_ms": 800,
+        "attempts": 2
+      },
+      "tool_calls": [
+        {
+          "call_id": "call_a",
+          "status": {
+            "ran": {
+              "source": "builtin",
+              "ended": "tool_error"
+            }
+          },
+          "started_ms": 1200,
+          "latency_ms": 30,
+          "truncated_from_bytes": 39,
+          "content": [
+            {
+              "text": "test result: FAILED. 1 p"
+            },
+            {
+              "text": "[truncated: the first 24 of 39 bytes]"
+            }
+          ]
+        },
+        {
+          "call_id": "call_b",
+          "status": "malformed_input",
+          "started_ms": 1240,
+          "latency_ms": 0,
+          "truncated_from_bytes": null,
+          "content": [
+            {
+              "text": "the arguments aren't valid JSON"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "input": [],
+      "response": [
+        {
+          "text": "Fixed."
+        }
+      ],
+      "record": {
+        "usage": {
+          "input_tokens": 180,
+          "output_tokens": 5,
+          "reasoning_output_tokens": 0,
+          "cache_read_tokens": 100,
+          "cache_write_tokens": null
+        },
+        "finish": "end_turn",
+        "response_id": null,
+        "response_model": null,
+        "started_ms": 1300,
+        "latency_ms": 300,
+        "attempts": 1
+      },
+      "tool_calls": []
+    }
+  ]
+}

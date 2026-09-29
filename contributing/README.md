@@ -124,7 +124,7 @@ A phase-end review is scaled to risk and has a budget.
 
 ## Versioning
 
-One workspace version. Keep-a-changelog format in `CHANGELOG.md`. A change to `lablet/schema.json`, `lablet/telemetry/registry/`, or `lablet/tests/fixtures/outcome.json` without an `Unreleased` entry fails `cargo xtask changelog`; CI checks out full history for it. Third-party crates are pinned to exact versions in `[workspace.dependencies]` and bumped only in dedicated commits; a crate `xtask` pins too carries the same version in both places. MSRV is `rust-version` in the workspace manifest: the pinned toolchain minus two minor versions, raised only in a minor release. Windows isn't supported.
+One workspace version. Keep-a-changelog format in `CHANGELOG.md`. A change to `lablet/schema.json`, `lablet/telemetry/registry/`, `lablet/tests/fixtures/outcome.json`, or `lablet/tests/fixtures/transcript.json` without an `Unreleased` entry fails `cargo xtask changelog`; CI checks out full history for it. Third-party crates are pinned to exact versions in `[workspace.dependencies]` and bumped only in dedicated commits; a crate `xtask` pins too carries the same version in both places. MSRV is `rust-version` in the workspace manifest: the pinned toolchain minus two minor versions, raised only in a minor release. Windows isn't supported.
 
 On a fresh clone run `scripts/setup.sh` once: it installs the pinned Rust toolchain, trusts and installs the `mise.toml` tools, and installs the git hooks (`scripts/install-hooks.sh` does only the last step). Plain cargo commands run from `lablet/`.
 

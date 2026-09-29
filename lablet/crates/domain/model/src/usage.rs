@@ -2,8 +2,6 @@
 
 use std::ops::{Add, AddAssign};
 
-use serde::{Deserialize, Serialize};
-
 /// What a provider reports about one call, named for the counts themselves so
 /// that five adjacent numbers can't be given in the wrong order.
 ///
@@ -47,13 +45,7 @@ pub struct TokenCounts {
 /// consumer couldn't otherwise tell which zeros to believe. A sum is `None` in
 /// a field only when nothing it sums reported the count, and whatever reads
 /// the counts as numbers reads a missing one as nothing.
-///
-/// All five fields are always serialised, a missing count as `null`. Left out
-/// when deserialising, the input and output counts are zero and the other
-/// three weren't reported. A field with any other name is an error, so a
-/// misspelt count isn't read as a missing one.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Usage {
     /// Every token of the prompt, cached or not.
     pub input_tokens: u64,

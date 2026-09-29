@@ -1,8 +1,9 @@
 //! The changelog gate (spec §8). The config schema, the telemetry registry,
-//! and the outcome JSON are lablet's public contract, so a change to any of
-//! them must come with an entry under `## [Unreleased]` in `CHANGELOG.md`.
-//! The comparison runs from a base commit to the working tree, so it judges
-//! what is committed on the branch and what is about to be.
+//! and the outcome JSON are lablet's public contract, and the transcript JSON
+//! is what a grader parses, so a change to any of them must come with an
+//! entry under `## [Unreleased]` in `CHANGELOG.md`. The comparison runs from
+//! a base commit to the working tree, so it judges what is committed on the
+//! branch and what is about to be.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -13,10 +14,11 @@ use crate::workspace::repo_root;
 
 /// The contract files, relative to the repository root. An entry ending in
 /// `/` is a directory and covers everything under it.
-const CONTRACT_PATHS: [&str; 3] = [
+const CONTRACT_PATHS: [&str; 4] = [
     "lablet/schema.json",
     "lablet/telemetry/registry/",
     "lablet/tests/fixtures/outcome.json",
+    "lablet/tests/fixtures/transcript.json",
 ];
 
 const CHANGELOG: &str = "CHANGELOG.md";
@@ -218,9 +220,9 @@ fn failure(paths: &[String], since: &str, missing: &str) -> String {
     }
     let _ = write!(
         message,
-        "\nThe config schema, the telemetry registry, and the outcome JSON are lablet's public \
-         contract (spec §8).\nAdd an entry under `{UNRELEASED_HEADING}` in {CHANGELOG} that says \
-         what changed for users."
+        "\nThe config schema, the telemetry registry, and the outcome and transcript JSON are \
+         what lablet's users parse (spec §8).\nAdd an entry under `{UNRELEASED_HEADING}` in \
+         {CHANGELOG} that says what changed for users."
     );
     message
 }
@@ -257,12 +259,13 @@ mod tests {
     }
 
     #[test]
-    fn the_contract_is_the_schema_the_registry_tree_and_the_outcome_fixture() {
+    fn the_contract_is_the_schema_the_registry_tree_and_the_two_document_fixtures() {
         for path in [
             "lablet/schema.json",
             "lablet/telemetry/registry/manifest.yaml",
             "lablet/telemetry/registry/spans/chat.yaml",
             "lablet/tests/fixtures/outcome.json",
+            "lablet/tests/fixtures/transcript.json",
         ] {
             assert!(is_contract_path(path), "{path}");
         }
@@ -272,7 +275,9 @@ mod tests {
             "lablet/telemetry/deps/semconv/model/http.yaml",
             "lablet/telemetry/templates/registry/rust/weaver.yaml",
             "lablet/tests/fixtures/outcome.json/nested",
+            "lablet/tests/fixtures/transcript.json.bak",
             "lablet/tests/fixtures/other.json",
+            "lablet/crates/adapters/secondary/transcript-json/src/lib.rs",
             "schema.json",
             "CHANGELOG.md",
         ] {

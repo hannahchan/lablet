@@ -1,10 +1,8 @@
 use serde_json::{Value, json};
 
-use crate::TaskResult;
-use crate::outcome::RawOutcome;
 use crate::{
-    CompletionMode, RunId, RunLabels, RunOutcome, StopClass, StopReason, TokenCounts, ToolName,
-    Usage,
+    CompletionMode, OutcomeParts, RunId, RunLabels, RunOutcome, StopClass, StopReason, TaskResult,
+    TokenCounts, ToolName, Usage,
 };
 
 // The literal spellings below are the members of `lablet.run.stop_reason` and
@@ -35,26 +33,18 @@ const COMPLETION_MODES: [(CompletionMode, &str); 2] = [
 ];
 
 #[test]
-fn every_stop_reason_prints_and_serialises_as_its_telemetry_spelling() {
+fn every_stop_reason_is_spelled_and_prints_as_its_telemetry_spelling() {
     for (reason, spelling) in STOP_REASONS {
+        assert_eq!(reason.as_str(), spelling);
         assert_eq!(reason.to_string(), spelling);
-        assert_eq!(serde_json::to_value(reason).unwrap(), json!(spelling));
-        assert_eq!(
-            serde_json::from_value::<StopReason>(json!(spelling)).unwrap(),
-            reason
-        );
     }
 }
 
 #[test]
-fn every_completion_mode_prints_and_serialises_as_its_telemetry_spelling() {
+fn every_completion_mode_is_spelled_and_prints_as_its_telemetry_spelling() {
     for (mode, spelling) in COMPLETION_MODES {
+        assert_eq!(mode.as_str(), spelling);
         assert_eq!(mode.to_string(), spelling);
-        assert_eq!(serde_json::to_value(mode).unwrap(), json!(spelling));
-        assert_eq!(
-            serde_json::from_value::<CompletionMode>(json!(spelling)).unwrap(),
-            mode
-        );
     }
 }
 
@@ -105,7 +95,7 @@ fn every_stop_reason_has_its_class() {
 fn closing_keeps_a_structured_result_only_for_a_completed_run() {
     let argument = json!({ "passed": true });
     for (reason, _) in STOP_REASONS {
-        let outcome = RunOutcome::closing(raw(reason, Some(argument.clone()), None));
+        let outcome = RunOutcome::closing(parts(reason, Some(argument.clone()), None));
 
         let expected = (reason == StopReason::Completed).then(|| argument.clone());
         assert_eq!(outcome.result().structured, expected, "{reason}");
@@ -116,7 +106,7 @@ fn closing_keeps_a_structured_result_only_for_a_completed_run() {
 #[test]
 fn closing_keeps_an_error_only_for_a_failed_run() {
     for (reason, class) in CLASSES {
-        let outcome = RunOutcome::closing(raw(reason, None, Some("boom")));
+        let outcome = RunOutcome::closing(parts(reason, None, Some("boom")));
 
         let expected = (class == StopClass::Failed).then_some("boom");
         assert_eq!(outcome.error(), expected, "{reason}");
@@ -131,8 +121,8 @@ fn labels() -> RunLabels {
     }
 }
 
-fn raw(stop_reason: StopReason, structured: Option<Value>, error: Option<&str>) -> RawOutcome {
-    RawOutcome {
+fn parts(stop_reason: StopReason, structured: Option<Value>, error: Option<&str>) -> OutcomeParts {
+    OutcomeParts {
         run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").unwrap(),
         labels: labels(),
         stop_reason,

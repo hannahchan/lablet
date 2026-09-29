@@ -1,5 +1,3 @@
-use serde_json::json;
-
 use super::*;
 use crate::TokenCounts;
 
@@ -28,75 +26,6 @@ const fn bare(input: u64, output: u64) -> Usage {
 #[test]
 fn the_default_usage_is_no_tokens_and_nothing_reported() {
     assert_eq!(Usage::default(), bare(0, 0));
-}
-
-#[test]
-fn usage_serialises_all_five_fields_and_a_count_nobody_reported_as_null() {
-    assert_eq!(
-        serde_json::to_string(&Usage {
-            reasoning_output_tokens: Some(5),
-            ..usage(1, 2, 3, 4)
-        })
-        .unwrap(),
-        concat!(
-            r#"{"input_tokens":1,"output_tokens":2,"reasoning_output_tokens":5,"#,
-            r#""cache_read_tokens":3,"cache_write_tokens":4}"#
-        )
-    );
-    assert_eq!(
-        serde_json::to_string(&Usage {
-            cache_read_tokens: Some(0),
-            ..bare(1, 2)
-        })
-        .unwrap(),
-        concat!(
-            r#"{"input_tokens":1,"output_tokens":2,"reasoning_output_tokens":null,"#,
-            r#""cache_read_tokens":0,"cache_write_tokens":null}"#
-        )
-    );
-}
-
-#[test]
-fn a_count_left_out_reads_as_zero_for_the_totals_and_as_not_reported_for_their_parts() {
-    assert_eq!(
-        serde_json::from_value::<Usage>(json!({})).unwrap(),
-        bare(0, 0)
-    );
-    assert_eq!(
-        serde_json::from_value::<Usage>(json!({ "input_tokens": 9, "output_tokens": 1 })).unwrap(),
-        bare(9, 1)
-    );
-    assert_eq!(
-        serde_json::from_value::<Usage>(json!({
-            "input_tokens": 9,
-            "output_tokens": 1,
-            "reasoning_output_tokens": null,
-            "cache_read_tokens": 0,
-            "cache_write_tokens": 4,
-        }))
-        .unwrap(),
-        Usage {
-            cache_read_tokens: Some(0),
-            cache_write_tokens: Some(4),
-            ..bare(9, 1)
-        }
-    );
-}
-
-#[test]
-fn usage_reads_back_as_what_was_written() {
-    for written in [
-        bare(9, 1),
-        usage(9, 1, 0, 4),
-        Usage {
-            reasoning_output_tokens: Some(1),
-            ..bare(9, 1)
-        },
-    ] {
-        let json = serde_json::to_string(&written).unwrap();
-
-        assert_eq!(serde_json::from_str::<Usage>(&json).unwrap(), written);
-    }
 }
 
 #[test]
@@ -191,18 +120,6 @@ fn from_uncached_adds_nothing_for_a_cache_count_the_provider_did_not_report() {
         }
     );
     assert_eq!(neither, bare(200, 50));
-}
-
-#[test]
-fn a_misspelt_usage_field_is_an_error_not_a_count_nobody_reported() {
-    for misspelt in [
-        json!({ "input_token": 12, "output_tokens": 3 }),
-        json!({ "input_tokens": 12, "output_tokens": 3, "cache_read_token": 8 }),
-    ] {
-        let error = serde_json::from_value::<Usage>(misspelt).unwrap_err();
-
-        assert!(error.to_string().contains("unknown field"), "{error}");
-    }
 }
 
 #[test]

@@ -2,13 +2,10 @@
 //! ended. The stop policy in `lablet-policy` reads all of it; the transcript
 //! and the summary each hold a part.
 
-use serde::{Deserialize, Serialize};
-
 use crate::ToolName;
 
 /// How a run decides that the model has finished.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum CompletionMode {
     /// The run completes when the model returns a turn with no tool calls.
     #[default]
@@ -36,7 +33,7 @@ impl CompletionMode {
         self == Self::Explicit && name.as_str() == Self::TASK_COMPLETE
     }
 
-    /// The serde spelling, which is the `lablet.run.completion_mode` value.
+    /// The `lablet.run.completion_mode` value.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -47,8 +44,7 @@ impl CompletionMode {
 }
 
 /// Why a run ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StopReason {
     /// The model finished, by a turn with no tool calls or by calling `task_complete`.
     Completed,
@@ -81,7 +77,8 @@ pub enum StopReason {
 }
 
 impl StopReason {
-    /// The serde spelling, which is the `lablet.run.stop_reason` value.
+    /// The `lablet.run.stop_reason` value, which is how the outcome document
+    /// spells it too.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {

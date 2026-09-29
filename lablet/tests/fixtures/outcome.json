@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "run_id": "01K5F3Z8Q4X9T2M7B6W1R0VNEC",
   "labels": {
     "task": "fix-failing-test",
@@ -19,8 +20,10 @@
   "result": {
     "text": "The failing test is fixed.",
     "structured": {
-      "passed": true,
-      "files_changed": ["src/lib.rs"]
+      "files_changed": [
+        "src/lib.rs"
+      ],
+      "passed": true
     }
   },
   "error": null

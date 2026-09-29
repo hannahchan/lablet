@@ -31,8 +31,6 @@
 
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
-
 use crate::message::tool_uses;
 use crate::whole_ms;
 use crate::{
@@ -44,8 +42,10 @@ use crate::{
 ///
 /// A run builds one through its [`crate::Run`], which is the only way one is
 /// built: lablet runs a loop and emits what it saw, and reading a transcript
-/// back belongs to the side that consumes it. So every `Transcript` holds
-/// these rules, because the run's states offer no way to break them:
+/// back belongs to the side that consumes it. So it can be taken apart
+/// ([`Transcript::into_parts`]) and never put together, and every
+/// `Transcript` holds these rules, because the run's states offer no way to
+/// break them:
 ///
 /// - Something from the user comes before every response: a turn has input,
 ///   or the turn before it has tool call outcomes. So the first turn has
@@ -66,14 +66,28 @@ use crate::{
 ///
 /// A run takes one prompt, so only the first turn of a run's transcript has
 /// input. The shape leaves room for a user who speaks again.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transcript {
     system: String,
     turns: Vec<Turn>,
 }
 
+/// A transcript taken apart, for whatever writes one down.
+///
+/// Every field of a transcript is here and every field is public, so
+/// whatever takes the parts apart by pattern stops compiling when a
+/// transcript gains a field, until it says whether the field is published.
+/// Nothing makes a transcript from them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptParts {
+    /// The system prompt.
+    pub system: String,
+    /// Every turn, in order.
+    pub turns: Vec<Turn>,
+}
+
 /// One model response, with its input, its record, and its tool call outcomes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Turn {
     input: Vec<UserContent>,
     response: Vec<ContentBlock>,
@@ -81,8 +95,21 @@ pub struct Turn {
     tool_calls: Vec<ToolCallOutcome>,
 }
 
+/// A turn taken apart, as [`TranscriptParts`] is a transcript.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnParts {
+    /// What the user supplied to the turn.
+    pub input: Vec<UserContent>,
+    /// The blocks of the model's response, in order.
+    pub response: Vec<ContentBlock>,
+    /// What the run knows about the provider call behind the response.
+    pub record: TurnRecord,
+    /// What happened to the response's tool calls, in call order.
+    pub tool_calls: Vec<ToolCallOutcome>,
+}
+
 /// What the run knows about the provider call that produced a turn.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnRecord {
     /// The tokens the completion used. `input_tokens` includes the cached
     /// tokens; see [`Usage`].
@@ -157,6 +184,13 @@ impl Transcript {
     /// Adds `turn` as the last turn.
     pub(crate) fn push(&mut self, turn: Turn) {
         self.turns.push(turn);
+    }
+
+    /// The transcript taken apart, every field of it.
+    #[must_use]
+    pub fn into_parts(self) -> TranscriptParts {
+        let Self { system, turns } = self;
+        TranscriptParts { system, turns }
     }
 }
 
@@ -243,6 +277,23 @@ impl Turn {
             .filter(|(_, outcome)| outcome.status.was_started())
     }
 
+    /// The turn taken apart, every field of it.
+    #[must_use]
+    pub fn into_parts(self) -> TurnParts {
+        let Self {
+            input,
+            response,
+            record,
+            tool_calls,
+        } = self;
+        TurnParts {
+            input,
+            response,
+            record,
+            tool_calls,
+        }
+    }
+
     /// The response's [`ContentBlock::Text`] blocks, concatenated in order.
     #[must_use]
     pub fn text(&self) -> String {
@@ -278,8 +329,6 @@ fn push_user<'a>(
 fn is_blank(block: &UserContent) -> bool {
     matches!(block, UserContent::Text(text) if text.trim().is_empty())
 }
-
-pub mod document;
 
 #[cfg(test)]
 mod tests;
