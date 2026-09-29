@@ -4,10 +4,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lablet_model::{
-    CompletionMode, ContentBlock, Endpoint, FinishReason, ModelRef, OutputCap, OutputCut,
-    OutputKeep, Prompts, ProviderErrorKind, ProviderKind, ProviderResponse, Rates, RequestParams,
-    RunContext, RunId, StopReason, Thinking, TokenCounts, ToolCallEnd, ToolCallId, ToolCallStatus,
-    ToolConcurrency, ToolInput, ToolName, ToolSource, ToolSpec, ToolUse, Usage,
+    CacheScope, CompletionMode, ContentBlock, Endpoint, FinishReason, ModelRef, OutputCap,
+    OutputCut, OutputKeep, Prompts, ProviderApi, ProviderErrorKind, ProviderKind, ProviderResponse,
+    Rates, RequestParams, RunContext, RunId, RunLabels, RunSummary, StopReason, Thinking,
+    TokenCounts, ToolCallEnd, ToolCallId, ToolCallStatus, ToolConcurrency, ToolInput, ToolName,
+    ToolSource, ToolSpec, ToolUse, Usage,
 };
 use lablet_policy::{Pricing, RetryPolicy, RetrySettings, StopPolicy};
 
@@ -39,18 +40,42 @@ fn spec(value: &str) -> ToolSpec {
 fn context() -> RunContext {
     RunContext {
         run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").expect("a valid run id"),
+        labels: RunLabels::default(),
+        started_unix_ms: 1_790_000_000_000,
         config_digest: "0".repeat(64),
         agent_version: "0.1.0".to_owned(),
         resource: Vec::new(),
         transcript_path: None,
         skills_count: 0,
         mcp_servers: Vec::new(),
+        mcp_server_versions: Vec::new(),
+        mcp_lifetime: None,
         capture_content: false,
     }
 }
 
 fn prompts() -> Prompts {
     Prompts::new("You fix tests.", "Fix the failing test.").expect("the task isn't blank")
+}
+
+fn model() -> ModelRef {
+    ModelRef {
+        provider: ProviderKind::Fake,
+        api: ProviderApi::Script,
+        name: "fake-1".to_owned(),
+        replays_reasoning: false,
+    }
+}
+
+fn request() -> RequestParams {
+    RequestParams {
+        max_tokens: 4096,
+        temperature: None,
+        thinking: Thinking::ProviderDefault,
+        effort: None,
+        seed: None,
+        cache_scope: CacheScope::Shared,
+    }
 }
 
 /// A response that says `text` and calls each of `tools`, the n-th under the
@@ -144,19 +169,14 @@ struct Harness {
     calls: CallLimits,
     context: RunContext,
     completion: CompletionMode,
+    request: RequestParams,
+    prompts: Prompts,
 }
 
 impl Harness {
     fn new(script: Vec<Answer>) -> Self {
         let clock = Arc::new(FakeClock::new());
-        let provider = Arc::new(FakeProvider::new(
-            ModelRef {
-                provider: ProviderKind::Fake,
-                name: "fake-1".to_owned(),
-            },
-            Arc::clone(&clock),
-            script,
-        ));
+        let provider = Arc::new(FakeProvider::new(model(), Arc::clone(&clock), script));
         Self {
             tools: vec![Arc::new(FakeTools::new(
                 Arc::clone(&clock),
@@ -182,6 +202,8 @@ impl Harness {
             },
             context: context(),
             completion: CompletionMode::Natural,
+            request: request(),
+            prompts: prompts(),
         }
     }
 
@@ -197,17 +219,11 @@ impl Harness {
             Arc::clone(&self.cancel) as Arc<dyn crate::Cancellation>,
             self.stop,
             self.retry,
-            RequestParams {
-                max_tokens: 4096,
-                temperature: None,
-                thinking: Thinking::ProviderDefault,
-                effort: None,
-                seed: None,
-            },
+            self.request,
             self.pricing,
             self.calls,
         );
-        let finished = movable(service.run(self.context, prompts())).await;
+        let finished = movable(service.run(self.context, self.prompts)).await;
         Run {
             finished,
             observer: self.observer,
@@ -1257,10 +1273,7 @@ async fn the_summary_reports_the_limits_the_run_actually_enforced() {
     harness.stop.timeout = ms(1_234);
     harness.provider = Arc::new(
         FakeProvider::new(
-            ModelRef {
-                provider: ProviderKind::Fake,
-                name: "fake-1".to_owned(),
-            },
+            model(),
             Arc::clone(&harness.clock),
             vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))],
         )
@@ -1394,17 +1407,11 @@ async fn the_span_an_observer_opens_reaches_the_executor() {
         Arc::clone(&harness.cancel) as Arc<dyn crate::Cancellation>,
         harness.stop,
         harness.retry,
-        RequestParams {
-            max_tokens: 4096,
-            temperature: None,
-            thinking: Thinking::ProviderDefault,
-            effort: None,
-            seed: None,
-        },
+        harness.request,
         None,
         harness.calls,
     );
-    service.run(harness.context, prompts()).await;
+    service.run(harness.context, harness.prompts).await;
 
     let taken = tools.taken();
     assert_eq!(taken.len(), 1);
@@ -3620,4 +3627,378 @@ async fn an_attempt_that_begins_when_the_run_s_time_has_gone_is_given_no_time() 
 
     assert_eq!(run.provider.deadlines(), [Duration::ZERO]);
     assert_eq!(run.stop_reason(), StopReason::Completed);
+}
+
+// O11: the labels a run was asked for under. An observer reads them from the
+// context of each event, and the outcome holds a copy.
+
+fn labelled() -> RunLabels {
+    RunLabels {
+        task: Some("fix-failing-test".to_owned()),
+        experiment: Some("terse-tool-descriptions".to_owned()),
+        trial: Some("3".to_owned()),
+    }
+}
+
+/// The context the run started with and the one it finished with, as an
+/// observer was handed them.
+fn contexts(run: &Run) -> (RunContext, RunContext) {
+    let events = run.observer.events();
+    let (
+        Some(EventKind::RunStarted {
+            context: started, ..
+        }),
+        Some(EventKind::RunFinished {
+            context: finished, ..
+        }),
+    ) = (
+        events.first().map(|event| event.kind.clone()),
+        events.last().map(|event| event.kind.clone()),
+    )
+    else {
+        panic!("a run's events open with RunStarted and close with RunFinished");
+    };
+    (*started, *finished)
+}
+
+/// A run that answers at once, and one whose only provider call fails, so
+/// the labels aren't those of a run that went well alone.
+fn a_short_run_and_a_failed_one() -> [Vec<Answer>; 2] {
+    [
+        vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))],
+        vec![Answer::fails(ProviderErrorKind::Fatal)],
+    ]
+}
+
+#[tokio::test]
+async fn the_labels_of_the_context_are_in_the_outcome_and_on_both_of_the_run_s_own_events() {
+    let partly = RunLabels {
+        experiment: None,
+        ..labelled()
+    };
+    for labels in [labelled(), partly] {
+        for script in a_short_run_and_a_failed_one() {
+            let mut harness = Harness::new(script);
+            harness.context.labels = labels.clone();
+
+            let run = harness.run().await;
+
+            assert_eq!(run.finished.summary.outcome.labels, labels);
+            let expected = RunContext {
+                labels: labels.clone(),
+                ..context()
+            };
+            assert_eq!(contexts(&run), (expected.clone(), expected));
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_run_asked_for_under_no_label_has_none_and_its_outcome_writes_each_as_null() {
+    for script in a_short_run_and_a_failed_one() {
+        let run = Harness::new(script).run().await;
+
+        let outcome = &run.finished.summary.outcome;
+        assert_eq!(outcome.labels, RunLabels::default());
+        assert_eq!(
+            serde_json::to_value(outcome).expect("an outcome serialises")["labels"],
+            serde_json::json!({ "task": null, "experiment": null, "trial": null })
+        );
+        let (started, finished) = contexts(&run);
+        assert_eq!(started.labels, RunLabels::default());
+        assert_eq!(finished.labels, RunLabels::default());
+    }
+}
+
+// O12: the digests of what the model was shown. Each digest below is what
+// `shasum -a 256` gives for the bytes written out beside it, so these hold
+// which hash it is, what's hashed and how it's written, where a test that
+// only compared two runs would hold none of the three.
+
+const BASH_SPEC: &str = r#"{"name":"bash","description":"The bash tool.","input_schema":{"type":"object"},"source":"builtin","concurrency":"exclusive"}"#;
+const READ_FILE_SPEC: &str = r#"{"name":"read_file","description":"The read_file tool.","input_schema":{"type":"object"},"source":"builtin","concurrency":"exclusive"}"#;
+const DIGEST_OF_BASH_THEN_READ_FILE: &str =
+    "75502ef02ef4cc26f3b03bd9bf53705051bb3e0f81846f14abea2ed4405735db";
+const DIGEST_OF_READ_FILE_THEN_BASH: &str =
+    "57c11b3c1a827fcf4e5b3683d74dbce28d3646e326a62e2657c3ba88e5be64b0";
+const DIGEST_OF_YOU_FIX_TESTS: &str =
+    "0897299beed5fb8987943bb73e81f94c9b18c4caeb6abe5eee6009f4c180810d";
+const DIGEST_OF_NOTHING: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+fn answering_at_once() -> Vec<Answer> {
+    vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))]
+}
+
+/// A run offered `specs` under `system`, which answers at once.
+async fn shown(specs: Vec<ToolSpec>, system: &str) -> Run {
+    let mut harness = Harness::new(answering_at_once());
+    harness.tools = vec![Arc::new(FakeTools::new(Arc::clone(&harness.clock), specs))];
+    harness.prompts = Prompts::new(system, "Fix the failing test.").expect("the task isn't blank");
+    harness.run().await
+}
+
+/// The specs the provider was sent on the run's first attempt, as the bytes
+/// the digest is of.
+fn specs_sent(run: &Run) -> String {
+    run.provider.shown()[0]
+        .tools
+        .iter()
+        .map(|spec| serde_json::to_string(spec).expect("a spec serialises"))
+        .collect()
+}
+
+fn summary(run: &Run) -> &RunSummary {
+    &run.finished.summary
+}
+
+#[tokio::test]
+async fn the_tools_digest_is_the_sha_256_of_the_specs_sent_as_compact_json_in_the_order_offered() {
+    let run = Harness::new(answering_at_once()).run().await;
+
+    assert_eq!(specs_sent(&run), format!("{BASH_SPEC}{READ_FILE_SPEC}"));
+    assert_eq!(summary(&run).tools_digest, DIGEST_OF_BASH_THEN_READ_FILE);
+    assert_eq!(
+        summary(&run).prompt_tools_bytes,
+        (BASH_SPEC.len() + READ_FILE_SPEC.len()) as u64
+    );
+}
+
+#[tokio::test]
+async fn the_system_prompt_digest_is_the_sha_256_of_the_system_prompt_sent() {
+    let run = Harness::new(answering_at_once()).run().await;
+
+    assert_eq!(run.provider.shown()[0].system, "You fix tests.");
+    assert_eq!(summary(&run).system_prompt_digest, DIGEST_OF_YOU_FIX_TESTS);
+}
+
+#[tokio::test]
+async fn a_run_shown_no_tools_and_no_system_prompt_reports_the_digest_of_nothing_for_each() {
+    let run = shown(Vec::new(), "").await;
+
+    assert_eq!(specs_sent(&run), "");
+    assert_eq!(run.provider.shown()[0].system, "");
+    assert_eq!(summary(&run).prompt_tools_bytes, 0);
+    assert_eq!(summary(&run).tools_digest, DIGEST_OF_NOTHING);
+    assert_eq!(summary(&run).system_prompt_digest, DIGEST_OF_NOTHING);
+}
+
+#[tokio::test]
+async fn the_order_the_specs_are_offered_in_is_part_of_their_digest() {
+    let run = shown(vec![spec("read_file"), spec("bash")], "You fix tests.").await;
+
+    assert_eq!(specs_sent(&run), format!("{READ_FILE_SPEC}{BASH_SPEC}"));
+    assert_eq!(summary(&run).tools_digest, DIGEST_OF_READ_FILE_THEN_BASH);
+    assert_eq!(
+        summary(&run).prompt_tools_bytes,
+        (BASH_SPEC.len() + READ_FILE_SPEC.len()) as u64,
+        "the size can't tell the two orders apart, which is what the digest is for"
+    );
+}
+
+/// The two descriptions are as long as each other, so nothing but the
+/// digest tells the two tool sets apart.
+#[tokio::test]
+async fn one_tool_set_run_twice_has_one_digest_and_one_changed_description_gives_another() {
+    let described = |description: &str| {
+        vec![
+            spec("bash"),
+            ToolSpec {
+                description: description.to_owned(),
+                ..spec("read_file")
+            },
+        ]
+    };
+    let first = shown(described("Reads a file."), "You fix tests.").await;
+    let again = shown(described("Reads a file."), "You fix tests.").await;
+    let changed = shown(described("Reads a path."), "You fix tests.").await;
+
+    assert_eq!(summary(&first).tools_digest, summary(&again).tools_digest);
+    assert_ne!(summary(&first).tools_digest, summary(&changed).tools_digest);
+    assert_eq!(
+        summary(&first).prompt_tools_bytes,
+        summary(&changed).prompt_tools_bytes
+    );
+    for run in [&first, &again, &changed] {
+        assert_eq!(summary(run).system_prompt_digest, DIGEST_OF_YOU_FIX_TESTS);
+    }
+}
+
+#[tokio::test]
+async fn one_system_prompt_run_twice_has_one_digest_and_one_changed_word_gives_another() {
+    let specs = || vec![spec("bash"), spec("read_file")];
+    let first = shown(specs(), "You fix tests.").await;
+    let again = shown(specs(), "You fix tests.").await;
+    let changed = shown(specs(), "You fix tasks.").await;
+
+    assert_eq!(
+        summary(&first).system_prompt_digest,
+        summary(&again).system_prompt_digest
+    );
+    assert_ne!(
+        summary(&first).system_prompt_digest,
+        summary(&changed).system_prompt_digest
+    );
+    assert_eq!(
+        summary(&first).prompt_system_bytes,
+        summary(&changed).prompt_system_bytes
+    );
+    for run in [&first, &again, &changed] {
+        assert_eq!(summary(run).tools_digest, DIGEST_OF_BASH_THEN_READ_FILE);
+    }
+}
+
+/// The digests are of what the model is shown and of nothing else about the
+/// run, or the same variant run as two trials would look like two variants.
+#[tokio::test]
+async fn two_runs_shown_the_same_have_the_same_digests_whatever_else_tells_them_apart() {
+    let mut other = Harness::new(vec![
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::now(says("On it.", &["bash"], FinishReason::ToolUse)),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    other.context.run_id = RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNED").expect("a valid run id");
+    other.context.labels = labelled();
+    other.request.cache_scope = CacheScope::Run;
+    other.prompts = Prompts::new("You fix tests.", "Fix the other failing test.")
+        .expect("the task isn't blank");
+
+    let other = other.run().await;
+
+    assert_eq!(summary(&other).tools_digest, DIGEST_OF_BASH_THEN_READ_FILE);
+    assert_eq!(
+        summary(&other).system_prompt_digest,
+        DIGEST_OF_YOU_FIX_TESTS
+    );
+}
+
+/// An explicit run offers `task_complete` itself, and the model is shown it
+/// like any tool an executor serves.
+#[tokio::test]
+async fn the_completion_tool_a_run_offers_is_among_the_specs_its_digest_is_of() {
+    let mut explicit = Harness::new(answering_at_once());
+    explicit.completion = CompletionMode::Explicit;
+
+    let explicit = explicit.run().await;
+
+    let sent = specs_sent(&explicit);
+    let own = sent
+        .strip_prefix(&format!("{BASH_SPEC}{READ_FILE_SPEC}"))
+        .expect("the executor's specs come first");
+    assert!(own.starts_with(r#"{"name":"task_complete","#), "{own}");
+    assert_eq!(summary(&explicit).prompt_tools_bytes, sent.len() as u64);
+    assert_ne!(
+        summary(&explicit).tools_digest,
+        DIGEST_OF_BASH_THEN_READ_FILE
+    );
+}
+
+// The cache key: the run id when the run has a cache of its own, and no part
+// of what the digests and the sizes are of.
+
+fn failing_once_then_taking_two_turns() -> Vec<Answer> {
+    vec![
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::now(says("On it.", &["bash"], FinishReason::ToolUse)),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]
+}
+
+async fn scoped(scope: CacheScope) -> Run {
+    let mut harness = Harness::new(failing_once_then_taking_two_turns());
+    harness.request.cache_scope = scope;
+    harness.run().await
+}
+
+fn cache_keys(run: &Run) -> Vec<Option<String>> {
+    run.provider
+        .shown()
+        .into_iter()
+        .map(|shown| shown.cache_key)
+        .collect()
+}
+
+#[tokio::test]
+async fn a_run_with_a_cache_of_its_own_sends_its_id_as_the_cache_key_of_every_attempt() {
+    let run = scoped(CacheScope::Run).await;
+
+    assert_eq!(
+        cache_keys(&run),
+        vec![Some("01K5F3Z8Q4X9T2M7B6W1R0VNEC".to_owned()); 3],
+        "the attempt that failed, the one that followed it, and the next turn's"
+    );
+    assert_eq!(summary(&run).request.cache_scope, CacheScope::Run);
+}
+
+#[tokio::test]
+async fn a_run_that_shares_its_cache_sends_no_cache_key() {
+    let run = scoped(CacheScope::Shared).await;
+
+    assert_eq!(cache_keys(&run), vec![None; 3]);
+    assert_eq!(summary(&run).request.cache_scope, CacheScope::Shared);
+}
+
+#[tokio::test]
+async fn the_cache_key_is_no_part_of_the_system_prompt_nor_of_its_size_or_its_digest() {
+    let shared = scoped(CacheScope::Shared).await;
+    let own = scoped(CacheScope::Run).await;
+
+    for run in [&shared, &own] {
+        let systems: Vec<String> = run
+            .provider
+            .shown()
+            .into_iter()
+            .map(|shown| shown.system)
+            .collect();
+        assert_eq!(systems, ["You fix tests."; 3]);
+        assert_eq!(run.finished.transcript.system(), "You fix tests.");
+        assert_eq!(summary(run).prompt_system_bytes, 14);
+        assert_eq!(summary(run).system_prompt_digest, DIGEST_OF_YOU_FIX_TESTS);
+        assert_eq!(summary(run).tools_digest, DIGEST_OF_BASH_THEN_READ_FILE);
+    }
+    assert_eq!(request_bytes(&shared), request_bytes(&own));
+    assert_eq!(shared.finished.transcript, own.finished.transcript);
+}
+
+// O15: how the model was reached. The provider says which API it speaks and
+// whether it sends reasoning back, and the cache scope is the service's own.
+
+#[tokio::test]
+async fn the_summary_names_the_api_whether_reasoning_is_sent_back_and_the_cache_scope() {
+    let reached = ModelRef {
+        provider: ProviderKind::Openai,
+        api: ProviderApi::ChatCompletions,
+        name: "qwen3".to_owned(),
+        replays_reasoning: true,
+    };
+    let mut harness = Harness::new(Vec::new());
+    harness.provider = Arc::new(FakeProvider::new(
+        reached.clone(),
+        Arc::clone(&harness.clock),
+        answering_at_once(),
+    ));
+    harness.request.cache_scope = CacheScope::Run;
+    let asked = harness.request.clone();
+
+    let run = harness.run().await;
+
+    assert_eq!(summary(&run).model, reached);
+    assert_eq!(summary(&run).request, asked);
+    let Some(EventKind::RunStarted { model, .. }) = run
+        .observer
+        .events()
+        .first()
+        .map(|event| event.kind.clone())
+    else {
+        panic!("the first event is RunStarted");
+    };
+    assert_eq!(model, reached);
+}
+
+#[tokio::test]
+async fn a_scripted_run_that_shares_its_cache_says_so_in_its_summary() {
+    let run = Harness::new(answering_at_once()).run().await;
+
+    assert_eq!(summary(&run).model.api, ProviderApi::Script);
+    assert!(!summary(&run).model.replays_reasoning);
+    assert_eq!(summary(&run).request.cache_scope, CacheScope::Shared);
 }

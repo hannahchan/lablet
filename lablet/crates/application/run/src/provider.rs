@@ -30,6 +30,13 @@ pub struct ProviderRequest<'a> {
     pub effort: Option<Effort>,
     /// The sampling seed, for providers that take one.
     pub seed: Option<i64>,
+    /// The run id, when the run's cache scope is
+    /// [`CacheScope::Run`](lablet_model::CacheScope::Run), for the adapter to
+    /// send as its API allows, so that no other run reads what this one
+    /// cached. It's a field of its own because it's no part of `system`: the
+    /// transcript's system prompt, its size and its digest are taken from
+    /// that, and are the same whatever the cache scope.
+    pub cache_key: Option<&'a str>,
     /// How long the adapter may take before it gives up on this attempt:
     /// the shorter of the provider timeout and the time the run has left.
     pub deadline: Duration,

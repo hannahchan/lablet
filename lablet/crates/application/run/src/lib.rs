@@ -9,6 +9,7 @@ mod clock;
 mod observer;
 mod provider;
 mod service;
+mod shown;
 mod tool;
 mod toolset;
 mod trace;

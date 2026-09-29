@@ -15,6 +15,7 @@ async-trait.workspace = true
 lablet-model.workspace = true
 lablet-policy.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

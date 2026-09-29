@@ -159,7 +159,8 @@ clap = { version = "=4.6.7", features = ["derive"] }
 humantime = "=2.4.0"
 # RunId generation in the composition root.
 ulid = "=3.0.0"
-# Digest of the resolved config.
+# SHA-256 for the digests a run is grouped by: of the resolved config, and of the system
+# prompt and the tool specs the loop sends.
 sha2 = "=0.11.0"
 # JSON Schema for the config (`lablet schema`); the line rmcp and opentelemetry-proto accept.
 schemars = "=1.2.2"

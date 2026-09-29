@@ -8,17 +8,28 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CompletionMode, Cost, Endpoint, FinishReason, ModelRef, Rates, RequestParams, RunId,
+    CompletionMode, Cost, Endpoint, FinishReason, ModelRef, Rates, RequestParams, RunId, RunLabels,
     RunOutcome, ToolName, Transcript, Turn, Usage,
 };
 
 /// What only the composition root knows about a run: its part of the wide
 /// event. What the loop is built from, such as the limits and the request
 /// parameters, it reports itself, in [`RunSummary`].
+///
+/// Neither digest of what the model was shown is here. The loop takes both
+/// from what it sends, so none can be paired with a prompt or a tool set it
+/// wasn't taken from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunContext {
     /// The run's id.
     pub run_id: RunId,
+    /// What the run request named the run's task, experiment and trial. The
+    /// loop copies them to the outcome, and an observer reads them here.
+    pub labels: RunLabels,
+    /// When the run started, in milliseconds since the Unix epoch. It's
+    /// read where the context is filled in: the domain reads no clock, and
+    /// the loop's gives instants, which have no date.
+    pub started_unix_ms: u64,
     /// SHA-256 of the resolved config, in hex.
     pub config_digest: String,
     /// The lablet version.
@@ -31,11 +42,43 @@ pub struct RunContext {
     pub skills_count: u32,
     /// The names of the configured MCP servers.
     pub mcp_servers: Vec<String>,
+    /// The version each of those servers gave of itself, in the order of
+    /// `mcp_servers`.
+    pub mcp_server_versions: Vec<String>,
+    /// How long the MCP servers live; `None` for a run that has none.
+    pub mcp_lifetime: Option<McpLifetime>,
     /// Whether prompts, responses, and tool content may reach telemetry. The
     /// loop reads it to fill the content fields of its events, and an observer
     /// reads it before emitting the result from the summary.
     pub capture_content: bool,
 }
+
+/// How long a run's MCP servers live.
+///
+/// A server that outlives a run carries what the run left in it to the next,
+/// so two runs on one `Lablet` are comparable only when the record says
+/// which they had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpLifetime {
+    /// The servers are started again for each run.
+    Run,
+    /// The servers are started once and serve every run of their `Lablet`.
+    Lablet,
+}
+
+impl McpLifetime {
+    /// The serde spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Run => "run",
+            Self::Lablet => "lablet",
+        }
+    }
+}
+
+display_as_str!(McpLifetime);
 
 /// One tool's share of a run.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -88,6 +131,13 @@ pub struct RunSummary {
     pub prompt_system_bytes: u64,
     /// Size of the task prompt in bytes.
     pub prompt_user_bytes: u64,
+    /// Size of the tool specs in bytes, as the loop measured them: each as
+    /// compact JSON, in the order they're offered.
+    pub prompt_tools_bytes: u64,
+    /// SHA-256 of those bytes, in hex.
+    pub tools_digest: String,
+    /// SHA-256 of the system prompt as it was sent, in hex.
+    pub system_prompt_digest: String,
     /// What the provider call attempts that failed reported using, summed,
     /// and `None` when none reported anything. It's in no turn, so
     /// `outcome.usage` leaves it out, and the cost counts both.

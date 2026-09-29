@@ -5,29 +5,88 @@ use serde_json::{Value, json};
 use super::*;
 use crate::outcome::RawOutcome;
 use crate::{
-    CompletionMode, Cost, Effort, Endpoint, FinishReason, ModelRef, Prompts, ProviderKind, Rates,
-    RequestParams, Run, RunOutcome, RunSetup, StopReason, Thinking, TokenCounts, ToolName,
-    ToolStats, Usage,
+    CacheScope, CompletionMode, Cost, Effort, Endpoint, FinishReason, ModelRef, Prompts,
+    ProviderApi, ProviderKind, Rates, RequestParams, Run, RunOutcome, RunSetup, StopReason,
+    Thinking, TokenCounts, ToolName, ToolStats, Usage,
 };
 use crate::{RunId, RunLabels, TaskResult};
 
+/// Every field, because each one is a wide-event attribute or a join key of
+/// every record.
 #[test]
-fn a_run_context_round_trips_through_json() {
+fn a_run_context_has_one_json_form() {
     let context = RunContext {
         run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").unwrap(),
+        labels: labels(),
+        started_unix_ms: 1_790_000_000_123,
         config_digest: "9f2c".to_owned(),
         agent_version: "0.1.0".to_owned(),
         resource: vec![("experiment.id".to_owned(), "exp-7".to_owned())],
         transcript_path: Some(PathBuf::from("out/transcript.json")),
         skills_count: 2,
-        mcp_servers: vec!["docs".to_owned()],
+        mcp_servers: vec!["docs".to_owned(), "tickets".to_owned()],
+        mcp_server_versions: vec!["1.4.0".to_owned(), "0.9.2".to_owned()],
+        mcp_lifetime: Some(McpLifetime::Lablet),
         capture_content: true,
+    };
+    let expected = json!({
+        "run_id": "01K5F3Z8Q4X9T2M7B6W1R0VNEC",
+        "labels": { "task": "fix-failing-test", "experiment": null, "trial": "3" },
+        "started_unix_ms": 1_790_000_000_123_u64,
+        "config_digest": "9f2c",
+        "agent_version": "0.1.0",
+        "resource": [["experiment.id", "exp-7"]],
+        "transcript_path": "out/transcript.json",
+        "skills_count": 2,
+        "mcp_servers": ["docs", "tickets"],
+        "mcp_server_versions": ["1.4.0", "0.9.2"],
+        "mcp_lifetime": "lablet",
+        "capture_content": true,
+    });
+
+    assert_eq!(serde_json::to_value(&context).unwrap(), expected);
+    assert_eq!(
+        serde_json::from_value::<RunContext>(expected).unwrap(),
+        context
+    );
+}
+
+#[test]
+fn a_run_without_mcp_servers_has_no_lifetime_for_them() {
+    let context = RunContext {
+        run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").unwrap(),
+        labels: RunLabels::default(),
+        started_unix_ms: 0,
+        config_digest: "9f2c".to_owned(),
+        agent_version: "0.1.0".to_owned(),
+        resource: Vec::new(),
+        transcript_path: None,
+        skills_count: 0,
+        mcp_servers: Vec::new(),
+        mcp_server_versions: Vec::new(),
+        mcp_lifetime: None,
+        capture_content: false,
     };
 
     let json = serde_json::to_value(&context).unwrap();
-    assert_eq!(json["resource"], json!([["experiment.id", "exp-7"]]));
-    assert_eq!(json["capture_content"], json!(true));
+    assert_eq!(json["mcp_lifetime"], Value::Null);
+    assert_eq!(
+        json["labels"],
+        json!({ "task": null, "experiment": null, "trial": null })
+    );
     assert_eq!(serde_json::from_value::<RunContext>(json).unwrap(), context);
+}
+
+#[test]
+fn an_mcp_lifetime_prints_what_it_serialises_as() {
+    for (lifetime, spelling) in [(McpLifetime::Run, "run"), (McpLifetime::Lablet, "lablet")] {
+        assert_eq!(lifetime.to_string(), spelling);
+        assert_eq!(serde_json::to_value(lifetime).unwrap(), json!(spelling));
+        assert_eq!(
+            serde_json::from_value::<McpLifetime>(json!(spelling)).unwrap(),
+            lifetime
+        );
+    }
 }
 
 fn summary() -> RunSummary {
@@ -35,7 +94,9 @@ fn summary() -> RunSummary {
     RunSummary {
         model: ModelRef {
             provider: ProviderKind::Openai,
+            api: ProviderApi::ChatCompletions,
             name: "qwen3".to_owned(),
+            replays_reasoning: true,
         },
         endpoint: Some(Endpoint {
             host: "localhost".to_owned(),
@@ -51,9 +112,13 @@ fn summary() -> RunSummary {
             thinking: Thinking::default(),
             effort: Some(Effort::Low),
             seed: None,
+            cache_scope: CacheScope::Run,
         },
         prompt_system_bytes: 120,
         prompt_user_bytes: 40,
+        prompt_tools_bytes: 312,
+        tools_digest: "5f70".to_owned(),
+        system_prompt_digest: "c1a5".to_owned(),
         failed_usage: Some(Usage::from_inclusive(TokenCounts {
             input: 9,
             output: 0,
@@ -96,7 +161,12 @@ fn a_run_summary_has_one_json_form() {
     assert_eq!(
         json,
         json!({
-            "model": { "provider": "openai", "name": "qwen3" },
+            "model": {
+                "provider": "openai",
+                "api": "chat_completions",
+                "name": "qwen3",
+                "replays_reasoning": true,
+            },
             "endpoint": { "host": "localhost", "port": 11434 },
             "tools": ["bash"],
             "completion": "explicit",
@@ -108,9 +178,13 @@ fn a_run_summary_has_one_json_form() {
                 "thinking": "provider_default",
                 "effort": "low",
                 "seed": null,
+                "cache_scope": "run",
             },
             "prompt_system_bytes": 120,
             "prompt_user_bytes": 40,
+            "prompt_tools_bytes": 312,
+            "tools_digest": "5f70",
+            "system_prompt_digest": "c1a5",
             "failed_usage": {
                 "input_tokens": 9,
                 "output_tokens": 0,
@@ -175,6 +249,9 @@ fn a_finished_run_carries_the_summary_and_the_conversation() {
         model: summary.model,
         endpoint: summary.endpoint,
         tools: summary.tools,
+        tools_bytes: summary.prompt_tools_bytes,
+        tools_digest: summary.tools_digest,
+        system_prompt_digest: summary.system_prompt_digest,
         completion: summary.completion,
         max_turns: summary.max_turns,
         timeout: Duration::from_secs(600),

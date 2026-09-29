@@ -139,6 +139,7 @@ fn request_defaults_have_one_json_form() {
         thinking: Thinking::Budget(NonZeroU32::new(1024).unwrap()),
         effort: Some(Effort::High),
         seed: Some(7),
+        cache_scope: CacheScope::Run,
     };
     let expected = json!({
         "max_tokens": 4096,
@@ -146,6 +147,7 @@ fn request_defaults_have_one_json_form() {
         "thinking": { "budget": 1024 },
         "effort": "high",
         "seed": 7,
+        "cache_scope": "run",
     });
 
     assert_eq!(serde_json::to_value(&request).unwrap(), expected);
@@ -153,6 +155,40 @@ fn request_defaults_have_one_json_form() {
         serde_json::from_value::<RequestParams>(expected).unwrap(),
         request
     );
+}
+
+#[test]
+fn runs_share_a_cache_unless_a_run_is_given_one_of_its_own() {
+    assert_eq!(CacheScope::default(), CacheScope::Shared);
+}
+
+#[test]
+fn a_cache_scope_prints_what_it_serialises_as() {
+    for (scope, spelling) in [(CacheScope::Shared, "shared"), (CacheScope::Run, "run")] {
+        assert_eq!(scope.to_string(), spelling);
+        assert_eq!(serde_json::to_value(scope).unwrap(), json!(spelling));
+        assert_eq!(
+            serde_json::from_value::<CacheScope>(json!(spelling)).unwrap(),
+            scope
+        );
+    }
+}
+
+#[test]
+fn a_provider_api_prints_what_it_serialises_as() {
+    for (api, spelling) in [
+        (ProviderApi::Messages, "messages"),
+        (ProviderApi::Responses, "responses"),
+        (ProviderApi::ChatCompletions, "chat_completions"),
+        (ProviderApi::Script, "script"),
+    ] {
+        assert_eq!(api.to_string(), spelling);
+        assert_eq!(serde_json::to_value(api).unwrap(), json!(spelling));
+        assert_eq!(
+            serde_json::from_value::<ProviderApi>(json!(spelling)).unwrap(),
+            api
+        );
+    }
 }
 
 fn bash(id: &str) -> ContentBlock {
@@ -191,8 +227,10 @@ fn a_script_cannot_put_a_tool_result_in_a_completion() {
 #[test]
 fn a_model_ref_and_an_endpoint_have_one_json_form() {
     let model = ModelRef {
-        provider: ProviderKind::Anthropic,
-        name: "claude-sonnet-5".to_owned(),
+        provider: ProviderKind::Openai,
+        api: ProviderApi::ChatCompletions,
+        name: "qwen3".to_owned(),
+        replays_reasoning: true,
     };
     let endpoint = Endpoint {
         host: "api.anthropic.com".to_owned(),
@@ -201,7 +239,16 @@ fn a_model_ref_and_an_endpoint_have_one_json_form() {
 
     assert_eq!(
         serde_json::to_value(&model).unwrap(),
-        json!({ "provider": "anthropic", "name": "claude-sonnet-5" })
+        json!({
+            "provider": "openai",
+            "api": "chat_completions",
+            "name": "qwen3",
+            "replays_reasoning": true,
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<ModelRef>(serde_json::to_value(&model).unwrap()).unwrap(),
+        model
     );
     assert_eq!(
         serde_json::to_value(&endpoint).unwrap(),

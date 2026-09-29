@@ -40,6 +40,12 @@ pub struct RunSetup {
     /// The tools offered to the model, after the allow and deny lists, and
     /// so the names the executor can resolve a call to.
     pub tools: Vec<ToolName>,
+    /// Size of the tool specs in bytes, each as compact JSON.
+    pub tools_bytes: u64,
+    /// SHA-256 of those bytes in the order the specs are offered, in hex.
+    pub tools_digest: String,
+    /// SHA-256 of the system prompt, in hex.
+    pub system_prompt_digest: String,
     /// How the run decides that the model has finished.
     pub completion: CompletionMode,
     /// The cap on turns; `None` when the run has none.
@@ -338,6 +344,9 @@ impl Run {
             request: setup.request,
             prompt_system_bytes: transcript.system().len() as u64,
             prompt_user_bytes: UserContent::bytes(prompt),
+            prompt_tools_bytes: setup.tools_bytes,
+            tools_digest: setup.tools_digest,
+            system_prompt_digest: setup.system_prompt_digest,
             failed_usage,
             provider_retries: u64::from(failed_attempts.saturating_sub(1)),
             provider_latency_total_ms: failed_latency_total_ms,

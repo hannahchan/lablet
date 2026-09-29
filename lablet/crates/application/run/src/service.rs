@@ -5,12 +5,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use lablet_model::{
-    Answer, Cost, Final, FinishedRun, KeptOutput, Message, OutputCap, Pending, Progress, Prompts,
-    ProviderErrorKind, ProviderResponse, Rates, RequestParams, Responded, Run, RunContext, RunId,
-    RunLabels, RunSetup, Schedule, StopReason, ToolCallStatus, ToolInput, ToolUse, Turn, Usage,
+    Answer, CacheScope, Cost, Final, FinishedRun, KeptOutput, Message, OutputCap, Pending,
+    Progress, Prompts, ProviderErrorKind, ProviderResponse, Rates, RequestParams, Responded, Run,
+    RunContext, RunId, RunSetup, Schedule, StopReason, ToolCallStatus, ToolInput, ToolUse, Turn,
+    Usage,
 };
 use lablet_policy::{Pricing, RetryPolicy, StopPolicy};
 
+use crate::shown::{OfferedSpecs, system_prompt_digest};
 use crate::{
     Cancellation, Clock, EventKind, McpCallMeta, ModelProvider, ProviderError, ProviderRequest,
     RunEvent, RunObserver, ToolCall, ToolSet,
@@ -177,12 +179,17 @@ impl RunService {
         let capture = context.capture_content;
         let run_id = context.run_id.clone();
 
+        let specs = OfferedSpecs::measure(self.tools.specs());
+        let bytes = RequestBytes::new(prompts.system().len() as u64 + specs.bytes);
         let setup = RunSetup {
             run_id: run_id.clone(),
-            labels: RunLabels::default(),
+            labels: context.labels.clone(),
             model: self.provider.model().clone(),
             endpoint: self.provider.endpoint(),
             tools: self.tools.specs().iter().map(|s| s.name.clone()).collect(),
+            tools_bytes: specs.bytes,
+            tools_digest: specs.digest,
+            system_prompt_digest: system_prompt_digest(prompts.system()),
             completion: self.tools.completion(),
             max_turns: self.stop.max_turns,
             timeout: self.stop.timeout,
@@ -203,7 +210,7 @@ impl RunService {
         .await;
 
         let run = Run::start(setup, prompts);
-        let (ending, stopped) = self.drive(&run_id, run, started, capture).await;
+        let (ending, stopped) = self.drive(&run_id, run, bytes, started, capture).await;
 
         let rates = self.pricing.as_ref().map(Pricing::rates);
         let cost = self.pricing.as_ref().and_then(|p| p.cost(&ending.spent()));
@@ -226,11 +233,11 @@ impl RunService {
         &self,
         run_id: &RunId,
         mut run: Run,
+        mut bytes: RequestBytes,
         started: Instant,
         capture: bool,
     ) -> (Ending, Stopped) {
         let mode = self.tools.completion();
-        let mut bytes = RequestBytes::new(run.transcript().system(), self.tools.specs());
         loop {
             if let Some(stopped) = self.before_call(&run, started) {
                 return (Ending::Waiting(run), stopped);
@@ -359,6 +366,7 @@ impl RunService {
                         thinking: self.request.thinking,
                         effort: self.request.effort,
                         seed: self.request.seed,
+                        cache_key: self.cache_key(run_id),
                         deadline: self.provider_deadline(began_at),
                     })
                     .await
@@ -395,6 +403,16 @@ impl RunService {
                 return Err(stopped);
             }
             attempt += 1;
+        }
+    }
+
+    /// What every request of the run `run_id` carries for the adapter to
+    /// keep the run's cache apart by: the id, which no other run has, and
+    /// nothing when runs share a cache.
+    fn cache_key<'a>(&self, run_id: &'a RunId) -> Option<&'a str> {
+        match self.request.cache_scope {
+            CacheScope::Shared => None,
+            CacheScope::Run => Some(run_id.as_str()),
         }
     }
 
@@ -689,13 +707,11 @@ struct RequestBytes {
 }
 
 impl RequestBytes {
-    fn new(system: &str, specs: &[lablet_model::ToolSpec]) -> Self {
-        let specs: u64 = specs
-            .iter()
-            .map(|spec| serde_json::to_string(spec).map_or(0, |json| json.len() as u64))
-            .sum();
+    /// The measure of a run whose system prompt and tool specs come to
+    /// `fixed` bytes together.
+    const fn new(fixed: u64) -> Self {
         Self {
-            fixed: system.len() as u64 + specs,
+            fixed,
             settled: 0,
             measured: 0,
         }

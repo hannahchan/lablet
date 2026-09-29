@@ -146,8 +146,20 @@ pub struct FakeProvider {
     clock: Arc<FakeClock>,
     calls: AtomicUsize,
     sent: Mutex<Vec<serde_json::Value>>,
+    shown: Mutex<Vec<Shown>>,
     deadlines: Mutex<Vec<Duration>>,
     ran_out: AtomicBool,
+}
+
+/// What one attempt carried beside the conversation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shown {
+    /// The system prompt.
+    pub system: String,
+    /// The tool specs, in the order they were offered.
+    pub tools: Vec<ToolSpec>,
+    /// The cache key, when the request had one.
+    pub cache_key: Option<String>,
 }
 
 impl FakeProvider {
@@ -160,6 +172,7 @@ impl FakeProvider {
             clock,
             calls: AtomicUsize::new(0),
             sent: Mutex::new(Vec::new()),
+            shown: Mutex::new(Vec::new()),
             deadlines: Mutex::new(Vec::new()),
             ran_out: AtomicBool::new(false),
         }
@@ -180,6 +193,14 @@ impl FakeProvider {
     /// test can assert what the model was told rather than what was recorded.
     pub fn sent(&self) -> Vec<serde_json::Value> {
         self.sent
+            .lock()
+            .expect("the fake provider isn't poisoned")
+            .clone()
+    }
+
+    /// What each attempt carried beside the conversation, in order.
+    pub fn shown(&self) -> Vec<Shown> {
+        self.shown
             .lock()
             .expect("the fake provider isn't poisoned")
             .clone()
@@ -214,6 +235,14 @@ impl ModelProvider for FakeProvider {
             .lock()
             .expect("the fake provider isn't poisoned")
             .push(serde_json::to_value(request.messages).expect("messages serialise"));
+        self.shown
+            .lock()
+            .expect("the fake provider isn't poisoned")
+            .push(Shown {
+                system: request.system.to_owned(),
+                tools: request.tools.to_vec(),
+                cache_key: request.cache_key.map(str::to_owned),
+            });
         self.deadlines
             .lock()
             .expect("the fake provider isn't poisoned")

@@ -42,13 +42,13 @@ pub use outcome::{OutcomeError, RunOutcome, TaskResult};
 pub use output::{KeptOutput, OutputCap, OutputCapError, OutputCut, OutputKeep};
 pub use price::{Cost, CostError, RateError, Rates};
 pub use provider::{
-    Effort, Endpoint, FinishReason, ModelRef, ProviderErrorKind, ProviderResponse, RequestParams,
-    ResponseError, Thinking, UnknownReason,
+    CacheScope, Effort, Endpoint, FinishReason, ModelRef, ProviderApi, ProviderErrorKind,
+    ProviderResponse, RequestParams, ResponseError, Thinking, UnknownReason,
 };
 pub use provider_kind::ProviderKind;
 pub use run::{BlankTask, Final, Pending, Progress, Prompts, Responded, Run, RunSetup, Schedule};
 pub use stop::{Calls, CompletionMode, StopClass, StopReason};
-pub use summary::{FinishedRun, RunContext, RunSummary, ToolStats};
+pub use summary::{FinishedRun, McpLifetime, RunContext, RunSummary, ToolStats};
 pub use tool::{
     Answer, ToolCallEnd, ToolCallOutcome, ToolCallStatus, ToolConcurrency, ToolSource, ToolSpec,
 };

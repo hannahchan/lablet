@@ -8,13 +8,50 @@ use serde::{Deserialize, Serialize};
 use crate::message::tool_uses;
 use crate::{ContentBlock, ProviderKind, Usage};
 
-/// A model as a run names it: the provider and the provider's name for the model.
+/// A model as a run names it, and how the adapter reaches it.
+///
+/// Two runs that reach one model through different APIs, or that differ in
+/// whether its reasoning is sent back, don't hand it the same conversation
+/// after the first call. A record that named the provider and the model
+/// alone would call them the same.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ModelRef {
     /// The provider that serves the model.
     pub provider: ProviderKind,
+    /// The API the adapter speaks to it.
+    pub api: ProviderApi,
     /// The model name sent in requests.
     pub name: String,
+    /// Whether the adapter sends the reasoning of earlier responses back on
+    /// later calls.
+    pub replays_reasoning: bool,
+}
+
+/// The API an adapter reaches its provider through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderApi {
+    /// Anthropic's Messages API.
+    Messages,
+    /// OpenAI's Responses API.
+    Responses,
+    /// OpenAI's chat completions, and every server that speaks them.
+    ChatCompletions,
+    /// The scripted provider's script.
+    Script,
+}
+
+impl ProviderApi {
+    /// The serde spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Messages => "messages",
+            Self::Responses => "responses",
+            Self::ChatCompletions => "chat_completions",
+            Self::Script => "script",
+        }
+    }
 }
 
 /// Where a provider's API is served, for `server.address` and `server.port`.
@@ -270,6 +307,35 @@ pub struct RequestParams {
     /// that's what `gen_ai.request.seed` carries; a `u64` above `i64::MAX`
     /// would reach telemetry as some other number.
     pub seed: Option<i64>,
+    /// Which runs may share what the provider caches of this run's requests.
+    pub cache_scope: CacheScope,
+}
+
+/// Which runs share what a provider caches of a run's requests.
+///
+/// A run that reads what another wrote costs less and answers sooner than it
+/// would have alone, so what it measures depends on which run came before
+/// it. [`CacheScope::Run`] keeps runs apart that are compared on either.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheScope {
+    /// Every run that sends the same prefix shares what's cached of it.
+    #[default]
+    Shared,
+    /// Each request carries the run id as its cache key, for the adapter to
+    /// use as its API allows.
+    Run,
+}
+
+impl CacheScope {
+    /// The serde spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Shared => "shared",
+            Self::Run => "run",
+        }
+    }
 }
 
 /// How the model is asked to reason before it answers.
@@ -321,7 +387,13 @@ impl Effort {
     }
 }
 
-display_as_str!(ProviderErrorKind, FinishReason, Effort);
+display_as_str!(
+    ProviderApi,
+    ProviderErrorKind,
+    FinishReason,
+    CacheScope,
+    Effort
+);
 
 #[cfg(test)]
 mod tests;

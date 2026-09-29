@@ -7,9 +7,10 @@ use serde_json::json;
 use super::*;
 use crate::tests::block_on;
 use crate::{
-    ContentBlock, Effort, FinishReason, KeptOutput, OutputCap, OutputCut, Prompts, ProviderKind,
-    Rates, RunLabels, StopClass, Thinking, TokenCounts, ToolCallEnd, ToolCallId, ToolCallOutcome,
-    ToolCallStatus, ToolResult, ToolResultContent, ToolSource, ToolStats,
+    CacheScope, ContentBlock, Effort, FinishReason, KeptOutput, OutputCap, OutputCut, Prompts,
+    ProviderApi, ProviderKind, Rates, RunLabels, StopClass, Thinking, TokenCounts, ToolCallEnd,
+    ToolCallId, ToolCallOutcome, ToolCallStatus, ToolResult, ToolResultContent, ToolSource,
+    ToolStats,
 };
 
 fn nz(count: u32) -> NonZeroU32 {
@@ -61,13 +62,18 @@ fn setup() -> RunSetup {
         labels: labels(),
         model: ModelRef {
             provider: ProviderKind::Anthropic,
+            api: ProviderApi::Messages,
             name: "claude-sonnet-5".to_owned(),
+            replays_reasoning: true,
         },
         endpoint: Some(Endpoint {
             host: "api.anthropic.com".to_owned(),
             port: 443,
         }),
         tools: vec![name("bash"), name("read_file")],
+        tools_bytes: 312,
+        tools_digest: "the digest of the tool specs".to_owned(),
+        system_prompt_digest: "the digest of the system prompt".to_owned(),
         completion: CompletionMode::Explicit,
         max_turns: Some(nz(30)),
         timeout: Duration::from_secs(600),
@@ -77,6 +83,7 @@ fn setup() -> RunSetup {
             thinking: Thinking::Adaptive,
             effort: Some(Effort::High),
             seed: Some(7),
+            cache_scope: CacheScope::Run,
         },
     }
 }
@@ -210,6 +217,12 @@ fn a_run_that_did_nothing_has_a_summary_of_its_setup_and_zeros() {
     assert_eq!(summary.request, setup().request);
     assert_eq!(summary.prompt_system_bytes, 14);
     assert_eq!(summary.prompt_user_bytes, 21);
+    assert_eq!(summary.prompt_tools_bytes, 312);
+    assert_eq!(summary.tools_digest, "the digest of the tool specs");
+    assert_eq!(
+        summary.system_prompt_digest,
+        "the digest of the system prompt"
+    );
     assert_eq!(summary.failed_usage, None);
     assert_eq!(summary.provider_retries, 0);
     assert_eq!(summary.provider_latency_total_ms, 0);
@@ -338,6 +351,29 @@ fn finish_writes_the_run_id_the_duration_in_whole_milliseconds_and_the_final_tex
     assert_eq!(outcome.error(), Some("provider: 401 unauthorized"));
     assert_eq!(finished.summary.cost, Some(usd(0.25)));
     assert_eq!(finished.summary.rates, Some(rates()));
+}
+
+/// Each under its own name, in whichever state the run stopped: the two
+/// digests are adjacent strings, and one written where the other belongs
+/// would be a run that reports a prompt it never sent.
+#[test]
+fn the_summary_names_what_the_model_was_shown_as_the_run_was_set_up_with_it() {
+    let waiting = finish(start(), StopReason::Cancelled);
+    let answered = done(start(), 1, ms(1))
+        .finish(StopReason::Completed, ms(0), None, None, None, None)
+        .summary;
+    let unanswered = calling(start(), &["bash"])
+        .finish(StopReason::MaxTurns, ms(0), None, None, None, None)
+        .summary;
+
+    for summary in [waiting, answered, unanswered] {
+        assert_eq!(summary.prompt_tools_bytes, setup().tools_bytes);
+        assert_eq!(summary.tools_digest, setup().tools_digest);
+        assert_eq!(summary.system_prompt_digest, setup().system_prompt_digest);
+        assert_ne!(summary.tools_digest, summary.system_prompt_digest);
+        assert_eq!(summary.model, setup().model);
+        assert_eq!(summary.request.cache_scope, CacheScope::Run);
+    }
 }
 
 #[test]
