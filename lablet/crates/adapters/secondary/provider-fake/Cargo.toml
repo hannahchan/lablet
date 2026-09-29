@@ -9,3 +9,23 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+async-trait.workspace = true
+humantime.workspace = true
+lablet-documents.workspace = true
+lablet-model.workspace = true
+lablet-run.workspace = true
+serde.workspace = true
+serde-saphyr.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+lablet-policy.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
