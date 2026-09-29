@@ -217,7 +217,8 @@ impl ToolSet {
     /// Whether `call` may run beside other calls of its turn: its tool's
     /// concurrency. A call to a name this run doesn't offer, or whose
     /// arguments didn't parse, is answered by the loop without an executor,
-    /// so it changes nothing and may.
+    /// so it changes nothing and may. So may the completion call, which the
+    /// loop answers too when it completed nothing: its spec says so.
     #[must_use]
     pub fn concurrency(&self, call: &ToolUse) -> ToolConcurrency {
         match &call.input {

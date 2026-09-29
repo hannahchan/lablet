@@ -852,6 +852,48 @@ fn a_call_whose_arguments_did_not_parse_is_not_a_call_to_an_unknown_tool() {
     assert_eq!(summary.per_tool[&name("bash")].errors, 1);
 }
 
+/// A call the loop rejected named a tool the run has, `task_complete`, so it
+/// counts against that tool as a call whose arguments didn't parse counts
+/// against the one it named, and it's an error result like any other.
+#[test]
+fn a_call_the_loop_rejected_counts_in_the_totals_and_against_the_tool_it_named() {
+    let run = tool_turn(
+        start(),
+        &["bash", "task_complete"],
+        &[ran(ToolCallEnd::Ok), ToolCallStatus::Rejected],
+    );
+
+    let summary = finish(run, StopReason::MaxTurns);
+    assert_eq!(summary.outcome.tool_calls, 2);
+    assert_eq!(summary.tool_calls_errors, 1);
+    assert_eq!(summary.tool_calls_unknown, 0);
+    assert_eq!(summary.tool_latency_total_ms, 2);
+    // Each input is `{"n":0}` with its own digit, and each output is `out`.
+    assert_eq!(summary.tool_input_bytes, 2 * 7);
+    assert_eq!(summary.tool_output_bytes, 2 * 3);
+    assert_eq!(
+        summary.per_tool,
+        BTreeMap::from([
+            (
+                name("bash"),
+                ToolStats {
+                    calls: 1,
+                    errors: 0,
+                    latency_ms: 1,
+                }
+            ),
+            (
+                name("task_complete"),
+                ToolStats {
+                    calls: 1,
+                    errors: 1,
+                    latency_ms: 1,
+                }
+            ),
+        ])
+    );
+}
+
 /// The summary asks the status whether a tool ran, not where it came from, so
 /// an MCP tool earns its per-tool entry exactly as a built-in one does. Every
 /// other test here runs built-in tools, which would leave the branch that
@@ -939,6 +981,27 @@ fn invalid_turns_in_a_row_count_up_whichever_way_the_model_got_each_call_wrong()
         &[ToolCallStatus::Unknown, ToolCallStatus::MalformedInput],
     );
     assert_eq!(invalid_turns(&run), 3);
+    let run = tool_turn(
+        run,
+        &["task_complete", "task_complete"],
+        &[ToolCallStatus::Rejected, ToolCallStatus::Rejected],
+    );
+    assert_eq!(invalid_turns(&run), 4);
+}
+
+/// The call beside the rejected one reached a tool, which is what the
+/// rejection asked the model to wait for.
+#[test]
+fn a_turn_whose_completion_call_was_rejected_beside_a_call_that_ran_is_not_an_invalid_turn() {
+    let run = turn_answered(start(), ToolCallStatus::Unknown);
+    assert_eq!(invalid_turns(&run), 1);
+
+    let run = tool_turn(
+        run,
+        &["bash", "task_complete"],
+        &[ran(ToolCallEnd::Ok), ToolCallStatus::Rejected],
+    );
+    assert_eq!(invalid_turns(&run), 0);
 }
 
 #[test]
@@ -1177,44 +1240,101 @@ fn a_run_with_no_system_prompt_is_allowed() {
     );
 }
 
+/// A run whose last response made `calls`, and nothing else.
+fn having_called(calls: Vec<ContentBlock>) -> Pending {
+    pending(start().responded(
+        ProviderResponse::new(calls, Usage::default(), FinishReason::ToolUse, None, None).unwrap(),
+        ms(0),
+        ms(1),
+    ))
+}
+
+fn parsed(argument: serde_json::Value) -> ToolInput {
+    ToolInput::Json(argument)
+}
+
 #[test]
-fn a_task_complete_call_whose_arguments_parsed_completes_an_explicit_run() {
-    let calling = pending(
-        start().responded(
-            ProviderResponse::new(
-                vec![
-                    tool_use(0, "bash", ToolInput::Json(json!({ "n": 0 }))),
-                    tool_use(1, "task_complete", ToolInput::Unparsed("{".to_owned())),
-                    tool_use(
-                        2,
-                        "task_complete",
-                        ToolInput::Json(json!({ "passed": true })),
-                    ),
-                    tool_use(
-                        3,
-                        "task_complete",
-                        ToolInput::Json(json!({ "passed": false })),
-                    ),
-                ],
-                Usage::default(),
-                FinishReason::ToolUse,
-                None,
-                None,
-            )
-            .unwrap(),
-            ms(0),
-            ms(1),
-        ),
-    );
+fn a_task_complete_call_made_on_its_own_completes_an_explicit_run() {
+    let calling = having_called(vec![tool_use(
+        0,
+        "task_complete",
+        parsed(json!({ "passed": true })),
+    )]);
 
     assert_eq!(
         calling.completed_with(CompletionMode::Explicit),
-        Some(&json!({ "passed": true })),
-        "the first call to task_complete whose arguments parsed"
+        Some(&json!({ "passed": true }))
     );
     assert_eq!(calling.calls(CompletionMode::Explicit), Calls::TaskComplete);
+}
+
+/// Natural mode has no completion call, so a tool an executor serves under
+/// the name is a tool like any other and its call is one to run.
+#[test]
+fn a_task_complete_call_completes_nothing_in_natural_mode() {
+    let calling = having_called(vec![tool_use(
+        0,
+        "task_complete",
+        parsed(json!({ "passed": true })),
+    )]);
+
     assert_eq!(calling.completed_with(CompletionMode::Natural), None);
     assert_eq!(calling.calls(CompletionMode::Natural), Calls::Tools);
+}
+
+#[test]
+fn a_call_to_another_tool_made_on_its_own_completes_nothing() {
+    let calling = having_called(vec![tool_use(0, "bash", parsed(json!({ "n": 0 })))]);
+
+    assert_eq!(calling.completed_with(CompletionMode::Explicit), None);
+    assert_eq!(calling.calls(CompletionMode::Explicit), Calls::Tools);
+}
+
+/// A run that completed on such a response would report work as done that
+/// the response only asked for. Where the completion call sits among the
+/// others decides nothing, and the other call may be a second completion
+/// call.
+#[test]
+fn a_task_complete_call_made_beside_another_call_completes_nothing() {
+    let argument = || parsed(json!({ "passed": true }));
+    let responses = [
+        vec![
+            tool_use(0, "task_complete", argument()),
+            tool_use(1, "bash", parsed(json!({ "n": 1 }))),
+        ],
+        vec![
+            tool_use(0, "bash", parsed(json!({ "n": 0 }))),
+            tool_use(1, "task_complete", argument()),
+        ],
+        vec![
+            tool_use(0, "task_complete", argument()),
+            tool_use(1, "task_complete", parsed(json!({ "passed": false }))),
+        ],
+        vec![
+            tool_use(0, "task_complete", argument()),
+            tool_use(1, "task_complete", ToolInput::Unparsed("{".to_owned())),
+        ],
+        vec![
+            tool_use(0, "task_complete", ToolInput::Unparsed("{".to_owned())),
+            tool_use(1, "task_complete", argument()),
+        ],
+    ];
+    for calls in responses {
+        let calling = having_called(calls);
+
+        assert_eq!(
+            calling.completed_with(CompletionMode::Explicit),
+            None,
+            "{:?}",
+            calling.turn().response()
+        );
+        assert_eq!(
+            calling.calls(CompletionMode::Explicit),
+            Calls::Tools,
+            "{:?}",
+            calling.turn().response()
+        );
+    }
 }
 
 /// In explicit mode the structured result is what the run is for, so a
@@ -1222,24 +1342,11 @@ fn a_task_complete_call_whose_arguments_parsed_completes_an_explicit_run() {
 /// like any other call with bad arguments, and the model can try again.
 #[test]
 fn a_task_complete_call_whose_arguments_did_not_parse_completes_nothing() {
-    let calling = pending(
-        start().responded(
-            ProviderResponse::new(
-                vec![tool_use(
-                    0,
-                    "task_complete",
-                    ToolInput::Unparsed("{\"passed\": tr".to_owned()),
-                )],
-                Usage::default(),
-                FinishReason::ToolUse,
-                None,
-                None,
-            )
-            .unwrap(),
-            ms(0),
-            ms(1),
-        ),
-    );
+    let calling = having_called(vec![tool_use(
+        0,
+        "task_complete",
+        ToolInput::Unparsed("{\"passed\": tr".to_owned()),
+    )]);
 
     assert_eq!(calling.completed_with(CompletionMode::Explicit), None);
     assert_eq!(calling.calls(CompletionMode::Explicit), Calls::Tools);

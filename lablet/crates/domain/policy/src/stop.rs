@@ -82,8 +82,8 @@ impl StopPolicy {
     ///   call's arguments, and a cut-off input can still parse as a valid,
     ///   smaller one, so none of its calls may run and a `task_complete` among
     ///   them doesn't complete the run.
-    /// - Otherwise `task_complete` in explicit mode is `completed`, and any
-    ///   other call goes on.
+    /// - Otherwise `task_complete` called on its own in explicit mode is
+    ///   `completed`, and any other call goes on.
     ///
     /// `completion` is passed rather than held, so the run keeps one copy of
     /// it: the tool set it decides the shape of. The same value must have

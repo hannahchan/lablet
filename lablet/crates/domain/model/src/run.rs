@@ -514,24 +514,24 @@ impl Pending {
         }
     }
 
-    /// The argument of the first `task_complete` call in the response whose
-    /// arguments parsed, in explicit mode, which is the run's structured
-    /// result. A call whose arguments didn't parse completes nothing: it's
-    /// answered like any other call with bad arguments, so the model can try
-    /// again.
+    /// The argument of the call that completes the run, which is the run's
+    /// structured result: the response's only call, when it's one `mode`
+    /// intercepts ([`CompletionMode::intercepts`]) and its arguments parsed.
+    ///
+    /// A completion call made beside other calls completes nothing, a second
+    /// completion call among them: the run would report work as done that
+    /// the response only asked for. Nor does one whose arguments didn't
+    /// parse. The loop answers each, so the model can make the call again.
     #[must_use]
     pub fn completed_with(&self, mode: CompletionMode) -> Option<&serde_json::Value> {
-        if mode != CompletionMode::Explicit {
+        let mut calls = self.0.turn.tool_uses();
+        let (Some(only), None) = (calls.next(), calls.next()) else {
             return None;
+        };
+        match &only.input {
+            ToolInput::Json(value) if mode.intercepts(&only.name) => Some(value),
+            ToolInput::Json(_) | ToolInput::Unparsed(_) => None,
         }
-        self.0
-            .turn
-            .tool_uses()
-            .filter(|call| call.name.as_str() == CompletionMode::TASK_COMPLETE)
-            .find_map(|call| match &call.input {
-                ToolInput::Json(value) => Some(value),
-                ToolInput::Unparsed(_) => None,
-            })
     }
 
     /// Closes the record of the run, the turn's calls unanswered; see

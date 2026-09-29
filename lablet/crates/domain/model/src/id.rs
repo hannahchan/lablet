@@ -124,7 +124,12 @@ impl ToolName {
     /// The longest tool name both provider APIs accept.
     pub const MAX_LEN: usize = 64;
 
-    /// The tool a run in [`crate::CompletionMode::Explicit`] ends by calling.
+    /// The name of the tool a run that completes explicitly ends by calling.
+    /// It's spelled here, where the rule for a name is, so the module that
+    /// reads completion modes depends on this one and never the reverse.
+    pub const TASK_COMPLETE: &'static str = "task_complete";
+
+    /// The tool a run that completes explicitly ends by calling.
     ///
     /// Built here rather than validated at the call site: this module owns
     /// the rule and can see that the name keeps it, so the loop needs no
@@ -132,7 +137,7 @@ impl ToolName {
     /// each other.
     #[must_use]
     pub fn task_complete() -> Self {
-        Self(crate::CompletionMode::TASK_COMPLETE.to_owned())
+        Self(Self::TASK_COMPLETE.to_owned())
     }
 }
 

@@ -58,7 +58,9 @@ use crate::{
 /// A turn without outcomes either called no tools or its tools never ran: the
 /// response was cut short or refused, its `task_complete` call was
 /// intercepted, or the run was cancelled or reached a limit first. Which of
-/// the two it was is read from whether the response holds tool calls.
+/// the two it was is read from whether the response holds tool calls. A
+/// `task_complete` call that came with other calls isn't intercepted: it has
+/// an outcome, `rejected`, like every other call of its turn.
 ///
 /// A run takes one prompt, so only the first turn of a run's transcript has
 /// input. The shape leaves room for a user who speaks again.

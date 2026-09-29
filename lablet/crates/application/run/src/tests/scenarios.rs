@@ -2203,6 +2203,377 @@ fn calls_with_unparsed_input(tool: &str, text: &str) -> ProviderResponse {
     .expect("a test's response has distinct call ids")
 }
 
+// L13: a `task_complete` call made beside other calls completes nothing.
+
+const CALL_IT_ON_ITS_OWN: &str =
+    "call task_complete on its own, once your other calls have returned";
+
+fn completing(argument: serde_json::Value) -> (&'static str, ToolInput) {
+    (CompletionMode::TASK_COMPLETE, ToolInput::Json(argument))
+}
+
+/// An explicit run over an executor that serves `write_file`, and the
+/// executor, so a scenario can say which calls reached it.
+fn explicit_with_write_file(script: Vec<Answer>) -> (Harness, Arc<FakeTools>) {
+    let mut harness = Harness::new(script);
+    harness.completion = CompletionMode::Explicit;
+    let tools = Arc::new(FakeTools::new(
+        Arc::clone(&harness.clock),
+        vec![spec("write_file")],
+    ));
+    harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
+    (harness, tools)
+}
+
+/// The script of L13: `write_file` beside the completion call, then the
+/// completion call twice, then the completion call alone. Each completion
+/// call has an argument of its own, so the result says which one was taken.
+fn completing_beside_other_calls() -> Vec<Answer> {
+    vec![
+        Answer::now(calling(&[
+            ("write_file", parsed()),
+            completing(serde_json::json!({ "answer": "first" })),
+        ])),
+        Answer::now(calling(&[
+            completing(serde_json::json!({ "answer": "second" })),
+            completing(serde_json::json!({ "answer": "third" })),
+        ])),
+        Answer::now(calling(&[completing(
+            serde_json::json!({ "answer": "alone" }),
+        )])),
+    ]
+}
+
+/// The name of every call an executor was handed, in order.
+fn reached(tools: &FakeTools) -> Vec<String> {
+    tools
+        .taken()
+        .iter()
+        .map(|call| call.name.to_string())
+        .collect()
+}
+
+/// A run that completed on a response that also asked for work would report
+/// the work as done. So the completion call is answered `rejected`, the
+/// response's other calls run, and the run completes when the call comes
+/// alone.
+#[tokio::test]
+async fn a_completion_call_beside_other_calls_is_rejected_and_the_others_run() {
+    let (harness, tools) = explicit_with_write_file(completing_beside_other_calls());
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(run.turns(), 3);
+    assert_eq!(run.provider.calls(), 3);
+    let outcome = &run.finished.summary.outcome;
+    assert_eq!(
+        outcome.result().structured,
+        Some(serde_json::json!({ "answer": "alone" })),
+        "the argument of the call that came alone, and of no call before it"
+    );
+    assert_eq!(
+        statuses(&run),
+        [vec!["ok", "rejected"], vec!["rejected", "rejected"], vec![]],
+        "the call that completed the run was intercepted, so it has no outcome"
+    );
+    assert_eq!(
+        reached(&tools),
+        ["write_file"],
+        "the other call ran, and no completion call reached an executor"
+    );
+
+    let rejected = &run.finished.transcript.turns()[0].tool_calls()[1];
+    assert_eq!(rejected.status, ToolCallStatus::Rejected);
+    assert_eq!(rejected.call_id.as_str(), "call_1");
+    assert_eq!(
+        rejected.content,
+        [lablet_model::ToolResultContent::Text(
+            CALL_IT_ON_ITS_OWN.to_owned()
+        )]
+    );
+    assert_eq!(rejected.latency_ms, 0, "nothing ran, so nothing took time");
+    for rejected in run.finished.transcript.turns()[1].tool_calls() {
+        assert_eq!(rejected.status, ToolCallStatus::Rejected);
+        assert_eq!(
+            rejected.content,
+            [lablet_model::ToolResultContent::Text(
+                CALL_IT_ON_ITS_OWN.to_owned()
+            )]
+        );
+    }
+}
+
+/// A rejected call is answered, so it's in every total an answered call is
+/// in: the count, the errors, and the share of the tool it named. It named a
+/// tool the run offers, so it isn't a call to an unknown one.
+#[tokio::test]
+async fn a_rejected_call_counts_in_the_totals_and_against_task_complete() {
+    let (harness, _) = explicit_with_write_file(completing_beside_other_calls());
+
+    let run = harness.run().await;
+
+    let summary = &run.finished.summary;
+    assert_eq!(
+        summary.outcome.tool_calls, 4,
+        "two calls in each of the first two turns; the third turn's is intercepted"
+    );
+    assert_eq!(summary.tool_calls_errors, 3);
+    assert_eq!(summary.tool_calls_unknown, 0);
+    assert_eq!(
+        summary.per_tool,
+        std::collections::BTreeMap::from([
+            (
+                ToolName::task_complete(),
+                lablet_model::ToolStats {
+                    calls: 3,
+                    errors: 3,
+                    latency_ms: 0,
+                }
+            ),
+            (
+                name("write_file"),
+                lablet_model::ToolStats {
+                    calls: 1,
+                    errors: 0,
+                    latency_ms: 0,
+                }
+            ),
+        ])
+    );
+}
+
+/// The model is told, as an error result, so it can make the call again once
+/// the results of its other calls are in front of it.
+#[tokio::test]
+async fn the_model_is_sent_the_rejection_as_an_error_result_beside_the_other_results() {
+    let (harness, _) = explicit_with_write_file(completing_beside_other_calls());
+
+    let run = harness.run().await;
+
+    let sent = run.provider.sent();
+    assert_eq!(
+        sent[1].as_array().and_then(|messages| messages.last()),
+        Some(&serde_json::json!({
+            "user": {
+                "tool_results": [
+                    {
+                        "call_id": "call_0",
+                        "content": [{ "text": "write_file ran" }],
+                        "is_error": false,
+                    },
+                    {
+                        "call_id": "call_1",
+                        "content": [{ "text": CALL_IT_ON_ITS_OWN }],
+                        "is_error": true,
+                    },
+                ],
+                "input": [],
+            },
+        }))
+    );
+}
+
+/// A rejected call is a call the loop answered, so an observer sees it begin
+/// and end as it sees a call to an unknown name. Only the call that completes
+/// the run is never announced. Every call runs alone here, because the events
+/// of calls that run together come in no order a test may rely on.
+#[tokio::test]
+async fn a_rejected_call_is_announced_and_the_intercepted_one_is_not() {
+    let (mut harness, _) = explicit_with_write_file(completing_beside_other_calls());
+    harness.calls.max_concurrent_tool_calls = nz(1);
+
+    let run = harness.run().await;
+
+    let events = run.observer.events();
+    let started: Vec<(u32, &str, &str, Option<&ToolSource>)> = events
+        .iter()
+        .filter_map(|event| match &event.kind {
+            EventKind::ToolCallStarted {
+                turn,
+                call_id,
+                name,
+                source,
+                ..
+            } => Some((*turn, call_id.as_str(), name.as_str(), source.as_ref())),
+            _ => None,
+        })
+        .collect();
+    let finished: Vec<(u32, &str, &str, bool)> = events
+        .iter()
+        .filter_map(|event| match &event.kind {
+            EventKind::ToolCallFinished {
+                turn,
+                call_id,
+                status,
+                mcp,
+                ..
+            } => Some((*turn, call_id.as_str(), status.as_str(), mcp.is_some())),
+            _ => None,
+        })
+        .collect();
+
+    let builtin = Some(&ToolSource::Builtin);
+    assert_eq!(
+        started,
+        [
+            (1, "call_0", "write_file", builtin),
+            (1, "call_1", "task_complete", builtin),
+            (2, "call_0", "task_complete", builtin),
+            (2, "call_1", "task_complete", builtin),
+        ],
+        "turn 3's call completed the run, so it never began"
+    );
+    assert_eq!(
+        finished,
+        [
+            (1, "call_0", "ok", false),
+            (1, "call_1", "rejected", false),
+            (2, "call_0", "rejected", false),
+            (2, "call_1", "rejected", false),
+        ]
+    );
+}
+
+/// Both calls of L13's second turn were ones the model got wrong, so the
+/// turn is an invalid one. Its first turn isn't: a call of it reached a tool.
+#[tokio::test]
+async fn a_turn_whose_calls_were_all_rejected_is_an_invalid_turn() {
+    let (mut harness, _) = explicit_with_write_file(completing_beside_other_calls());
+    harness.stop.max_consecutive_invalid_turns = Some(nz(1));
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::InvalidCallsExhausted);
+    assert_eq!(run.error(), Some(INVALID_TURNS_REACHED_THEIR_CAP));
+    assert_eq!(
+        run.turns(),
+        2,
+        "the first turn's write_file ran, so the count began at the second"
+    );
+    assert_eq!(run.provider.calls(), 2, "no provider call follows the stop");
+    assert_eq!(
+        statuses(&run),
+        [vec!["ok", "rejected"], vec!["rejected", "rejected"]]
+    );
+    assert_eq!(run.finished.summary.outcome.result().structured, None);
+}
+
+/// Where the completion call sits among a response's calls decides nothing:
+/// one made first is rejected as one made last is, and the call after it
+/// still runs.
+#[tokio::test]
+async fn a_completion_call_made_ahead_of_another_call_is_rejected_too() {
+    let (harness, tools) = explicit_with_write_file(vec![
+        Answer::now(calling(&[
+            completing(serde_json::json!({ "answer": "early" })),
+            ("write_file", parsed()),
+        ])),
+        Answer::now(says("Stopping here.", &[], FinishReason::EndTurn)),
+    ]);
+
+    let run = harness.run().await;
+
+    assert_eq!(
+        run.stop_reason(),
+        StopReason::EndedWithoutCompletion,
+        "the rejected call completed nothing, and no other call followed it"
+    );
+    assert_eq!(run.turns(), 2);
+    assert_eq!(statuses(&run), [vec!["rejected", "ok"], vec![]]);
+    assert_eq!(reached(&tools), ["write_file"]);
+    assert_eq!(run.finished.summary.outcome.result().structured, None);
+}
+
+// L15: only explicit mode intercepts the name.
+
+/// A natural run over an executor that serves `bash` and a tool of its own
+/// named `task_complete`, and the executor.
+fn natural_serving_task_complete(script: Vec<Answer>) -> (Harness, Arc<FakeTools>) {
+    let harness = Harness::new(script);
+    let tools = Arc::new(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![spec("bash"), spec(CompletionMode::TASK_COMPLETE)],
+        )
+        .answers(
+            CompletionMode::TASK_COMPLETE,
+            Answers::Text("noted".to_owned()),
+        ),
+    );
+    let harness = Harness {
+        tools: vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>],
+        ..harness
+    };
+    (harness, tools)
+}
+
+/// Natural mode has no completion call, so the name is the executor's to
+/// serve and a call to it is a call to run, whatever it was made beside.
+#[tokio::test]
+async fn in_natural_mode_a_tool_named_task_complete_runs_beside_another_call() {
+    let (harness, tools) = natural_serving_task_complete(vec![
+        Answer::now(calling(&[
+            ("bash", parsed()),
+            completing(serde_json::json!({ "answer": "not a result" })),
+        ])),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(run.turns(), 2);
+    assert_eq!(
+        statuses(&run),
+        [vec!["ok", "ok"], vec![]],
+        "both calls ran, and neither was rejected"
+    );
+    assert_eq!(reached(&tools), ["bash", "task_complete"]);
+    assert_eq!(
+        tools.taken()[1].input,
+        serde_json::json!({ "answer": "not a result" }),
+        "the executor is handed the arguments the model wrote"
+    );
+    let answered = &run.finished.transcript.turns()[0].tool_calls()[1];
+    assert_eq!(
+        answered.content,
+        [lablet_model::ToolResultContent::Text("noted".to_owned())],
+        "the model is sent what the tool returned"
+    );
+    let summary = &run.finished.summary;
+    assert_eq!(summary.outcome.tool_calls, 2);
+    assert_eq!(summary.tool_calls_errors, 0);
+    assert_eq!(
+        summary.outcome.result().structured,
+        None,
+        "its argument is a tool's input, not the run's result"
+    );
+}
+
+/// The same call made alone would complete an explicit run at point R. In
+/// natural mode it's a tool call like any other: it runs, and the run goes
+/// on to the response that ends it.
+#[tokio::test]
+async fn in_natural_mode_a_tool_named_task_complete_runs_when_called_alone() {
+    let (harness, tools) = natural_serving_task_complete(vec![
+        Answer::now(calling(&[completing(
+            serde_json::json!({ "answer": "not a result" }),
+        )])),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(run.turns(), 2, "the call didn't end the run");
+    assert_eq!(run.provider.calls(), 2);
+    assert_eq!(statuses(&run), [vec!["ok"], vec![]]);
+    assert_eq!(reached(&tools), ["task_complete"]);
+    assert_eq!(run.finished.summary.outcome.tool_calls, 1);
+    assert_eq!(run.finished.summary.outcome.result().structured, None);
+}
+
 // L11: a turn's tool calls run in groups.
 
 /// A run whose first response calls `read_file`, `read_file`, `write_file`,

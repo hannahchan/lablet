@@ -116,12 +116,13 @@ fn both_tool_sources_are_spelled_as_the_registry_spells_them() {
     }
 }
 
-/// The model nests the five registry values in two levels, so both levels are
+/// The model nests the registry's values in two levels, so both levels are
 /// matched exhaustively here and the flattening is what's compared.
 const fn registry_tool_status(status: &ToolCallStatus) -> LabletToolStatus {
     match status {
         ToolCallStatus::Unknown => LabletToolStatus::Unknown,
         ToolCallStatus::MalformedInput => LabletToolStatus::MalformedInput,
+        ToolCallStatus::Rejected => LabletToolStatus::Rejected,
         ToolCallStatus::Ran { ended, .. } => match ended {
             ToolCallEnd::Ok => LabletToolStatus::Ok,
             ToolCallEnd::ToolError => LabletToolStatus::ToolError,
@@ -135,6 +136,7 @@ const fn model_tool_status(registry: LabletToolStatus) -> ToolCallStatus {
     match registry {
         LabletToolStatus::Unknown => ToolCallStatus::Unknown,
         LabletToolStatus::MalformedInput => ToolCallStatus::MalformedInput,
+        LabletToolStatus::Rejected => ToolCallStatus::Rejected,
         LabletToolStatus::Ok => ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok),
         LabletToolStatus::ToolError => {
             ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::ToolError)
@@ -149,6 +151,7 @@ fn every_tool_call_status_is_spelled_as_the_registry_spells_it() {
     for status in [
         ToolCallStatus::Unknown,
         ToolCallStatus::MalformedInput,
+        ToolCallStatus::Rejected,
         ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok),
         ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::ToolError),
         ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Timeout),

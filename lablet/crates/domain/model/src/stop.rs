@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::ToolName;
+
 /// How a run decides that the model has finished.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -19,7 +21,20 @@ impl CompletionMode {
     /// The name of the tool that ends a run in [`CompletionMode::Explicit`]:
     /// the loop offers it, intercepts it rather than executing it, and the
     /// stop policy reads it. One definition, because those three have to agree.
-    pub const TASK_COMPLETE: &'static str = "task_complete";
+    pub const TASK_COMPLETE: &'static str = ToolName::TASK_COMPLETE;
+
+    /// Whether a call to `name` is the completion call, which the loop
+    /// answers itself and never hands to an executor.
+    ///
+    /// Only [`CompletionMode::Explicit`] has one, so a tool an executor
+    /// serves under that name in natural mode is a tool like any other.
+    /// [`crate::Pending::completed_with`] and the loop both ask here, so
+    /// the call one of them reads as completing a run is the call the other
+    /// declines to run.
+    #[must_use]
+    pub fn intercepts(self, name: &ToolName) -> bool {
+        self == Self::Explicit && name.as_str() == Self::TASK_COMPLETE
+    }
 
     /// The serde spelling, which is the `lablet.run.completion_mode` value.
     #[must_use]
@@ -141,12 +156,13 @@ display_as_str!(CompletionMode, StopReason);
 /// expects it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Calls {
-    /// The response didn't complete the task: `task_complete` wasn't among
-    /// its calls, or no call to it had arguments that parsed.
+    /// The response didn't complete the task: it made a call other than
+    /// `task_complete`, more than one call, or a `task_complete` call whose
+    /// arguments didn't parse.
     Tools,
-    /// The response called `task_complete` with arguments that parsed, alone
-    /// or among other tools. Only [`CompletionMode::Explicit`] has such a
-    /// tool, so a natural-mode response is never read as this.
+    /// The response's only call is `task_complete`, with arguments that
+    /// parsed. Only [`CompletionMode::Explicit`] has such a tool, so a
+    /// natural-mode response is never read as this.
     TaskComplete,
 }
 

@@ -508,6 +508,12 @@ impl RunService {
     /// The name is resolved before the arguments are read, so a call to a
     /// name this run doesn't offer is `Unknown` whether or not its arguments
     /// parsed.
+    ///
+    /// The completion call gets here only when it didn't complete the run:
+    /// its arguments didn't parse, or it wasn't the response's only call.
+    /// Which call that is is the mode's to say, as it was at point R, so a
+    /// tool an executor serves under the name in natural mode runs like any
+    /// other.
     async fn settle(
         &self,
         call: &ToolUse,
@@ -527,7 +533,6 @@ impl RunService {
         // unwrap it again, and the arm that can't then happen is a region no
         // test can reach.
         let input = match &call.input {
-            ToolInput::Json(value) => value.clone(),
             ToolInput::Unparsed(text) => {
                 return Settled::local(
                     ToolCallStatus::MalformedInput,
@@ -537,6 +542,16 @@ impl RunService {
                     ),
                 );
             }
+            ToolInput::Json(_) if self.tools.completion().intercepts(&call.name) => {
+                return Settled::local(
+                    ToolCallStatus::Rejected,
+                    format!(
+                        "call {} on its own, once your other calls have returned",
+                        call.name
+                    ),
+                );
+            }
+            ToolInput::Json(value) => value.clone(),
         };
 
         match self

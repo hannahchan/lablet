@@ -396,6 +396,10 @@ attributes:
           value: malformed_input
           brief: The model's arguments for the call weren't valid JSON, so nothing ran.
           stability: development
+        - id: rejected
+          value: rejected
+          brief: The loop declined a `task_complete` call that wasn't the response's only call, so nothing ran.
+          stability: development
         - id: timeout
           value: timeout
           brief: The call ran past the tool timeout.

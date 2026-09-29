@@ -72,10 +72,12 @@ fn a_tool_spec_has_one_json_form() {
 // Every spelling but `ok` is a value of `error.type` on the `execute_tool`
 // span, which is a semantic-convention attribute with no registry enum to
 // compare with.
-const STATUSES: [(ToolCallStatus, &str); 5] = [
+const STATUSES: [(ToolCallStatus, &str); 7] = [
     (ran(ToolCallEnd::Ok), "ok"),
     (ran(ToolCallEnd::ToolError), "tool_error"),
     (ToolCallStatus::Unknown, "unknown"),
+    (ToolCallStatus::MalformedInput, "malformed_input"),
+    (ToolCallStatus::Rejected, "rejected"),
     (ran(ToolCallEnd::Timeout), "timeout"),
     (ran(ToolCallEnd::Failed), "failed"),
 ];
@@ -99,6 +101,10 @@ fn every_status_but_ok_is_an_error_result_for_the_model() {
 fn a_call_is_invalid_when_no_tool_was_reached_and_never_when_one_was() {
     assert!(ToolCallStatus::Unknown.is_invalid());
     assert!(ToolCallStatus::MalformedInput.is_invalid());
+    assert!(
+        ToolCallStatus::Rejected.is_invalid(),
+        "the loop answered it, so it reached no tool"
+    );
     for ended in [
         ToolCallEnd::Ok,
         ToolCallEnd::ToolError,
@@ -116,24 +122,42 @@ fn a_call_is_invalid_when_no_tool_was_reached_and_never_when_one_was() {
 #[test]
 fn only_a_call_that_ran_has_a_source() {
     assert_eq!(ToolCallStatus::Unknown.source(), None);
+    assert_eq!(ToolCallStatus::MalformedInput.source(), None);
+    assert_eq!(ToolCallStatus::Rejected.source(), None);
     assert_eq!(
         ToolCallStatus::ran(docs_server(), ToolCallEnd::Failed).source(),
         Some(&docs_server())
     );
 }
 
+/// A call the loop answered for its arguments, or rejected, still named a
+/// tool the run has: only `unknown` says the name was the mistake.
+#[test]
+fn every_call_but_one_to_an_unknown_name_named_a_tool_the_run_offered() {
+    for (status, spelling) in STATUSES {
+        assert_eq!(
+            status.names_an_offered_tool(),
+            spelling != "unknown",
+            "{status}"
+        );
+    }
+}
+
 /// The flattening that `as_str` does is for telemetry; the document keeps the
 /// two levels, so a reader can tell a built-in failure from an MCP one.
 #[test]
 fn a_status_serialises_as_the_two_levels_it_holds() {
-    assert_eq!(
-        serde_json::to_value(ToolCallStatus::Unknown).unwrap(),
-        json!("unknown")
-    );
-    assert_eq!(
-        serde_json::from_value::<ToolCallStatus>(json!("unknown")).unwrap(),
-        ToolCallStatus::Unknown
-    );
+    for (status, written) in [
+        (ToolCallStatus::Unknown, "unknown"),
+        (ToolCallStatus::MalformedInput, "malformed_input"),
+        (ToolCallStatus::Rejected, "rejected"),
+    ] {
+        assert_eq!(serde_json::to_value(&status).unwrap(), json!(written));
+        assert_eq!(
+            serde_json::from_value::<ToolCallStatus>(json!(written)).unwrap(),
+            status
+        );
+    }
 
     let timed_out = ToolCallStatus::ran(docs_server(), ToolCallEnd::Timeout);
     let expected = json!({

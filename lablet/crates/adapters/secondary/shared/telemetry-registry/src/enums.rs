@@ -130,6 +130,8 @@ pub enum LabletToolStatus {
     Unknown,
     /// The model's arguments for the call weren't valid JSON, so nothing ran.
     MalformedInput,
+    /// The loop declined a `task_complete` call that wasn't the response's only call, so nothing ran.
+    Rejected,
     /// The call ran past the tool timeout.
     Timeout,
     /// The executor failed before the tool could answer.
@@ -145,6 +147,7 @@ impl LabletToolStatus {
             Self::ToolError => "tool_error",
             Self::Unknown => "unknown",
             Self::MalformedInput => "malformed_input",
+            Self::Rejected => "rejected",
             Self::Timeout => "timeout",
             Self::Failed => "failed",
         }

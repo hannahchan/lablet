@@ -111,10 +111,10 @@ pub struct RunSummary {
     pub tool_output_bytes: u64,
     /// How many tool calls had their output cut by the output cap.
     pub tool_calls_truncated: u64,
-    /// Each called tool's share, by tool name. A key exists for each call a
-    /// tool ran for, which is the same set as `tools` in a run because the
-    /// executor resolves only the names it offered, whatever names the model
-    /// called.
+    /// Each called tool's share, by tool name. A key exists for each call
+    /// that named a tool the run offered, whether or not the tool ran, so the
+    /// keys are among `tools` in a run because the executor resolves only the
+    /// names it offered, whatever names the model called.
     pub per_tool: BTreeMap<ToolName, ToolStats>,
     /// The rates the run was priced at; `Some` exactly when pricing was
     /// configured. They reach the wide event beside the cost so a consumer

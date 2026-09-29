@@ -89,7 +89,7 @@ impl core::fmt::Display for ToolSource {
 /// [`ToolCallStatus::as_str`] is the `error.type` of the span; a call that
 /// ended `ok` has no `error.type`.
 ///
-/// Written `"unknown"`, `"malformed_input"`, or
+/// Written `"unknown"`, `"malformed_input"`, `"rejected"`, or
 /// `{"ran": {"source": "builtin", "ended": "ok"}}`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -102,6 +102,11 @@ pub enum ToolCallStatus {
     /// a retry re-rolling the same prompt and reports a tool-surface problem
     /// as provider flakiness.
     MalformedInput,
+    /// The loop declined a call it won't act on, so nothing ran: a
+    /// `task_complete` call that wasn't the response's only call. Acting on
+    /// it would report work as done that the same response only asked for,
+    /// so the model is asked to make the call on its own.
+    Rejected,
     /// A tool ran.
     Ran {
         /// Where the tool that ran comes from.
@@ -147,12 +152,13 @@ impl ToolCallStatus {
     }
 
     /// The `lablet.tool.status` value, which flattens the two levels into the
-    /// registry's five.
+    /// registry's one.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Unknown => "unknown",
             Self::MalformedInput => "malformed_input",
+            Self::Rejected => "rejected",
             Self::Ran { ended, .. } => ended.as_str(),
         }
     }
@@ -161,18 +167,18 @@ impl ToolCallStatus {
     #[must_use]
     pub const fn source(&self) -> Option<&ToolSource> {
         match self {
-            Self::Unknown | Self::MalformedInput => None,
+            Self::Unknown | Self::MalformedInput | Self::Rejected => None,
             Self::Ran { source, .. } => Some(source),
         }
     }
 
     /// Whether the call named a tool the run offered.
     ///
-    /// A call whose arguments didn't parse did: nothing ran, but the name was
-    /// real, so it earns its per-tool entry and isn't one of the calls to a
-    /// name the run doesn't have. The loop resolves the name before it reads
-    /// the arguments, so a bad name with bad arguments is
-    /// [`ToolCallStatus::Unknown`].
+    /// A call whose arguments didn't parse did, and so did one the loop
+    /// rejected: nothing ran, but the name was real, so it earns its per-tool
+    /// entry and isn't one of the calls to a name the run doesn't have. The
+    /// loop resolves the name before it reads the arguments, so a bad name
+    /// with bad arguments is [`ToolCallStatus::Unknown`].
     #[must_use]
     pub const fn names_an_offered_tool(&self) -> bool {
         !matches!(self, Self::Unknown)
@@ -185,7 +191,7 @@ impl ToolCallStatus {
     #[must_use]
     pub const fn is_invalid(&self) -> bool {
         match self {
-            Self::Unknown | Self::MalformedInput => true,
+            Self::Unknown | Self::MalformedInput | Self::Rejected => true,
             Self::Ran { .. } => false,
         }
     }

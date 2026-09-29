@@ -3,7 +3,8 @@ use serde_json::{Value, json};
 use crate::TaskResult;
 use crate::outcome::RawOutcome;
 use crate::{
-    CompletionMode, RunId, RunLabels, RunOutcome, StopClass, StopReason, TokenCounts, Usage,
+    CompletionMode, RunId, RunLabels, RunOutcome, StopClass, StopReason, TokenCounts, ToolName,
+    Usage,
 };
 
 // The literal spellings below are the members of `lablet.run.stop_reason` and
@@ -60,6 +61,20 @@ fn every_completion_mode_prints_and_serialises_as_its_telemetry_spelling() {
 #[test]
 fn natural_is_the_default_completion_mode() {
     assert_eq!(CompletionMode::default(), CompletionMode::Natural);
+}
+
+#[test]
+fn only_explicit_mode_intercepts_a_call_and_only_one_to_task_complete() {
+    let task_complete = ToolName::task_complete();
+    let bash = ToolName::new("bash").unwrap();
+
+    assert!(CompletionMode::Explicit.intercepts(&task_complete));
+    assert!(!CompletionMode::Explicit.intercepts(&bash));
+    assert!(
+        !CompletionMode::Natural.intercepts(&task_complete),
+        "a tool of that name in natural mode is a tool like any other"
+    );
+    assert!(!CompletionMode::Natural.intercepts(&bash));
 }
 
 // Each reason with its class. Paired rather than a list in the order of
