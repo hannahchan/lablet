@@ -24,7 +24,7 @@ Explicit architecture. Inside `lablet/`, directory `foo/bar/` is package `lablet
 | Composition root      | `apps/*`                             | everything except test support                                      | none                                                             |
 | Test support          | `tests/*`                            | anything, dev-only                                                  | none                                                             |
 
-`cargo xtask lint-layers` enforces this on `[dependencies]` and `[build-dependencies]` (dev-dependencies are exempt) and runs at pre-commit: a workspace crate is placed by the path of its `[workspace.dependencies]` entry, an external crate is matched by name. A forbidden name covers its family (`opentelemetry` also forbids `opentelemetry_sdk`), and no crate outside `tests/` may depend on a `tests/` crate. `serde` and `serde_json` are allowed everywhere; the domain model is the one serde form of the conversation.
+`cargo xtask lint-layers` enforces this on `[dependencies]` and `[build-dependencies]` (dev-dependencies are exempt) and runs at pre-commit: a workspace crate is placed by the path of its `[workspace.dependencies]` entry, an external crate is matched by name. A forbidden name covers its family (`opentelemetry` also forbids `opentelemetry_sdk`), and no crate outside `tests/` may depend on a `tests/` crate. `serde` and `serde_json` are allowed everywhere; the domain and application hold in-memory models, and the published document shapes live in `lablet-documents`.
 
 - Ports are object-safe `async_trait` traits, `Send + Sync`, defined in the application crate that consumes them, injected as `Arc<dyn Trait>` by constructor. No DI framework, no generics over adapters.
 - Adapters implement ports and map their own errors into the port's error at the `impl` boundary. Adapter types never appear in application or domain signatures.
@@ -118,7 +118,7 @@ A phase-end review is scaled to risk and has a budget.
 - Each reviewer reports at most five findings, high and medium severity only.
 - The builder sorts the findings before anything is verified or fixed. A finding that isn't worth handling in a lightweight project is dropped, or the fix is to reject the input rather than to model it.
 - One verifier for each surviving finding, reasoning from the code first. Reproduce only when the claim is disputed or cheap to run.
-- Each phase states a review budget of about 10 to 15 percent of the build's token cost, and the phase report gives the actual figure.
+- Each phase states a review budget of about 20 percent of the build's token cost when it adds a security boundary or a public contract, and 10 to 15 percent otherwise. The phase report gives the actual figure.
 - Every gate or feature is exercised once with real input on a cold clone before the phase closes.
 - [reviews.md](reviews.md) holds what to look for, drawn from defects that reached `main` and were caught by a later review.
 

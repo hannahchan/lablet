@@ -927,3 +927,12 @@ What the builder decided on the way:
 - **The nightly runs through `rustup run`, in a target directory of its own.** A nested `cargo +toolchain` under `cargo xtask` can reach the real cargo rather than the `rustup` proxy, and a directory of its own keeps the nightly and stable builds from rebuilding each other's artefacts.
 
 It supersedes in part three earlier decisions: the 2026-09-19 bullet on the CI matrix, the 2026-09-21 paragraph that no floor is 100% mutants, and the 2026-09-21 decision to leave branch coverage out.
+
+## 2026-09-29 Phase 4, signed off
+
+Decided by the human, at the review of phase 4.
+
+- **The rule on serde says where the published shapes live.** The architecture rule said the domain model is the one serde form of the conversation, which stopped being true when the transcript and outcome documents moved to `lablet-documents`. It says now that the domain and the application hold in-memory models and that the published document shapes live in `lablet-documents`. Which crates may use `serde` is unchanged.
+- **The cap on invalid turns is confirmed.** The cap was decided as three invalid calls in a row and built as three invalid turns in a row, for the reasons the 2026-09-28 entry "What the review of the plan changed" gives. The human confirmed turns.
+- **A review's budget depends on what the phase adds.** About 20 percent of the build's token cost for a phase that adds a security boundary or a public contract, and 10 to 15 percent otherwise. The reviews of phases 3b and 4 each ran a third over the old ceiling, and phase 4's found ten real defects, one of them of high severity, so the budget was too small rather than the reviews too large.
+- **The remaining speed-up proposals wait.** Building adapters side by side in separate working trees, splitting the spec, letting builders edit the spec sections their item covers, and feeding review findings into `contributing/reviews.md` were proposed and deferred.
