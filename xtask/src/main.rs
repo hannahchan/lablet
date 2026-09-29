@@ -50,7 +50,7 @@ Quality checks:
 Quality gates:
   pre-commit               fmt --check + clippy + lint-layers + lint-manifests + weaver check
                            + weaver generate --check + lint-shell + lint-prose
-  pre-push                 pre-commit + deny + changelog + doc + test
+  pre-push                 pre-commit + deny + changelog + doc + test + mutants --changed
   ci                       pre-push
 
 Analysis:

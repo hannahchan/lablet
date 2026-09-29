@@ -478,6 +478,9 @@ pub fn pre_push_steps() -> Vec<Step> {
     steps.extend(changelog_steps());
     steps.extend(doc_steps());
     steps.extend(test_steps());
+    // Last, since it builds the floor crates once more for each mutant, and
+    // a push that changes none of them passes it at once.
+    steps.extend(mutants_steps(true));
     steps
 }
 
@@ -562,9 +565,14 @@ pub fn task_of(label: &str) -> &str {
 /// The command that runs a failed gate step alone, as a gate runs it.
 fn rerun(label: &str) -> String {
     let task = task_of(label);
-    let verifies = ["fmt", "weaver generate"].contains(&task);
-    let check = if verifies { " --check" } else { "" };
-    format!("re-run: cargo xtask {task}{check}")
+    let flag = if ["fmt", "weaver generate"].contains(&task) {
+        " --check"
+    } else if label == "mutants (changed)" {
+        " --changed"
+    } else {
+        ""
+    };
+    format!("re-run: cargo xtask {task}{flag}")
 }
 
 /// Streamed, a failure is one line, since the output is already on screen.
@@ -690,12 +698,13 @@ mod tests {
     }
 
     #[test]
-    fn pre_push_is_pre_commit_then_deny_changelog_doc_and_test() {
+    fn pre_push_is_pre_commit_then_deny_changelog_doc_test_and_the_mutants_of_what_changed() {
         let pre_commit = labels(&pre_commit_steps());
         assert_eq!(
             labels(&pre_push_steps()),
             format!(
-                "{pre_commit}, deny, deny (xtask), changelog, doc, doc (xtask), test, test (xtask)"
+                "{pre_commit}, deny, deny (xtask), changelog, doc, doc (xtask), test, test (xtask), \
+                 mutants (changed)"
             )
         );
     }
@@ -720,6 +729,15 @@ mod tests {
         );
         assert_eq!(with_hint("error", None), "error");
         assert_eq!(rerun("clippy (xtask)"), "re-run: cargo xtask clippy");
+    }
+
+    #[test]
+    fn a_failed_scoped_mutation_step_is_re_run_scoped() {
+        assert_eq!(
+            rerun("mutants (changed)"),
+            "re-run: cargo xtask mutants --changed"
+        );
+        assert_eq!(rerun("mutants"), "re-run: cargo xtask mutants");
     }
 
     #[test]

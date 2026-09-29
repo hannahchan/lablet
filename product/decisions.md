@@ -952,3 +952,11 @@ What the builder decided on the way:
 - **A link at the transcript's path gives the new file the permissions of the file it led to.** That's what reading the path showed, and a link's own permissions mean nothing.
 - **The temporary file is made no more open than the file it replaces,** and its mode is then set to that file's exactly. So nobody the old file kept out can open it while it's written, which setting the mode after the file was made would have allowed for the moment between the two.
 - **The resolved built-in section is a type of its own.** `ResolvedBuiltin` holds its settings as `Applied`, as `ResolvedModel` does, and `Builtin` is left as the config reads it.
+
+## 2026-09-30 A push tests the mutants of what it changes
+
+Decided by the human. `pre-push` ends with `cargo xtask mutants --changed`, so a push that changes `lablet-model`, `lablet-policy` or `lablet-run` is refused until every mutant in what it changes is caught or named in `EQUIVALENT_MUTANTS`. A push fast-forwards `main`, so what differs from `origin/main` at the push is what the push lands.
+
+It costs little because it tests little. Over the 17 pushes of phases 3b and 4, seven changed no floor crate and would have passed the step at once, and the rest had 4 to 74 mutants in what they changed, where the full run has 482. At the full run's rate of about a second and a half a mutant, that's between 20 seconds and 2 minutes.
+
+What it leaves to the daily run: a test that was weakened or removed, since only changed production code is mutated, and an entry in the list that went stale. `ci` runs the same steps, and on `main` the merge-base is the pushed commit, so there it finds nothing to test.
