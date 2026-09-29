@@ -10,5 +10,5 @@ mod retry;
 mod stop;
 
 pub use pricing::Pricing;
-pub use retry::{RetryPolicy, RetryPolicyError};
+pub use retry::{RetryPolicy, RetryPolicyError, RetrySettings};
 pub use stop::StopPolicy;

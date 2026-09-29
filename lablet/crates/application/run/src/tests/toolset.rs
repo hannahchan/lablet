@@ -306,7 +306,7 @@ async fn a_call_to_a_name_this_run_does_not_offer_is_unknown() {
     let refused = set.execute(call("bash")).await.expect_err("it was denied");
 
     assert_eq!(refused.kind, ToolErrorKind::Unknown);
-    assert!(refused.message.contains("bash"));
+    assert!(refused.message().contains("bash"));
 }
 
 fn call(name_: &str) -> ToolCall {

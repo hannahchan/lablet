@@ -110,8 +110,9 @@ impl Cancellation for FakeCancel {
 pub enum Answer {
     /// The call succeeds, after `latency`.
     Responds(Box<ProviderResponse>, Duration),
-    /// The call fails, after `latency`.
-    Fails(ProviderErrorKind, String, Duration),
+    /// The call fails, after `latency`, with whatever usage and hint the
+    /// error carries.
+    Fails(ProviderError, Duration),
 }
 
 impl Answer {
@@ -122,11 +123,15 @@ impl Answer {
 
     /// A failure of `kind` that took no time.
     pub fn fails(kind: ProviderErrorKind) -> Self {
-        Self::Fails(
+        Self::failing(ProviderError::new(
             kind,
             format!("the fake provider failed: {kind}"),
-            Duration::ZERO,
-        )
+        ))
+    }
+
+    /// The failure `error`, which took no time.
+    pub const fn failing(error: ProviderError) -> Self {
+        Self::Fails(error, Duration::ZERO)
     }
 }
 
@@ -140,6 +145,7 @@ pub struct FakeProvider {
     script: Mutex<VecDeque<Answer>>,
     clock: Arc<FakeClock>,
     calls: AtomicUsize,
+    ran_out: AtomicBool,
 }
 
 impl FakeProvider {
@@ -151,6 +157,7 @@ impl FakeProvider {
             script: Mutex::new(script.into()),
             clock,
             calls: AtomicUsize::new(0),
+            ran_out: AtomicBool::new(false),
         }
     }
 
@@ -191,16 +198,24 @@ impl ModelProvider for FakeProvider {
                 self.clock.advance(latency);
                 Ok(*response)
             }
-            Some(Answer::Fails(kind, message, latency)) => {
+            Some(Answer::Fails(error, latency)) => {
                 self.clock.advance(latency);
-                Err(ProviderError::new(kind, message))
+                Err(error)
             }
             // A script that runs out is a test that didn't say what happens
-            // next, which is worth failing loudly rather than looping.
-            None => Err(ProviderError::new(
-                ProviderErrorKind::Fatal,
-                "the fake provider's script ran out",
-            )),
+            // next, which is worth failing loudly rather than looping. The
+            // failure ends a run, so a loop that calls again is retrying what
+            // no attempt could answer, and would for ever.
+            None => {
+                assert!(
+                    !self.ran_out.swap(true, Ordering::Relaxed),
+                    "the loop called again after the fake provider's script ran out"
+                );
+                Err(ProviderError::new(
+                    ProviderErrorKind::Fatal,
+                    "the fake provider's script ran out",
+                ))
+            }
         }
     }
 }

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     CompletionMode, Cost, Endpoint, FinishReason, ModelRef, Rates, RequestParams, RunId,
-    RunOutcome, ToolName, Transcript, Turn,
+    RunOutcome, ToolName, Transcript, Turn, Usage,
 };
 
 /// What only the composition root knows about a run: its part of the wide
@@ -85,6 +85,10 @@ pub struct RunSummary {
     pub prompt_system_bytes: u64,
     /// Size of the task prompt in bytes.
     pub prompt_user_bytes: u64,
+    /// What the provider call attempts that failed reported using, summed,
+    /// and `None` when none reported anything. It's in no turn, so
+    /// `outcome.usage` leaves it out, and the cost counts both.
+    pub failed_usage: Option<Usage>,
     /// How many provider call attempts were made beyond the first of their
     /// call. A call that fails on its only attempt adds none.
     pub provider_retries: u64,

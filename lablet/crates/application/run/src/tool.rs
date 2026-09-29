@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use lablet_model::{ToolCallEnd, ToolCallId, ToolName, ToolResultContent, ToolSpec};
 
-use crate::TraceContext;
+use crate::{TraceContext, bounded};
 
 /// One tool call, as the loop hands it to an executor.
 ///
@@ -41,26 +41,37 @@ pub struct ToolOutput {
 }
 
 /// How an executor failed to get an answer from a tool.
+///
+/// The message is private because [`ToolError::new`] cuts it to
+/// [`ERROR_MESSAGE_MAX_BYTES`](crate::ERROR_MESSAGE_MAX_BYTES), and a field
+/// anyone could write would let a message past the cut.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct ToolError {
     /// What kind of failure this is.
     pub kind: ToolErrorKind,
-    /// What the executor says happened. The model is sent this as its error
-    /// result, so it's what the model has to work from.
-    pub message: String,
+    message: String,
     /// Present when the call went over MCP.
     pub mcp: Option<McpCallMeta>,
 }
 
 impl ToolError {
-    /// A failure of `kind`, described by `message`, over no MCP server.
+    /// A failure of `kind`, described by `message`, over no MCP server. The
+    /// message is cut to
+    /// [`ERROR_MESSAGE_MAX_BYTES`](crate::ERROR_MESSAGE_MAX_BYTES).
     pub fn new(kind: ToolErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
-            message: message.into(),
+            message: bounded(message.into()),
             mcp: None,
         }
+    }
+
+    /// What the executor says happened. The model is sent this as its error
+    /// result, so it's what the model has to work from.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
     }
 
     /// The same failure, with what the MCP call carried back. A call that
@@ -163,5 +174,10 @@ pub trait ToolExecutor: Send + Sync {
     /// Returns a [`ToolError`] when no answer came back. A tool that ran and
     /// reported its own failure is `Ok` with
     /// [`ToolOutput::is_error`] set, not an error here.
+    ///
+    /// The error's message holds no credentials: no user info or query
+    /// string of a URL, no header value, and a response body only when the
+    /// run captures content. The type holds the message's length and nothing
+    /// can hold this, so it's the executor's obligation.
     async fn execute(&self, call: ToolCall) -> Result<ToolOutput, ToolError>;
 }

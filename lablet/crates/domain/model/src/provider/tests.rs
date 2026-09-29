@@ -221,6 +221,7 @@ fn every_provider_error_kind_is_spelled_as_the_chat_span_reports_it() {
             "context_exhausted",
             false,
         ),
+        (ProviderErrorKind::Auth, "auth", false),
         (ProviderErrorKind::Fatal, "fatal", false),
         (ProviderErrorKind::Malformed, "malformed", true),
     ] {

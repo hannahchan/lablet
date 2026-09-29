@@ -30,9 +30,9 @@ pub struct Endpoint {
 /// classifies its own error and carries the message; this is the part the
 /// domain decides on.
 ///
-/// The four spellings are the `error.type` of a failed `lablet.chat` span.
-/// That attribute is an open set in the conventions, so nothing generated can
-/// pin them; a unit test does.
+/// The spellings are the `error.type` of a failed `lablet.chat` span. That
+/// attribute is an open set in the conventions, so nothing generated can pin
+/// them; a unit test does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderErrorKind {
@@ -40,7 +40,11 @@ pub enum ProviderErrorKind {
     Retryable,
     /// The provider rejected the request as longer than the model's context.
     ContextExhausted,
-    /// Auth, a bad request, an unknown model: another attempt changes nothing.
+    /// The provider rejected the credentials. Another attempt changes
+    /// nothing, as for [`ProviderErrorKind::Fatal`]; it's a kind of its own so
+    /// that a failed call says a key was turned away.
+    Auth,
+    /// A bad request, an unknown model: another attempt changes nothing.
     Fatal,
     /// The adapter couldn't map the payload to the domain model. Retryable,
     /// because a garbled response needn't recur.
@@ -54,6 +58,7 @@ impl ProviderErrorKind {
         match self {
             Self::Retryable => "retryable",
             Self::ContextExhausted => "context_exhausted",
+            Self::Auth => "auth",
             Self::Fatal => "fatal",
             Self::Malformed => "malformed",
         }

@@ -9,12 +9,12 @@ use lablet_model::{
     TokenCounts, ToolCallEnd, ToolCallId, ToolCallStatus, ToolConcurrency, ToolInput, ToolName,
     ToolSource, ToolSpec, ToolUse, Usage,
 };
-use lablet_policy::{Pricing, RetryPolicy, StopPolicy};
+use lablet_policy::{Pricing, RetryPolicy, RetrySettings, StopPolicy};
 
 use super::fakes::{Answer, Answers, FakeCancel, FakeClock, FakeProvider, FakeTools, Recorder};
-use crate::{CallLimits, EventKind, RunService, ToolFilter, ToolSet};
+use crate::{CallLimits, EventKind, ProviderError, RunService, ToolFilter, ToolSet};
 
-fn ms(millis: u64) -> Duration {
+const fn ms(millis: u64) -> Duration {
     Duration::from_millis(millis)
 }
 
@@ -93,6 +93,39 @@ fn reporting(tools: &[&str], finish: FinishReason, counts: TokenCounts) -> Provi
     .expect("a test's response has distinct call ids")
 }
 
+/// Three retries, backing off from 100 ms to 10 s, with no jitter, so a
+/// scenario that isn't about the jitter asserts its waits exactly.
+const fn settings() -> RetrySettings {
+    RetrySettings {
+        max_retries: 3,
+        base: ms(100),
+        max: ms(10_000),
+        factor: 2.0,
+        hint_max: Duration::from_secs(60),
+        jitter: 0.0,
+    }
+}
+
+fn retrying(settings: RetrySettings) -> RetryPolicy {
+    RetryPolicy::new(settings).expect("a valid retry policy")
+}
+
+/// A failure another attempt could answer, in a provider's own words.
+fn overloaded() -> ProviderError {
+    ProviderError::new(ProviderErrorKind::Retryable, "529 overloaded")
+}
+
+/// What a provider that reports every count says a call used.
+fn tokens(input: u64, output: u64) -> Usage {
+    Usage::from_inclusive(TokenCounts {
+        input,
+        output,
+        reasoning: Some(0),
+        cache_read: Some(0),
+        cache_write: Some(0),
+    })
+}
+
 /// Everything a run is built from, so a scenario states only what it varies.
 struct Harness {
     clock: Arc<FakeClock>,
@@ -136,7 +169,7 @@ impl Harness {
                 max_total_tokens: None,
                 max_consecutive_tool_errors: nz(3),
             },
-            retry: RetryPolicy::new(3, ms(100), ms(10_000), 2.0).expect("a valid retry policy"),
+            retry: retrying(settings()),
             pricing: None,
             calls: CallLimits {
                 provider_timeout: Duration::from_secs(60),
@@ -198,6 +231,19 @@ struct Run {
 impl Run {
     fn stop_reason(&self) -> StopReason {
         self.finished.summary.outcome.stop_reason()
+    }
+
+    /// The error of each failed attempt and the wait the loop said would
+    /// follow it, in order.
+    fn failures(&self) -> Vec<(ProviderError, Option<Duration>)> {
+        self.observer
+            .events()
+            .into_iter()
+            .filter_map(|event| match event.kind {
+                EventKind::ProviderCallFailed { error, retry, .. } => Some((error, retry)),
+                _ => None,
+            })
+            .collect()
     }
 
     fn error(&self) -> Option<&str> {
@@ -805,23 +851,31 @@ async fn a_priced_run_reports_its_cost_and_the_rates_it_was_priced_at() {
 }
 
 /// The cost is priced before the run is closed, from the state it stopped in,
-/// so each state has to count the turn it's holding. A run stopped at a
-/// response's calls holds a turn the transcript doesn't have yet.
+/// so each state has to count the turn it's holding and the failed attempts
+/// behind it. A run stopped at a response's calls holds a turn the transcript
+/// doesn't have yet.
 #[tokio::test]
-async fn a_run_is_priced_on_every_turn_it_took_whichever_state_it_stopped_in() {
+async fn a_run_is_priced_on_all_it_spent_whichever_state_it_stopped_in() {
     let pricing = Pricing::new(Rates::new(4.0, 16.0, 0.5, 5.0).expect("ordinary rates"));
+    let billed = || Answer::failing(overloaded().with_usage(tokens(70, 5)));
     let answered = || Answer::now(says("On it.", &["bash"], FinishReason::ToolUse));
     let stopped_at = [
         // The response called no tool.
-        vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))],
+        vec![
+            billed(),
+            Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+        ],
         // The response's calls were cut short, so they never ran.
-        vec![Answer::now(says(
-            "On it.",
-            &["bash"],
-            FinishReason::MaxTokens,
-        ))],
-        // Point A, waiting for a response, after a turn whose calls ran.
-        vec![answered(), Answer::fails(ProviderErrorKind::Fatal)],
+        vec![
+            billed(),
+            Answer::now(says("On it.", &["bash"], FinishReason::MaxTokens)),
+        ],
+        // Waiting for a response, after a turn whose calls ran.
+        vec![
+            billed(),
+            answered(),
+            Answer::fails(ProviderErrorKind::Fatal),
+        ],
     ];
 
     for script in stopped_at {
@@ -831,10 +885,10 @@ async fn a_run_is_priced_on_every_turn_it_took_whichever_state_it_stopped_in() {
         let run = harness.run().await;
 
         let usage = run.finished.summary.outcome.usage;
-        assert!(usage.total() > 0, "{:?}", run.stop_reason());
+        assert_eq!(usage, tokens(100, 20), "{:?}", run.stop_reason());
         assert_eq!(
             run.finished.summary.cost,
-            pricing.cost(&usage),
+            pricing.cost(&tokens(170, 25)),
             "{:?}",
             run.stop_reason()
         );
@@ -1329,7 +1383,10 @@ async fn a_retry_budget_of_zero_gives_up_on_the_first_error() {
         Answer::fails(ProviderErrorKind::Retryable),
         Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
     ]);
-    harness.retry = RetryPolicy::new(0, ms(100), ms(10_000), 2.0).expect("a valid policy");
+    harness.retry = retrying(RetrySettings {
+        max_retries: 0,
+        ..settings()
+    });
 
     let run = harness.run().await;
 
@@ -1366,11 +1423,10 @@ async fn the_retry_budget_starts_again_for_every_provider_call() {
 
 #[tokio::test]
 async fn a_failure_reports_the_providers_own_words() {
-    let run = Harness::new(vec![Answer::Fails(
+    let run = Harness::new(vec![Answer::failing(ProviderError::new(
         ProviderErrorKind::ContextExhausted,
-        "prompt is 205000 tokens, over the 200000 limit".to_owned(),
-        Duration::ZERO,
-    )])
+        "prompt is 205000 tokens, over the 200000 limit",
+    ))])
     .run()
     .await;
 
@@ -1389,16 +1445,15 @@ async fn a_failure_reports_the_providers_own_words() {
 
 #[tokio::test]
 async fn a_fatal_failure_reports_what_the_provider_said() {
-    let run = Harness::new(vec![Answer::Fails(
+    let run = Harness::new(vec![Answer::failing(ProviderError::new(
         ProviderErrorKind::Fatal,
-        "401 unauthorized".to_owned(),
-        Duration::ZERO,
-    )])
+        "404 no model named fake-2",
+    ))])
     .run()
     .await;
 
     assert_eq!(run.stop_reason(), StopReason::ProviderError);
-    assert_eq!(run.error(), Some("401 unauthorized"));
+    assert_eq!(run.error(), Some("404 no model named fake-2"));
     assert_eq!(run.turns(), 0);
 }
 
@@ -1520,8 +1575,7 @@ async fn a_turn_records_when_its_attempt_began_and_how_long_it_took() {
 async fn provider_latency_counts_the_failed_attempts_too() {
     let run = Harness::new(vec![
         Answer::Fails(
-            ProviderErrorKind::Retryable,
-            "overloaded".to_owned(),
+            ProviderError::new(ProviderErrorKind::Retryable, "overloaded"),
             ms(90),
         ),
         Answer::Responds(Box::new(says("Done.", &[], FinishReason::EndTurn)), ms(60)),
@@ -1543,7 +1597,10 @@ async fn provider_latency_counts_the_failed_attempts_too() {
 #[tokio::test]
 async fn a_failed_attempt_reports_the_wait_before_the_attempt_that_follows() {
     let run = Harness::new(vec![
-        Answer::Fails(ProviderErrorKind::Retryable, "overloaded".to_owned(), ms(0)),
+        Answer::failing(ProviderError::new(
+            ProviderErrorKind::Retryable,
+            "overloaded",
+        )),
         Answer::now(says("Done.", &[], FinishReason::EndTurn)),
     ])
     .run()
@@ -1564,8 +1621,12 @@ async fn a_failed_attempt_reports_the_wait_before_the_attempt_that_follows() {
 
 #[tokio::test]
 async fn the_last_failed_attempt_reports_no_wait() {
-    let fail = || Answer::Fails(ProviderErrorKind::Fatal, "bad request".to_owned(), ms(0));
-    let run = Harness::new(vec![fail()]).run().await;
+    let run = Harness::new(vec![Answer::failing(ProviderError::new(
+        ProviderErrorKind::Fatal,
+        "bad request",
+    ))])
+    .run()
+    .await;
 
     let waits: Vec<Option<Duration>> = run
         .observer
@@ -1984,8 +2045,9 @@ async fn a_run_cancelled_during_a_backoff_makes_no_further_attempt() {
         Answer::fails(ProviderErrorKind::Retryable),
         Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
     ]);
-    // Answered once at point A, then true at the poll after the backoff.
-    harness.cancel = Arc::new(FakeCancel::after(1));
+    // Answered before the attempt and again once it failed, then true at the
+    // poll after the backoff.
+    harness.cancel = Arc::new(FakeCancel::after(2));
 
     let run = harness.run().await;
 
@@ -2007,4 +2069,377 @@ async fn a_run_cancelled_during_a_backoff_makes_no_further_attempt() {
         } if wait == ms(100)
     ));
     assert!(matches!(finished.kind, EventKind::RunFinished { .. }));
+}
+
+#[tokio::test]
+async fn a_run_cancelled_while_an_attempt_was_failing_stops_before_the_wait() {
+    let mut harness = Harness::new(vec![
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
+    ]);
+    // Answered before the attempt, then true at the poll once it failed.
+    harness.cancel = Arc::new(FakeCancel::after(1));
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Cancelled);
+    assert_eq!(run.provider.calls(), 1);
+    assert_eq!(run.clock.sleeps(), [], "a cancelled run waits for nothing");
+    let [(_, retry)] = run.failures().try_into().expect("one attempt failed");
+    assert_eq!(retry, None, "the call was over when the attempt failed");
+}
+
+// E13: the server's hint.
+
+#[tokio::test]
+async fn a_retry_waits_as_long_as_the_server_asked_when_that_is_longer_than_the_backoff() {
+    let run = Harness::new(vec![
+        Answer::failing(overloaded().with_retry_after(Duration::from_secs(5))),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ])
+    .run()
+    .await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(run.clock.sleeps(), [Duration::from_secs(5)]);
+    let [(error, retry)] = run.failures().try_into().expect("one attempt failed");
+    assert_eq!(error.retry_after, Some(Duration::from_secs(5)));
+    assert_eq!(retry, Some(Duration::from_secs(5)));
+    assert_eq!(
+        run.finished.transcript.turns()[0].record().started_ms,
+        5_000,
+        "the attempt that answered began once the wait was over"
+    );
+}
+
+#[tokio::test]
+async fn a_retry_waits_the_backoff_when_the_server_asked_for_less() {
+    let run = Harness::new(vec![
+        Answer::failing(overloaded().with_retry_after(ms(40))),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ])
+    .run()
+    .await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(run.clock.sleeps(), [ms(100)]);
+}
+
+#[tokio::test]
+async fn a_hint_longer_than_the_cap_on_hints_exhausts_the_retries_without_waiting() {
+    let mut harness = Harness::new(vec![
+        Answer::failing(overloaded().with_retry_after(Duration::from_secs(120))),
+        Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.retry = retrying(RetrySettings {
+        hint_max: Duration::from_secs(60),
+        ..settings()
+    });
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::RetriesExhausted);
+    assert_eq!(run.error(), Some("529 overloaded"));
+    assert_eq!(run.provider.calls(), 1, "three retries were left");
+    assert_eq!(run.clock.sleeps(), [], "lablet won't make the wait");
+    assert_eq!(run.finished.summary.provider_retries, 0);
+    let [(_, retry)] = run.failures().try_into().expect("one attempt failed");
+    assert_eq!(retry, None);
+}
+
+// E14: what a failed attempt was billed.
+
+#[tokio::test]
+async fn what_a_failed_attempt_used_is_kept_apart_from_the_usage_and_priced_with_it() {
+    let pricing = Pricing::new(Rates::new(4.0, 16.0, 0.5, 5.0).expect("ordinary rates"));
+    let mut harness = Harness::new(vec![
+        Answer::failing(overloaded().with_usage(tokens(70, 5))),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.pricing = Some(pricing);
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    let summary = &run.finished.summary;
+    assert_eq!(
+        summary.outcome.usage,
+        tokens(100, 20),
+        "the call that succeeded, alone"
+    );
+    assert_eq!(summary.failed_usage, Some(tokens(70, 5)));
+    assert_eq!(summary.cost, pricing.cost(&tokens(170, 25)));
+    assert_ne!(summary.cost, pricing.cost(&tokens(100, 20)));
+    assert_eq!(
+        run.finished.transcript.turns()[0].record().usage,
+        tokens(100, 20),
+        "a turn's usage is that of the attempt that answered"
+    );
+    let [(error, _)] = run.failures().try_into().expect("one attempt failed");
+    assert_eq!(error.usage, Some(tokens(70, 5)));
+}
+
+#[tokio::test]
+async fn a_run_none_of_whose_failed_attempts_reported_usage_has_no_failed_usage() {
+    let run = Harness::new(vec![
+        Answer::failing(overloaded()),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ])
+    .run()
+    .await;
+
+    assert_eq!(run.finished.summary.failed_usage, None);
+}
+
+/// The failed attempt used 75 tokens and the turn 120, so only the two
+/// together reach a budget of 190.
+#[tokio::test]
+async fn the_token_budget_counts_what_a_failed_attempt_used() {
+    let script = || {
+        vec![
+            Answer::failing(overloaded().with_usage(tokens(70, 5))),
+            Answer::now(says("On it.", &["bash"], FinishReason::ToolUse)),
+            Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+        ]
+    };
+    let mut reached = Harness::new(script());
+    reached.stop.max_total_tokens = Some(190);
+    let mut spared = Harness::new(script());
+    spared.stop.max_total_tokens = Some(196);
+
+    let reached = reached.run().await;
+    let spared = spared.run().await;
+
+    assert_eq!(reached.stop_reason(), StopReason::MaxTotalTokens);
+    assert_eq!(reached.provider.calls(), 2, "no call after the tool phase");
+    assert_eq!(reached.turns(), 1);
+    assert_eq!(spared.stop_reason(), StopReason::Completed);
+    assert_eq!(spared.provider.calls(), 3);
+}
+
+// E15: a rejected key.
+
+#[tokio::test]
+async fn a_rejected_key_fails_the_run_at_once_and_the_failed_attempt_says_auth() {
+    let run = Harness::new(vec![
+        Answer::failing(ProviderError::new(
+            ProviderErrorKind::Auth,
+            "401 invalid x-api-key",
+        )),
+        Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
+    ])
+    .run()
+    .await;
+
+    assert_eq!(run.stop_reason(), StopReason::ProviderError);
+    assert_eq!(run.error(), Some("401 invalid x-api-key"));
+    assert_eq!(run.provider.calls(), 1);
+    assert_eq!(run.clock.sleeps(), [], "nothing was waited for");
+    assert_eq!(run.finished.summary.provider_retries, 0);
+    assert_eq!(run.turns(), 0);
+    let [(error, retry)] = run.failures().try_into().expect("one attempt failed");
+    assert_eq!(error.kind, ProviderErrorKind::Auth);
+    assert_eq!(retry, None);
+    assert_eq!(
+        run.observer.names().last(),
+        Some(&"RunFinished"),
+        "a run the provider turned away is still a run, with its wide event"
+    );
+}
+
+// E17: jitter.
+
+/// Three failures and then an answer, with waits spread by up to a quarter,
+/// under the run id `run_id`.
+async fn spread(run_id: &str) -> Vec<Duration> {
+    let mut harness = Harness::new(vec![
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.retry = retrying(RetrySettings {
+        jitter: 0.25,
+        ..settings()
+    });
+    harness.context.run_id = RunId::new(run_id).expect("a valid run id");
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    let waits: Vec<Duration> = run
+        .failures()
+        .into_iter()
+        .filter_map(|(_, retry)| retry)
+        .collect();
+    assert_eq!(run.clock.sleeps(), waits, "the loop waits what it reported");
+    waits
+}
+
+#[tokio::test]
+async fn each_wait_is_the_backoff_and_up_to_a_quarter_more_and_two_runs_wait_differently() {
+    let one = spread("01K5F3Z8Q4X9T2M7B6W1R0VNEC").await;
+    let other = spread("01K5F3Z8Q4X9T2M7B6W1R0VNED").await;
+    let again = spread("01K5F3Z8Q4X9T2M7B6W1R0VNEC").await;
+
+    for waits in [&one, &other] {
+        assert_eq!(waits.len(), 3);
+        for (wait, backoff) in waits.iter().zip([100, 200, 400]) {
+            assert!(
+                (ms(backoff)..ms(backoff + backoff / 4)).contains(wait),
+                "{wait:?} after a backoff of {backoff} ms"
+            );
+        }
+    }
+    for (wait, others) in one.iter().zip(&other) {
+        assert_ne!(wait, others, "runs that fail together come back apart");
+    }
+    assert_eq!(one, again, "a replayed run waits as it did");
+}
+
+#[tokio::test]
+async fn without_jitter_each_wait_is_the_backoff_exactly() {
+    let run = Harness::new(vec![
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ])
+    .run()
+    .await;
+
+    assert_eq!(run.clock.sleeps(), [ms(100), ms(200), ms(400)]);
+}
+
+/// The jitter of a wait is read from the run, the turn and the attempt, in
+/// that order, so no two waits of a run share one.
+#[tokio::test]
+async fn the_salt_of_a_wait_is_of_the_run_the_turn_and_the_attempt_that_failed() {
+    let spread = RetrySettings {
+        jitter: 0.25,
+        ..settings()
+    };
+    let mut harness = Harness::new(vec![
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::now(says("On it.", &["bash"], FinishReason::ToolUse)),
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.retry = retrying(spread);
+    let run_id = harness.context.run_id.clone();
+
+    let run = harness.run().await;
+
+    let wait = |turn, attempt| {
+        retrying(spread)
+            .next(
+                attempt,
+                ProviderErrorKind::Retryable,
+                None,
+                run_id.salt(turn, attempt),
+            )
+            .expect("the call has retries left")
+    };
+    assert_eq!(run.clock.sleeps(), [wait(1, 1), wait(1, 2), wait(2, 1)]);
+    assert_ne!(wait(1, 2), wait(2, 1));
+    assert_ne!(wait(1, 1), wait(2, 1));
+}
+
+#[tokio::test]
+async fn a_wait_the_server_asked_for_is_spread_too() {
+    let mut harness = Harness::new(vec![
+        Answer::failing(overloaded().with_retry_after(Duration::from_secs(5))),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.retry = retrying(RetrySettings {
+        jitter: 0.25,
+        ..settings()
+    });
+
+    let run = harness.run().await;
+
+    let [wait] = run.clock.sleeps().try_into().expect("one wait");
+    assert!(wait > Duration::from_secs(5), "{wait:?}");
+    assert!(wait < ms(6_250), "{wait:?}");
+}
+
+// E18: point A is asked once an attempt has failed, before the retry policy.
+
+#[tokio::test]
+async fn a_failed_attempt_that_used_up_the_run_s_time_is_a_timeout_with_a_retry_left_or_without() {
+    for max_retries in [0, 3] {
+        let mut harness = Harness::new(vec![
+            Answer::Fails(overloaded(), Duration::from_secs(10)),
+            Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
+        ]);
+        harness.stop.timeout = Duration::from_secs(10);
+        harness.retry = retrying(RetrySettings {
+            max_retries,
+            ..settings()
+        });
+
+        let run = harness.run().await;
+
+        assert_eq!(run.stop_reason(), StopReason::Timeout, "{max_retries}");
+        assert_eq!(run.error(), None, "{max_retries}");
+        assert_eq!(run.provider.calls(), 1, "{max_retries}");
+        assert_eq!(run.clock.sleeps(), [], "{max_retries}");
+        let [(_, retry)] = run.failures().try_into().expect("one attempt failed");
+        assert_eq!(retry, None, "{max_retries}");
+    }
+}
+
+#[tokio::test]
+async fn a_failed_attempt_whose_usage_reaches_the_token_budget_is_the_last_attempt() {
+    for max_retries in [0, 3] {
+        let mut harness = Harness::new(vec![
+            Answer::failing(overloaded().with_usage(tokens(140, 10))),
+            Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
+        ]);
+        harness.stop.max_total_tokens = Some(150);
+        harness.retry = retrying(RetrySettings {
+            max_retries,
+            ..settings()
+        });
+
+        let run = harness.run().await;
+
+        assert_eq!(
+            run.stop_reason(),
+            StopReason::MaxTotalTokens,
+            "{max_retries}"
+        );
+        assert_eq!(run.provider.calls(), 1, "{max_retries}");
+        assert_eq!(run.clock.sleeps(), [], "{max_retries}");
+        assert_eq!(run.finished.summary.failed_usage, Some(tokens(140, 10)));
+        assert_eq!(run.finished.summary.outcome.usage, Usage::default());
+        let [(_, retry)] = run.failures().try_into().expect("one attempt failed");
+        assert_eq!(retry, None, "{max_retries}");
+    }
+}
+
+/// Only a failure that could be retried is held to point A. One that
+/// couldn't is why the run ended, however long the attempt took.
+#[tokio::test]
+async fn a_failure_no_attempt_could_answer_ends_the_run_as_itself_though_the_time_is_up() {
+    for (kind, reason) in [
+        (
+            ProviderErrorKind::ContextExhausted,
+            StopReason::ContextExhausted,
+        ),
+        (ProviderErrorKind::Auth, StopReason::ProviderError),
+        (ProviderErrorKind::Fatal, StopReason::ProviderError),
+    ] {
+        let mut harness = Harness::new(vec![Answer::Fails(
+            ProviderError::new(kind, "the provider's own words"),
+            Duration::from_secs(10),
+        )]);
+        harness.stop.timeout = Duration::from_secs(10);
+
+        let run = harness.run().await;
+
+        assert_eq!(run.stop_reason(), reason, "{kind}");
+        assert_eq!(run.error(), Some("the provider's own words"), "{kind}");
+    }
 }

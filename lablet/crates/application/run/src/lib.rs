@@ -23,5 +23,21 @@ pub use tool::{
 pub use toolset::{FilterList, ToolFilter, ToolSet, ToolSetError};
 pub use trace::TraceContext;
 
+/// The longest message a [`ProviderError`] or a [`ToolError`] carries, in
+/// bytes.
+///
+/// An adapter's error text can be as long as whatever a server sent back, and
+/// it reaches the outcome, every exporter and, for a tool, the model. Both
+/// errors cut their message to this when they're built, so no adapter can
+/// leave the bound out.
+pub const ERROR_MESSAGE_MAX_BYTES: usize = 2_048;
+
+/// `message`, cut to [`ERROR_MESSAGE_MAX_BYTES`] at the last character
+/// boundary the bound allows.
+pub(crate) fn bounded(mut message: String) -> String {
+    message.truncate(message.floor_char_boundary(ERROR_MESSAGE_MAX_BYTES));
+    message
+}
+
 #[cfg(test)]
 mod tests;

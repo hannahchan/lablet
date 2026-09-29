@@ -210,6 +210,7 @@ fn a_run_that_did_nothing_has_a_summary_of_its_setup_and_zeros() {
     assert_eq!(summary.request, setup().request);
     assert_eq!(summary.prompt_system_bytes, 14);
     assert_eq!(summary.prompt_user_bytes, 21);
+    assert_eq!(summary.failed_usage, None);
     assert_eq!(summary.provider_retries, 0);
     assert_eq!(summary.provider_latency_total_ms, 0);
     assert_eq!(summary.provider_latency_max_ms, 0);
@@ -566,14 +567,149 @@ fn a_run_that_has_just_responded_counts_the_new_turns_usage() {
     assert_eq!(last.turn().text(), "Done.");
 }
 
+/// What a provider that reports every count says a failed attempt used.
+fn billed(input: u64, output: u64) -> Usage {
+    Usage::from_inclusive(TokenCounts {
+        input,
+        output,
+        reasoning: Some(0),
+        cache_read: Some(0),
+        cache_write: Some(0),
+    })
+}
+
+#[test]
+fn what_a_failed_attempt_reported_is_spent_and_is_in_no_turn() {
+    let mut run = start();
+    run.failed_attempt(ms(10), Some(billed(70, 5)));
+
+    assert_eq!(run.usage(), Usage::default(), "no call has succeeded");
+    assert_eq!(run.spent(), billed(70, 5));
+    assert_eq!(run.progress(ms(10)).usage, billed(70, 5));
+
+    let run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::Ok)]);
+
+    assert_eq!(run.usage(), billed(100, 20));
+    assert_eq!(run.spent(), billed(170, 25));
+    assert_eq!(run.progress(ms(20)).usage, billed(170, 25));
+    let finished = run.finish(StopReason::MaxTurns, ms(20), None, None, None, None);
+    assert_eq!(finished.summary.failed_usage, Some(billed(70, 5)));
+    assert_eq!(
+        finished.summary.outcome.usage,
+        billed(100, 20),
+        "the outcome counts the calls that succeeded"
+    );
+    assert_eq!(
+        finished.transcript.turns()[0].record().usage,
+        billed(100, 20),
+        "a turn's usage is that of the attempt that answered"
+    );
+}
+
+#[test]
+fn what_failed_attempts_reported_is_summed_over_every_call_of_the_run() {
+    let mut run = start();
+    run.failed_attempt(ms(10), Some(billed(70, 5)));
+    run.failed_attempt(ms(10), None);
+    let mut run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::Ok)]);
+    run.failed_attempt(ms(10), Some(billed(30, 0)));
+
+    assert_eq!(run.spent(), billed(200, 25));
+    assert_eq!(
+        finish(run, StopReason::RetriesExhausted).failed_usage,
+        Some(billed(100, 5))
+    );
+}
+
+#[test]
+fn failed_usage_is_absent_when_no_failed_attempt_reported_any() {
+    let mut run = start();
+    run.failed_attempt(ms(10), None);
+    run.failed_attempt(ms(10), None);
+
+    assert_eq!(run.spent(), Usage::default());
+    assert_eq!(finish(run, StopReason::RetriesExhausted).failed_usage, None);
+}
+
+/// A failed attempt that reported zeros reported something, which isn't the
+/// same as one that reported nothing.
+#[test]
+fn a_failed_attempt_that_reported_no_tokens_still_reported() {
+    let mut run = start();
+    run.failed_attempt(ms(10), Some(Usage::default()));
+
+    assert_eq!(
+        finish(run, StopReason::RetriesExhausted).failed_usage,
+        Some(Usage::default())
+    );
+}
+
+#[test]
+fn a_count_is_missing_from_the_failed_usage_only_when_no_failed_attempt_reported_it() {
+    let mut run = start();
+    run.failed_attempt(
+        ms(10),
+        Some(Usage {
+            input_tokens: 70,
+            output_tokens: 0,
+            reasoning_output_tokens: None,
+            cache_read_tokens: Some(60),
+            cache_write_tokens: None,
+        }),
+    );
+    run.failed_attempt(
+        ms(10),
+        Some(Usage {
+            input_tokens: 70,
+            output_tokens: 0,
+            reasoning_output_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: Some(10),
+        }),
+    );
+
+    assert_eq!(
+        finish(run, StopReason::RetriesExhausted).failed_usage,
+        Some(Usage {
+            input_tokens: 140,
+            output_tokens: 0,
+            reasoning_output_tokens: None,
+            cache_read_tokens: Some(60),
+            cache_write_tokens: Some(10),
+        })
+    );
+}
+
+/// The cost is priced from the state a run stopped in, so each state counts
+/// the failed attempts beside the turn it's holding.
+#[test]
+fn a_run_that_has_just_responded_has_spent_what_its_failed_attempts_reported_too() {
+    let mut run = tool_turn(start(), &["bash"], &[ran(ToolCallEnd::Ok)]);
+    run.failed_attempt(ms(10), Some(billed(70, 5)));
+
+    let calling = calling(run.clone(), &["bash"]);
+    let last = done(run, 7, ms(1));
+
+    assert_eq!(calling.usage(), billed(200, 40));
+    assert_eq!(calling.spent(), billed(270, 45));
+    assert_eq!(last.usage(), billed(107, 40));
+    assert_eq!(last.spent(), billed(177, 45));
+    assert_eq!(
+        last.finish(StopReason::Completed, ms(0), None, None, None, None)
+            .summary
+            .failed_usage,
+        Some(billed(70, 5))
+    );
+}
+
 #[test]
 fn provider_latency_is_summed_and_its_maximum_kept_over_every_attempt() {
     let calls = response("On it.", &["bash"], FinishReason::ToolUse, 1);
     let mut run = start();
-    run.failed_attempt(ms(900));
+    run.failed_attempt(ms(900), None);
     let calling = pending(run.responded(calls, ms(0), ms(400)));
     let mut run = answered(calling, &[answer(ran(ToolCallEnd::Ok), "out", ms(0))]);
-    run.failed_attempt(ms(200));
+    run.failed_attempt(ms(200), None);
 
     let summary = finish(run.clone(), StopReason::ProviderError);
     assert_eq!(summary.provider_latency_total_ms, 1_500);
@@ -589,7 +725,7 @@ fn provider_latency_is_summed_and_its_maximum_kept_over_every_attempt() {
 #[test]
 fn a_run_whose_only_provider_call_fails_took_no_turns_and_made_no_retries() {
     let mut run = start();
-    run.failed_attempt(ms(250));
+    run.failed_attempt(ms(250), None);
 
     assert_eq!(run.progress(ms(250)).turns, 0);
     let summary = finish(run, StopReason::ProviderError);
@@ -602,8 +738,8 @@ fn a_run_whose_only_provider_call_fails_took_no_turns_and_made_no_retries() {
 #[test]
 fn a_turn_counts_the_attempts_of_its_call_and_the_next_call_starts_again() {
     let mut run = start();
-    run.failed_attempt(ms(10));
-    run.failed_attempt(ms(10));
+    run.failed_attempt(ms(10), None);
+    run.failed_attempt(ms(10), None);
     let run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::Ok)]);
     let run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::Ok)]);
 
@@ -620,10 +756,10 @@ fn a_turn_counts_the_attempts_of_its_call_and_the_next_call_starts_again() {
 #[test]
 fn a_retry_is_an_attempt_made_beyond_the_first_of_its_call() {
     let mut run = start();
-    run.failed_attempt(ms(10));
+    run.failed_attempt(ms(10), None);
     let mut run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::Ok)]);
     for _ in 0..4 {
-        run.failed_attempt(ms(10));
+        run.failed_attempt(ms(10), None);
     }
 
     // One retry behind the turn, and three of the four failures of the last
@@ -785,20 +921,15 @@ fn progress_is_what_the_limits_are_held_against() {
     let run = start();
     assert_eq!(run.progress(ms(0)), Progress::default());
 
-    let run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::ToolError)]);
+    let mut run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::ToolError)]);
+    run.failed_attempt(ms(10), Some(billed(70, 5)));
 
     assert_eq!(
         run.progress(ms(830)),
         Progress {
             turns: 1,
             elapsed: ms(830),
-            usage: Usage::from_inclusive(TokenCounts {
-                input: 100,
-                output: 20,
-                reasoning: Some(0),
-                cache_read: Some(0),
-                cache_write: Some(0)
-            }),
+            usage: billed(170, 25),
             consecutive_tool_errors: 1,
         }
     );
@@ -807,7 +938,7 @@ fn progress_is_what_the_limits_are_held_against() {
 #[test]
 fn a_latency_is_truncated_as_it_is_recorded_so_totals_are_sums_of_whole_milliseconds() {
     let mut run = start();
-    run.failed_attempt(Duration::from_micros(1_600));
+    run.failed_attempt(Duration::from_micros(1_600), None);
     let calling = pending(run.responded(
         response("On it.", &["bash", "bash"], FinishReason::ToolUse, 1),
         ms(0),
@@ -841,7 +972,7 @@ fn sums_and_durations_saturate_rather_than_overflow() {
         },
     );
     for _ in 0..2 {
-        run.failed_attempt(Duration::MAX);
+        run.failed_attempt(Duration::MAX, None);
     }
     let calling = pending(run.responded(
         response("On it.", &["bash", "bash"], FinishReason::ToolUse, 1),

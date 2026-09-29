@@ -195,3 +195,48 @@ fn the_completion_tools_name_is_one_this_module_would_accept() {
         ToolName::new(crate::CompletionMode::TASK_COMPLETE).unwrap()
     );
 }
+
+// The salt of a retry
+
+const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
+
+fn salt(run: &str, turn: u32, attempt: u32) -> u64 {
+    RunId::new(run).unwrap().salt(turn, attempt)
+}
+
+/// The values were worked out apart from this crate, from the published
+/// FNV-1a parameters, so a toolchain or a refactor that changed the hash
+/// changes a replayed run's waits and fails here.
+#[test]
+fn a_salt_is_fnv_1a_over_the_id_then_the_turn_then_the_attempt() {
+    assert_eq!(salt("a", 0, 0), 0xbfe4_d88f_2353_f60c);
+    assert_eq!(salt(RUN, 1, 1), 0x205a_d082_d84b_3829);
+    assert_eq!(salt(RUN, u32::MAX, u32::MAX), 0x0667_aa2a_d53d_5631);
+}
+
+#[test]
+fn a_salt_reads_every_byte_of_both_numbers_least_significant_first() {
+    assert_eq!(salt(RUN, 0x0102_0304, 0x0506_0708), 0x99a2_4cdb_d309_8449);
+    assert_eq!(salt(RUN, 256, 1), 0x7a03_1c01_9166_af6f);
+    assert_eq!(salt(RUN, 1, 256), 0x8909_9f7a_86fd_7a43);
+}
+
+#[test]
+fn another_run_another_turn_and_another_attempt_each_give_another_salt() {
+    let salts = [
+        salt(RUN, 1, 1),
+        salt("01K5F3Z8Q4X9T2M7B6W1R0VNED", 1, 1),
+        salt(RUN, 2, 1),
+        salt(RUN, 1, 2),
+    ];
+
+    assert_eq!(
+        salts,
+        [
+            0x205a_d082_d84b_3829,
+            0xb1c5_5be1_d659_495c,
+            0x3d55_cd8d_4cad_9d6a,
+            0xc055_7c8b_2e80_f4ba,
+        ]
+    );
+}

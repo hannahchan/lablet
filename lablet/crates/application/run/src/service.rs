@@ -12,8 +12,8 @@ use lablet_model::{
 use lablet_policy::{Pricing, RetryPolicy, StopPolicy};
 
 use crate::{
-    Cancellation, Clock, EventKind, McpCallMeta, ModelProvider, ProviderRequest, RunEvent,
-    RunObserver, ToolCall, ToolSet,
+    Cancellation, Clock, EventKind, McpCallMeta, ModelProvider, ProviderError, ProviderRequest,
+    RunEvent, RunObserver, ToolCall, ToolSet,
 };
 
 /// What bounds the calls, which is not a stop decision: the run's limits are
@@ -97,11 +97,13 @@ enum Ending {
 }
 
 impl Ending {
-    fn usage(&self) -> Usage {
+    /// What the run is priced on: the failed attempts that reported usage
+    /// were billed too.
+    fn spent(&self) -> Usage {
         match self {
-            Self::Waiting(run) => run.usage(),
-            Self::Final(done) => done.usage(),
-            Self::Pending(pending) => pending.usage(),
+            Self::Waiting(run) => run.spent(),
+            Self::Final(done) => done.spent(),
+            Self::Pending(pending) => pending.spent(),
         }
     }
 
@@ -199,7 +201,7 @@ impl RunService {
         let (ending, stopped) = self.drive(&run_id, run, started, capture).await;
 
         let rates = self.pricing.as_ref().map(Pricing::rates);
-        let cost = self.pricing.as_ref().and_then(|p| p.cost(&ending.usage()));
+        let cost = self.pricing.as_ref().and_then(|p| p.cost(&ending.spent()));
         let finished = ending.finish(stopped, self.elapsed(started), rates, cost);
 
         self.emit(
@@ -225,11 +227,8 @@ impl RunService {
         let mode = self.tools.completion();
         let mut bytes = RequestBytes::new(run.transcript().system(), self.tools.specs());
         loop {
-            if self.cancel.is_cancelled() {
-                return (Ending::Waiting(run), Stopped::just(StopReason::Cancelled));
-            }
-            if let Some(reason) = self.stop.before_call(&self.progress(&run, started)) {
-                return (Ending::Waiting(run), Stopped::just(reason));
+            if let Some(stopped) = self.before_call(&run, started) {
+                return (Ending::Waiting(run), stopped);
             }
 
             let turn = u32::try_from(run.transcript().turns().len())
@@ -295,11 +294,26 @@ impl RunService {
         .await;
     }
 
+    /// Point A: why the run makes no provider call now, if it makes none.
+    ///
+    /// Cancellation is polled first, because the policy never sees it.
+    fn before_call(&self, run: &Run, started: Instant) -> Option<Stopped> {
+        if self.cancel.is_cancelled() {
+            return Some(Stopped::just(StopReason::Cancelled));
+        }
+        self.stop
+            .before_call(&self.progress(run, started))
+            .map(Stopped::just)
+    }
+
     /// One provider call, with its retries.
     ///
     /// The attempt's own timing comes back with the response, because the
     /// turn records when the attempt began and how long it took, and only
     /// this function is in a position to know either.
+    ///
+    /// A retry is a provider call, so point A is asked before each one as it
+    /// was before the first attempt, once the wait is over.
     async fn call(
         &self,
         run_id: &RunId,
@@ -350,40 +364,63 @@ impl RunService {
                 }
                 Err(error) => error,
             };
-            run.failed_attempt(latency);
+            run.failed_attempt(latency, error.usage);
 
-            let wait = self.retry.next(attempt, error.kind);
-            let elapsed = self.elapsed(started);
-            let retry = wait.filter(|&wait| self.stop.allows_wait(elapsed, wait));
+            let next =
+                self.after_failure(run, &error, run_id.salt(turn, attempt), attempt, started);
             self.emit(
                 run_id,
                 EventKind::ProviderCallFailed {
                     turn,
                     attempt,
-                    error: error.clone(),
-                    retry,
+                    error,
+                    retry: next.as_ref().ok().copied(),
                 },
             )
             .await;
 
-            match (wait, retry) {
-                (_, Some(wait)) => {
-                    self.clock.sleep(wait).await;
-                    // A retry is a provider call, so it's held to the same
-                    // poll as the first attempt of one.
-                    if self.cancel.is_cancelled() {
-                        return Err(Stopped::just(StopReason::Cancelled));
-                    }
-                    attempt += 1;
-                }
-                // A wait that would carry the run past its own timeout isn't
-                // taken: the run stops now rather than sleeping up to a limit
-                // it's known to reach.
-                (Some(_), None) => return Err(Stopped::just(StopReason::Timeout)),
-                (None, None) => {
-                    return Err(Stopped::with(stop_reason_for(error.kind), error.message));
-                }
+            self.clock.sleep(next?).await;
+            if let Some(stopped) = self.before_call(run, started) {
+                return Err(stopped);
             }
+            attempt += 1;
+        }
+    }
+
+    /// What follows a failed attempt: the wait before the next one, or why
+    /// there won't be one.
+    ///
+    /// A failure another attempt could answer is held to point A before the
+    /// retry policy is asked. The attempt may have used up the run's time or
+    /// its token budget, and that's why the run stops then, whether or not
+    /// the call has a retry left: one state gives one stop reason. A failure
+    /// no attempt could answer ends the run as itself.
+    fn after_failure(
+        &self,
+        run: &Run,
+        error: &ProviderError,
+        salt: u64,
+        attempt: u32,
+        started: Instant,
+    ) -> Result<Duration, Stopped> {
+        if error.kind.is_retryable()
+            && let Some(stopped) = self.before_call(run, started)
+        {
+            return Err(stopped);
+        }
+        match self
+            .retry
+            .next(attempt, error.kind, error.retry_after, salt)
+        {
+            Some(wait) if self.stop.allows_wait(self.elapsed(started), wait) => Ok(wait),
+            // A wait that would carry the run past its own timeout isn't
+            // taken: the run stops now rather than sleeping up to a limit
+            // it's known to reach.
+            Some(_) => Err(Stopped::just(StopReason::Timeout)),
+            None => Err(Stopped::with(
+                stop_reason_for(error.kind),
+                error.message().to_owned(),
+            )),
         }
     }
 
@@ -531,7 +568,7 @@ impl RunService {
                 });
                 Settled {
                     status,
-                    content: vec![ToolResultContent::Text(error.message)],
+                    content: vec![ToolResultContent::Text(error.message().to_owned())],
                     mcp: error.mcp,
                 }
             }
@@ -628,6 +665,8 @@ const fn stop_reason_for(kind: ProviderErrorKind) -> StopReason {
         // Both are failures another attempt could have answered, and none did.
         ProviderErrorKind::Retryable | ProviderErrorKind::Malformed => StopReason::RetriesExhausted,
         ProviderErrorKind::ContextExhausted => StopReason::ContextExhausted,
-        ProviderErrorKind::Fatal => StopReason::ProviderError,
+        // A rejected key is a run that failed, like any other request the
+        // provider won't take.
+        ProviderErrorKind::Auth | ProviderErrorKind::Fatal => StopReason::ProviderError,
     }
 }

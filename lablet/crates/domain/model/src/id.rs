@@ -96,6 +96,30 @@ id! {
     ToolName, tool_name
 }
 
+impl RunId {
+    /// A number that's a pure function of the run, the turn and the attempt,
+    /// which is what the jitter of a retry is read from: two runs that fail
+    /// together wait differently, and one run waits the same every time it's
+    /// replayed.
+    ///
+    /// It's FNV-1a over the id's bytes and then the two numbers',
+    /// little-endian. The hash is written out here because the standard
+    /// library's hasher may change from one release of Rust to the next, and
+    /// a replayed run's waits would change with it.
+    #[must_use]
+    pub fn salt(&self, turn: u32, attempt: u32) -> u64 {
+        const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+        self.0
+            .bytes()
+            .chain(turn.to_le_bytes())
+            .chain(attempt.to_le_bytes())
+            .fold(OFFSET_BASIS, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(PRIME)
+            })
+    }
+}
+
 impl ToolName {
     /// The longest tool name both provider APIs accept.
     pub const MAX_LEN: usize = 64;

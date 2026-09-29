@@ -2,9 +2,9 @@
 //! policy reads from it, and the finished run it becomes.
 //!
 //! It keeps the transcript, and beside it only what a transcript doesn't
-//! hold: the input waiting for the next turn, and the provider call attempts
-//! that failed. Every total of the summary is computed from the two when the
-//! run ends, so a total can't disagree with the turns it sums.
+//! hold: the input waiting for the next turn, and what the provider call
+//! attempts that failed cost. Every total of the summary is computed from the
+//! two when the run ends, so a total can't disagree with the turns it sums.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -107,7 +107,8 @@ pub struct Progress {
     pub turns: u32,
     /// The time since the run started.
     pub elapsed: Duration,
-    /// Usage summed over every response so far.
+    /// Usage summed over every provider call attempt so far: every response,
+    /// and every failed attempt that reported what it used.
     pub usage: Usage,
     /// Tool error results since the last successful tool call.
     pub consecutive_tool_errors: u32,
@@ -137,6 +138,9 @@ pub struct Run {
     failed_attempts: u32,
     failed_latency_total_ms: u64,
     failed_latency_max_ms: u64,
+    /// What the failed attempts of every call reported using, and `None`
+    /// when none reported anything.
+    failed_usage: Option<Usage>,
 }
 
 impl Run {
@@ -151,6 +155,7 @@ impl Run {
             failed_attempts: 0,
             failed_latency_total_ms: 0,
             failed_latency_max_ms: 0,
+            failed_usage: None,
         }
     }
 
@@ -171,12 +176,21 @@ impl Run {
         self.transcript.messages(&self.input)
     }
 
-    /// Records a provider call attempt that failed after `latency`.
-    pub fn failed_attempt(&mut self, latency: Duration) {
+    /// Records a provider call attempt that failed after `latency`, and the
+    /// `usage` it reported, when the provider billed for it and said so.
+    ///
+    /// That usage is in no turn, because a failed attempt made none, so the
+    /// outcome's usage leaves it out. It counts toward the token budget and
+    /// the cost, or a run that fails more often would look cheaper than it
+    /// was.
+    pub fn failed_attempt(&mut self, latency: Duration, usage: Option<Usage>) {
         let latency_ms = whole_ms(latency);
         self.failed_attempts = self.failed_attempts.saturating_add(1);
         self.failed_latency_total_ms = self.failed_latency_total_ms.saturating_add(latency_ms);
         self.failed_latency_max_ms = self.failed_latency_max_ms.max(latency_ms);
+        if let Some(usage) = usage {
+            self.failed_usage = Some(self.failed() + usage);
+        }
     }
 
     /// Records the provider call attempt that returned `response` as the
@@ -217,16 +231,29 @@ impl Run {
         Progress {
             turns: self.turns(),
             elapsed,
-            usage: self.usage(),
+            usage: self.spent(),
             consecutive_tool_errors: self.transcript.consecutive_tool_errors(),
         }
     }
 
-    /// Usage summed over every turn so far, which is what a run's cost is
-    /// priced from.
+    /// Usage summed over every turn so far, which is every provider call
+    /// that succeeded.
     #[must_use]
     pub fn usage(&self) -> Usage {
         self.transcript.usage()
+    }
+
+    /// [`Run::usage`] and what the failed attempts reported, which is what a
+    /// run's token budget is held against and its cost priced from.
+    #[must_use]
+    pub fn spent(&self) -> Usage {
+        self.usage() + self.failed()
+    }
+
+    /// What the failed attempts reported, read as a sum: nothing when none
+    /// reported anything.
+    fn failed(&self) -> Usage {
+        self.failed_usage.unwrap_or_default()
     }
 
     /// Closes the record of a run that stopped with `stop`, `duration` after
@@ -265,6 +292,7 @@ impl Run {
             failed_attempts,
             failed_latency_total_ms,
             failed_latency_max_ms,
+            failed_usage,
             input,
         } = self;
         let prompt = transcript.turns().first().map_or(&*input, Turn::input);
@@ -283,6 +311,7 @@ impl Run {
             request: setup.request,
             prompt_system_bytes: transcript.system().len() as u64,
             prompt_user_bytes: UserContent::bytes(prompt),
+            failed_usage,
             provider_retries: u64::from(failed_attempts.saturating_sub(1)),
             provider_latency_total_ms: failed_latency_total_ms,
             provider_latency_max_ms: failed_latency_max_ms,
@@ -358,6 +387,10 @@ impl Recorded {
         self.run.usage() + self.turn.record().usage
     }
 
+    fn spent(&self) -> Usage {
+        self.run.spent() + self.turn.record().usage
+    }
+
     fn finish(
         self,
         stop: StopReason,
@@ -384,6 +417,12 @@ impl Final {
     #[must_use]
     pub fn usage(&self) -> Usage {
         self.0.usage()
+    }
+
+    /// That usage and what the failed attempts reported; see [`Run::spent`].
+    #[must_use]
+    pub fn spent(&self) -> Usage {
+        self.0.spent()
     }
 
     /// Closes the record of the run; see [`Run::finish`].
@@ -430,6 +469,12 @@ impl Pending {
     #[must_use]
     pub fn usage(&self) -> Usage {
         self.0.usage()
+    }
+
+    /// That usage and what the failed attempts reported; see [`Run::spent`].
+    #[must_use]
+    pub fn spent(&self) -> Usage {
+        self.0.spent()
     }
 
     /// How `mode` reads the response's calls: [`Calls::TaskComplete`] when
