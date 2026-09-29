@@ -4,7 +4,6 @@
 //! A case is called from a test that pauses tokio's clock, so what a script
 //! says a call took is what the loop measures.
 
-use std::fmt::Display;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,6 +20,8 @@ use lablet_run::{
     ToolErrorKind, ToolExecutor, ToolFilter, ToolOutput, ToolSet,
 };
 use serde_json::json;
+
+use crate::must;
 
 /// The ids of the runs the cases make.
 pub(super) const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
@@ -75,15 +76,6 @@ pub(super) const EVERYTHING: &str = r#"
 pub(super) const FAILS: &str = r"
 - error: { kind: fatal, message: unknown model, latency: 15ms }
 ";
-
-/// What `result` holds, or the end of the case: whatever went wrong
-/// `doing` it is a fault of the case's own, or of what it's handed.
-pub(super) fn must<T, E: Display>(result: Result<T, E>, doing: &str) -> T {
-    match result {
-        Ok(value) => value,
-        Err(error) => panic!("{doing}: {error}"),
-    }
-}
 
 struct TokioClock;
 

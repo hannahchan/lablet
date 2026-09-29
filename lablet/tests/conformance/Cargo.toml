@@ -20,6 +20,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
 [[test]]
 name = "it"
 path = "tests/it/main.rs"
