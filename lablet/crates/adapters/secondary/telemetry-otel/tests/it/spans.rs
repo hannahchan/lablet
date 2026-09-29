@@ -1,15 +1,15 @@
 //! O1 and O2, as far as they're of spans, and the clause of E15 that's of
 //! the chat span.
 
+use lablet_conformance::observer::assert_the_wide_event_is_declared;
 use lablet_conformance::otlp::{SpanKind, Status};
 use lablet_model::{RunLabels, StopReason, Usage};
 use lablet_telemetry_registry::attribute as key;
 use lablet_telemetry_registry::signals::{
     EVENT_GEN_AI_CLIENT_OPERATION_EXCEPTION_KEYS, EVENT_GEN_AI_CLIENT_OPERATION_EXCEPTION_REQUIRED,
-    EVENT_LABLET_RETRY_KEYS, EVENT_LABLET_RETRY_REQUIRED, EVENT_LABLET_RUN_KEYS,
-    SPAN_LABLET_CHAT_KEYS, SPAN_LABLET_CHAT_REQUIRED, SPAN_LABLET_EXECUTE_TOOL_KEYS,
-    SPAN_LABLET_EXECUTE_TOOL_REQUIRED, SPAN_LABLET_INVOKE_AGENT_KEYS,
-    SPAN_LABLET_INVOKE_AGENT_REQUIRED,
+    EVENT_LABLET_RETRY_KEYS, EVENT_LABLET_RETRY_REQUIRED, SPAN_LABLET_CHAT_KEYS,
+    SPAN_LABLET_CHAT_REQUIRED, SPAN_LABLET_EXECUTE_TOOL_KEYS, SPAN_LABLET_EXECUTE_TOOL_REQUIRED,
+    SPAN_LABLET_INVOKE_AGENT_KEYS, SPAN_LABLET_INVOKE_AGENT_REQUIRED,
 };
 use serde_json::json;
 
@@ -103,12 +103,7 @@ async fn a_run_has_one_wide_event_in_the_trace_and_the_context_of_its_root_span(
     assert_eq!(wide.flags, 1);
     assert_eq!(wide.time_unix_nano, root.end_unix_nano);
     assert_eq!(wide.severity_text, "INFO");
-    assert_declared(
-        "the wide event",
-        &wide.attributes,
-        &[],
-        EVENT_LABLET_RUN_KEYS,
-    );
+    assert_the_wide_event_is_declared(wide);
     assert_eq!(
         wide.attributes[key::LABLET_TELEMETRY_DROPPED_RECORDS],
         json!(0)
@@ -237,7 +232,7 @@ async fn the_chat_spans_of_a_run_number_its_turns_and_its_retries() {
     let traced = traced("o1-chats", FAILS_CALLS_ENDS, |_| {}).await;
 
     let summary = &traced.finished.summary;
-    assert_eq!((summary.outcome.turns, summary.provider_retries), (3, 1));
+    assert_eq!((summary.outcome.turns, summary.provider.retries), (3, 1));
     let chats = traced.chats();
     assert_eq!(chats.len(), 3 + 1);
     let numbered: Vec<_> = chats
@@ -273,7 +268,7 @@ async fn a_run_that_ended_on_a_failed_call_has_one_chat_span_more_than_its_turns
 
     let summary = &traced.finished.summary;
     assert_eq!(summary.outcome.stop_reason(), StopReason::RetriesExhausted);
-    assert_eq!((summary.outcome.turns, summary.provider_retries), (1, 1));
+    assert_eq!((summary.outcome.turns, summary.provider.retries), (1, 1));
     assert_eq!(traced.chats().len(), 1 + 1 + 1);
     let root = traced.root();
     assert_eq!(root.attributes[key::ERROR_TYPE], "retries_exhausted");
@@ -341,19 +336,19 @@ async fn the_counts_of_the_spans_sum_to_what_the_run_measured() {
         .iter()
         .filter(|tool| tool.attributes[key::LABLET_TOOL_IS_ERROR] == true)
         .count();
-    assert_eq!(errors as u64, summary.tool_calls_errors);
+    assert_eq!(errors as u64, summary.tool_calls.errors);
     let unknown = tools
         .iter()
         .filter(|tool| tool.attributes[key::LABLET_TOOL_STATUS] == "unknown")
         .count();
-    assert_eq!(unknown as u64, summary.tool_calls_unknown);
+    assert_eq!(unknown as u64, summary.tool_calls.unknown);
     assert_eq!(
         sum(&tools, key::LABLET_TOOL_INPUT_BYTES),
-        Some(summary.tool_input_bytes)
+        Some(summary.tool_calls.input_bytes)
     );
     assert_eq!(
         sum(&tools, key::LABLET_TOOL_OUTPUT_BYTES),
-        Some(summary.tool_output_bytes)
+        Some(summary.tool_calls.output_bytes)
     );
     for (name, stats) in &summary.per_tool {
         let of_the_tool: Vec<_> = tools
@@ -394,18 +389,18 @@ async fn the_spans_last_as_long_as_the_run_measured_and_start_when_it_says() {
     );
     assert_eq!(
         chats.iter().map(|(_, lasted)| lasted).sum::<u64>(),
-        summary.provider_latency_total_ms
+        summary.provider.latency.total_ms()
     );
     assert_eq!(
         chats.iter().map(|(_, lasted)| *lasted).max(),
-        Some(summary.provider_latency_max_ms)
+        Some(summary.provider.latency.max_ms())
     );
 
     let tools: Vec<_> = traced.tools().into_iter().map(timing).collect();
     assert_eq!(tools, [(2_290, 1_000), (3_290, 300), (3_690, 0)]);
     assert_eq!(
         tools.iter().map(|(_, lasted)| lasted).sum::<u64>(),
-        summary.tool_latency_total_ms
+        summary.tool_calls.latency_ms
     );
     let outcomes: Vec<_> = traced
         .finished

@@ -63,7 +63,7 @@ async fn a_script_is_played_through_a_run_and_the_run_counts_what_it_stated() {
             ..Usage::default()
         })
     );
-    assert_eq!(finished.summary.provider_retries, 1);
+    assert_eq!(finished.summary.provider.retries, 1);
     assert_eq!(harness.recorder.attempts(), 3);
     assert_eq!(
         harness.recorder.failures(),
@@ -82,7 +82,7 @@ async fn a_script_is_played_through_a_run_and_the_run_counts_what_it_stated() {
     assert_eq!(turns[0].tool_calls()[0].status, ToolCallStatus::Unknown);
     assert_eq!(turns[1].record().attempts, 1);
     assert_eq!(turns[1].record().latency_ms, 120);
-    assert_eq!(finished.summary.provider_latency_total_ms, 410);
+    assert_eq!(finished.summary.provider.latency.total_ms(), 410);
 }
 
 #[tokio::test(start_paused = true)]
@@ -117,7 +117,7 @@ async fn a_run_that_outlasts_its_script_ends_as_a_provider_error_that_says_what_
         2,
         "the attempt the script couldn't answer is the run's last, though it had retries left"
     );
-    assert_eq!(finished.summary.provider_retries, 0);
+    assert_eq!(finished.summary.provider.retries, 0);
     assert_eq!(
         harness.recorder.failures(),
         [(outcome.error().unwrap().to_owned(), 0, None)]

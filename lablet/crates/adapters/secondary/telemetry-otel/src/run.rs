@@ -26,7 +26,7 @@ use crate::signal::{Ended, Happened, Record, Signals, Span, instant, traceparent
 
 /// The name of the agent, which is `gen_ai.agent.name` and the root span's
 /// name after its operation.
-const AGENT: &str = "lablet";
+pub(crate) const AGENT: &str = "lablet";
 
 /// The three operations a run's spans are of, as `gen_ai.operation.name`
 /// spells them. Each is the first word of its span's name.
@@ -96,16 +96,7 @@ pub(crate) struct Closed {
     pub(crate) root: SpanId,
     /// When the run ended.
     pub(crate) at: SystemTime,
-    pub(crate) join: Attributes,
-    #[expect(
-        dead_code,
-        reason = "the wide event's attributes are mapped from it, and none of them is yet"
-    )]
     pub(crate) context: RunContext,
-    #[expect(
-        dead_code,
-        reason = "the wide event's attributes are mapped from it, and none of them is yet"
-    )]
     pub(crate) summary: RunSummary,
 }
 
@@ -561,7 +552,6 @@ impl OpenRun {
             trace: self.trace,
             root: self.root,
             at: end,
-            join: self.join,
             context,
             summary,
         };

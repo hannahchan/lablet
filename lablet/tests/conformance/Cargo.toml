@@ -9,13 +9,16 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+async-trait.workspace = true
+lablet-model.workspace = true
+lablet-policy.workspace = true
+lablet-provider-fake.workspace = true
+lablet-run.workspace = true
+lablet-telemetry-registry.workspace = true
 opentelemetry-proto.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-
-[dev-dependencies]
-lablet-model.workspace = true
-lablet-telemetry-registry.workspace = true
+tokio.workspace = true
 
 [[test]]
 name = "it"

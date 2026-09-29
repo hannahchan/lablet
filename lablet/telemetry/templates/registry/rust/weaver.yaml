@@ -44,15 +44,31 @@ templates:
       | sort_by(.key)
     application_mode: single
     file_name: enums.rs
+  # The wide event is one row, filled from one value by one match, so its keys
+  # are an enum as well as a list: a key the registry gains is a variant the
+  # match doesn't cover. A template's key has a suffix, so the templates are
+  # an enum of their own.
   - template: signals.rs.j2
     filter: >
       def keys: {
         required: [.attributes[] | select(.requirement_level == "required") | .key],
         all: [.attributes[].key]
       };
+      def is_template: .type | type == "string" and startswith("template[");
+      def level: .requirement_level
+        | if type == "object" then "Conditionally required: " + .conditionally_required
+          elif . == "opt_in" then "Opt-in."
+          else "Required."
+          end;
+      def row: {
+        id: .name,
+        keys: [.attributes[] | select(is_template | not) | {key: .key, level: level}],
+        templates: [.attributes[] | select(is_template) | {key: .key, level: level}]
+      };
       {
         spans: [.registry.spans[] | {id: .type, kind: .kind, name: .name.note} + keys],
-        events: [.registry.events[] | {id: .name} + keys]
+        events: [.registry.events[] | {id: .name} + keys],
+        rows: [.registry.events[] | select(.name == "lablet.run") | row]
       }
     application_mode: single
     file_name: signals.rs

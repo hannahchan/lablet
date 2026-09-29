@@ -1,6 +1,8 @@
 //! The attributes of one span or log record, held to the one limit on how
 //! long a value may be.
 
+use std::borrow::Cow;
+
 use opentelemetry::logs::{AnyValue, LogRecord as _};
 use opentelemetry::{Array, KeyValue, StringValue, Value};
 use opentelemetry_sdk::logs::SdkLogRecord;
@@ -102,14 +104,28 @@ impl Held {
 
 /// The attributes of one signal, in the order they were given.
 ///
-/// A key is a constant of the registry crate, which is why it's `'static`.
+/// A key is a constant of the registry crate, which is why it's `'static`,
+/// or such a constant and a suffix, when the constant is a template's.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct Attributes(Vec<(&'static str, Held)>);
+pub(crate) struct Attributes(Vec<(Cow<'static, str>, Held)>);
 
 impl Attributes {
     /// These and `key`, holding `value`.
     pub(crate) fn with(mut self, key: &'static str, value: impl Into<Held>) -> Self {
-        self.0.push((key, value.into().bounded()));
+        self.0.push((Cow::Borrowed(key), value.into().bounded()));
+        self
+    }
+
+    /// These and the key of the template `prefix` for `suffix`, holding
+    /// `value`. A template's key is its prefix, a dot, and the suffix.
+    pub(crate) fn with_under(
+        mut self,
+        prefix: &'static str,
+        suffix: &str,
+        value: impl Into<Held>,
+    ) -> Self {
+        let key = format!("{prefix}.{suffix}");
+        self.0.push((Cow::Owned(key), value.into().bounded()));
         self
     }
 
@@ -170,8 +186,8 @@ impl Attributes {
 #[cfg(test)]
 impl Attributes {
     /// The keys, in the order they were given, each as often as it was.
-    pub(crate) fn keys(&self) -> Vec<&'static str> {
-        self.0.iter().map(|(key, _)| *key).collect()
+    pub(crate) fn keys(&self) -> Vec<&str> {
+        self.0.iter().map(|(key, _)| key.as_ref()).collect()
     }
 
     /// What `key` holds; `None` when it's not among these.
@@ -179,6 +195,14 @@ impl Attributes {
         self.0
             .iter()
             .find_map(|(held, value)| (*held == key).then_some(value))
+    }
+
+    /// Each key and what it holds, in the order they were given.
+    pub(crate) fn pairs(&self) -> Vec<(&str, &Held)> {
+        self.0
+            .iter()
+            .map(|(key, held)| (key.as_ref(), held))
+            .collect()
     }
 }
 

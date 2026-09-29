@@ -68,7 +68,8 @@ events:
       - ref: lablet.tools.count
         requirement_level: required
       - ref: lablet.mcp.servers
-        requirement_level: required
+        requirement_level:
+          conditionally_required: If the run has MCP servers.
       - ref: lablet.mcp.server_versions
         requirement_level:
           conditionally_required: If the run has MCP servers.

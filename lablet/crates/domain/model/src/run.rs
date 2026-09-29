@@ -14,12 +14,13 @@ use std::time::Duration;
 use futures_util::StreamExt as _;
 use futures_util::stream::FuturesUnordered;
 
+use crate::totals::sum;
 use crate::whole_ms;
 use crate::{
-    Answer, Calls, CompletionMode, Cost, Endpoint, FinishedRun, Message, ModelRef, OutcomeParts,
-    ProviderResponse, Rates, RequestParams, RunId, RunLabels, RunOutcome, RunSummary, StopReason,
-    TaskResult, ToolConcurrency, ToolInput, ToolName, ToolUse, Transcript, Turn, Usage,
-    UserContent,
+    Answer, Calls, CompletionMode, Cost, Endpoint, FinishedRun, Latency, Message, ModelRef,
+    OutcomeParts, PromptSizes, ProviderResponse, ProviderTotals, Rates, RequestParams, RunId,
+    RunLabels, RunOutcome, RunSummary, StopReason, TaskResult, ToolCallOutcome, ToolCallTotals,
+    ToolConcurrency, ToolInput, ToolName, ToolStats, ToolUse, Transcript, Turn, Usage, UserContent,
 };
 
 /// What the loop knows about a run before its first provider call, the
@@ -157,8 +158,8 @@ pub struct Run {
     input: Vec<UserContent>,
     /// Failed attempts of the provider call in progress.
     failed_attempts: u32,
-    failed_latency_total_ms: u64,
-    failed_latency_max_ms: u64,
+    /// How long the failed attempts of every call took.
+    failed_latency: Latency,
     /// What the failed attempts of every call reported using, and `None`
     /// when none reported anything.
     failed_usage: Option<Usage>,
@@ -174,8 +175,7 @@ impl Run {
             transcript: Transcript::new(prompts.system),
             input: vec![UserContent::Text(prompts.task)],
             failed_attempts: 0,
-            failed_latency_total_ms: 0,
-            failed_latency_max_ms: 0,
+            failed_latency: Latency::default(),
             failed_usage: None,
         }
     }
@@ -217,10 +217,7 @@ impl Run {
             latency_ms: whole_ms(latency),
         };
         self.failed_attempts = self.failed_attempts.saturating_add(1);
-        self.failed_latency_total_ms = self
-            .failed_latency_total_ms
-            .saturating_add(attempt.latency_ms);
-        self.failed_latency_max_ms = self.failed_latency_max_ms.max(attempt.latency_ms);
+        self.failed_latency = self.failed_latency + Latency::of(attempt.latency_ms);
         if let Some(usage) = usage {
             self.failed_usage = Some(self.failed() + usage);
         }
@@ -347,18 +344,24 @@ impl Run {
             setup,
             transcript,
             failed_attempts,
-            failed_latency_total_ms,
-            failed_latency_max_ms,
+            failed_latency,
             failed_usage,
             input,
         } = self;
-        let prompt = transcript.turns().first().map_or(&*input, Turn::input);
-        let tool_calls = transcript
-            .turns()
+        let recorded = transcript.turns();
+        let prompt = recorded.first().map_or(&*input, Turn::input);
+        let counted = || recorded.iter().flat_map(Turn::counted);
+        // What the attempts that failed add: the latency of every one, and
+        // the retries of the call that no response followed. The attempts
+        // of a call that was answered are counted by its turn's record.
+        let failed = ProviderTotals {
+            retries: u64::from(failed_attempts.saturating_sub(1)),
+            latency: failed_latency,
+        };
+        let answered = recorded
             .iter()
-            .map(|turn| turn.counted().count() as u64)
-            .sum();
-        let mut summary = RunSummary {
+            .map(|turn| ProviderTotals::of(turn.record()));
+        let summary = RunSummary {
             model: setup.model,
             endpoint: setup.endpoint,
             tools: setup.tools,
@@ -366,23 +369,21 @@ impl Run {
             max_turns: setup.max_turns,
             timeout_ms: whole_ms(setup.timeout),
             request: setup.request,
-            prompt_system_bytes: transcript.system().len() as u64,
-            prompt_user_bytes: UserContent::bytes(prompt),
-            prompt_tools_bytes: setup.tools_bytes,
+            prompt: PromptSizes {
+                system_bytes: transcript.system().len() as u64,
+                user_bytes: UserContent::bytes(prompt),
+                tools_bytes: setup.tools_bytes,
+            },
             tools_digest: setup.tools_digest,
             system_prompt_digest: setup.system_prompt_digest,
             failed_usage,
-            provider_retries: u64::from(failed_attempts.saturating_sub(1)),
-            provider_latency_total_ms: failed_latency_total_ms,
-            provider_latency_max_ms: failed_latency_max_ms,
-            finish_reasons: Vec::new(),
-            tool_calls_errors: 0,
-            tool_calls_unknown: 0,
-            tool_latency_total_ms: 0,
-            tool_input_bytes: 0,
-            tool_output_bytes: 0,
-            tool_calls_truncated: 0,
-            per_tool: BTreeMap::new(),
+            provider: failed + sum(answered),
+            finish_reasons: recorded
+                .iter()
+                .map(|turn| turn.record().finish.clone())
+                .collect(),
+            tool_calls: sum(counted().map(|(call, outcome)| ToolCallTotals::of(call, outcome))),
+            per_tool: per_tool(counted()),
             rates,
             cost,
             outcome: RunOutcome::closing(OutcomeParts {
@@ -391,7 +392,7 @@ impl Run {
                 stop_reason: stop,
                 turns: turns(&transcript),
                 usage: transcript.usage(),
-                tool_calls,
+                tool_calls: counted().count() as u64,
                 duration_ms: whole_ms(duration),
                 result: TaskResult {
                     text: transcript.final_text(),
@@ -400,9 +401,6 @@ impl Run {
                 error,
             }),
         };
-        for turn in transcript.turns() {
-            summary.add_turn(turn);
-        }
         FinishedRun {
             summary,
             transcript,
@@ -651,6 +649,22 @@ impl Pending {
         run.transcript.push(turn);
         run
     }
+}
+
+/// Each tool's share of `calls`, by the name it was called by. A call that
+/// named a tool the run didn't offer adds to no share: the model can call any
+/// name, and the shares are what the per-tool keys of the wide event are made
+/// from.
+fn per_tool<'a>(
+    calls: impl Iterator<Item = (&'a ToolUse, &'a ToolCallOutcome)>,
+) -> BTreeMap<ToolName, ToolStats> {
+    calls
+        .filter(|(_, outcome)| outcome.status.names_an_offered_tool())
+        .fold(BTreeMap::new(), |mut shares, (call, outcome)| {
+            let share = shares.entry(call.name.clone()).or_default();
+            *share = *share + ToolStats::of(outcome);
+            shares
+        })
 }
 
 /// A run's turns are the model responses it received, so a run whose first

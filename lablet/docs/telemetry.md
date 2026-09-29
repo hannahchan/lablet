@@ -28,7 +28,8 @@ Captured content is a JSON string in the form the GenAI conventions give its att
 - **Every `lablet.*` attribute is justified.** Its entry in the registry has a note that opens with `Justification:` and says why no convention covers it. The reference shows the note beside the attribute, and `cargo xtask weaver check` fails an entry without one.
 - **Every attribute on a signal has a requirement level.** Required attributes are always present. A conditionally required one states its condition. Captured content is opt-in, and absent rather than blanked when capture is off.
 - **Only raw values.** Counts, bytes, tokens, and durations in milliseconds. Ratios and averages belong to whoever aggregates.
-- **Flat shape.** No nested maps. Per-tool values are template attributes such as `lablet.tool.calls.<tool name>`.
+- **Flat shape.** No nested maps. Per-tool values are template attributes such as `lablet.tool.calls.<tool name>`. The wide event has them for a tool the run offered and called, so the names in `lablet.tools.names` bound the keys.
+- **Absent, never blank.** An attribute whose condition doesn't hold of a run is left out: the turn cap of a run without one, the cost of a run that isn't priced, a count the provider didn't report. A `0` is a count of zero.
 
 A rename in the conventions lablet depends on is a breaking change to this contract, as is any change to a `lablet.*` attribute, and both get a `CHANGELOG.md` entry.
 
@@ -37,7 +38,7 @@ A rename in the conventions lablet depends on is a breaking change to this contr
 1. Look for a semantic-convention attribute first, in the vendored registries under `lablet/telemetry/deps/`.
 2. Edit the registry: a new `lablet.*` attribute goes in `attributes.yaml` with its justification, and every span or event that carries it refers to it with a requirement level.
 3. Run `cargo xtask weaver check`, then `cargo xtask weaver generate`, which writes the `lablet-telemetry-registry` crate and the reference again.
-4. Use the generated constant in the code. Attribute names never appear as string literals.
+4. Use the generated constant in the code. Attribute names never appear as string literals. An attribute added to `lablet.run` is a new variant of the generated `EventLabletRunKey`, and the build fails until the observer's match over that enum says what the attribute holds.
 5. Add an entry under `Unreleased` in `CHANGELOG.md`.
 
 `cargo xtask pre-commit` runs the check and fails when the generated files are out of date.

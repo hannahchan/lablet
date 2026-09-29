@@ -58,48 +58,48 @@ Emitted once, after the run ends and whatever the stop reason, in the trace cont
 | `gen_ai.usage.input_tokens` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Input tokens summed over every successful provider call, cached tokens included. [7] | `100` |
 | `gen_ai.usage.output_tokens` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Output tokens summed over every successful provider call. [8] | `180` |
 | [`lablet.config.digest`](/lablet/docs/telemetry/lablet/README.md#lablet-config-digest) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | SHA-256 of the resolved config, in hex. [9] | `9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08` |
-| [`lablet.mcp.servers`](/lablet/docs/telemetry/lablet/README.md#lablet-mcp-servers) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string[] | Names of the configured MCP servers. [10] | `["docs", "search"]` |
-| [`lablet.prompt.system_bytes`](/lablet/docs/telemetry/lablet/README.md#lablet-prompt-system-bytes) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Size of the system prompt in bytes, skills included. [11] | `2048` |
-| [`lablet.prompt.system_digest`](/lablet/docs/telemetry/lablet/README.md#lablet-prompt-system-digest) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | SHA-256 of the system prompt as it was sent, in hex. [12] | `dbc1b4c900ffe48d575b5da5c638040125f65db0fe3e24494b76ea986457d986` |
-| [`lablet.prompt.tools_bytes`](/lablet/docs/telemetry/lablet/README.md#lablet-prompt-tools-bytes) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Size of the tool specs in bytes, as the run offered them. [13] | `3120` |
-| [`lablet.prompt.user_bytes`](/lablet/docs/telemetry/lablet/README.md#lablet-prompt-user-bytes) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Size of the task prompt in bytes. [14] | `512` |
-| [`lablet.provider.latency_ms.max`](/lablet/docs/telemetry/lablet/README.md#lablet-provider-latency-ms-max) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Latency of the slowest provider call attempt, in milliseconds. [15] | `9800` |
-| [`lablet.provider.latency_ms.total`](/lablet/docs/telemetry/lablet/README.md#lablet-provider-latency-ms-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the latencies of every provider call attempt, in milliseconds. [16] | `41200` |
-| [`lablet.provider.retries`](/lablet/docs/telemetry/lablet/README.md#lablet-provider-retries) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of provider call attempts made beyond the first of their call. [17] | `1` |
-| [`lablet.request.api`](/lablet/docs/telemetry/lablet/README.md#lablet-request-api) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The API the run reached its model through. [18] | `messages`; `responses` |
-| [`lablet.request.cache_scope`](/lablet/docs/telemetry/lablet/README.md#lablet-request-cache-scope) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | Which runs share what the provider caches of the run's requests. [19] | `shared`; `run` |
-| [`lablet.request.reasoning_replayed`](/lablet/docs/telemetry/lablet/README.md#lablet-request-reasoning-replayed) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | boolean | Whether the reasoning of earlier responses was sent back on later calls. [20] | `true` |
-| [`lablet.request.thinking`](/lablet/docs/telemetry/lablet/README.md#lablet-request-thinking) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | How the model was asked to reason, as the config spells it. [21] | `adaptive:summarized`; `budget:2048` |
-| [`lablet.result.has_structured`](/lablet/docs/telemetry/lablet/README.md#lablet-result-has-structured) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | boolean | Whether the run produced a structured result, the `task_complete` argument. [22] | `true` |
-| [`lablet.result.text_bytes`](/lablet/docs/telemetry/lablet/README.md#lablet-result-text-bytes) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Size of the final assistant text in bytes. [23] | `834` |
-| [`lablet.run.completion_mode`](/lablet/docs/telemetry/lablet/README.md#lablet-run-completion-mode) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | How the run decides that the model has finished. [24] | `natural`; `explicit` |
-| [`lablet.run.duration_ms`](/lablet/docs/telemetry/lablet/README.md#lablet-run-duration-ms) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Wall-clock duration of the run, in milliseconds. [25] | `12345` |
-| [`lablet.run.stop_reason`](/lablet/docs/telemetry/lablet/README.md#lablet-run-stop-reason) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | Why the run ended. [26] | `completed`; `max_turns` |
-| [`lablet.run.timeout_ms`](/lablet/docs/telemetry/lablet/README.md#lablet-run-timeout-ms) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | The configured run timeout, in milliseconds. [27] | `600000` |
-| [`lablet.run.turns`](/lablet/docs/telemetry/lablet/README.md#lablet-run-turns) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of turns the run took. [28] | `7` |
-| [`lablet.skills.count`](/lablet/docs/telemetry/lablet/README.md#lablet-skills-count) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of skill files appended to the system prompt. [29] | `2` |
-| [`lablet.telemetry.dropped_records`](/lablet/docs/telemetry/lablet/README.md#lablet-telemetry-dropped-records) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of spans and log records of the run that lablet's exporters refused or dropped before the wide event was made. [30] | `0` |
-| [`lablet.tool_calls.errors`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-errors) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls that returned an error result. [31] | `1` |
-| [`lablet.tool_calls.input_bytes.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-input-bytes-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the sizes of every tool call's input, in bytes. [32] | `1820` |
-| [`lablet.tool_calls.latency_ms.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-latency-ms-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the latencies of every tool call, in milliseconds. [33] | `3100` |
-| [`lablet.tool_calls.output_bytes.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-output-bytes-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the sizes of every tool call's output, in bytes. [34] | `56012` |
-| [`lablet.tool_calls.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls executed. The intercepted `task_complete` call isn't one, and neither is a call that was never run. [35] | `5` |
-| [`lablet.tool_calls.truncated`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-truncated) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls whose output the output cap cut short. [36] | `0` |
-| [`lablet.tool_calls.unknown`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-unknown) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls that named a tool the run didn't offer. [37] | `0` |
-| [`lablet.tools.count`](/lablet/docs/telemetry/lablet/README.md#lablet-tools-count) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tools offered to the model. [38] | `3` |
-| [`lablet.tools.digest`](/lablet/docs/telemetry/lablet/README.md#lablet-tools-digest) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | SHA-256 of the tool specs as the run offered them, in hex. [39] | `4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a` |
-| [`lablet.tools.names`](/lablet/docs/telemetry/lablet/README.md#lablet-tools-names) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string[] | Names of the tools offered to the model, after the allow and deny lists. [40] | `["bash", "read_file", "write_file"]` |
+| [`lablet.prompt.system_bytes`](/lablet/docs/telemetry/lablet/README.md#lablet-prompt-system-bytes) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Size of the system prompt in bytes, skills included. [10] | `2048` |
+| [`lablet.prompt.system_digest`](/lablet/docs/telemetry/lablet/README.md#lablet-prompt-system-digest) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | SHA-256 of the system prompt as it was sent, in hex. [11] | `dbc1b4c900ffe48d575b5da5c638040125f65db0fe3e24494b76ea986457d986` |
+| [`lablet.prompt.tools_bytes`](/lablet/docs/telemetry/lablet/README.md#lablet-prompt-tools-bytes) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Size of the tool specs in bytes, as the run offered them. [12] | `3120` |
+| [`lablet.prompt.user_bytes`](/lablet/docs/telemetry/lablet/README.md#lablet-prompt-user-bytes) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Size of the task prompt in bytes. [13] | `512` |
+| [`lablet.provider.latency_ms.max`](/lablet/docs/telemetry/lablet/README.md#lablet-provider-latency-ms-max) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Latency of the slowest provider call attempt, in milliseconds. [14] | `9800` |
+| [`lablet.provider.latency_ms.total`](/lablet/docs/telemetry/lablet/README.md#lablet-provider-latency-ms-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the latencies of every provider call attempt, in milliseconds. [15] | `41200` |
+| [`lablet.provider.retries`](/lablet/docs/telemetry/lablet/README.md#lablet-provider-retries) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of provider call attempts made beyond the first of their call. [16] | `1` |
+| [`lablet.request.api`](/lablet/docs/telemetry/lablet/README.md#lablet-request-api) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The API the run reached its model through. [17] | `messages`; `responses` |
+| [`lablet.request.cache_scope`](/lablet/docs/telemetry/lablet/README.md#lablet-request-cache-scope) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | Which runs share what the provider caches of the run's requests. [18] | `shared`; `run` |
+| [`lablet.request.reasoning_replayed`](/lablet/docs/telemetry/lablet/README.md#lablet-request-reasoning-replayed) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | boolean | Whether the reasoning of earlier responses was sent back on later calls. [19] | `true` |
+| [`lablet.request.thinking`](/lablet/docs/telemetry/lablet/README.md#lablet-request-thinking) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | How the model was asked to reason, as the config spells it. [20] | `adaptive:summarized`; `budget:2048` |
+| [`lablet.result.has_structured`](/lablet/docs/telemetry/lablet/README.md#lablet-result-has-structured) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | boolean | Whether the run produced a structured result, the `task_complete` argument. [21] | `true` |
+| [`lablet.result.text_bytes`](/lablet/docs/telemetry/lablet/README.md#lablet-result-text-bytes) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Size of the final assistant text in bytes. [22] | `834` |
+| [`lablet.run.completion_mode`](/lablet/docs/telemetry/lablet/README.md#lablet-run-completion-mode) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | How the run decides that the model has finished. [23] | `natural`; `explicit` |
+| [`lablet.run.duration_ms`](/lablet/docs/telemetry/lablet/README.md#lablet-run-duration-ms) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Wall-clock duration of the run, in milliseconds. [24] | `12345` |
+| [`lablet.run.stop_reason`](/lablet/docs/telemetry/lablet/README.md#lablet-run-stop-reason) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | Why the run ended. [25] | `completed`; `max_turns` |
+| [`lablet.run.timeout_ms`](/lablet/docs/telemetry/lablet/README.md#lablet-run-timeout-ms) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | The configured run timeout, in milliseconds. [26] | `600000` |
+| [`lablet.run.turns`](/lablet/docs/telemetry/lablet/README.md#lablet-run-turns) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of turns the run took. [27] | `7` |
+| [`lablet.skills.count`](/lablet/docs/telemetry/lablet/README.md#lablet-skills-count) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of skill files appended to the system prompt. [28] | `2` |
+| [`lablet.telemetry.dropped_records`](/lablet/docs/telemetry/lablet/README.md#lablet-telemetry-dropped-records) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of spans and log records of the run that lablet's exporters refused or dropped before the wide event was made. [29] | `0` |
+| [`lablet.tool_calls.errors`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-errors) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls that returned an error result. [30] | `1` |
+| [`lablet.tool_calls.input_bytes.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-input-bytes-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the sizes of every tool call's input, in bytes. [31] | `1820` |
+| [`lablet.tool_calls.latency_ms.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-latency-ms-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the latencies of every tool call, in milliseconds. [32] | `3100` |
+| [`lablet.tool_calls.output_bytes.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-output-bytes-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the sizes of every tool call's output, in bytes. [33] | `56012` |
+| [`lablet.tool_calls.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls executed. The intercepted `task_complete` call isn't one, and neither is a call that was never run. [34] | `5` |
+| [`lablet.tool_calls.truncated`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-truncated) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls whose output the output cap cut short. [35] | `0` |
+| [`lablet.tool_calls.unknown`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-unknown) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls that named a tool the run didn't offer. [36] | `0` |
+| [`lablet.tools.count`](/lablet/docs/telemetry/lablet/README.md#lablet-tools-count) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tools offered to the model. [37] | `3` |
+| [`lablet.tools.digest`](/lablet/docs/telemetry/lablet/README.md#lablet-tools-digest) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | SHA-256 of the tool specs as the run offered them, in hex. [38] | `4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a` |
+| [`lablet.tools.names`](/lablet/docs/telemetry/lablet/README.md#lablet-tools-names) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string[] | Names of the tools offered to the model, after the allow and deny lists. [39] | `["bash", "read_file", "write_file"]` |
 | `session.id` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The run id, for backends that group by session. | `00112233-4455-6677-8899-aabbccddeeff` |
-| `error.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | `Conditionally Required` If the stop reason isn't `completed`. | string | The stop reason, when the run didn't complete. [41] | `timeout`; `java.net.UnknownHostException`; `server_certificate_invalid`; `500` |
-| `gen_ai.request.reasoning.level` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If `model.effort` is set. | string | The reasoning or thinking effort level requested for a GenAI model. [42] | `low`; `medium`; `high` |
+| `error.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | `Conditionally Required` If the stop reason isn't `completed`. | string | The stop reason, when the run didn't complete. [40] | `timeout`; `java.net.UnknownHostException`; `server_certificate_invalid`; `500` |
+| `gen_ai.request.reasoning.level` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If `model.effort` is set. | string | The reasoning or thinking effort level requested for a GenAI model. [41] | `low`; `medium`; `high` |
 | `gen_ai.request.seed` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If `model.seed` is set. | int | Requests with same seed value more likely to return same result. | `100` |
 | `gen_ai.request.temperature` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If `model.temperature` is set. | double | The temperature setting for the GenAI request. | `0.0` |
-| `gen_ai.usage.cache_read.input_tokens` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If a successful provider call reported the count. | int | The number of input tokens served from a provider-managed cache. [43] | `50` |
-| `gen_ai.usage.cache_write.input_tokens` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If a successful provider call reported the count. | int | The number of input tokens written to a provider-managed cache. [44] | `25` |
-| `gen_ai.usage.reasoning.output_tokens` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If a successful provider call reported the count. | int | The part of the output tokens spent on reasoning, summed over every successful provider call. A part of `gen_ai.usage.output_tokens`, never added to it. [45] | `50` |
-| [`lablet.experiment.id`](/lablet/docs/telemetry/lablet/README.md#lablet-experiment-id) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the run request named an experiment. | string | The experiment the run is part of, as the run request named it. [46] | `tool-descriptions-v2` |
-| [`lablet.mcp.lifetime`](/lablet/docs/telemetry/lablet/README.md#lablet-mcp-lifetime) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the run has MCP servers. | string | How long the run's MCP servers live. [47] | `run`; `lablet` |
-| [`lablet.mcp.server_versions`](/lablet/docs/telemetry/lablet/README.md#lablet-mcp-server-versions) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the run has MCP servers. | string[] | The version each MCP server gave of itself when it started, in the order of `lablet.mcp.servers`. [48] | `["1.4.0", "0.9.2"]` |
+| `gen_ai.usage.cache_read.input_tokens` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If a successful provider call reported the count. | int | The number of input tokens served from a provider-managed cache. [42] | `50` |
+| `gen_ai.usage.cache_write.input_tokens` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If a successful provider call reported the count. | int | The number of input tokens written to a provider-managed cache. [43] | `25` |
+| `gen_ai.usage.reasoning.output_tokens` | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If a successful provider call reported the count. | int | The part of the output tokens spent on reasoning, summed over every successful provider call. A part of `gen_ai.usage.output_tokens`, never added to it. [44] | `50` |
+| [`lablet.experiment.id`](/lablet/docs/telemetry/lablet/README.md#lablet-experiment-id) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the run request named an experiment. | string | The experiment the run is part of, as the run request named it. [45] | `tool-descriptions-v2` |
+| [`lablet.mcp.lifetime`](/lablet/docs/telemetry/lablet/README.md#lablet-mcp-lifetime) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the run has MCP servers. | string | How long the run's MCP servers live. [46] | `run`; `lablet` |
+| [`lablet.mcp.server_versions`](/lablet/docs/telemetry/lablet/README.md#lablet-mcp-server-versions) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the run has MCP servers. | string[] | The version each MCP server gave of itself when it started, in the order of `lablet.mcp.servers`. [47] | `["1.4.0", "0.9.2"]` |
+| [`lablet.mcp.servers`](/lablet/docs/telemetry/lablet/README.md#lablet-mcp-servers) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If the run has MCP servers. | string[] | Names of the configured MCP servers. [48] | `["docs", "search"]` |
 | [`lablet.pricing.cache_read_usd_per_mtok`](/lablet/docs/telemetry/lablet/README.md#lablet-pricing-cache-read-usd-per-mtok) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If `model.pricing` is configured. | double | The price of a million input tokens served from the prompt cache, in US dollars. [49] | `0.3` |
 | [`lablet.pricing.cache_write_usd_per_mtok`](/lablet/docs/telemetry/lablet/README.md#lablet-pricing-cache-write-usd-per-mtok) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If `model.pricing` is configured. | double | The price of a million input tokens written to the prompt cache, in US dollars. [50] | `3.75` |
 | [`lablet.pricing.input_usd_per_mtok`](/lablet/docs/telemetry/lablet/README.md#lablet-pricing-input-usd-per-mtok) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If `model.pricing` is configured. | double | The price of a million uncached input tokens, in US dollars. [51] | `3.0` |
@@ -196,69 +196,67 @@ value matches the units the customer is charged for.
 
 **[9] `lablet.config.digest`:** Justification: no convention identifies the configuration that produced a run, and grouping runs by configuration is what lablet's measurements are for.
 
-**[10] `lablet.mcp.servers`:** Justification: the `mcp.*` conventions describe one MCP call; none lists the servers an agent was configured with.
+**[10] `lablet.prompt.system_bytes`:** Justification: `gen_ai.system_instructions` is opt-in content; the size is needed when content isn't captured, and no convention carries it.
 
-**[11] `lablet.prompt.system_bytes`:** Justification: `gen_ai.system_instructions` is opt-in content; the size is needed when content isn't captured, and no convention carries it.
+**[11] `lablet.prompt.system_digest`:** Justification: `gen_ai.system_instructions` is opt-in content, and `lablet.config.digest` covers the path of a prompt file, not its text. The digest tells two runs apart whose prompts differ under one config.
 
-**[12] `lablet.prompt.system_digest`:** Justification: `gen_ai.system_instructions` is opt-in content, and `lablet.config.digest` covers the path of a prompt file, not its text. The digest tells two runs apart whose prompts differ under one config.
+**[12] `lablet.prompt.tools_bytes`:** Justification: `gen_ai.tool.definitions` is opt-in content; the size is needed when content isn't captured, and no convention carries it. It's the size of the bytes `lablet.tools.digest` is taken from, and a part of every `lablet.request.bytes`.
 
-**[13] `lablet.prompt.tools_bytes`:** Justification: `gen_ai.tool.definitions` is opt-in content; the size is needed when content isn't captured, and no convention carries it. It's the size of the bytes `lablet.tools.digest` is taken from, and a part of every `lablet.request.bytes`.
+**[13] `lablet.prompt.user_bytes`:** Justification: `gen_ai.input.messages` is opt-in content; the size is needed when content isn't captured, and no convention carries it.
 
-**[14] `lablet.prompt.user_bytes`:** Justification: `gen_ai.input.messages` is opt-in content; the size is needed when content isn't captured, and no convention carries it.
+**[14] `lablet.provider.latency_ms.max`:** Justification: the conventions record one operation's duration as a span or a histogram; a per-run maximum has no attribute.
 
-**[15] `lablet.provider.latency_ms.max`:** Justification: the conventions record one operation's duration as a span or a histogram; a per-run maximum has no attribute.
+**[15] `lablet.provider.latency_ms.total`:** Justification: the conventions record one operation's duration as a span or a histogram; a per-run sum has no attribute.
 
-**[16] `lablet.provider.latency_ms.total`:** Justification: the conventions record one operation's duration as a span or a histogram; a per-run sum has no attribute.
+**[16] `lablet.provider.retries`:** Justification: no convention counts repeated inference attempts across an agent run. A call that fails on its only attempt adds none.
 
-**[17] `lablet.provider.retries`:** Justification: no convention counts repeated inference attempts across an agent run. A call that fails on its only attempt adds none.
+**[17] `lablet.request.api`:** Justification: `openai.api.type` names two APIs of one provider, and `gen_ai.provider.name` says `openai` for both. One attribute has to say it for every provider, because two runs that reach one model through different APIs don't hand it the same conversation after the first call.
 
-**[18] `lablet.request.api`:** Justification: `openai.api.type` names two APIs of one provider, and `gen_ai.provider.name` says `openai` for both. One attribute has to say it for every provider, because two runs that reach one model through different APIs don't hand it the same conversation after the first call.
+**[18] `lablet.request.cache_scope`:** Justification: the conventions count cached tokens and say nothing of who may share a cache. A run that reads what another wrote costs less and answers sooner than it would have alone, so its cost and its first-call latency depend on the scope.
 
-**[19] `lablet.request.cache_scope`:** Justification: the conventions count cached tokens and say nothing of who may share a cache. A run that reads what another wrote costs less and answers sooner than it would have alone, so its cost and its first-call latency depend on the scope.
+**[19] `lablet.request.reasoning_replayed`:** Justification: no convention says what a client sends back of a model's reasoning. A model that isn't sent its reasoning reasons again on every turn, so two runs that differ in it differ in tokens and in behaviour under one model name.
 
-**[20] `lablet.request.reasoning_replayed`:** Justification: no convention says what a client sends back of a model's reasoning. A model that isn't sent its reasoning reasons again on every turn, so two runs that differ in it differ in tokens and in behaviour under one model name.
+**[20] `lablet.request.thinking`:** Justification: `gen_ai.request.reasoning.level` carries the effort level and nothing carries the thinking mode or its token budget, which is the setting a run is most often varied by. Written `provider_default`, `adaptive`, `adaptive:summarized`, `budget:2048`, `budget:2048:summarized`, or `disabled`.
 
-**[21] `lablet.request.thinking`:** Justification: `gen_ai.request.reasoning.level` carries the effort level and nothing carries the thinking mode or its token budget, which is the setting a run is most often varied by. Written `provider_default`, `adaptive`, `adaptive:summarized`, `budget:2048`, `budget:2048:summarized`, or `disabled`.
+**[21] `lablet.result.has_structured`:** Justification: the structured result is a product of lablet's explicit completion mode, which the conventions don't describe.
 
-**[22] `lablet.result.has_structured`:** Justification: the structured result is a product of lablet's explicit completion mode, which the conventions don't describe.
+**[22] `lablet.result.text_bytes`:** Justification: `gen_ai.output.messages` is opt-in content; the size is needed when content isn't captured, and no convention carries it.
 
-**[23] `lablet.result.text_bytes`:** Justification: `gen_ai.output.messages` is opt-in content; the size is needed when content isn't captured, and no convention carries it.
+**[23] `lablet.run.completion_mode`:** Justification: the completion mode is a property of lablet's loop; the GenAI conventions don't describe how an agent decides that it's done.
 
-**[24] `lablet.run.completion_mode`:** Justification: the completion mode is a property of lablet's loop; the GenAI conventions don't describe how an agent decides that it's done.
+**[24] `lablet.run.duration_ms`:** Justification: a span has a duration but a log record has none, and the wide event must be readable without joining the root span.
 
-**[25] `lablet.run.duration_ms`:** Justification: a span has a duration but a log record has none, and the wide event must be readable without joining the root span.
+**[25] `lablet.run.stop_reason`:** Justification: `gen_ai.response.finish_reasons` describes one inference call and can't express a budget, a timeout, or a cancellation; the conventions have no per-run outcome.
 
-**[26] `lablet.run.stop_reason`:** Justification: `gen_ai.response.finish_reasons` describes one inference call and can't express a budget, a timeout, or a cancellation; the conventions have no per-run outcome.
+**[26] `lablet.run.timeout_ms`:** Justification: the GenAI conventions carry request parameters of one inference call, not the budgets of an agent loop.
 
-**[27] `lablet.run.timeout_ms`:** Justification: the GenAI conventions carry request parameters of one inference call, not the budgets of an agent loop.
+**[27] `lablet.run.turns`:** Justification: a turn is the loop's own unit, one provider response and its tool calls; the conventions count inference calls, which also include retries.
 
-**[28] `lablet.run.turns`:** Justification: a turn is the loop's own unit, one provider response and its tool calls; the conventions count inference calls, which also include retries.
+**[28] `lablet.skills.count`:** Justification: skills are a lablet config feature with no counterpart in the conventions.
 
-**[29] `lablet.skills.count`:** Justification: skills are a lablet config feature with no counterpart in the conventions.
+**[29] `lablet.telemetry.dropped_records`:** Justification: the conventions count what an SDK drops as metrics of the SDK, which a consumer of one run's record doesn't have. The count is on the run's one row so that a row whose spans or content are incomplete says so. The wide event is made once the run's other records have been flushed, and it isn't counted itself.
 
-**[30] `lablet.telemetry.dropped_records`:** Justification: the conventions count what an SDK drops as metrics of the SDK, which a consumer of one run's record doesn't have. The count is on the run's one row so that a row whose spans or content are incomplete says so. The wide event is made once the run's other records have been flushed, and it isn't counted itself.
+**[30] `lablet.tool_calls.errors`:** Justification: no convention counts the failed tool calls of an agent run.
 
-**[31] `lablet.tool_calls.errors`:** Justification: no convention counts the failed tool calls of an agent run.
+**[31] `lablet.tool_calls.input_bytes.total`:** Justification: `gen_ai.tool.call.arguments` is opt-in content; no convention carries its size, per call or per run.
 
-**[32] `lablet.tool_calls.input_bytes.total`:** Justification: `gen_ai.tool.call.arguments` is opt-in content; no convention carries its size, per call or per run.
+**[32] `lablet.tool_calls.latency_ms.total`:** Justification: the conventions record one tool call's duration as a span; a per-run sum has no attribute.
 
-**[33] `lablet.tool_calls.latency_ms.total`:** Justification: the conventions record one tool call's duration as a span; a per-run sum has no attribute.
+**[33] `lablet.tool_calls.output_bytes.total`:** Justification: `gen_ai.tool.call.result` is opt-in content; no convention carries its size, per call or per run.
 
-**[34] `lablet.tool_calls.output_bytes.total`:** Justification: `gen_ai.tool.call.result` is opt-in content; no convention carries its size, per call or per run.
+**[34] `lablet.tool_calls.total`:** Justification: no convention counts the tool calls of an agent run.
 
-**[35] `lablet.tool_calls.total`:** Justification: no convention counts the tool calls of an agent run.
+**[35] `lablet.tool_calls.truncated`:** Justification: no convention says that a tool's output was cut before the model saw it, per call or per run; the count tells a run whose tools outgrew the cap from one they fitted.
 
-**[36] `lablet.tool_calls.truncated`:** Justification: no convention says that a tool's output was cut before the model saw it, per call or per run; the count tells a run whose tools outgrew the cap from one they fitted.
+**[36] `lablet.tool_calls.unknown`:** Justification: the model can call any name, so these calls get no per-tool attribute and would otherwise be invisible in the per-tool breakdown; no convention counts them.
 
-**[37] `lablet.tool_calls.unknown`:** Justification: the model can call any name, so these calls get no per-tool attribute and would otherwise be invisible in the per-tool breakdown; no convention counts them.
+**[37] `lablet.tools.count`:** Justification: no convention counts the tools offered, and an array's length can't be aggregated in most backends.
 
-**[38] `lablet.tools.count`:** Justification: no convention counts the tools offered, and an array's length can't be aggregated in most backends.
+**[38] `lablet.tools.digest`:** Justification: `gen_ai.tool.definitions` is opt-in content, and `lablet.config.digest` can't see a tool's description, which a server supplies. The digest tells two runs apart that were offered different tools under one config. It's taken from each spec as compact JSON in lablet's own form, in the order offered, with nothing between them.
 
-**[39] `lablet.tools.digest`:** Justification: `gen_ai.tool.definitions` is opt-in content, and `lablet.config.digest` can't see a tool's description, which a server supplies. The digest tells two runs apart that were offered different tools under one config. It's taken from each spec as compact JSON in lablet's own form, in the order offered, with nothing between them.
+**[39] `lablet.tools.names`:** Justification: `gen_ai.tool.definitions` holds full definitions and is opt-in content; the names alone are needed on every run to compare tool sets.
 
-**[40] `lablet.tools.names`:** Justification: `gen_ai.tool.definitions` holds full definitions and is opt-in content; the names alone are needed on every run to compare tool sets.
-
-**[41] `error.type`:** The `error.type` SHOULD be predictable, and SHOULD have low cardinality.
+**[40] `error.type`:** The `error.type` SHOULD be predictable, and SHOULD have low cardinality.
 
 When `error.type` is set to a type (e.g., an exception type), its
 canonical class name identifying the type within the artifact SHOULD be used.
@@ -284,20 +282,22 @@ it's RECOMMENDED to:
 - Use a domain-specific attribute
 - Set `error.type` to capture all errors, regardless of whether they are defined within the domain-specific set or not.
 
-**[42] `gen_ai.request.reasoning.level`:** The value SHOULD be the exact string value sent to the provider.
+**[41] `gen_ai.request.reasoning.level`:** The value SHOULD be the exact string value sent to the provider.
 Semantic conventions for individual providers SHOULD document which input parameter maps to this attribute.
 
-**[43] `gen_ai.usage.cache_read.input_tokens`:** The value SHOULD be included in `gen_ai.usage.input_tokens`.
+**[42] `gen_ai.usage.cache_read.input_tokens`:** The value SHOULD be included in `gen_ai.usage.input_tokens`.
 
-**[44] `gen_ai.usage.cache_write.input_tokens`:** The value SHOULD be included in `gen_ai.usage.input_tokens`.
+**[43] `gen_ai.usage.cache_write.input_tokens`:** The value SHOULD be included in `gen_ai.usage.input_tokens`.
 
-**[45] `gen_ai.usage.reasoning.output_tokens`:** The value SHOULD be included in `gen_ai.usage.output_tokens`.
+**[44] `gen_ai.usage.reasoning.output_tokens`:** The value SHOULD be included in `gen_ai.usage.output_tokens`.
 
-**[46] `lablet.experiment.id`:** Justification: no convention names the comparison a run belongs to. It's what tells the runs of one comparison from the runs of another that attempt the same task.
+**[45] `lablet.experiment.id`:** Justification: no convention names the comparison a run belongs to. It's what tells the runs of one comparison from the runs of another that attempt the same task.
 
-**[47] `lablet.mcp.lifetime`:** Justification: no convention says whether a server outlived the run that used it. A server that does carries what one run left in it to the next, so two runs are comparable only when the record says which they had.
+**[46] `lablet.mcp.lifetime`:** Justification: no convention says whether a server outlived the run that used it. A server that does carries what one run left in it to the next, so two runs are comparable only when the record says which they had.
 
-**[48] `lablet.mcp.server_versions`:** Justification: the `mcp.*` conventions describe one MCP call and carry the protocol's version, not the server's. Two builds of a server started by one command offer different tools under one config, and the version is what says which build a run had.
+**[47] `lablet.mcp.server_versions`:** Justification: the `mcp.*` conventions describe one MCP call and carry the protocol's version, not the server's. Two builds of a server started by one command offer different tools under one config, and the version is what says which build a run had.
+
+**[48] `lablet.mcp.servers`:** Justification: the `mcp.*` conventions describe one MCP call; none lists the servers an agent was configured with.
 
 **[49] `lablet.pricing.cache_read_usd_per_mtok`:** Justification: as `lablet.pricing.input_usd_per_mtok`.
 

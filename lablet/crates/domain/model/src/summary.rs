@@ -6,8 +6,9 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 
 use crate::{
-    CompletionMode, Cost, Endpoint, FinishReason, McpServers, ModelRef, Rates, RequestParams,
-    RunId, RunLabels, RunOutcome, ToolName, Transcript, Turn, Usage,
+    CompletionMode, Cost, Endpoint, FinishReason, McpServers, ModelRef, ProviderTotals, Rates,
+    RequestParams, RunId, RunLabels, RunOutcome, ToolCallTotals, ToolName, ToolStats, Transcript,
+    Usage,
 };
 
 /// What only the composition root knows about a run: its part of the wide
@@ -47,26 +48,35 @@ pub struct RunContext {
     pub capture_content: bool,
 }
 
-/// One tool's share of a run.
+/// The sizes of what the model was shown before its first response, in
+/// bytes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub struct ToolStats {
-    /// How many times the tool was called.
-    pub calls: u64,
-    /// How many of those calls returned an error result.
-    pub errors: u64,
-    /// The summed latency of those calls, in whole milliseconds.
-    pub latency_ms: u64,
+pub struct PromptSizes {
+    /// The system prompt, skills included.
+    pub system_bytes: u64,
+    /// The task prompt.
+    pub user_bytes: u64,
+    /// The tool specs, as the loop measured them: each as compact JSON, in
+    /// the order they're offered.
+    pub tools_bytes: u64,
 }
 
 /// What the loop knew and measured over a run: its part of the wide event,
 /// built by [`crate::Run`].
 ///
-/// The run totals that the outcome carries (`usage`, `tool_calls`, `turns`,
-/// `duration_ms`, `stop_reason`, `error`) are read from `outcome` and aren't
-/// repeated here, so no two fields can disagree. Every total of tool calls,
-/// there and here, counts the calls something was started for
-/// ([`crate::ToolCallStatus::was_started`]): a call that was never run is in
-/// the transcript alone.
+/// The run totals that the outcome carries (its `usage`, its count of
+/// `tool_calls`, `turns`, `duration_ms`, `stop_reason`, `error`) are read
+/// from `outcome` and aren't repeated here, so no two fields can disagree.
+/// Every total of tool calls, there and here, counts the calls something was
+/// started for ([`crate::ToolCallStatus::was_started`]): a call that was
+/// never run is in the transcript alone.
+///
+/// The totals are grouped as the wide event names them: what's under
+/// `lablet.prompt` is in `prompt`, what's under `lablet.provider` in
+/// `provider`, and what's under `lablet.tool_calls` in `tool_calls`. The
+/// groups are for reading. Two numbers of one group can still be taken for
+/// each other, and what holds each to its attribute is the observer's match
+/// over the registry's keys, with the tests of what each key holds.
 ///
 /// It has no written form of its own: the wide event is a mapping of its
 /// fields to attributes, and the documents lablet writes are the outcome and
@@ -92,14 +102,10 @@ pub struct RunSummary {
     pub timeout_ms: u64,
     /// The request parameters every provider call shared.
     pub request: RequestParams,
-    /// Size of the system prompt in bytes, skills included.
-    pub prompt_system_bytes: u64,
-    /// Size of the task prompt in bytes.
-    pub prompt_user_bytes: u64,
-    /// Size of the tool specs in bytes, as the loop measured them: each as
-    /// compact JSON, in the order they're offered.
-    pub prompt_tools_bytes: u64,
-    /// SHA-256 of those bytes, in hex.
+    /// The sizes of what the model was shown before its first response.
+    pub prompt: PromptSizes,
+    /// SHA-256 of the tool specs, of the bytes `prompt.tools_bytes` counts,
+    /// in hex.
     pub tools_digest: String,
     /// SHA-256 of the system prompt as it was sent, in hex.
     pub system_prompt_digest: String,
@@ -107,28 +113,15 @@ pub struct RunSummary {
     /// and `None` when none reported anything. It's in no turn, so
     /// `outcome.usage` leaves it out, and the cost counts both.
     pub failed_usage: Option<Usage>,
-    /// How many provider call attempts were made beyond the first of their
-    /// call. A call that fails on its only attempt adds none.
-    pub provider_retries: u64,
-    /// The summed latency of every provider call attempt, in whole milliseconds.
-    pub provider_latency_total_ms: u64,
-    /// The latency of the slowest provider call attempt, in whole milliseconds.
-    pub provider_latency_max_ms: u64,
+    /// What every provider call attempt came to, the ones that failed
+    /// included.
+    pub provider: ProviderTotals,
     /// The finish reason of each completion, in call order.
     pub finish_reasons: Vec<FinishReason>,
-    /// How many tool calls returned an error result.
-    pub tool_calls_errors: u64,
-    /// How many tool calls named a tool the run didn't offer. They're in the
-    /// totals and have no entry in `per_tool`.
-    pub tool_calls_unknown: u64,
-    /// The summed latency of every tool call, in whole milliseconds.
-    pub tool_latency_total_ms: u64,
-    /// The summed size of every tool call's input, in bytes.
-    pub tool_input_bytes: u64,
-    /// The summed size of every tool call's output as the model was sent it, in bytes.
-    pub tool_output_bytes: u64,
-    /// How many tool calls had their output cut by the output cap.
-    pub tool_calls_truncated: u64,
+    /// What the tool calls came to, but for how many there were, which is
+    /// `outcome.tool_calls`. A call that named a tool the run didn't offer
+    /// is in these and has no entry in `per_tool`.
+    pub tool_calls: ToolCallTotals,
     /// Each called tool's share, by tool name. A key exists for each call
     /// that named a tool the run offered, whether or not the tool ran, so the
     /// keys are among `tools` in a run because the executor resolves only the
@@ -154,45 +147,6 @@ pub struct FinishedRun {
     pub summary: RunSummary,
     /// The whole conversation, whatever the stop reason.
     pub transcript: Transcript,
-}
-
-/// Raises a total by `amount`, saturating. One function, so no total is
-/// added up differently from the rest.
-fn add(total: &mut u64, amount: u64) {
-    *total = total.saturating_add(amount);
-}
-
-impl RunSummary {
-    /// Adds what `turn` holds to these totals.
-    pub(crate) fn add_turn(&mut self, turn: &Turn) {
-        let record = turn.record();
-        add(
-            &mut self.provider_retries,
-            u64::from(record.attempts.saturating_sub(1)),
-        );
-        add(&mut self.provider_latency_total_ms, record.latency_ms);
-        self.provider_latency_max_ms = self.provider_latency_max_ms.max(record.latency_ms);
-        self.finish_reasons.push(record.finish.clone());
-        for (call, outcome) in turn.counted() {
-            let errors = u64::from(outcome.status.is_error());
-            add(&mut self.tool_calls_errors, errors);
-            add(
-                &mut self.tool_calls_truncated,
-                u64::from(outcome.truncated_from_bytes.is_some()),
-            );
-            add(&mut self.tool_latency_total_ms, outcome.latency_ms);
-            add(&mut self.tool_input_bytes, call.input_bytes());
-            add(&mut self.tool_output_bytes, outcome.output_bytes());
-            if outcome.status.names_an_offered_tool() {
-                let stats = self.per_tool.entry(call.name.clone()).or_default();
-                add(&mut stats.calls, 1);
-                add(&mut stats.errors, errors);
-                add(&mut stats.latency_ms, outcome.latency_ms);
-            } else {
-                add(&mut self.tool_calls_unknown, 1);
-            }
-        }
-    }
 }
 
 #[cfg(test)]

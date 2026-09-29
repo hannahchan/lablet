@@ -481,7 +481,7 @@ async fn a_retryable_failure_is_tried_again_after_the_policy_s_backoff() {
         "the waits grow by the policy's factor and nothing else"
     );
     assert_eq!(
-        run.finished.summary.provider_retries, 2,
+        run.finished.summary.provider.retries, 2,
         "a retry is an attempt beyond the first of its call"
     );
     assert_eq!(run.turns(), 1);
@@ -521,7 +521,7 @@ async fn a_fatal_failure_is_not_tried_again() {
     assert_eq!(run.provider.calls(), 1);
     assert_eq!(run.clock.sleeps(), [], "nothing was waited for");
     assert_eq!(
-        run.finished.summary.provider_retries, 0,
+        run.finished.summary.provider.retries, 0,
         "a call that fails on its only attempt made no retry"
     );
 }
@@ -605,7 +605,7 @@ async fn a_tool_that_always_fails_never_stops_a_run_however_it_fails() {
         assert_eq!(run.error(), None, "{ended}");
         assert_eq!(run.turns(), 6, "{ended}");
         assert_eq!(run.provider.calls(), 6, "{ended}");
-        assert_eq!(run.finished.summary.tool_calls_errors, 5, "{ended}");
+        assert_eq!(run.finished.summary.tool_calls.errors, 5, "{ended}");
         let statuses: Vec<&ToolCallStatus> = run
             .finished
             .transcript
@@ -643,7 +643,7 @@ async fn an_executor_that_fails_sends_the_model_an_error_result_rather_than_endi
         outcome.status,
         ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Timeout)
     );
-    assert_eq!(run.finished.summary.tool_calls_errors, 1);
+    assert_eq!(run.finished.summary.tool_calls.errors, 1);
 }
 
 // E10: a name the run doesn't offer.
@@ -658,7 +658,7 @@ async fn a_call_to_a_name_the_run_does_not_offer_is_an_error_result_and_gets_no_
     .await;
 
     assert_eq!(run.stop_reason(), StopReason::Completed);
-    assert_eq!(run.finished.summary.tool_calls_unknown, 1);
+    assert_eq!(run.finished.summary.tool_calls.unknown, 1);
     assert_eq!(run.finished.summary.outcome.tool_calls, 2);
     assert_eq!(
         run.finished.summary.per_tool.keys().collect::<Vec<_>>(),
@@ -777,7 +777,7 @@ async fn an_output_over_the_cap_is_cut_to_its_start_and_one_that_fits_is_sent_wh
     let outcomes = run.finished.transcript.turns()[0].tool_calls();
     assert_eq!(outcomes[0].truncated_from_bytes, Some(16));
     assert_eq!(outcomes[1].truncated_from_bytes, None);
-    assert_eq!(run.finished.summary.tool_calls_truncated, 1);
+    assert_eq!(run.finished.summary.tool_calls.truncated, 1);
     for outcome in outcomes {
         assert_eq!(
             outcome.status,
@@ -785,7 +785,7 @@ async fn an_output_over_the_cap_is_cut_to_its_start_and_one_that_fits_is_sent_wh
             "the loop cut the output; the tool itself succeeded"
         );
     }
-    assert_eq!(run.finished.summary.tool_calls_errors, 0);
+    assert_eq!(run.finished.summary.tool_calls.errors, 0);
     assert_eq!(run.stop_reason(), StopReason::Completed);
 }
 
@@ -839,7 +839,7 @@ async fn an_observer_is_told_what_was_sent_of_each_output_and_how_large_a_cut_on
         ]
     );
     assert_eq!(
-        run.finished.summary.tool_output_bytes,
+        run.finished.summary.tool_calls.output_bytes,
         20 + line.len() as u64
     );
 }
@@ -858,7 +858,7 @@ async fn without_a_cap_nothing_is_cut_and_an_executor_is_told_to_keep_everything
     let outcomes = run.finished.transcript.turns()[0].tool_calls();
     assert_eq!(outcomes[0].truncated_from_bytes, None);
     assert_eq!(outcomes[1].truncated_from_bytes, None);
-    assert_eq!(run.finished.summary.tool_calls_truncated, 0);
+    assert_eq!(run.finished.summary.tool_calls.truncated, 0);
     let keeps: Vec<_> = tools.taken().iter().map(|call| call.keep).collect();
     assert_eq!(keeps, [None, None]);
     assert_eq!(tools.kept(), [16, 10]);
@@ -915,7 +915,7 @@ async fn an_error_result_is_cut_as_any_other_output_is() {
         .map(|outcome| outcome.status.as_str())
         .collect();
     assert_eq!(statuses, ["tool_error", "failed", "unknown"]);
-    assert_eq!(run.finished.summary.tool_calls_truncated, 3);
+    assert_eq!(run.finished.summary.tool_calls.truncated, 3);
 }
 
 // T13: the other two ways to cut, and an executor that keeps only what the
@@ -938,7 +938,7 @@ async fn head_tail_sends_both_ends_of_a_long_output_around_a_line_that_says_what
     let outcomes = run.finished.transcript.turns()[0].tool_calls();
     assert_eq!(outcomes[0].truncated_from_bytes, Some(16));
     assert_eq!(outcomes[1].truncated_from_bytes, None);
-    assert_eq!(run.finished.summary.tool_calls_truncated, 1);
+    assert_eq!(run.finished.summary.tool_calls.truncated, 1);
     assert_eq!(tools.kept(), [16, 10], "the executor held every byte");
 }
 
@@ -959,7 +959,7 @@ async fn preview_sends_a_few_bytes_of_a_long_output_and_a_line_that_says_how_lar
     let outcomes = run.finished.transcript.turns()[0].tool_calls();
     assert_eq!(outcomes[0].truncated_from_bytes, Some(16));
     assert_eq!(outcomes[1].truncated_from_bytes, None);
-    assert_eq!(run.finished.summary.tool_calls_truncated, 1);
+    assert_eq!(run.finished.summary.tool_calls.truncated, 1);
     assert_eq!(tools.kept(), [16, 10], "the executor held every byte");
 }
 
@@ -1439,7 +1439,7 @@ async fn a_tool_that_takes_time_is_reported_as_taking_it() {
         run.finished.transcript.turns()[0].tool_calls()[0].latency_ms,
         250
     );
-    assert_eq!(run.finished.summary.tool_latency_total_ms, 250);
+    assert_eq!(run.finished.summary.tool_calls.latency_ms, 250);
 }
 
 #[tokio::test]
@@ -1614,9 +1614,9 @@ async fn the_summary_is_the_sum_of_the_transcript_beside_it() {
     );
 
     // Every total is the sum over the turns it describes.
-    assert_eq!(summary.provider_retries, 1);
+    assert_eq!(summary.provider.retries, 1);
     assert_eq!(summary.outcome.tool_calls, 2);
-    assert_eq!(summary.tool_calls_errors, 1);
+    assert_eq!(summary.tool_calls.errors, 1);
     assert_eq!(
         summary.outcome.usage,
         turns
@@ -1676,7 +1676,7 @@ async fn the_retry_budget_starts_again_for_every_provider_call() {
 
     assert_eq!(run.stop_reason(), StopReason::Completed);
     assert_eq!(run.provider.calls(), 9);
-    assert_eq!(run.finished.summary.provider_retries, 6);
+    assert_eq!(run.finished.summary.provider.retries, 6);
     assert_eq!(run.turns(), 3);
 }
 
@@ -1730,7 +1730,7 @@ async fn a_malformed_response_is_tried_again() {
 
     assert_eq!(run.stop_reason(), StopReason::Completed);
     assert_eq!(run.provider.calls(), 2);
-    assert_eq!(run.finished.summary.provider_retries, 1);
+    assert_eq!(run.finished.summary.provider.retries, 1);
 }
 
 // E8: a name the run doesn't offer is an error result, and a turn that made
@@ -1777,7 +1777,7 @@ async fn a_turn_whose_only_call_names_no_tool_is_an_invalid_turn() {
     assert_eq!(run.stop_reason(), StopReason::InvalidCallsExhausted);
     assert_eq!(run.turns(), 1);
     assert_eq!(run.provider.calls(), 1);
-    assert_eq!(run.finished.summary.tool_calls_unknown, 1);
+    assert_eq!(run.finished.summary.tool_calls.unknown, 1);
 }
 
 #[tokio::test]
@@ -1792,7 +1792,7 @@ async fn a_turn_that_names_no_tool_and_also_reaches_one_is_not_an_invalid_turn()
 
     assert_eq!(run.stop_reason(), StopReason::Completed);
     assert_eq!(run.turns(), 2);
-    assert_eq!(run.finished.summary.tool_calls_unknown, 1);
+    assert_eq!(run.finished.summary.tool_calls.unknown, 1);
 }
 
 // E12: the cap on invalid turns in a row.
@@ -2063,10 +2063,11 @@ async fn a_turn_records_when_its_attempt_began_and_how_long_it_took() {
     assert_eq!(turns[1].record().latency_ms, 150);
 
     assert_eq!(
-        run.finished.summary.provider_latency_total_ms, 550,
+        run.finished.summary.provider.latency.total_ms(),
+        550,
         "a run where nothing failed still spent time in the provider"
     );
-    assert_eq!(run.finished.summary.provider_latency_max_ms, 400);
+    assert_eq!(run.finished.summary.provider.latency.max_ms(), 400);
 }
 
 /// The totals count every attempt, not only the ones that answered.
@@ -2082,8 +2083,8 @@ async fn provider_latency_counts_the_failed_attempts_too() {
     .run()
     .await;
 
-    assert_eq!(run.finished.summary.provider_latency_total_ms, 150);
-    assert_eq!(run.finished.summary.provider_latency_max_ms, 90);
+    assert_eq!(run.finished.summary.provider.latency.total_ms(), 150);
+    assert_eq!(run.finished.summary.provider.latency.max_ms(), 90);
     assert_eq!(
         run.finished.transcript.turns()[0].record().started_ms,
         190,
@@ -2161,13 +2162,13 @@ async fn the_latencies_of_a_run_s_attempts_sum_to_the_summary_s_total_and_the_lo
         let summary = &run.finished.summary;
         assert_eq!(
             latencies.clone().sum::<u64>(),
-            summary.provider_latency_total_ms
+            summary.provider.latency.total_ms()
         );
-        assert_eq!(latencies.max(), Some(summary.provider_latency_max_ms));
+        assert_eq!(latencies.max(), Some(summary.provider.latency.max_ms()));
         assert_eq!(
             (
-                summary.provider_latency_total_ms,
-                summary.provider_latency_max_ms
+                summary.provider.latency.total_ms(),
+                summary.provider.latency.max_ms()
             ),
             (total, max)
         );
@@ -2482,7 +2483,7 @@ async fn a_task_complete_call_whose_arguments_did_not_parse_is_answered_and_the_
     assert_eq!(answered[0].status.as_str(), "ok", "the other call ran");
     assert_eq!(answered[1].status, ToolCallStatus::MalformedInput);
     assert!(answered[1].status.is_error(), "it counts as a tool error");
-    assert_eq!(run.finished.summary.tool_calls_errors, 1);
+    assert_eq!(run.finished.summary.tool_calls.errors, 1);
 }
 
 /// A response whose only call is unparsed, so `tool_uses` has one entry the
@@ -2626,8 +2627,8 @@ async fn a_rejected_call_counts_in_the_totals_and_against_task_complete() {
         summary.outcome.tool_calls, 4,
         "two calls in each of the first two turns; the third turn's is intercepted"
     );
-    assert_eq!(summary.tool_calls_errors, 3);
-    assert_eq!(summary.tool_calls_unknown, 0);
+    assert_eq!(summary.tool_calls.errors, 3);
+    assert_eq!(summary.tool_calls.unknown, 0);
     assert_eq!(
         summary.per_tool,
         std::collections::BTreeMap::from([
@@ -2851,7 +2852,7 @@ async fn in_natural_mode_a_tool_named_task_complete_runs_beside_another_call() {
     );
     let summary = &run.finished.summary;
     assert_eq!(summary.outcome.tool_calls, 2);
-    assert_eq!(summary.tool_calls_errors, 0);
+    assert_eq!(summary.tool_calls.errors, 0);
     assert_eq!(
         summary.outcome.result().structured,
         None,
@@ -3095,7 +3096,7 @@ async fn a_hint_longer_than_the_cap_on_hints_exhausts_the_retries_without_waitin
     assert_eq!(run.error(), Some("529 overloaded"));
     assert_eq!(run.provider.calls(), 1, "three retries were left");
     assert_eq!(run.clock.sleeps(), [], "lablet won't make the wait");
-    assert_eq!(run.finished.summary.provider_retries, 0);
+    assert_eq!(run.finished.summary.provider.retries, 0);
     let [(_, retry)] = run.failures().try_into().expect("one attempt failed");
     assert_eq!(retry, None);
 }
@@ -3188,7 +3189,7 @@ async fn a_rejected_key_fails_the_run_at_once_and_the_failed_attempt_says_auth()
     assert_eq!(run.error(), Some("401 invalid x-api-key"));
     assert_eq!(run.provider.calls(), 1);
     assert_eq!(run.clock.sleeps(), [], "nothing was waited for");
-    assert_eq!(run.finished.summary.provider_retries, 0);
+    assert_eq!(run.finished.summary.provider.retries, 0);
     assert_eq!(run.turns(), 0);
     let [(error, retry)] = run.failures().try_into().expect("one attempt failed");
     assert_eq!(error.kind, ProviderErrorKind::Auth);
@@ -3523,19 +3524,19 @@ async fn a_call_that_was_never_run_reaches_no_observer_and_no_total() {
     );
     let summary = &run.finished.summary;
     assert_eq!(summary.outcome.tool_calls, 1);
-    assert_eq!(summary.tool_calls_errors, 0);
-    assert_eq!(summary.tool_calls_unknown, 0);
+    assert_eq!(summary.tool_calls.errors, 0);
+    assert_eq!(summary.tool_calls.unknown, 0);
     assert_eq!(
-        summary.tool_calls_truncated, 1,
+        summary.tool_calls.truncated, 1,
         "`bash ran` is over the cap"
     );
-    assert_eq!(summary.tool_latency_total_ms, 1_000);
+    assert_eq!(summary.tool_calls.latency_ms, 1_000);
     assert_eq!(
-        summary.tool_input_bytes, 7,
+        summary.tool_calls.input_bytes, 7,
         "the first call's `{{\"n\":0}}`"
     );
     assert_eq!(
-        summary.tool_output_bytes,
+        summary.tool_calls.output_bytes,
         4 + 35,
         "`bash` and `[truncated: the first 4 of 8 bytes]`"
     );
@@ -3687,7 +3688,7 @@ async fn a_turn_the_timeout_cut_short_is_not_an_invalid_turn_so_the_run_stops_fo
     assert_eq!(run.provider.calls(), 3);
     assert_eq!(tools.taken(), []);
     assert_eq!(run.finished.summary.outcome.tool_calls, 3);
-    assert_eq!(run.finished.summary.tool_calls_unknown, 2);
+    assert_eq!(run.finished.summary.tool_calls.unknown, 2);
 }
 
 /// Each attempt's deadline is taken when the attempt begins, a retry's
@@ -3741,7 +3742,7 @@ async fn an_attempt_whose_turn_comes_when_the_run_s_time_has_gone_is_never_made(
         "and no attempt is announced"
     );
     assert_eq!(run.turns(), 0);
-    assert_eq!(run.finished.summary.provider_latency_total_ms, 0);
+    assert_eq!(run.finished.summary.provider.latency.total_ms(), 0);
     assert_eq!(run.finished.summary.outcome.duration_ms, 10_000);
 }
 
@@ -3781,8 +3782,8 @@ async fn the_time_an_observer_takes_over_the_start_of_an_attempt_is_not_the_atte
     );
     let record = run.finished.transcript.turns()[0].record();
     assert_eq!((record.started_ms, record.latency_ms), (4_190, 400));
-    assert_eq!(run.finished.summary.provider_latency_total_ms, 490);
-    assert_eq!(run.finished.summary.provider_latency_max_ms, 400);
+    assert_eq!(run.finished.summary.provider.latency.total_ms(), 490);
+    assert_eq!(run.finished.summary.provider.latency.max_ms(), 400);
 }
 
 /// The attempt's turn came with the whole of the run's time left, so it's
@@ -3866,7 +3867,7 @@ async fn the_time_an_observer_takes_over_the_start_of_a_tool_call_is_not_the_cal
         [(5_000, 1_000)],
         "the observer is told what the transcript holds"
     );
-    assert_eq!(run.finished.summary.tool_latency_total_ms, 1_000);
+    assert_eq!(run.finished.summary.tool_calls.latency_ms, 1_000);
     assert_eq!(run.stop_reason(), StopReason::Completed);
 }
 
@@ -4017,7 +4018,7 @@ async fn the_tools_digest_is_the_sha_256_of_the_specs_sent_as_compact_json_in_th
     assert_eq!(specs_sent(&run), format!("{BASH_SPEC}{READ_FILE_SPEC}"));
     assert_eq!(summary(&run).tools_digest, DIGEST_OF_BASH_THEN_READ_FILE);
     assert_eq!(
-        summary(&run).prompt_tools_bytes,
+        summary(&run).prompt.tools_bytes,
         (BASH_SPEC.len() + READ_FILE_SPEC.len()) as u64
     );
 }
@@ -4036,7 +4037,7 @@ async fn a_run_shown_no_tools_and_no_system_prompt_reports_the_digest_of_nothing
 
     assert_eq!(specs_sent(&run), "");
     assert_eq!(run.provider.shown()[0].system, "");
-    assert_eq!(summary(&run).prompt_tools_bytes, 0);
+    assert_eq!(summary(&run).prompt.tools_bytes, 0);
     assert_eq!(summary(&run).tools_digest, DIGEST_OF_NOTHING);
     assert_eq!(summary(&run).system_prompt_digest, DIGEST_OF_NOTHING);
 }
@@ -4048,7 +4049,7 @@ async fn the_order_the_specs_are_offered_in_is_part_of_their_digest() {
     assert_eq!(specs_sent(&run), format!("{READ_FILE_SPEC}{BASH_SPEC}"));
     assert_eq!(summary(&run).tools_digest, DIGEST_OF_READ_FILE_THEN_BASH);
     assert_eq!(
-        summary(&run).prompt_tools_bytes,
+        summary(&run).prompt.tools_bytes,
         (BASH_SPEC.len() + READ_FILE_SPEC.len()) as u64,
         "the size can't tell the two orders apart, which is what the digest is for"
     );
@@ -4074,8 +4075,8 @@ async fn one_tool_set_run_twice_has_one_digest_and_one_changed_description_gives
     assert_eq!(summary(&first).tools_digest, summary(&again).tools_digest);
     assert_ne!(summary(&first).tools_digest, summary(&changed).tools_digest);
     assert_eq!(
-        summary(&first).prompt_tools_bytes,
-        summary(&changed).prompt_tools_bytes
+        summary(&first).prompt.tools_bytes,
+        summary(&changed).prompt.tools_bytes
     );
     for run in [&first, &again, &changed] {
         assert_eq!(summary(run).system_prompt_digest, DIGEST_OF_YOU_FIX_TESTS);
@@ -4098,8 +4099,8 @@ async fn one_system_prompt_run_twice_has_one_digest_and_one_changed_word_gives_a
         summary(&changed).system_prompt_digest
     );
     assert_eq!(
-        summary(&first).prompt_system_bytes,
-        summary(&changed).prompt_system_bytes
+        summary(&first).prompt.system_bytes,
+        summary(&changed).prompt.system_bytes
     );
     for run in [&first, &again, &changed] {
         assert_eq!(summary(run).tools_digest, DIGEST_OF_BASH_THEN_READ_FILE);
@@ -4144,7 +4145,7 @@ async fn the_completion_tool_a_run_offers_is_among_the_specs_its_digest_is_of() 
         .strip_prefix(&format!("{BASH_SPEC}{READ_FILE_SPEC}"))
         .expect("the executor's specs come first");
     assert!(own.starts_with(r#"{"name":"task_complete","#), "{own}");
-    assert_eq!(summary(&explicit).prompt_tools_bytes, sent.len() as u64);
+    assert_eq!(summary(&explicit).prompt.tools_bytes, sent.len() as u64);
     assert_ne!(
         summary(&explicit).tools_digest,
         DIGEST_OF_BASH_THEN_READ_FILE
@@ -4210,7 +4211,7 @@ async fn the_cache_key_is_no_part_of_the_system_prompt_nor_of_its_size_or_its_di
             .collect();
         assert_eq!(systems, ["You fix tests."; 3]);
         assert_eq!(run.finished.transcript.system(), "You fix tests.");
-        assert_eq!(summary(run).prompt_system_bytes, 14);
+        assert_eq!(summary(run).prompt.system_bytes, 14);
         assert_eq!(summary(run).system_prompt_digest, DIGEST_OF_YOU_FIX_TESTS);
         assert_eq!(summary(run).tools_digest, DIGEST_OF_BASH_THEN_READ_FILE);
     }

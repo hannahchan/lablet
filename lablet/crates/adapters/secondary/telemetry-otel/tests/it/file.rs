@@ -111,8 +111,8 @@ async fn a_destination_that_cannot_be_written_changes_nothing_about_the_run() {
     assert_eq!(finished.summary.outcome, expected.summary.outcome);
     assert_eq!(finished.transcript, expected.transcript);
     assert_eq!(
-        finished.summary.provider_latency_total_ms,
-        expected.summary.provider_latency_total_ms
+        finished.summary.provider.latency.total_ms(),
+        expected.summary.provider.latency.total_ms()
     );
     let failures = flushed.unwrap_err();
     let queues: Vec<_> = failures

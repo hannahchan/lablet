@@ -78,9 +78,9 @@ pub enum EventKind {
         response: Option<Vec<ContentBlock>>,
     },
     /// An attempt failed. Its timing is what the run counted of it, so the
-    /// latencies of a run's failed and finished attempts sum to the
-    /// summary's `provider_latency_total_ms`, and the longest of them is its
-    /// `provider_latency_max_ms`.
+    /// latencies of a run's failed and finished attempts sum to the total
+    /// of the summary's `provider.latency`, and the longest of them is its
+    /// maximum.
     ProviderCallFailed {
         /// Which turn.
         turn: u32,

@@ -303,7 +303,7 @@ pub(crate) fn assert_declared(
 
 /// The keys of `attributes` that the registry doesn't require of their
 /// signal, in order: the ones a signal holds only when it has the value.
-pub(crate) fn beyond_required(attributes: &Attributes, required: &[&str]) -> Vec<&'static str> {
+pub(crate) fn beyond_required<'a>(attributes: &'a Attributes, required: &[&str]) -> Vec<&'a str> {
     attributes
         .keys()
         .into_iter()

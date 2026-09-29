@@ -3,6 +3,8 @@
 //! and the file is read back.
 
 #[cfg(test)]
+mod conformance;
+#[cfg(test)]
 mod content;
 #[cfg(test)]
 mod file;
@@ -10,3 +12,5 @@ mod file;
 mod harness;
 #[cfg(test)]
 mod spans;
+#[cfg(test)]
+mod wide;

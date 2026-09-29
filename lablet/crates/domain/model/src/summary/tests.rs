@@ -2,9 +2,10 @@ use std::time::Duration;
 
 use super::*;
 use crate::{
-    CacheScope, CompletionMode, Cost, Effort, Endpoint, FinishReason, ModelRef, OutcomeParts,
-    Prompts, ProviderApi, Rates, RequestParams, Run, RunId, RunLabels, RunOutcome, RunSetup,
-    StopReason, TaskResult, Thinking, TokenCounts, ToolName, ToolStats, Usage,
+    CacheScope, CompletionMode, Cost, Effort, Endpoint, FinishReason, Latency, ModelRef,
+    OutcomeParts, Prompts, ProviderApi, ProviderTotals, Rates, RequestParams, Run, RunId,
+    RunLabels, RunOutcome, RunSetup, StopReason, TaskResult, Thinking, TokenCounts, ToolCallTotals,
+    ToolName, ToolStats, Usage,
 };
 
 fn summary() -> RunSummary {
@@ -31,9 +32,11 @@ fn summary() -> RunSummary {
             seed: None,
             cache_scope: CacheScope::Run,
         },
-        prompt_system_bytes: 120,
-        prompt_user_bytes: 40,
-        prompt_tools_bytes: 312,
+        prompt: PromptSizes {
+            system_bytes: 120,
+            user_bytes: 40,
+            tools_bytes: 312,
+        },
         tools_digest: "5f70".to_owned(),
         system_prompt_digest: "c1a5".to_owned(),
         failed_usage: Some(Usage::from_inclusive(TokenCounts {
@@ -43,16 +46,19 @@ fn summary() -> RunSummary {
             cache_read: Some(8),
             cache_write: None,
         })),
-        provider_retries: 1,
-        provider_latency_total_ms: 900,
-        provider_latency_max_ms: 500,
+        provider: ProviderTotals {
+            retries: 1,
+            latency: Latency::of(400) + Latency::of(500),
+        },
         finish_reasons: vec![FinishReason::ToolUse, FinishReason::EndTurn],
-        tool_calls_errors: 1,
-        tool_calls_unknown: 0,
-        tool_latency_total_ms: 35,
-        tool_input_bytes: 18,
-        tool_output_bytes: 2048,
-        tool_calls_truncated: 1,
+        tool_calls: ToolCallTotals {
+            errors: 1,
+            unknown: 0,
+            truncated: 1,
+            latency_ms: 35,
+            input_bytes: 18,
+            output_bytes: 2048,
+        },
         per_tool: BTreeMap::from([(
             bash,
             ToolStats {
@@ -76,7 +82,7 @@ fn a_finished_run_carries_the_summary_and_the_conversation() {
         model: summary.model,
         endpoint: summary.endpoint,
         tools: summary.tools,
-        tools_bytes: summary.prompt_tools_bytes,
+        tools_bytes: summary.prompt.tools_bytes,
         tools_digest: summary.tools_digest,
         system_prompt_digest: summary.system_prompt_digest,
         completion: summary.completion,
@@ -107,13 +113,13 @@ fn a_finished_run_carries_the_summary_and_the_conversation() {
 }
 
 #[test]
-fn tool_stats_start_at_zero() {
+fn the_sizes_of_a_prompt_start_at_nothing() {
     assert_eq!(
-        ToolStats::default(),
-        ToolStats {
-            calls: 0,
-            errors: 0,
-            latency_ms: 0,
+        PromptSizes::default(),
+        PromptSizes {
+            system_bytes: 0,
+            user_bytes: 0,
+            tools_bytes: 0,
         }
     );
 }

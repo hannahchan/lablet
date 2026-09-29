@@ -213,25 +213,25 @@ fn a_run_that_did_nothing_has_a_summary_of_its_setup_and_zeros() {
     assert_eq!(summary.max_turns, Some(nz(30)));
     assert_eq!(summary.timeout_ms, 600_000);
     assert_eq!(summary.request, setup().request);
-    assert_eq!(summary.prompt_system_bytes, 14);
-    assert_eq!(summary.prompt_user_bytes, 21);
-    assert_eq!(summary.prompt_tools_bytes, 312);
+    assert_eq!(summary.prompt.system_bytes, 14);
+    assert_eq!(summary.prompt.user_bytes, 21);
+    assert_eq!(summary.prompt.tools_bytes, 312);
     assert_eq!(summary.tools_digest, "the digest of the tool specs");
     assert_eq!(
         summary.system_prompt_digest,
         "the digest of the system prompt"
     );
     assert_eq!(summary.failed_usage, None);
-    assert_eq!(summary.provider_retries, 0);
-    assert_eq!(summary.provider_latency_total_ms, 0);
-    assert_eq!(summary.provider_latency_max_ms, 0);
+    assert_eq!(summary.provider.retries, 0);
+    assert_eq!(summary.provider.latency.total_ms(), 0);
+    assert_eq!(summary.provider.latency.max_ms(), 0);
     assert!(summary.finish_reasons.is_empty());
-    assert_eq!(summary.tool_calls_errors, 0);
-    assert_eq!(summary.tool_calls_unknown, 0);
-    assert_eq!(summary.tool_latency_total_ms, 0);
-    assert_eq!(summary.tool_input_bytes, 0);
-    assert_eq!(summary.tool_output_bytes, 0);
-    assert_eq!(summary.tool_calls_truncated, 0);
+    assert_eq!(summary.tool_calls.errors, 0);
+    assert_eq!(summary.tool_calls.unknown, 0);
+    assert_eq!(summary.tool_calls.latency_ms, 0);
+    assert_eq!(summary.tool_calls.input_bytes, 0);
+    assert_eq!(summary.tool_calls.output_bytes, 0);
+    assert_eq!(summary.tool_calls.truncated, 0);
     assert!(summary.per_tool.is_empty());
     assert_eq!(summary.cost, None);
     assert_eq!(summary.outcome.turns, 0);
@@ -259,8 +259,8 @@ fn the_prompt_sizes_are_byte_lengths_whether_or_not_a_turn_has_taken_the_prompt(
             .summary;
 
     for summary in [waiting, taken] {
-        assert_eq!(summary.prompt_system_bytes, 5);
-        assert_eq!(summary.prompt_user_bytes, 6);
+        assert_eq!(summary.prompt.system_bytes, 5);
+        assert_eq!(summary.prompt.user_bytes, 6);
     }
 }
 
@@ -365,7 +365,7 @@ fn the_summary_names_what_the_model_was_shown_as_the_run_was_set_up_with_it() {
         .summary;
 
     for summary in [waiting, answered, unanswered] {
-        assert_eq!(summary.prompt_tools_bytes, setup().tools_bytes);
+        assert_eq!(summary.prompt.tools_bytes, setup().tools_bytes);
         assert_eq!(summary.tools_digest, setup().tools_digest);
         assert_eq!(summary.system_prompt_digest, setup().system_prompt_digest);
         assert_ne!(summary.tools_digest, summary.system_prompt_digest);
@@ -767,10 +767,10 @@ fn a_failed_attempt_gives_back_its_timing_as_the_totals_count_it() {
     );
     let summary = finish(run, StopReason::RetriesExhausted);
     assert_eq!(
-        summary.provider_latency_total_ms,
+        summary.provider.latency.total_ms(),
         first.latency_ms + second.latency_ms
     );
-    assert_eq!(summary.provider_latency_max_ms, second.latency_ms);
+    assert_eq!(summary.provider.latency.max_ms(), second.latency_ms);
 }
 
 #[test]
@@ -783,14 +783,14 @@ fn provider_latency_is_summed_and_its_maximum_kept_over_every_attempt() {
     run.failed_attempt(Duration::ZERO, ms(200), None);
 
     let summary = finish(run.clone(), StopReason::ProviderError);
-    assert_eq!(summary.provider_latency_total_ms, 1_500);
-    assert_eq!(summary.provider_latency_max_ms, 900);
+    assert_eq!(summary.provider.latency.total_ms(), 1_500);
+    assert_eq!(summary.provider.latency.max_ms(), 900);
 
     let summary = done(run, 1, ms(1_200))
         .finish(StopReason::Completed, ms(0), None, None, None, None)
         .summary;
-    assert_eq!(summary.provider_latency_total_ms, 2_700);
-    assert_eq!(summary.provider_latency_max_ms, 1_200);
+    assert_eq!(summary.provider.latency.total_ms(), 2_700);
+    assert_eq!(summary.provider.latency.max_ms(), 1_200);
 }
 
 #[test]
@@ -801,8 +801,8 @@ fn a_run_whose_only_provider_call_fails_took_no_turns_and_made_no_retries() {
     assert_eq!(run.progress(ms(250)).turns, 0);
     let summary = finish(run, StopReason::ProviderError);
     assert_eq!(summary.outcome.turns, 0);
-    assert_eq!(summary.provider_retries, 0);
-    assert_eq!(summary.provider_latency_total_ms, 250);
+    assert_eq!(summary.provider.retries, 0);
+    assert_eq!(summary.provider.latency.total_ms(), 250);
     assert_eq!(summary.outcome.usage, Usage::default());
 }
 
@@ -821,7 +821,7 @@ fn a_turn_counts_the_attempts_of_its_call_and_the_next_call_starts_again() {
         .map(|turn| turn.record().attempts)
         .collect();
     assert_eq!(attempts, [3, 1]);
-    assert_eq!(finish(run, StopReason::Completed).provider_retries, 2);
+    assert_eq!(finish(run, StopReason::Completed).provider.retries, 2);
 }
 
 #[test]
@@ -836,7 +836,7 @@ fn a_retry_is_an_attempt_made_beyond_the_first_of_its_call() {
     // One retry behind the turn, and three of the four failures of the last
     // call were followed by another attempt.
     let summary = finish(run, StopReason::RetriesExhausted);
-    assert_eq!(summary.provider_retries, 4);
+    assert_eq!(summary.provider.retries, 4);
     assert_eq!(summary.outcome.turns, 1);
 }
 
@@ -853,14 +853,14 @@ fn tool_calls_add_to_the_totals_and_to_the_share_of_their_tool() {
 
     let summary = finish(run, StopReason::Completed);
     assert_eq!(summary.outcome.tool_calls, 3);
-    assert_eq!(summary.tool_calls_errors, 1);
-    assert_eq!(summary.tool_calls_unknown, 0);
-    assert_eq!(summary.tool_calls_truncated, 1);
-    assert_eq!(summary.tool_latency_total_ms, 37);
+    assert_eq!(summary.tool_calls.errors, 1);
+    assert_eq!(summary.tool_calls.unknown, 0);
+    assert_eq!(summary.tool_calls.truncated, 1);
+    assert_eq!(summary.tool_calls.latency_ms, 37);
     // Each input is `{"n":0}` with its own digit.
-    assert_eq!(summary.tool_input_bytes, 3 * 7);
+    assert_eq!(summary.tool_calls.input_bytes, 3 * 7);
     // The third output was cut to 8 bytes and a 36-byte line.
-    assert_eq!(summary.tool_output_bytes, 8 + 6 + 8 + 36);
+    assert_eq!(summary.tool_calls.output_bytes, 8 + 6 + 8 + 36);
     assert_eq!(
         summary.per_tool,
         BTreeMap::from([
@@ -898,9 +898,9 @@ fn a_call_to_a_name_the_run_did_not_offer_counts_in_the_totals_and_gets_no_per_t
 
     let summary = finish(run, StopReason::Completed);
     assert_eq!(summary.outcome.tool_calls, 3);
-    assert_eq!(summary.tool_calls_errors, 2);
-    assert_eq!(summary.tool_calls_unknown, 2);
-    assert_eq!(summary.tool_latency_total_ms, 3);
+    assert_eq!(summary.tool_calls.errors, 2);
+    assert_eq!(summary.tool_calls.unknown, 2);
+    assert_eq!(summary.tool_calls.latency_ms, 3);
     assert_eq!(summary.per_tool.keys().collect::<Vec<_>>(), [&name("bash")]);
 }
 
@@ -917,8 +917,8 @@ fn a_call_whose_arguments_did_not_parse_is_not_a_call_to_an_unknown_tool() {
     );
 
     let summary = finish(run, StopReason::Completed);
-    assert_eq!(summary.tool_calls_unknown, 1);
-    assert_eq!(summary.tool_calls_errors, 2);
+    assert_eq!(summary.tool_calls.unknown, 1);
+    assert_eq!(summary.tool_calls.errors, 2);
     assert_eq!(summary.per_tool.keys().collect::<Vec<_>>(), [&name("bash")]);
     assert_eq!(summary.per_tool[&name("bash")].errors, 1);
 }
@@ -936,12 +936,12 @@ fn a_call_the_loop_rejected_counts_in_the_totals_and_against_the_tool_it_named()
 
     let summary = finish(run, StopReason::MaxTurns);
     assert_eq!(summary.outcome.tool_calls, 2);
-    assert_eq!(summary.tool_calls_errors, 1);
-    assert_eq!(summary.tool_calls_unknown, 0);
-    assert_eq!(summary.tool_latency_total_ms, 2);
+    assert_eq!(summary.tool_calls.errors, 1);
+    assert_eq!(summary.tool_calls.unknown, 0);
+    assert_eq!(summary.tool_calls.latency_ms, 2);
     // Each input is `{"n":0}` with its own digit, and each output is `out`.
-    assert_eq!(summary.tool_input_bytes, 2 * 7);
-    assert_eq!(summary.tool_output_bytes, 2 * 3);
+    assert_eq!(summary.tool_calls.input_bytes, 2 * 7);
+    assert_eq!(summary.tool_calls.output_bytes, 2 * 3);
     assert_eq!(
         summary.per_tool,
         BTreeMap::from([
@@ -978,7 +978,7 @@ fn a_call_to_a_tool_served_over_mcp_earns_a_per_tool_entry_like_any_other() {
     );
 
     let summary = finish(run, StopReason::Completed);
-    assert_eq!(summary.tool_calls_unknown, 0);
+    assert_eq!(summary.tool_calls.unknown, 0);
     assert_eq!(
         summary.per_tool.keys().collect::<Vec<_>>(),
         [&name("bash"), &name("read_file")]
@@ -997,7 +997,7 @@ fn whether_a_call_was_to_a_tool_the_run_has_is_read_from_the_outcome_alone() {
 
     let summary = finish(run, StopReason::Completed);
     assert!(summary.tools.contains(&name("bash")));
-    assert_eq!(summary.tool_calls_unknown, 1);
+    assert_eq!(summary.tool_calls.unknown, 1);
     assert!(summary.per_tool.is_empty());
 }
 
@@ -1007,8 +1007,8 @@ fn tool_calls_that_never_ran_are_in_no_total() {
         .finish(StopReason::Completed, ms(0), None, None, None, None)
         .summary;
     assert_eq!(summary.outcome.tool_calls, 0);
-    assert_eq!(summary.tool_calls_unknown, 0);
-    assert_eq!(summary.tool_input_bytes, 0);
+    assert_eq!(summary.tool_calls.unknown, 0);
+    assert_eq!(summary.tool_calls.input_bytes, 0);
 }
 
 /// The call that was never run is given a latency and an output over the
@@ -1038,13 +1038,13 @@ fn a_call_that_was_never_run_is_in_the_transcript_and_in_no_total() {
     assert_eq!(outcomes[1].call_id.as_str(), "call_1");
     let summary = finished.summary;
     assert_eq!(summary.outcome.tool_calls, 1);
-    assert_eq!(summary.tool_calls_errors, 0);
-    assert_eq!(summary.tool_calls_unknown, 0);
-    assert_eq!(summary.tool_calls_truncated, 0);
-    assert_eq!(summary.tool_latency_total_ms, 30);
+    assert_eq!(summary.tool_calls.errors, 0);
+    assert_eq!(summary.tool_calls.unknown, 0);
+    assert_eq!(summary.tool_calls.truncated, 0);
+    assert_eq!(summary.tool_calls.latency_ms, 30);
     // The one input counted is `{"n":0}`, and the one output is `done`.
-    assert_eq!(summary.tool_input_bytes, 7);
-    assert_eq!(summary.tool_output_bytes, 4);
+    assert_eq!(summary.tool_calls.input_bytes, 7);
+    assert_eq!(summary.tool_calls.output_bytes, 4);
     assert_eq!(
         summary.per_tool,
         BTreeMap::from([(
@@ -1248,9 +1248,9 @@ fn a_latency_is_truncated_as_it_is_recorded_so_totals_are_sums_of_whole_millisec
     );
 
     let summary = finish(run, StopReason::Completed);
-    assert_eq!(summary.provider_latency_total_ms, 2);
-    assert_eq!(summary.provider_latency_max_ms, 1);
-    assert_eq!(summary.tool_latency_total_ms, 2);
+    assert_eq!(summary.provider.latency.total_ms(), 2);
+    assert_eq!(summary.provider.latency.max_ms(), 1);
+    assert_eq!(summary.tool_calls.latency_ms, 2);
     assert_eq!(summary.per_tool[&name("bash")].latency_ms, 2);
 }
 
@@ -1284,9 +1284,9 @@ fn sums_and_durations_saturate_rather_than_overflow() {
 
     let summary = finish(run, StopReason::Timeout);
     assert_eq!(summary.timeout_ms, u64::MAX);
-    assert_eq!(summary.provider_latency_total_ms, u64::MAX);
-    assert_eq!(summary.provider_latency_max_ms, u64::MAX);
-    assert_eq!(summary.tool_latency_total_ms, u64::MAX);
+    assert_eq!(summary.provider.latency.total_ms(), u64::MAX);
+    assert_eq!(summary.provider.latency.max_ms(), u64::MAX);
+    assert_eq!(summary.tool_calls.latency_ms, u64::MAX);
     assert_eq!(summary.per_tool[&name("bash")].latency_ms, u64::MAX);
 }
 
@@ -1316,22 +1316,22 @@ fn the_summarys_totals_are_those_of_the_transcript_it_comes_with() {
             .sum::<u64>()
     );
     assert_eq!(
-        summary.provider_latency_total_ms,
+        summary.provider.latency.total_ms(),
         turns
             .iter()
             .map(|turn| turn.record().latency_ms)
             .sum::<u64>()
     );
     assert_eq!(
-        summary.tool_latency_total_ms,
+        summary.tool_calls.latency_ms,
         outcomes().map(|outcome| outcome.latency_ms).sum::<u64>()
     );
     assert_eq!(
-        summary.tool_output_bytes,
+        summary.tool_calls.output_bytes,
         outcomes().map(ToolCallOutcome::output_bytes).sum::<u64>()
     );
     assert_eq!(
-        summary.tool_input_bytes,
+        summary.tool_calls.input_bytes,
         turns
             .iter()
             .flat_map(Turn::tool_uses)

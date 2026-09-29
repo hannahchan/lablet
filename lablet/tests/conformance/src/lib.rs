@@ -3,4 +3,5 @@
 //! Checks that span crates, which no single crate may make on its own, and
 //! the reader of the OTLP/JSON lines an observer exports.
 
+pub mod observer;
 pub mod otlp;

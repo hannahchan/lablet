@@ -11,10 +11,11 @@ use std::time::{Duration, Instant};
 
 use lablet_conformance::otlp::{Attributes, Exported, LogRecord, Span};
 use lablet_model::{
-    CacheScope, CompletionMode, FinishedRun, KeptOutput, Prompts, RequestParams, RunContext, RunId,
-    RunLabels, Thinking, ToolCallId, ToolConcurrency, ToolName, ToolSource, ToolSpec,
+    CacheScope, CompletionMode, FinishedRun, KeptOutput, McpServers, Prompts, RequestParams,
+    RunContext, RunId, RunLabels, Thinking, ToolCallId, ToolConcurrency, ToolName, ToolSource,
+    ToolSpec,
 };
-use lablet_policy::{RetryPolicy, RetrySettings, StopPolicy};
+use lablet_policy::{Pricing, RetryPolicy, RetrySettings, StopPolicy};
 use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
 use lablet_run::{
     CallLimits, Cancellation, Clock, RunService, ToolCall, ToolError, ToolErrorKind, ToolExecutor,
@@ -118,14 +119,30 @@ impl Cancellation for NeverCancelled {
     }
 }
 
+/// What the model is told `bash` does, unless a test says otherwise.
+pub const BASH_DOES: &str = "Runs a command.";
+
 /// Serves `bash` and `read_file`, each of which answers the same text
 /// every time, after the same wait, and keeps what each call carried.
-#[derive(Default)]
 pub struct Tools {
+    bash_does: String,
     propagated: Mutex<Vec<(ToolCallId, Option<TraceContext>)>>,
 }
 
+impl Default for Tools {
+    fn default() -> Self {
+        Self::described(BASH_DOES)
+    }
+}
+
 impl Tools {
+    fn described(bash_does: &str) -> Self {
+        Self {
+            bash_does: bash_does.to_owned(),
+            propagated: Mutex::default(),
+        }
+    }
+
     /// The span each call was handed to propagate, in the order the calls
     /// came.
     pub fn propagated(&self) -> Vec<(ToolCallId, Option<TraceContext>)> {
@@ -147,7 +164,7 @@ fn spec(name: &str, description: &str, concurrency: ToolConcurrency) -> ToolSpec
 impl ToolExecutor for Tools {
     async fn specs(&self) -> Result<Vec<ToolSpec>, ToolError> {
         Ok(vec![
-            spec("bash", "Runs a command.", ToolConcurrency::Exclusive),
+            spec("bash", &self.bash_does, ToolConcurrency::Exclusive),
             spec("read_file", "Reads a file.", ToolConcurrency::Shared),
         ])
     }
@@ -213,11 +230,27 @@ pub struct Settings {
     pub max_retries: u32,
     /// What every provider call is asked.
     pub request: RequestParams,
+    /// The system prompt.
+    pub system: String,
+    /// What the model is told `bash` does.
+    pub bash_does: String,
+    /// The cap on turns, when the runs have one.
+    pub max_turns: Option<NonZeroU32>,
+    /// What the runs are priced at, when they're priced.
+    pub pricing: Option<Pricing>,
+    /// Where the context says the transcript is written.
+    pub transcript_path: Option<PathBuf>,
+    /// How many skill files the context says the system prompt holds.
+    pub skills_count: u32,
+    /// The MCP servers the context says serve the runs.
+    pub mcp: Option<McpServers>,
 }
 
 impl Settings {
     /// Runs that capture nothing, have no labels, retry three times, and
-    /// each have a file of their own in `scratch`.
+    /// each have a file of their own in `scratch`. They have nothing a run
+    /// may be without: no cap on turns, no pricing, no transcript, no
+    /// skills and no MCP servers.
     pub fn in_scratch(scratch: &Scratch) -> Self {
         Self {
             target: FileTarget::EachRun {
@@ -234,6 +267,13 @@ impl Settings {
                 seed: None,
                 cache_scope: CacheScope::Shared,
             },
+            system: SYSTEM.to_owned(),
+            bash_does: BASH_DOES.to_owned(),
+            max_turns: None,
+            pricing: None,
+            transcript_path: None,
+            skills_count: 0,
+            mcp: None,
         }
     }
 }
@@ -246,6 +286,10 @@ pub struct Harness {
     service: RunService,
     capture_content: bool,
     labels: RunLabels,
+    system: String,
+    transcript_path: Option<PathBuf>,
+    skills_count: u32,
+    mcp: Option<McpServers>,
 }
 
 impl Harness {
@@ -257,6 +301,13 @@ impl Harness {
             labels,
             max_retries,
             request,
+            system,
+            bash_does,
+            max_turns,
+            pricing,
+            transcript_path,
+            skills_count,
+            mcp,
         } = settings;
         let script = Script::read(ScriptSource {
             name: "scripts/run.yaml",
@@ -265,7 +316,7 @@ impl Harness {
         })
         .unwrap();
         let provider = Arc::new(FakeProvider::new(MODEL, script));
-        let tools = Arc::new(Tools::default());
+        let tools = Arc::new(Tools::described(&bash_does));
         let observer = OtelObserver::builder(VERSION)
             .resource(vec![
                 ("team".to_owned(), "evals".to_owned()),
@@ -288,7 +339,7 @@ impl Harness {
             Arc::new(TokioClock),
             Arc::new(NeverCancelled),
             StopPolicy {
-                max_turns: None,
+                max_turns,
                 timeout: Duration::from_secs(3_600),
                 max_total_tokens: None,
                 max_consecutive_invalid_turns: NonZeroU32::new(3),
@@ -303,7 +354,7 @@ impl Harness {
             })
             .unwrap(),
             request,
-            None,
+            pricing,
             CallLimits {
                 provider_timeout: Duration::from_secs(60),
                 output_cap: None,
@@ -317,6 +368,10 @@ impl Harness {
             service,
             capture_content,
             labels,
+            system,
+            transcript_path,
+            skills_count,
+            mcp,
         }
     }
 
@@ -330,12 +385,12 @@ impl Harness {
             config_digest: CONFIG_DIGEST.to_owned(),
             agent_version: VERSION.to_owned(),
             resource: Vec::new(),
-            transcript_path: None,
-            skills_count: 0,
-            mcp: None,
+            transcript_path: self.transcript_path.clone(),
+            skills_count: self.skills_count,
+            mcp: self.mcp.clone(),
             capture_content: self.capture_content,
         };
-        let prompts = Prompts::new(SYSTEM, PROMPT).unwrap();
+        let prompts = Prompts::new(self.system.as_str(), PROMPT).unwrap();
         self.service.run(context, prompts).await
     }
 }

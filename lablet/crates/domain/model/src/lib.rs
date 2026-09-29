@@ -33,6 +33,7 @@ mod run;
 mod stop;
 mod summary;
 mod tool;
+mod totals;
 mod transcript;
 mod usage;
 
@@ -54,10 +55,11 @@ pub use run::{
     BlankTask, FailedAttempt, Final, Pending, Progress, Prompts, Responded, Run, RunSetup, Schedule,
 };
 pub use stop::{Calls, CompletionMode, StopClass, StopReason};
-pub use summary::{FinishedRun, RunContext, RunSummary, ToolStats};
+pub use summary::{FinishedRun, PromptSizes, RunContext, RunSummary};
 pub use tool::{
     Answer, ToolCallEnd, ToolCallOutcome, ToolCallStatus, ToolConcurrency, ToolSource, ToolSpec,
 };
+pub use totals::{Latency, ProviderTotals, ToolCallTotals, ToolStats};
 pub use transcript::{Transcript, TranscriptParts, Turn, TurnParts, TurnRecord};
 pub use usage::{TokenCounts, Usage};
 
