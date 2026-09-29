@@ -18,7 +18,6 @@
 use serde::Deserialize;
 use std::fmt::{self, Write as _};
 use std::path::Path;
-use std::time::SystemTime;
 
 use crate::floors::{self, EQUIVALENT_MUTANTS, Equivalent, FLOORS, FloorCrate, Standing};
 use crate::gates::CheckResult;
@@ -373,7 +372,8 @@ fn test_mutants(output: &Path, in_diff: Option<&Path>) -> Result<Outcomes, Strin
     let output_arg = output.display().to_string();
     let diff_arg = in_diff.map(|diff| diff.display().to_string());
     let args = mutants_args(&output_arg, diff_arg.as_deref());
-    let started = SystemTime::now();
+    let report = output.join("mutants.out").join("outcomes.json");
+    forget_last_report(&report)?;
     let status = process::stream("cargo", &args, &[])?;
     if !status
         .code()
@@ -384,7 +384,7 @@ fn test_mutants(output: &Path, in_diff: Option<&Path>) -> Result<Outcomes, Strin
             process::command_failed("cargo", &args)
         ));
     }
-    read_outcomes(&output.join("mutants.out").join("outcomes.json"), started)
+    read_outcomes(&report)
 }
 
 /// Runs cargo-mutants over the floor crates and judges the exact floor.
@@ -558,13 +558,25 @@ fn added_file(path: &str, text: &str) -> String {
     diff
 }
 
+/// Removes the report a previous run left, so the one read after a run is
+/// that run's. cargo-mutants leaves the last run's `outcomes.json` in place
+/// when a diff holds no mutant, and a file's modification time can't tell the
+/// two apart: Linux stamps a file from a clock that may read earlier than the
+/// one a run's start was read from.
+fn forget_last_report(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(format!("could not remove {}: {e}", path.display()))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// cargo-mutants writes no `outcomes.json` when it finds nothing to mutate,
-/// and when a diff holds no mutant it leaves the last run's file in place. So
-/// a file that is missing, or was written before this run began, is an empty
-/// run and not an error; the floors then fail any crate that must be measured.
-fn read_outcomes(path: &Path, started: SystemTime) -> Result<Outcomes, String> {
-    let written = std::fs::metadata(path).and_then(|file| file.modified());
-    if !written.is_ok_and(|written| written >= started) {
+/// so a missing file is an empty run and not an error; the floors then fail
+/// any crate that must be measured.
+fn read_outcomes(path: &Path) -> Result<Outcomes, String> {
+    if !path.is_file() {
         return Ok(Outcomes {
             outcomes: Vec::new(),
         });
@@ -974,7 +986,7 @@ mod tests {
     #[test]
     fn a_full_run_that_found_no_mutants_passes_only_for_crates_that_define_no_function() {
         let missing = Path::new("/nonexistent/mutants.out/outcomes.json");
-        let outcomes = read_outcomes(missing, SystemTime::now()).unwrap();
+        let outcomes = read_outcomes(missing).unwrap();
         for (holds_code, standing) in [
             (false, Standing::NothingToMeasure),
             (true, Standing::NothingMeasured),
@@ -1008,18 +1020,19 @@ mod tests {
     /// With `--in-diff` and no mutant in the diff, cargo-mutants exits 0 and
     /// leaves the last run's report where it was.
     #[test]
-    fn a_report_written_before_the_run_began_is_not_this_runs_report() {
+    fn a_report_a_previous_run_left_is_gone_before_the_next_run_reads_one() {
         let dir = TempDir::new("mutants-outcomes");
-        let before = SystemTime::now();
         let report = format!(r#"{{"outcomes": [{}]}}"#, green().join(","));
         dir.write("mutants.out/outcomes.json", &report);
         let path = dir.path().join("mutants.out/outcomes.json");
-        assert_eq!(read_outcomes(&path, before).unwrap().outcomes.len(), 7);
-        let after = SystemTime::now() + std::time::Duration::from_secs(60);
-        assert_eq!(read_outcomes(&path, after).unwrap().outcomes.len(), 0);
+        assert_eq!(read_outcomes(&path).unwrap().outcomes.len(), 7);
+
+        forget_last_report(&path).unwrap();
+        assert_eq!(read_outcomes(&path).unwrap().outcomes.len(), 0);
+        forget_last_report(&path).unwrap();
 
         dir.write("mutants.out/outcomes.json", "not JSON");
-        let error = read_outcomes(&path, before).unwrap_err();
+        let error = read_outcomes(&path).unwrap_err();
         assert!(error.starts_with("could not parse "), "{error}");
     }
 
