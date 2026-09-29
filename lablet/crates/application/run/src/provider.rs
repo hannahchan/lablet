@@ -30,7 +30,8 @@ pub struct ProviderRequest<'a> {
     pub effort: Option<Effort>,
     /// The sampling seed, for providers that take one.
     pub seed: Option<i64>,
-    /// How long the adapter may take before it gives up on this attempt.
+    /// How long the adapter may take before it gives up on this attempt:
+    /// the shorter of the provider timeout and the time the run has left.
     pub deadline: Duration,
 }
 

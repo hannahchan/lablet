@@ -113,7 +113,8 @@ pub struct Progress {
     /// The turns in a row, counted back from the last, of which every call
     /// was one the model got wrong ([`crate::ToolCallStatus::is_invalid`]). A
     /// turn in which any call reached a tool ends the count, whatever the
-    /// tool returned.
+    /// tool returned, and so does one the run's timeout cut short, since a
+    /// call that was never run isn't one the model got wrong.
     pub consecutive_invalid_turns: u32,
 }
 
@@ -300,7 +301,8 @@ impl Run {
     /// calls those are is read from each outcome's
     /// [`crate::ToolCallStatus`], the value the executor set when it looked
     /// the name up, rather than looked up a second time here against the tool
-    /// list, where the two answers could differ.
+    /// list, where the two answers could differ. A call that was never run
+    /// counts nowhere: it's in the transcript and in no total.
     #[must_use]
     pub fn finish(
         self,
@@ -324,7 +326,7 @@ impl Run {
         let tool_calls = transcript
             .turns()
             .iter()
-            .map(|turn| turn.tool_calls().len() as u64)
+            .map(|turn| turn.counted().count() as u64)
             .sum();
         let mut summary = RunSummary {
             model: setup.model,

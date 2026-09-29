@@ -234,7 +234,7 @@ pub const LABLET_TOOL_CALLS_LATENCY_MS_TOTAL: &str = "lablet.tool_calls.latency_
 /// Sum of the sizes of every tool call's output, in bytes.
 pub const LABLET_TOOL_CALLS_OUTPUT_BYTES_TOTAL: &str = "lablet.tool_calls.output_bytes.total";
 
-/// Number of tool calls executed. The intercepted `task_complete` call isn't one.
+/// Number of tool calls executed. The intercepted `task_complete` call isn't one, and neither is a call that was never run.
 pub const LABLET_TOOL_CALLS_TOTAL: &str = "lablet.tool_calls.total";
 
 /// Number of tool calls whose output the output cap cut short.

@@ -177,7 +177,6 @@ impl Harness {
             pricing: None,
             calls: CallLimits {
                 provider_timeout: Duration::from_secs(60),
-                tool_timeout: Duration::from_secs(30),
                 output_cap: Some(output_cap(50_000, OutputCut::Preview { bytes: 2_000 })),
                 max_concurrent_tool_calls: nz(10),
             },
@@ -1415,11 +1414,6 @@ async fn the_span_an_observer_opens_reaches_the_executor() {
             .as_ref()
             .map(|c| c.traceparent.as_str()),
         Some("00-trace-call_0-01")
-    );
-    assert_eq!(
-        taken[0].deadline,
-        Duration::from_secs(30),
-        "the tool call carries the run's per-call deadline"
     );
 }
 
@@ -3291,4 +3285,339 @@ async fn a_failure_no_attempt_could_answer_ends_the_run_as_itself_though_the_tim
         assert_eq!(run.stop_reason(), reason, "{kind}");
         assert_eq!(run.error(), Some("the provider's own words"), "{kind}");
     }
+}
+
+// E16: no call's deadline is later than the run's, and a call whose turn
+// comes when the run's time has gone is never run.
+
+const fn secs(seconds: u64) -> Duration {
+    Duration::from_secs(seconds)
+}
+
+const NEVER_STARTED: &str = "the run reached its timeout before this call started";
+
+/// A run with a timeout of 10 s and an output cap of 4 bytes, whose one
+/// response arrives 9 s in and makes two calls to `tool`, each of which
+/// would take `each`; and the executor, which serves `tool` as `concurrency`
+/// says.
+async fn two_calls_nine_seconds_in(
+    tool: &str,
+    concurrency: ToolConcurrency,
+    each: Duration,
+) -> (Run, Arc<FakeTools>) {
+    let mut harness = Harness::new(vec![Answer::Responds(
+        Box::new(says("On it.", &[tool, tool], FinishReason::ToolUse)),
+        secs(9),
+    )]);
+    let tools = Arc::new(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![ToolSpec {
+                concurrency,
+                ..spec(tool)
+            }],
+        )
+        .taking(each),
+    );
+    harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
+    harness.stop.timeout = secs(10);
+    harness.calls.output_cap = Some(output_cap(4, OutputCut::Head));
+    harness.calls.max_concurrent_tool_calls = nz(1);
+    (harness.run().await, tools)
+}
+
+/// The id and the deadline of every call an executor was handed, in order.
+fn deadlines(tools: &FakeTools) -> Vec<(String, Duration)> {
+    tools
+        .taken()
+        .iter()
+        .map(|call| (call.id.as_str().to_owned(), call.deadline))
+        .collect()
+}
+
+/// The id of the call each tool event is about, in order.
+fn announced(run: &Run) -> Vec<(&'static str, String)> {
+    run.observer
+        .events()
+        .iter()
+        .filter_map(|event| match &event.kind {
+            EventKind::ToolCallStarted { call_id, .. }
+            | EventKind::ToolCallFinished { call_id, .. } => {
+                Some((event.kind.name(), call_id.as_str().to_owned()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_call_whose_turn_comes_when_the_run_s_time_has_gone_is_never_run() {
+    let (run, tools) = two_calls_nine_seconds_in("bash", ToolConcurrency::Exclusive, secs(1)).await;
+
+    assert_eq!(
+        deadlines(&tools),
+        [("call_0".to_owned(), secs(1))],
+        "the first call has the second the run has left, and the executor never sees the other"
+    );
+    let outcomes = run.finished.transcript.turns()[0].tool_calls();
+    assert_eq!(
+        outcomes[0].status,
+        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok)
+    );
+    assert_eq!(
+        (outcomes[0].started_ms, outcomes[0].latency_ms),
+        (9_000, 1_000)
+    );
+    assert_eq!(
+        outcomes[1],
+        lablet_model::ToolCallOutcome {
+            call_id: ToolCallId::new("call_1").expect("a valid call id"),
+            status: ToolCallStatus::NotRun,
+            started_ms: 10_000,
+            latency_ms: 0,
+            truncated_from_bytes: None,
+            content: vec![lablet_model::ToolResultContent::Text(
+                NEVER_STARTED.to_owned()
+            )],
+        },
+        "nothing of the call was there for the output cap to cut"
+    );
+    assert_eq!(run.stop_reason(), StopReason::Timeout);
+    assert_eq!(run.error(), None);
+    assert_eq!(run.provider.calls(), 1, "point B stops the run");
+    assert_eq!(run.finished.summary.outcome.duration_ms, 10_000);
+}
+
+#[tokio::test]
+async fn a_call_that_was_never_run_reaches_no_observer_and_no_total() {
+    let (run, _) = two_calls_nine_seconds_in("bash", ToolConcurrency::Exclusive, secs(1)).await;
+
+    assert_eq!(
+        run.observer.names(),
+        [
+            "RunStarted",
+            "TurnStarted",
+            "ProviderCallStarted",
+            "ProviderCallFinished",
+            "ToolCallStarted",
+            "ToolCallFinished",
+            "RunFinished",
+        ]
+    );
+    assert_eq!(
+        announced(&run),
+        [
+            ("ToolCallStarted", "call_0".to_owned()),
+            ("ToolCallFinished", "call_0".to_owned()),
+        ]
+    );
+    let summary = &run.finished.summary;
+    assert_eq!(summary.outcome.tool_calls, 1);
+    assert_eq!(summary.tool_calls_errors, 0);
+    assert_eq!(summary.tool_calls_unknown, 0);
+    assert_eq!(
+        summary.tool_calls_truncated, 1,
+        "`bash ran` is over the cap"
+    );
+    assert_eq!(summary.tool_latency_total_ms, 1_000);
+    assert_eq!(
+        summary.tool_input_bytes, 7,
+        "the first call's `{{\"n\":0}}`"
+    );
+    assert_eq!(
+        summary.tool_output_bytes,
+        4 + 35,
+        "`bash` and `[truncated: the first 4 of 8 bytes]`"
+    );
+    assert_eq!(
+        summary.per_tool,
+        std::collections::BTreeMap::from([(
+            name("bash"),
+            lablet_model::ToolStats {
+                calls: 1,
+                errors: 0,
+                latency_ms: 1_000,
+            }
+        )])
+    );
+}
+
+/// A place in a group is a turn too: with one call running at a time, the
+/// second read waits for the first, and the time has gone when it ends.
+#[tokio::test]
+async fn a_call_still_waiting_for_a_place_in_its_group_when_the_time_goes_is_never_run() {
+    let (run, tools) =
+        two_calls_nine_seconds_in("read_file", ToolConcurrency::Shared, secs(1)).await;
+
+    assert_eq!(deadlines(&tools), [("call_0".to_owned(), secs(1))]);
+    assert_eq!(statuses(&run), [vec!["ok", "not_run"]]);
+    assert_eq!(run.stop_reason(), StopReason::Timeout);
+}
+
+/// The executor takes no longer than the deadline, so the run ends when its
+/// timeout says and not when the tool would have.
+#[tokio::test]
+async fn a_tool_that_would_outlast_the_run_is_stopped_when_the_run_s_time_is_up() {
+    let (run, tools) = two_calls_nine_seconds_in("bash", ToolConcurrency::Exclusive, secs(5)).await;
+
+    assert_eq!(deadlines(&tools), [("call_0".to_owned(), secs(1))]);
+    let outcomes = run.finished.transcript.turns()[0].tool_calls();
+    assert_eq!(
+        outcomes[0].status,
+        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Timeout)
+    );
+    assert_eq!(outcomes[0].latency_ms, 1_000);
+    assert_eq!(outcomes[1].status, ToolCallStatus::NotRun);
+    assert_eq!(run.stop_reason(), StopReason::Timeout);
+    assert_eq!(run.finished.summary.outcome.duration_ms, 10_000);
+}
+
+/// The time left is read when a call's turn comes, so a call that runs
+/// after another has what the other left it.
+#[tokio::test]
+async fn a_tool_call_is_given_the_time_the_run_has_left_when_its_turn_comes() {
+    let mut harness = Harness::new(vec![
+        Answer::Responds(
+            Box::new(says("On it.", &["bash", "bash"], FinishReason::ToolUse)),
+            secs(3),
+        ),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    let tools =
+        Arc::new(FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")]).taking(secs(2)));
+    harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
+    harness.stop.timeout = secs(10);
+
+    let run = harness.run().await;
+
+    assert_eq!(
+        deadlines(&tools),
+        [
+            ("call_0".to_owned(), secs(7)),
+            ("call_1".to_owned(), secs(5)),
+        ]
+    );
+    assert_eq!(statuses(&run), [vec!["ok", "ok"], vec![]]);
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+}
+
+/// Point R reads the response alone and lets this run go on. The question
+/// asked after it is what stops the run, with the turn's call unanswered,
+/// as any stop ahead of a tool phase leaves it.
+#[tokio::test]
+async fn no_tool_starts_in_a_run_whose_response_used_up_its_time() {
+    let mut harness = Harness::new(vec![Answer::Responds(
+        Box::new(says("On it.", &["bash"], FinishReason::ToolUse)),
+        secs(10),
+    )]);
+    let tools = Arc::new(FakeTools::new(
+        Arc::clone(&harness.clock),
+        vec![spec("bash")],
+    ));
+    harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
+    harness.stop.timeout = secs(10);
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Timeout);
+    assert_eq!(run.turns(), 1);
+    assert_eq!(run.provider.calls(), 1);
+    assert_eq!(tools.taken(), [], "no executor was reached");
+    assert_eq!(announced(&run), [], "and no call was announced");
+    let turn = &run.finished.transcript.turns()[0];
+    assert_eq!(turn.tool_uses().count(), 1);
+    assert_eq!(turn.tool_calls(), [], "the call stays unanswered");
+    assert_eq!(run.finished.summary.outcome.tool_calls, 0);
+}
+
+/// The observer takes a second over each call's end, which is what lets
+/// time pass between two calls the loop answers itself. The third turn's
+/// response arrives 9 s in, its first call is answered by 10 s, and the
+/// second call's turn comes then.
+#[tokio::test]
+async fn a_turn_the_timeout_cut_short_is_not_an_invalid_turn_so_the_run_stops_for_its_time() {
+    let mut harness = Harness::new(vec![
+        Answer::now(calling(&[("invented", parsed())])),
+        Answer::now(calling(&[("bash", unparsed())])),
+        Answer::Responds(
+            Box::new(calling(&[("invented", parsed()), ("bash", parsed())])),
+            secs(7),
+        ),
+        Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.observer = Arc::new(Recorder::slow_over(
+        Arc::clone(&harness.clock),
+        "ToolCallFinished",
+        secs(1),
+    ));
+    let tools = Arc::new(FakeTools::new(
+        Arc::clone(&harness.clock),
+        vec![spec("bash")],
+    ));
+    harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
+    harness.stop.timeout = secs(10);
+    harness.stop.max_consecutive_invalid_turns = Some(nz(3));
+
+    let run = harness.run().await;
+
+    assert_eq!(
+        statuses(&run),
+        [
+            vec!["unknown"],
+            vec!["malformed_input"],
+            vec!["unknown", "not_run"]
+        ]
+    );
+    assert_eq!(
+        run.stop_reason(),
+        StopReason::Timeout,
+        "the third turn in a row that reached no tool isn't a third invalid turn"
+    );
+    assert_eq!(run.error(), None);
+    assert_eq!(run.provider.calls(), 3);
+    assert_eq!(tools.taken(), []);
+    assert_eq!(run.finished.summary.outcome.tool_calls, 3);
+    assert_eq!(run.finished.summary.tool_calls_unknown, 2);
+}
+
+/// Each attempt's deadline is taken when the attempt begins, a retry's
+/// too: the third attempt begins 45.1 s into a run of 100 s.
+#[tokio::test]
+async fn a_provider_attempt_is_given_the_shorter_of_the_provider_timeout_and_the_time_left() {
+    let mut harness = Harness::new(vec![
+        Answer::Responds(
+            Box::new(says("On it.", &["bash"], FinishReason::ToolUse)),
+            secs(30),
+        ),
+        Answer::Fails(overloaded(), secs(15)),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.stop.timeout = secs(100);
+    harness.calls.provider_timeout = secs(60);
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(run.clock.sleeps(), [ms(100)]);
+    assert_eq!(run.provider.deadlines(), [secs(60), secs(60), ms(54_900)]);
+}
+
+/// Point A reads the clock ahead of the attempt, and here the observer
+/// takes the run's whole time between the two. The attempt is given none,
+/// which an adapter reports as a deadline reached; the fake's script answers
+/// whatever the deadline, and a response that ends the run completes it.
+#[tokio::test]
+async fn an_attempt_that_begins_when_the_run_s_time_has_gone_is_given_no_time() {
+    let mut harness = Harness::new(vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))]);
+    harness.observer = Arc::new(Recorder::slow_over(
+        Arc::clone(&harness.clock),
+        "TurnStarted",
+        secs(10),
+    ));
+    harness.stop.timeout = secs(10);
+
+    let run = harness.run().await;
+
+    assert_eq!(run.provider.deadlines(), [Duration::ZERO]);
+    assert_eq!(run.stop_reason(), StopReason::Completed);
 }

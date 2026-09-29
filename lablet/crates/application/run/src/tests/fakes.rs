@@ -146,6 +146,7 @@ pub struct FakeProvider {
     clock: Arc<FakeClock>,
     calls: AtomicUsize,
     sent: Mutex<Vec<serde_json::Value>>,
+    deadlines: Mutex<Vec<Duration>>,
     ran_out: AtomicBool,
 }
 
@@ -159,6 +160,7 @@ impl FakeProvider {
             clock,
             calls: AtomicUsize::new(0),
             sent: Mutex::new(Vec::new()),
+            deadlines: Mutex::new(Vec::new()),
             ran_out: AtomicBool::new(false),
         }
     }
@@ -178,6 +180,15 @@ impl FakeProvider {
     /// test can assert what the model was told rather than what was recorded.
     pub fn sent(&self) -> Vec<serde_json::Value> {
         self.sent
+            .lock()
+            .expect("the fake provider isn't poisoned")
+            .clone()
+    }
+
+    /// The deadline each attempt was given, in order. The script decides how
+    /// long an attempt takes, so a deadline is kept here and not enforced.
+    pub fn deadlines(&self) -> Vec<Duration> {
+        self.deadlines
             .lock()
             .expect("the fake provider isn't poisoned")
             .clone()
@@ -203,6 +214,10 @@ impl ModelProvider for FakeProvider {
             .lock()
             .expect("the fake provider isn't poisoned")
             .push(serde_json::to_value(request.messages).expect("messages serialise"));
+        self.deadlines
+            .lock()
+            .expect("the fake provider isn't poisoned")
+            .push(request.deadline);
         let answer = self
             .script
             .lock()
@@ -350,7 +365,8 @@ impl FakeTools {
         self
     }
 
-    /// Every call takes this long.
+    /// Every call takes this long, or as long as its deadline allows when
+    /// that's shorter, and then it has timed out.
     pub const fn taking(mut self, latency: Duration) -> Self {
         self.latency = latency;
         self
@@ -388,11 +404,19 @@ impl ToolExecutor for FakeTools {
             .lock()
             .expect("the fake executor isn't poisoned")
             .push(format!("-{id}"));
-        self.clock.advance(self.latency);
+        // The port's contract: a call takes no longer than its deadline,
+        // and one that reached it has stopped by the time it returns.
+        self.clock.advance(self.latency.min(call.deadline));
         self.taken
             .lock()
             .expect("the fake executor isn't poisoned")
             .push(call.clone());
+        if self.latency > call.deadline {
+            return Err(ToolError::new(
+                crate::ToolErrorKind::Timeout,
+                format!("{} was stopped at its deadline", call.name),
+            ));
+        }
         let mut answers = self
             .answers
             .lock()
@@ -433,6 +457,16 @@ impl ToolExecutor for FakeTools {
 /// An observer that keeps every event it was handed.
 pub struct Recorder {
     events: Mutex<Vec<RunEvent>>,
+    slow: Option<Slow>,
+}
+
+/// The events an observer takes time over. The loop waits for an observer,
+/// so time can pass in one, and this is how a test makes it pass between
+/// two things the loop does that take none themselves.
+struct Slow {
+    clock: Arc<FakeClock>,
+    over: &'static str,
+    taking: Duration,
 }
 
 impl Recorder {
@@ -440,6 +474,20 @@ impl Recorder {
     pub const fn new() -> Self {
         Self {
             events: Mutex::new(Vec::new()),
+            slow: None,
+        }
+    }
+
+    /// The same, which takes `taking` on `clock` over every event named
+    /// `over`.
+    pub const fn slow_over(clock: Arc<FakeClock>, over: &'static str, taking: Duration) -> Self {
+        Self {
+            events: Mutex::new(Vec::new()),
+            slow: Some(Slow {
+                clock,
+                over,
+                taking,
+            }),
         }
     }
 
@@ -463,6 +511,11 @@ impl Recorder {
 #[async_trait::async_trait]
 impl RunObserver for Recorder {
     async fn on(&self, event: RunEvent) {
+        if let Some(slow) = &self.slow
+            && slow.over == event.kind.name()
+        {
+            slow.clock.advance(slow.taking);
+        }
         self.events
             .lock()
             .expect("the recorder isn't poisoned")

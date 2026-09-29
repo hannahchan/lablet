@@ -132,7 +132,9 @@ pub enum LabletToolStatus {
     MalformedInput,
     /// The loop declined a `task_complete` call that wasn't the response's only call, so nothing ran.
     Rejected,
-    /// The call ran past the tool timeout.
+    /// The call's turn came when the run had no time left, so nothing was started for it. No span carries it.
+    NotRun,
+    /// The call ran past its deadline, the shorter of its executor's own limit and the time the run had left.
     Timeout,
     /// The executor failed before the tool could answer.
     Failed,
@@ -148,6 +150,7 @@ impl LabletToolStatus {
             Self::Unknown => "unknown",
             Self::MalformedInput => "malformed_input",
             Self::Rejected => "rejected",
+            Self::NotRun => "not_run",
             Self::Timeout => "timeout",
             Self::Failed => "failed",
         }

@@ -318,7 +318,7 @@ libraries.
 
 **[30] `lablet.tool.output.truncated`:** Justification: no convention says that a tool's output was cut before the model saw it, and `lablet.tool.output.bytes` alone can't tell a cut output from one that fitted.
 
-**[31] `lablet.tool.status`:** Justification: `error.type` is an open set, so it can't hold lablet's closed one, and a call that ended `ok` has no `error.type` at all. Every value but `ok` is also the call's `error.type`.
+**[31] `lablet.tool.status`:** Justification: `error.type` is an open set, so it can't hold lablet's closed one, and a call that ended `ok` has no `error.type` at all. Every value but `ok` and `not_run` is also the call's `error.type`. A call that was never run has no span, so no span carries `not_run`. It's the status the run's transcript gives such a call, and it's a member here so that the transcript's statuses and this attribute's values stay one set.
 
 **[32] `lablet.turn`:** Justification: the conventions have no turn; the index groups a turn's chat and tool spans without adding a span level.
 
@@ -435,9 +435,10 @@ Semantic conventions for individual RPC frameworks SHOULD document what `rpc.res
 | --- | --- | --- |
 | `failed` | The executor failed before the tool could answer. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `malformed_input` | The model's arguments for the call weren't valid JSON, so nothing ran. | ![Development](https://img.shields.io/badge/-development-blue) |
+| `not_run` | The call's turn came when the run had no time left, so nothing was started for it. No span carries it. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `ok` | The tool ran and returned a result. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `rejected` | The loop declined a `task_complete` call that wasn't the response's only call, so nothing ran. | ![Development](https://img.shields.io/badge/-development-blue) |
-| `timeout` | The call ran past the tool timeout. | ![Development](https://img.shields.io/badge/-development-blue) |
+| `timeout` | The call ran past its deadline, the shorter of its executor's own limit and the time the run had left. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `tool_error` | The tool ran and reported an error in its own result. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `unknown` | No configured tool has the name the model called. | ![Development](https://img.shields.io/badge/-development-blue) |
 
@@ -519,7 +520,7 @@ The `gen_ai.usage.*` values are the run's totals. A query that sums them over ev
 | [`lablet.config.digest`](/lablet/docs/telemetry/lablet/README.md#lablet-config-digest) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | SHA-256 of the resolved config, in hex. [53] | `9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08` |
 | [`lablet.run.stop_reason`](/lablet/docs/telemetry/lablet/README.md#lablet-run-stop-reason) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | Why the run ended. [54] | `completed`; `max_turns` |
 | [`lablet.run.turns`](/lablet/docs/telemetry/lablet/README.md#lablet-run-turns) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of turns the run took. [55] | `7` |
-| [`lablet.tool_calls.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls executed. The intercepted `task_complete` call isn't one. [56] | `5` |
+| [`lablet.tool_calls.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls executed. The intercepted `task_complete` call isn't one, and neither is a call that was never run. [56] | `5` |
 | `session.id` | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | string | The run id, for backends that group by session. | `00112233-4455-6677-8899-aabbccddeeff` |
 | `error.type` | ![Stable](https://img.shields.io/badge/-stable-lightgreen) | `Conditionally Required` If the stop reason isn't `completed`. | string | The stop reason, when the run didn't complete. [57] | `timeout`; `java.net.UnknownHostException`; `server_certificate_invalid`; `500` |
 | [`lablet.run.cost_usd`](/lablet/docs/telemetry/lablet/README.md#lablet-run-cost-usd) | ![Development](https://img.shields.io/badge/-development-blue) | `Conditionally Required` If `model.pricing` is configured. | double | Cost of the run in US dollars, from the configured pricing. [58] | `0.0421` |

@@ -72,7 +72,7 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 | <a id="lablet-tool-calls-input-bytes-total">`lablet.tool_calls.input_bytes.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Sum of the sizes of every tool call's input, in bytes. [42] | `1820` |
 | <a id="lablet-tool-calls-latency-ms-total">`lablet.tool_calls.latency_ms.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Sum of the latencies of every tool call, in milliseconds. [43] | `3100` |
 | <a id="lablet-tool-calls-output-bytes-total">`lablet.tool_calls.output_bytes.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Sum of the sizes of every tool call's output, in bytes. [44] | `56012` |
-| <a id="lablet-tool-calls-total">`lablet.tool_calls.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tool calls executed. The intercepted `task_complete` call isn't one. [45] | `5` |
+| <a id="lablet-tool-calls-total">`lablet.tool_calls.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tool calls executed. The intercepted `task_complete` call isn't one, and neither is a call that was never run. [45] | `5` |
 | <a id="lablet-tool-calls-truncated">`lablet.tool_calls.truncated`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tool calls whose output the output cap cut short. [46] | `0` |
 | <a id="lablet-tool-calls-unknown">`lablet.tool_calls.unknown`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tool calls that named a tool the run didn't offer. [47] | `0` |
 | <a id="lablet-tools-count">`lablet.tools.count`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tools offered to the model. [48] | `3` |
@@ -157,7 +157,7 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 
 **[39] `lablet.tool.source`:** Justification: `gen_ai.tool.type` says how a tool is invoked (function, extension, datastore), not which executor serves it.
 
-**[40] `lablet.tool.status`:** Justification: `error.type` is an open set, so it can't hold lablet's closed one, and a call that ended `ok` has no `error.type` at all. Every value but `ok` is also the call's `error.type`.
+**[40] `lablet.tool.status`:** Justification: `error.type` is an open set, so it can't hold lablet's closed one, and a call that ended `ok` has no `error.type` at all. Every value but `ok` and `not_run` is also the call's `error.type`. A call that was never run has no span, so no span carries `not_run`. It's the status the run's transcript gives such a call, and it's a member here so that the transcript's statuses and this attribute's values stay one set.
 
 **[41] `lablet.tool_calls.errors`:** Justification: no convention counts the failed tool calls of an agent run.
 
@@ -224,8 +224,9 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 | --- | --- | --- |
 | `failed` | The executor failed before the tool could answer. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `malformed_input` | The model's arguments for the call weren't valid JSON, so nothing ran. | ![Development](https://img.shields.io/badge/-development-blue) |
+| `not_run` | The call's turn came when the run had no time left, so nothing was started for it. No span carries it. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `ok` | The tool ran and returned a result. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `rejected` | The loop declined a `task_complete` call that wasn't the response's only call, so nothing ran. | ![Development](https://img.shields.io/badge/-development-blue) |
-| `timeout` | The call ran past the tool timeout. | ![Development](https://img.shields.io/badge/-development-blue) |
+| `timeout` | The call ran past its deadline, the shorter of its executor's own limit and the time the run had left. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `tool_error` | The tool ran and reported an error in its own result. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `unknown` | No configured tool has the name the model called. | ![Development](https://img.shields.io/badge/-development-blue) |

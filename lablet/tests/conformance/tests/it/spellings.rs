@@ -123,6 +123,7 @@ const fn registry_tool_status(status: &ToolCallStatus) -> LabletToolStatus {
         ToolCallStatus::Unknown => LabletToolStatus::Unknown,
         ToolCallStatus::MalformedInput => LabletToolStatus::MalformedInput,
         ToolCallStatus::Rejected => LabletToolStatus::Rejected,
+        ToolCallStatus::NotRun => LabletToolStatus::NotRun,
         ToolCallStatus::Ran { ended, .. } => match ended {
             ToolCallEnd::Ok => LabletToolStatus::Ok,
             ToolCallEnd::ToolError => LabletToolStatus::ToolError,
@@ -137,6 +138,7 @@ const fn model_tool_status(registry: LabletToolStatus) -> ToolCallStatus {
         LabletToolStatus::Unknown => ToolCallStatus::Unknown,
         LabletToolStatus::MalformedInput => ToolCallStatus::MalformedInput,
         LabletToolStatus::Rejected => ToolCallStatus::Rejected,
+        LabletToolStatus::NotRun => ToolCallStatus::NotRun,
         LabletToolStatus::Ok => ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok),
         LabletToolStatus::ToolError => {
             ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::ToolError)
@@ -152,6 +154,7 @@ fn every_tool_call_status_is_spelled_as_the_registry_spells_it() {
         ToolCallStatus::Unknown,
         ToolCallStatus::MalformedInput,
         ToolCallStatus::Rejected,
+        ToolCallStatus::NotRun,
         ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok),
         ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::ToolError),
         ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Timeout),

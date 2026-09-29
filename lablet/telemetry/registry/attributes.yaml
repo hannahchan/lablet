@@ -238,7 +238,7 @@ attributes:
   - key: lablet.tool_calls.total
     type: int
     stability: development
-    brief: Number of tool calls executed. The intercepted `task_complete` call isn't one.
+    brief: Number of tool calls executed. The intercepted `task_complete` call isn't one, and neither is a call that was never run.
     note: >
       Justification: no convention counts the tool calls of an agent run.
     examples: [5]
@@ -400,9 +400,13 @@ attributes:
           value: rejected
           brief: The loop declined a `task_complete` call that wasn't the response's only call, so nothing ran.
           stability: development
+        - id: not_run
+          value: not_run
+          brief: The call's turn came when the run had no time left, so nothing was started for it. No span carries it.
+          stability: development
         - id: timeout
           value: timeout
-          brief: The call ran past the tool timeout.
+          brief: The call ran past its deadline, the shorter of its executor's own limit and the time the run had left.
           stability: development
         - id: failed
           value: failed
@@ -412,8 +416,10 @@ attributes:
     brief: How a tool call ended.
     note: >
       Justification: `error.type` is an open set, so it can't hold lablet's closed one, and a
-      call that ended `ok` has no `error.type` at all. Every value but `ok` is also the call's
-      `error.type`.
+      call that ended `ok` has no `error.type` at all. Every value but `ok` and `not_run` is
+      also the call's `error.type`. A call that was never run has no span, so no span carries
+      `not_run`. It's the status the run's transcript gives such a call, and it's a member
+      here so that the transcript's statuses and this attribute's values stay one set.
     examples: [ok, tool_error]
   - key: lablet.tool.input.bytes
     type: int

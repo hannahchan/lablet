@@ -87,9 +87,9 @@ impl core::fmt::Display for ToolSource {
 ///
 /// Every status but [`ToolCallEnd::Ok`] is an error result for the model, and
 /// [`ToolCallStatus::as_str`] is the `error.type` of the span; a call that
-/// ended `ok` has no `error.type`.
+/// ended `ok` has no `error.type`, and a call that was never run has no span.
 ///
-/// Written `"unknown"`, `"malformed_input"`, `"rejected"`, or
+/// Written `"unknown"`, `"malformed_input"`, `"rejected"`, `"not_run"`, or
 /// `{"ran": {"source": "builtin", "ended": "ok"}}`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -107,6 +107,12 @@ pub enum ToolCallStatus {
     /// it would report work as done that the same response only asked for,
     /// so the model is asked to make the call on its own.
     Rejected,
+    /// The call's turn came when the run had no time left, so nothing was
+    /// started for it. The model did nothing wrong, so it isn't an invalid
+    /// call. It's in the transcript, because a turn's outcomes answer every
+    /// call of its response, and nowhere else: no total counts it, and no
+    /// event reports it, so it has no span.
+    NotRun,
     /// A tool ran.
     Ran {
         /// Where the tool that ran comes from.
@@ -125,7 +131,8 @@ pub enum ToolCallEnd {
     /// The tool reported an error in its own result, as an MCP tool does with
     /// `isError`.
     ToolError,
-    /// The call ran past the tool timeout.
+    /// The call ran past its deadline, which is the shorter of its
+    /// executor's own limit and the time the run had left.
     Timeout,
     /// The executor failed before the tool could answer.
     Failed,
@@ -159,6 +166,7 @@ impl ToolCallStatus {
             Self::Unknown => "unknown",
             Self::MalformedInput => "malformed_input",
             Self::Rejected => "rejected",
+            Self::NotRun => "not_run",
             Self::Ran { ended, .. } => ended.as_str(),
         }
     }
@@ -167,7 +175,7 @@ impl ToolCallStatus {
     #[must_use]
     pub const fn source(&self) -> Option<&ToolSource> {
         match self {
-            Self::Unknown | Self::MalformedInput | Self::Rejected => None,
+            Self::Unknown | Self::MalformedInput | Self::Rejected | Self::NotRun => None,
             Self::Ran { source, .. } => Some(source),
         }
     }
@@ -179,25 +187,48 @@ impl ToolCallStatus {
     /// entry and isn't one of the calls to a name the run doesn't have. The
     /// loop resolves the name before it reads the arguments, so a bad name
     /// with bad arguments is [`ToolCallStatus::Unknown`].
+    ///
+    /// Nothing resolved the name of a call that was never run, so it isn't
+    /// known to have named one: a per-tool entry is earned by a name that
+    /// was looked up, or the model could add keys by inventing names.
     #[must_use]
     pub const fn names_an_offered_tool(&self) -> bool {
-        !matches!(self, Self::Unknown)
+        match self {
+            Self::Unknown | Self::NotRun => false,
+            Self::MalformedInput | Self::Rejected | Self::Ran { .. } => true,
+        }
     }
 
     /// Whether the call is one the model got wrong, so the loop answered it
     /// and it reached no tool. A call that reached a tool isn't one whatever
     /// the tool returned, and neither is a call the executor failed: those
-    /// say how the tools did, where this says the model can't call them.
+    /// say how the tools did, where this says the model can't call them. A
+    /// call that was never run isn't one either: the run's time was gone
+    /// before anything could be said of the call.
     #[must_use]
     pub const fn is_invalid(&self) -> bool {
         match self {
             Self::Unknown | Self::MalformedInput | Self::Rejected => true,
-            Self::Ran { .. } => false,
+            Self::NotRun | Self::Ran { .. } => false,
+        }
+    }
+
+    /// Whether anything was started for the call: the loop took it up,
+    /// announced it to the observer, and answered it, with a tool or without
+    /// one. Only a call that was never run wasn't, and the run's totals
+    /// count the calls that were.
+    #[must_use]
+    pub const fn was_started(&self) -> bool {
+        match self {
+            Self::NotRun => false,
+            Self::Unknown | Self::MalformedInput | Self::Rejected | Self::Ran { .. } => true,
         }
     }
 
     /// Whether the model is sent an error result. A name the run doesn't have
-    /// is one, because the model is told so.
+    /// is one, because the model is told so, and so is a call that was never
+    /// run, though the run that left it unrun stops before the model is sent
+    /// anything.
     #[must_use]
     pub const fn is_error(&self) -> bool {
         !matches!(
@@ -219,8 +250,8 @@ impl core::fmt::Display for ToolCallStatus {
     }
 }
 
-/// What happened to one executed tool call: a member of the [`crate::Turn`]
-/// whose response made the call.
+/// What happened to one tool call: a member of the [`crate::Turn`] whose
+/// response made the call.
 ///
 /// The call's name and input aren't here, because the response's
 /// [`crate::ToolUse`] block with the same id holds them. Nor are the sizes:

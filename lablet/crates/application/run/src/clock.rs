@@ -4,9 +4,11 @@ use std::time::{Duration, Instant};
 
 /// The loop's only source of time.
 ///
-/// Every offset and latency a run records is read from here, so a test drives
-/// timeouts and backoff without waiting. Adapters enforce their own per-call
-/// deadlines in real time; this is the run's clock, not theirs.
+/// Every offset and latency a run records is read from here, and so is the
+/// time the run has left, which each call's deadline is taken from, so a test
+/// drives timeouts and backoff without waiting. Adapters enforce the
+/// deadline they're handed in real time; this is the run's clock, not
+/// theirs.
 #[async_trait::async_trait]
 pub trait Clock: Send + Sync {
     /// The instant now.

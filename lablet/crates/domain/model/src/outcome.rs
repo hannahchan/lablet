@@ -27,7 +27,8 @@ pub struct RunOutcome {
     /// includes the cached tokens, and a count no call reported is `None`;
     /// see [`Usage`].
     pub usage: Usage,
-    /// How many tool calls were executed. The intercepted `task_complete` call isn't one.
+    /// How many tool calls were executed. The intercepted `task_complete`
+    /// call isn't one, and neither is a call that was never run.
     pub tool_calls: u64,
     /// Wall-clock duration of the run, in whole milliseconds.
     pub duration_ms: u64,

@@ -19,12 +19,14 @@ use crate::{
 /// What bounds the calls, which is not a stop decision: the run's limits are
 /// the stop policy's business and these are the adapters' and the tool
 /// phase's.
+///
+/// No limit on a tool call is here. An executor has its own, and the loop
+/// hands each call the time the run has left, which the stop policy knows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CallLimits {
-    /// How long one provider attempt may take.
+    /// How long one provider attempt may take, when the run has that long
+    /// left. An attempt's deadline is the shorter of the two.
     pub provider_timeout: Duration,
-    /// How long one tool call may take.
-    pub tool_timeout: Duration,
     /// The cap on what the model is sent of a tool's output, and how a
     /// longer one is cut; `None` for no cap. The loop applies it to every
     /// call's answer, and hands each executor what the cap can use of an
@@ -268,6 +270,12 @@ impl RunService {
                 };
                 return (Ending::Pending(pending), stopped);
             }
+            // Point R reads only the response, so it lets a run go on whose
+            // time the response used up. No tool starts in such a run: its
+            // calls stay unanswered, as at any stop ahead of a tool phase.
+            if self.stop.time_left(self.elapsed(started)).is_none() {
+                return (Ending::Pending(pending), Stopped::just(StopReason::Timeout));
+            }
 
             run = self
                 .run_tools(run_id, pending, turn, started, capture)
@@ -351,7 +359,7 @@ impl RunService {
                         thinking: self.request.thinking,
                         effort: self.request.effort,
                         seed: self.request.seed,
-                        deadline: self.calls.provider_timeout,
+                        deadline: self.provider_deadline(began_at),
                     })
                     .await
             };
@@ -388,6 +396,20 @@ impl RunService {
             }
             attempt += 1;
         }
+    }
+
+    /// The deadline of a provider attempt that begins `elapsed` into the
+    /// run: the shorter of the provider timeout and the time the run has
+    /// left, so that no attempt is given longer than the run has.
+    ///
+    /// Point A found time left before the attempt, on a reading of the clock
+    /// taken ahead of this one. Should the last of it go between the two,
+    /// the attempt has no time at all, and the adapter reports the deadline
+    /// as reached.
+    fn provider_deadline(&self, elapsed: Duration) -> Duration {
+        self.stop
+            .time_left(elapsed)
+            .map_or(Duration::ZERO, |left| left.min(self.calls.provider_timeout))
     }
 
     /// What follows a failed attempt: the wait before the next one, or why
@@ -451,7 +473,17 @@ impl RunService {
     }
 
     /// One tool call, from the event that opens it to the event that closes
-    /// it.
+    /// it, or a call that's never run because its turn came when the run
+    /// had no time left.
+    ///
+    /// The clock is read once, when the call's turn comes, which for a call
+    /// of a later group is after the groups ahead of it. The call's start and
+    /// its deadline are both taken from that reading, so the deadline is the
+    /// time the run had left when the call is said to have started.
+    ///
+    /// Nothing is started for a call that's never run, so an observer isn't
+    /// told of it and the output cap, which cuts what a call wrote, has
+    /// nothing of it to cut.
     async fn answer(
         &self,
         run_id: &RunId,
@@ -460,6 +492,18 @@ impl RunService {
         started: Instant,
         capture: bool,
     ) -> Answer {
+        let began = self.clock.now();
+        let began_at = began.saturating_duration_since(started);
+        let Some(left) = self.stop.time_left(began_at) else {
+            return Answer::measured(
+                ToolCallStatus::NotRun,
+                KeptOutput::whole("the run reached its timeout before this call started"),
+                None,
+                began_at,
+                Duration::ZERO,
+            );
+        };
+
         let source = self.tools.source(&call.name).cloned();
         let input = match &call.input {
             ToolInput::Json(value) => Some(value),
@@ -478,16 +522,15 @@ impl RunService {
         )
         .await;
 
-        let began = self.clock.now();
         let trace_context = self.observer.trace_context(&call.id);
-        let settled = self.settle(&call, source, trace_context).await;
+        let settled = self.settle(&call, source, left, trace_context).await;
         let latency = self.clock.now().saturating_duration_since(began);
 
         let answer = Answer::measured(
             settled.status,
             settled.output,
             self.calls.output_cap,
-            began.saturating_duration_since(started),
+            began_at,
             latency,
         );
         self.emit(
@@ -506,7 +549,9 @@ impl RunService {
         .await;
         answer
     }
-    /// What became of one call, and what the model is sent back.
+
+    /// What became of one call that has `left` to run in, and what the model
+    /// is sent back.
     ///
     /// The name is resolved before the arguments are read, so a call to a
     /// name this run doesn't offer is `Unknown` whether or not its arguments
@@ -521,6 +566,7 @@ impl RunService {
         &self,
         call: &ToolUse,
         source: Option<lablet_model::ToolSource>,
+        left: Duration,
         trace_context: Option<crate::TraceContext>,
     ) -> Settled {
         use lablet_model::ToolCallEnd;
@@ -563,7 +609,7 @@ impl RunService {
                 id: call.id.clone(),
                 name: call.name.clone(),
                 input,
-                deadline: self.calls.tool_timeout,
+                deadline: left,
                 keep: self.calls.output_cap.map(OutputCap::keeps),
                 trace_context,
             })

@@ -53,7 +53,10 @@ pub struct ToolStats {
 ///
 /// The run totals that the outcome document carries (`usage`, `tool_calls`,
 /// `turns`, `duration_ms`, `stop_reason`, `error`) are read from `outcome` and
-/// aren't repeated here, so no two fields can disagree.
+/// aren't repeated here, so no two fields can disagree. Every total of tool
+/// calls, there and here, counts the calls something was started for
+/// ([`crate::ToolCallStatus::was_started`]): a call that was never run is in
+/// the transcript alone.
 ///
 /// It's written, never read: the wide event is emitted from it, and the
 /// documents lablet writes are the outcome and the transcript, each of which
@@ -155,7 +158,7 @@ impl RunSummary {
         add(&mut self.provider_latency_total_ms, record.latency_ms);
         self.provider_latency_max_ms = self.provider_latency_max_ms.max(record.latency_ms);
         self.finish_reasons.push(record.finish.clone());
-        for (call, outcome) in turn.tool_uses().zip(turn.tool_calls()) {
+        for (call, outcome) in turn.counted() {
             let errors = u64::from(outcome.status.is_error());
             add(&mut self.tool_calls_errors, errors);
             add(

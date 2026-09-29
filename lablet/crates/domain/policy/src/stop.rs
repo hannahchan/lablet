@@ -1,4 +1,5 @@
-//! Whether a run goes on, asked at the three points of a turn where it can end.
+//! Whether a run goes on, asked at the three points of a turn where it can
+//! end, and how long it has left, which is what a call's deadline is.
 
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -116,12 +117,27 @@ impl StopPolicy {
     /// instead of sleeping up to a limit it's known to reach.
     #[must_use]
     pub fn allows_wait(&self, elapsed: Duration, wait: Duration) -> bool {
-        elapsed.saturating_add(wait) < self.timeout
+        self.time_left(elapsed.saturating_add(wait)).is_some()
+    }
+
+    /// The time the run has left `elapsed` after it started, or `None` once
+    /// `elapsed` has reached the timeout.
+    ///
+    /// It's the only place a call's deadline is taken from the run's timeout,
+    /// so no call's deadline is later than the run's. Its `None` is what
+    /// keeps a tool phase from starting and what leaves a call unrun whose
+    /// turn comes too late. The timeout of points A and B is read from here
+    /// too, so a run those points let go on always has time to give a call.
+    #[must_use]
+    pub fn time_left(&self, elapsed: Duration) -> Option<Duration> {
+        self.timeout
+            .checked_sub(elapsed)
+            .filter(|left| !left.is_zero())
     }
 
     /// The limits that grow during a provider call as well as a tool phase.
     fn limit_reached(&self, progress: &Progress) -> Option<StopReason> {
-        if progress.elapsed >= self.timeout {
+        if self.time_left(progress.elapsed).is_none() {
             Some(StopReason::Timeout)
         } else if self
             .max_total_tokens

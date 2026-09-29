@@ -940,6 +940,53 @@ fn tool_calls_that_never_ran_are_in_no_total() {
     assert_eq!(summary.tool_input_bytes, 0);
 }
 
+/// The call that was never run is given a latency and an output over the
+/// cap here, which the loop never gives one, so that each total is seen to
+/// leave it out rather than to add nothing.
+#[test]
+fn a_call_that_was_never_run_is_in_the_transcript_and_in_no_total() {
+    let run = answered(
+        calling(start(), &["bash", "read_file", "no_such_tool"]),
+        &[
+            answer(ran(ToolCallEnd::Ok), "done", ms(30)),
+            answer(ToolCallStatus::NotRun, "0123456789", ms(5)),
+            answer(ToolCallStatus::NotRun, "0123456789", ms(5)),
+        ],
+    );
+
+    let finished = run.finish(StopReason::Timeout, ms(0), None, None, None, None);
+
+    let outcomes = finished.transcript.turns()[0].tool_calls();
+    assert_eq!(
+        outcomes
+            .iter()
+            .map(|outcome| outcome.status.as_str())
+            .collect::<Vec<_>>(),
+        ["ok", "not_run", "not_run"]
+    );
+    assert_eq!(outcomes[1].call_id.as_str(), "call_1");
+    let summary = finished.summary;
+    assert_eq!(summary.outcome.tool_calls, 1);
+    assert_eq!(summary.tool_calls_errors, 0);
+    assert_eq!(summary.tool_calls_unknown, 0);
+    assert_eq!(summary.tool_calls_truncated, 0);
+    assert_eq!(summary.tool_latency_total_ms, 30);
+    // The one input counted is `{"n":0}`, and the one output is `done`.
+    assert_eq!(summary.tool_input_bytes, 7);
+    assert_eq!(summary.tool_output_bytes, 4);
+    assert_eq!(
+        summary.per_tool,
+        BTreeMap::from([(
+            name("bash"),
+            ToolStats {
+                calls: 1,
+                errors: 0,
+                latency_ms: 30,
+            }
+        )])
+    );
+}
+
 #[test]
 fn a_run_without_a_turn_cap_has_a_summary_that_holds_none() {
     let run = Run::start(
@@ -1058,6 +1105,25 @@ fn where_a_valid_call_sits_among_a_turn_s_calls_does_not_decide_the_count() {
 
         assert_eq!(invalid_turns(&run), 0, "{statuses:?}");
     }
+}
+
+/// The model got the first call wrong and had no chance to get the second
+/// one right, so the turn says nothing about whether it can call a tool.
+#[test]
+fn a_turn_the_timeout_cut_short_is_never_an_invalid_turn() {
+    let run = turn_answered(start(), ToolCallStatus::Unknown);
+    let run = turn_answered(run, ToolCallStatus::MalformedInput);
+    assert_eq!(invalid_turns(&run), 2);
+
+    let cut_short = tool_turn(
+        run.clone(),
+        &["no_such_tool", "bash"],
+        &[ToolCallStatus::Unknown, ToolCallStatus::NotRun],
+    );
+    assert_eq!(invalid_turns(&cut_short), 0);
+
+    let never_begun = turn_answered(run, ToolCallStatus::NotRun);
+    assert_eq!(invalid_turns(&never_begun), 0);
 }
 
 #[test]

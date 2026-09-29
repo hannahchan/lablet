@@ -60,7 +60,9 @@ use crate::{
 /// intercepted, or the run was cancelled or reached a limit first. Which of
 /// the two it was is read from whether the response holds tool calls. A
 /// `task_complete` call that came with other calls isn't intercepted: it has
-/// an outcome, `rejected`, like every other call of its turn.
+/// an outcome, `rejected`, like every other call of its turn. So has a call
+/// whose turn came when the run's time had gone inside a tool phase:
+/// `not_run`, which is what lets the calls ahead of it keep their outcomes.
 ///
 /// A run takes one prompt, so only the first turn of a run's transcript has
 /// input. The shape leaves room for a user who speaks again.
@@ -229,6 +231,16 @@ impl Turn {
     /// outcomes, the n-th outcome answers the n-th call.
     pub fn tool_uses(&self) -> impl Iterator<Item = &ToolUse> {
         tool_uses(&self.response)
+    }
+
+    /// The calls a run's totals count, each with its outcome: the ones
+    /// something was started for. It's the one reading of which those are,
+    /// so the count of a run's tool calls and the sums over them can't
+    /// differ on a call that was never run.
+    pub(crate) fn counted(&self) -> impl Iterator<Item = (&ToolUse, &ToolCallOutcome)> {
+        self.tool_uses()
+            .zip(&self.tool_calls)
+            .filter(|(_, outcome)| outcome.status.was_started())
     }
 
     /// The response's [`ContentBlock::Text`] blocks, concatenated in order.

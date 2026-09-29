@@ -69,15 +69,16 @@ fn a_tool_spec_has_one_json_form() {
     assert_eq!(serde_json::from_value::<ToolSpec>(expected).unwrap(), spec);
 }
 
-// Every spelling but `ok` is a value of `error.type` on the `execute_tool`
-// span, which is a semantic-convention attribute with no registry enum to
-// compare with.
-const STATUSES: [(ToolCallStatus, &str); 7] = [
+// Every spelling but `ok` and `not_run` is a value of `error.type` on the
+// `execute_tool` span, which is a semantic-convention attribute with no
+// registry enum to compare with. A call that was never run has no span.
+const STATUSES: [(ToolCallStatus, &str); 8] = [
     (ran(ToolCallEnd::Ok), "ok"),
     (ran(ToolCallEnd::ToolError), "tool_error"),
     (ToolCallStatus::Unknown, "unknown"),
     (ToolCallStatus::MalformedInput, "malformed_input"),
     (ToolCallStatus::Rejected, "rejected"),
+    (ToolCallStatus::NotRun, "not_run"),
     (ran(ToolCallEnd::Timeout), "timeout"),
     (ran(ToolCallEnd::Failed), "failed"),
 ];
@@ -105,6 +106,10 @@ fn a_call_is_invalid_when_no_tool_was_reached_and_never_when_one_was() {
         ToolCallStatus::Rejected.is_invalid(),
         "the loop answered it, so it reached no tool"
     );
+    assert!(
+        !ToolCallStatus::NotRun.is_invalid(),
+        "the run's time had gone, which the model didn't get wrong"
+    );
     for ended in [
         ToolCallEnd::Ok,
         ToolCallEnd::ToolError,
@@ -124,6 +129,7 @@ fn only_a_call_that_ran_has_a_source() {
     assert_eq!(ToolCallStatus::Unknown.source(), None);
     assert_eq!(ToolCallStatus::MalformedInput.source(), None);
     assert_eq!(ToolCallStatus::Rejected.source(), None);
+    assert_eq!(ToolCallStatus::NotRun.source(), None);
     assert_eq!(
         ToolCallStatus::ran(docs_server(), ToolCallEnd::Failed).source(),
         Some(&docs_server())
@@ -131,15 +137,26 @@ fn only_a_call_that_ran_has_a_source() {
 }
 
 /// A call the loop answered for its arguments, or rejected, still named a
-/// tool the run has: only `unknown` says the name was the mistake.
+/// tool the run has: only `unknown` says the name was the mistake. The name
+/// of a call that was never run was looked up by nothing, so it's known to
+/// name no tool, whatever it was.
 #[test]
-fn every_call_but_one_to_an_unknown_name_named_a_tool_the_run_offered() {
+fn a_call_named_a_tool_the_run_offered_unless_its_name_was_unknown_or_never_looked_up() {
     for (status, spelling) in STATUSES {
         assert_eq!(
             status.names_an_offered_tool(),
-            spelling != "unknown",
+            !matches!(spelling, "unknown" | "not_run"),
             "{status}"
         );
+    }
+}
+
+/// The loop answers an invalid call without a tool, and it still took the
+/// call up and told the observer. Only `not_run` says it never did.
+#[test]
+fn something_was_started_for_every_call_but_one_that_was_never_run() {
+    for (status, spelling) in STATUSES {
+        assert_eq!(status.was_started(), spelling != "not_run", "{status}");
     }
 }
 
@@ -151,6 +168,7 @@ fn a_status_serialises_as_the_two_levels_it_holds() {
         (ToolCallStatus::Unknown, "unknown"),
         (ToolCallStatus::MalformedInput, "malformed_input"),
         (ToolCallStatus::Rejected, "rejected"),
+        (ToolCallStatus::NotRun, "not_run"),
     ] {
         assert_eq!(serde_json::to_value(&status).unwrap(), json!(written));
         assert_eq!(

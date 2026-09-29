@@ -86,7 +86,8 @@ pub enum EventKind {
         /// next attempt, and `RunFinished` says so.
         retry: Option<Duration>,
     },
-    /// A tool call began.
+    /// A tool call began. A call that's never run began nothing, so it has
+    /// neither this event nor the one that ends a call, and no span.
     ToolCallStarted {
         /// Which turn made the call.
         turn: u32,
@@ -109,7 +110,8 @@ pub enum EventKind {
         turn: u32,
         /// The call's id.
         call_id: ToolCallId,
-        /// What became of it.
+        /// What became of it, which is never
+        /// [`ToolCallStatus::NotRun`]: no event reports such a call.
         status: ToolCallStatus,
         /// How long it took.
         latency_ms: u64,

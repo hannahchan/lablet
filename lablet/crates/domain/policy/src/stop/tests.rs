@@ -184,6 +184,60 @@ fn a_timeout_of_zero_stops_the_run_before_its_first_provider_call() {
     );
 }
 
+// The time left
+
+#[test]
+fn the_time_left_is_the_timeout_less_what_has_elapsed() {
+    assert_eq!(limits().time_left(Duration::ZERO), Some(TIMEOUT));
+    assert_eq!(
+        limits().time_left(Duration::from_secs(599)),
+        Some(Duration::from_secs(1))
+    );
+    assert_eq!(
+        limits().time_left(TIMEOUT.checked_sub(Duration::from_nanos(1)).unwrap()),
+        Some(Duration::from_nanos(1))
+    );
+}
+
+#[test]
+fn a_run_that_has_reached_its_timeout_has_no_time_left() {
+    assert_eq!(limits().time_left(TIMEOUT), None);
+    assert_eq!(limits().time_left(TIMEOUT + Duration::from_nanos(1)), None);
+    assert_eq!(limits().time_left(Duration::MAX), None);
+
+    let policy = StopPolicy {
+        timeout: Duration::ZERO,
+        ..limits()
+    };
+    assert_eq!(policy.time_left(Duration::ZERO), None);
+}
+
+/// A deadline is handed out only by a run the timeout hasn't stopped, so the
+/// two answers change at the same instant: a run point A or point B lets go
+/// on has time to give a call, and one they stop has none.
+#[test]
+fn a_run_has_time_left_exactly_when_the_timeout_has_not_stopped_it() {
+    let nanosecond = Duration::from_nanos(1);
+    for elapsed in [
+        Duration::ZERO,
+        TIMEOUT.checked_sub(nanosecond).unwrap(),
+        TIMEOUT,
+        TIMEOUT + nanosecond,
+    ] {
+        let progress = Progress {
+            elapsed,
+            ..mid_run()
+        };
+        for decide in [StopPolicy::before_call, StopPolicy::after_tools] {
+            assert_eq!(
+                decide(&uncapped(), &progress).is_none(),
+                uncapped().time_left(elapsed).is_some(),
+                "{elapsed:?}"
+            );
+        }
+    }
+}
+
 // The token budget
 
 #[test]
