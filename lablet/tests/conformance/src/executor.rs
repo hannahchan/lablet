@@ -8,6 +8,7 @@
 //! takes real time, and a paused clock would reach a call's deadline before
 //! the work had begun.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,6 +31,9 @@ const KEPT: OutputKeep = OutputKeep { head: 4, tail: 4 };
 
 /// How much the tool writes of which everything is kept.
 const SHORT_BYTES: u64 = 64;
+
+/// How long a line of what the tool writes is, its newline included.
+const LINE_BYTES: u64 = 8;
 
 /// The deadlines the deadline case gives a call, one after another until
 /// the work of a call had begun when its deadline came. The first is enough
@@ -88,9 +92,10 @@ pub trait Subject: Send + Sync {
     /// The executor. Every call gives the same one.
     fn executor(&self) -> Arc<dyn ToolExecutor>;
 
-    /// A call to a tool whose text is `bytes` long, all of it counted, and
-    /// is ASCII, so that it can be cut anywhere.
-    fn writes(&self, bytes: u64) -> Asked;
+    /// A call to a tool whose text is `text`, which is ASCII, so that it
+    /// can be cut anywhere, and ends a line. The executor may close the
+    /// text with a line of its own, the same one whatever the text.
+    fn writes(&self, text: &str) -> Asked;
 
     /// A call whose work would go on for a minute or longer, and a way to
     /// see that work. Every call of this gives work of its own, which no
@@ -127,6 +132,16 @@ fn text(output: KeptOutput) -> String {
         .iter()
         .map(|ToolResultContent::Text(text)| text.as_str())
         .collect()
+}
+
+/// Text of `bytes` bytes in which every line is its own number, so that no
+/// two places in it read alike and text kept from the wrong place shows.
+fn numbered(bytes: u64) -> String {
+    (0..bytes / LINE_BYTES).fold(String::new(), |mut text, line| {
+        // Writing to a `String` can't fail, so there's no error to report.
+        let _ = writeln!(text, "{line:<7}");
+        text
+    })
 }
 
 /// A call that runs past its deadline returns `timeout`, no sooner than the
@@ -180,29 +195,49 @@ pub async fn a_call_past_its_deadline_has_stopped_when_execute_returns(subject: 
 }
 
 /// An executor keeps of a call's text what the call's `keep` says and no
-/// more, however much the tool writes, reports the size of all of it, and
-/// keeps everything of a call that has no `keep`.
+/// more, however much the tool writes: the text's own start and its own
+/// end. It reports the size of all of it, and keeps everything of a call
+/// that has no `keep`. A line it closes the text with is kept whole beside
+/// them.
 ///
 /// # Panics
 ///
 /// Panics when that doesn't hold of `subject`, which is how a case fails.
 pub async fn an_executor_keeps_no_more_output_than_its_limit(subject: &dyn Subject) {
     let executor = subject.executor();
+    let (written, brief) = (numbered(WRITTEN_BYTES), numbered(SHORT_BYTES));
 
-    let long = subject.writes(WRITTEN_BYTES).call(NO_HURRY, Some(KEPT));
+    let long = subject.writes(&written).call(NO_HURRY, Some(KEPT));
     let long = must(executor.execute(long).await, "calling the tool that writes");
-    let short = subject.writes(SHORT_BYTES).call(NO_HURRY, None);
+    let short = subject.writes(&brief).call(NO_HURRY, None);
     let short = must(
         executor.execute(short).await,
         "calling the tool that writes",
     );
 
     assert!(!long.is_error && !short.is_error);
+    let (total, kept) = (short.output.total_bytes(), short.output.kept_bytes());
+    assert_eq!(kept, total, "a call with no `keep` has everything kept");
+    let said = text(short.output);
+    let Some(closing) = said.strip_prefix(brief.as_str()) else {
+        panic!("the text of a call with no `keep` is what the tool wrote: {said:?}")
+    };
+    assert_eq!(
+        total,
+        said.len() as u64,
+        "the size that a call with no `keep` reports of its text"
+    );
+    let closing_bytes = closing.len() as u64;
+
     let (total, kept) = (long.output.total_bytes(), long.output.kept_bytes());
-    assert_eq!(total, WRITTEN_BYTES, "the size of all the tool wrote");
+    assert_eq!(
+        total,
+        WRITTEN_BYTES + closing_bytes,
+        "the size of all the tool wrote"
+    );
     assert_eq!(
         kept,
-        KEPT.head + KEPT.tail,
+        KEPT.head + KEPT.tail + closing_bytes,
         "what's kept of {total} bytes, of which {KEPT:?} is to be kept"
     );
     let cap = must(
@@ -216,29 +251,25 @@ pub async fn an_executor_keeps_no_more_output_than_its_limit(subject: &dyn Subje
         Duration::ZERO,
         Duration::ZERO,
     );
-    assert_eq!(sent.truncated_from_bytes(), Some(WRITTEN_BYTES));
-    let sizes: Vec<usize> = sent
+    assert_eq!(sent.truncated_from_bytes(), Some(total));
+    let sent: Vec<&str> = sent
         .content()
         .iter()
-        .map(|ToolResultContent::Text(text)| text.len())
+        .map(|ToolResultContent::Text(text)| text.as_str())
         .collect();
     let line = format!(
-        "[truncated: {} of {WRITTEN_BYTES} bytes left out]",
-        WRITTEN_BYTES - kept
+        "[truncated: {} of {total} bytes left out]",
+        WRITTEN_BYTES - KEPT.head - KEPT.tail
     );
+    let mut expected = vec![&written[..4], line.as_str(), &written[written.len() - 4..]];
+    if !closing.is_empty() {
+        expected.push(closing);
+    }
     assert_eq!(
-        sizes,
-        [4, line.len(), 4],
-        "the start, the line and the end that the model is sent: {:?}",
-        sent.content()
+        sent, expected,
+        "the start of the text, the line, the end of the text and the closing line that the \
+         model is sent"
     );
-
-    assert_eq!(
-        (short.output.total_bytes(), short.output.kept_bytes()),
-        (SHORT_BYTES, SHORT_BYTES),
-        "a call with no `keep` has everything kept"
-    );
-    assert_eq!(text(short.output).len() as u64, SHORT_BYTES);
 }
 
 /// A tool whose spec says `Shared` answers calls that are made while

@@ -14,8 +14,8 @@ Sequencing rationale: the loop is proven against fakes before any real adapter e
 | 3     | The loop                                            | Done, 2026-09-21 |
 | 3a    | The run's states as types, and tool calls in groups | Done, 2026-09-24 |
 | 3b    | The domain and the loop after the design review     | Done, 2026-09-29 |
-| 4     | Library and first traced run                        | Next             |
-| 5     | CLI and config surface                              | Not started      |
+| 4     | Library and first traced run                        | Done, 2026-09-29 |
+| 5     | CLI and config surface                              | Next             |
 | 6     | OTLP network export and live-check                  | Not started      |
 | 7     | Anthropic, and the capture of the primary reference | Not started      |
 | 7a    | Context management                                  | Not started      |

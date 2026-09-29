@@ -1,6 +1,7 @@
 //! `build`: a config in, a `Lablet` out. The one place that knows every
 //! adapter, and that selects among them.
 
+use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -11,7 +12,9 @@ use lablet_telemetry_otel::{FileTarget, OtelObserver};
 use lablet_tools_builtin::{BuiltinTools, SettingsError};
 
 use crate::clock::{NeverCancelled, TokioClock};
-use crate::config::{Config, ConfigError, Context, Format, Provider, TranscriptFormat};
+use crate::config::{
+    Config, ConfigError, Context, Format, Model, Provider, Tools, TranscriptFormat,
+};
 use crate::fanout::FanOut;
 use crate::lablet::{Fixed, Lablet, Played};
 use crate::root::{self, OwnFile};
@@ -40,6 +43,10 @@ pub enum Unsupported {
     Atif,
     /// `run.completion_schema` is set.
     CompletionSchema,
+    /// `tools.max_description_chars` is anything but its default. Nothing
+    /// that's built yet has a description to cut, so another value would
+    /// change the config's digest and nothing else.
+    MaxDescriptionChars,
 }
 
 impl Unsupported {
@@ -49,7 +56,7 @@ impl Unsupported {
             Self::OtlpEndpoint => "6",
             Self::Anthropic => "7",
             Self::ContextMask => "7a",
-            Self::McpServers => "8",
+            Self::McpServers | Self::MaxDescriptionChars => "8",
             Self::Openai => "9",
             Self::Skills | Self::Atif | Self::CompletionSchema => "10",
         }
@@ -67,6 +74,9 @@ impl fmt::Display for Unsupported {
             Self::ContextMask => "`run.context: mask`",
             Self::Atif => "`run.transcript_format: atif`",
             Self::CompletionSchema => "`run.completion_schema`",
+            Self::MaxDescriptionChars => {
+                "a value of `tools.max_description_chars` other than its default"
+            }
         })
     }
 }
@@ -81,7 +91,8 @@ impl From<Unsupported> for BuildError {
 }
 
 /// Why a `Lablet` couldn't be built. Each refusal of a setting names its
-/// key and the value that was refused.
+/// key and the value that was refused, but for `model.api_key_env`, whose
+/// value no refusal shows.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BuildError {
     /// The config states something a config may not.
@@ -95,9 +106,18 @@ pub enum BuildError {
         /// The phase of the build plan that delivers it.
         phase: &'static str,
     },
+    /// The provider needs a key, and the variable that `model.api_key_env`
+    /// names holds none where lablet runs. What the config holds there may
+    /// be a key that was written in the name's place, so the refusal holds
+    /// nothing of it.
+    #[error("model.api_key_env is refused: {reason}")]
+    KeyVariable {
+        /// What's wrong with the variable.
+        reason: String,
+    },
     /// A setting holds a value that can't be used where lablet runs: a
-    /// file that can't be read, a script that's refused, a variable that
-    /// isn't set.
+    /// file that can't be read, a script that's refused, a root that's no
+    /// directory.
     #[error("{key}: {value} is refused: {reason}")]
     Refused {
         /// The setting.
@@ -153,13 +173,16 @@ fn refused(key: &'static str, value: &dyn fmt::Display, reason: &dyn fmt::Displa
 /// may not. The config is checked whole before any adapter is selected, so
 /// the answer doesn't depend on which adapters exist.
 ///
-/// Returns [`BuildError::Refused`] when `model.api_key_env` names a
-/// variable that isn't set and the provider needs a key, when a file the
-/// config names can't be read, when the script is refused, and when
-/// `tools.builtin.root` isn't a directory.
+/// Returns [`BuildError::KeyVariable`] when the provider needs a key and
+/// the variable `model.api_key_env` names isn't set, or holds nothing.
+///
+/// Returns [`BuildError::Refused`] when a file the config names can't be
+/// read, when the script is refused, and when `tools.builtin.root` isn't a
+/// directory.
 ///
 /// Returns [`BuildError::Unsupported`] for a config that selects an
-/// adapter this lablet doesn't have yet.
+/// adapter this lablet doesn't have yet, or that states a setting only a
+/// later one applies.
 ///
 /// Returns [`BuildError::RootHolds`] when `tools.builtin.root` holds the
 /// config, the system prompt's file, the transcript or the telemetry file.
@@ -181,7 +204,7 @@ pub async fn build_observed(
     observers: Vec<Arc<dyn RunObserver>>,
 ) -> Result<Lablet, BuildError> {
     let settings = Settings::of(&config)?;
-    key_is_set(&config)?;
+    key_is_set(&config.model, |variable| std::env::var_os(variable))?;
     let script = match &settings.provider {
         Selected::Fake { script } => script,
         Selected::Anthropic => return Err(Unsupported::Anthropic.into()),
@@ -274,29 +297,31 @@ pub async fn build_observed(
 /// Holds `model.api_key_env` to a variable that's set, for a provider that
 /// needs a key. Only whether it's set is read, and nothing of what it
 /// holds is kept.
-fn key_is_set(config: &Config) -> Result<(), BuildError> {
-    let (Provider::Anthropic, Some(variable)) =
-        (config.model.provider, config.model.key_variable())
-    else {
+///
+/// `held` is lablet's environment, asked for as a function so that a test
+/// can say what it holds.
+fn key_is_set(model: &Model, held: impl Fn(&str) -> Option<OsString>) -> Result<(), BuildError> {
+    let (Provider::Anthropic, Some(variable)) = (model.provider, model.key_variable()) else {
         return Ok(());
     };
-    match std::env::var_os(variable) {
-        Some(key) if !key.is_empty() => Ok(()),
-        Some(_) => Err(refused(
-            "model.api_key_env",
-            &variable,
-            &"the variable is empty, and the provider `anthropic` needs a key",
-        )),
-        None => Err(refused(
-            "model.api_key_env",
-            &variable,
-            &"the variable isn't set, and the provider `anthropic` needs a key",
-        )),
-    }
+    let fault = match held(variable) {
+        Some(key) if !key.is_empty() => return Ok(()),
+        Some(_) => "is empty",
+        None => "isn't set",
+    };
+    // A name the config states isn't shown, and the one that's lablet's own
+    // is: a config that names none has nothing else to be corrected by.
+    let variable = match model.api_key_env {
+        Some(_) => "the variable it names".to_owned(),
+        None => format!("`{variable}`, the variable that's read when the config names none,"),
+    };
+    Err(BuildError::KeyVariable {
+        reason: format!("{variable} {fault}, and the provider `anthropic` needs a key"),
+    })
 }
 
 /// Refuses what the config selects, beside its provider, that this lablet
-/// has no adapter for.
+/// has no adapter for, and a setting that only such an adapter applies.
 fn supported(config: &Config) -> Result<(), Unsupported> {
     let Config {
         run,
@@ -320,6 +345,10 @@ fn supported(config: &Config) -> Result<(), Unsupported> {
         (
             run.completion_schema.is_some(),
             Unsupported::CompletionSchema,
+        ),
+        (
+            tools.max_description_chars != Tools::default().max_description_chars,
+            Unsupported::MaxDescriptionChars,
         ),
     ];
     match selected.into_iter().find(|(selected, _)| *selected) {
@@ -377,3 +406,6 @@ fn outside_root(root: &Path, config: &Config, telemetry: &FileTarget) -> Result<
         None => Ok(()),
     }
 }
+
+#[cfg(test)]
+mod tests;

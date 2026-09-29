@@ -70,7 +70,7 @@ fn a_character_the_output_ends_inside_is_no_character() {
 }
 
 #[test]
-fn a_line_of_its_own_follows_text_that_ends_a_line_and_text_that_does_not() {
+fn the_closing_line_is_a_line_of_its_own_after_text_that_ends_a_line_and_text_that_does_not() {
     for (wrote, expected) in [
         ("", "exit code: 0"),
         ("done\n", "done\nexit code: 0"),
@@ -79,18 +79,38 @@ fn a_line_of_its_own_follows_text_that_ends_a_line_and_text_that_does_not() {
     ] {
         let mut text = Text::new(None);
         text.feed(wrote.as_bytes());
-        text.line("exit code: 0");
-        assert_eq!(whole(text.kept()), expected, "after {wrote:?}");
+        text.close("exit code: 0");
+        let kept = text.kept();
+
+        assert_eq!(kept.total_bytes(), expected.len() as u64, "after {wrote:?}");
+        assert_eq!(sent(kept, None), [expected], "after {wrote:?}");
     }
 }
 
 #[test]
-fn a_line_follows_a_character_that_was_never_ended() {
+fn the_closing_line_follows_a_character_that_was_never_ended() {
     let mut text = Text::new(None);
     text.feed(b"a\xE2");
-    text.line("exit code: 0");
+    text.close("exit code: 0");
 
     assert_eq!(whole(text.kept()), "a\u{FFFD}\nexit code: 0");
+}
+
+#[test]
+fn the_closing_line_is_sent_of_a_text_that_a_cut_sends_only_the_start_of() {
+    let cap = OutputCap::new(8, OutputCut::Head).unwrap();
+    let mut text = Text::new(Some(cap.keeps()));
+    text.feed(b"one\ntwo\nthree");
+    text.close("exit code: 3");
+
+    assert_eq!(
+        sent(text.kept(), Some(cap)),
+        [
+            "one\ntwo\n",
+            "[truncated: the first 8 of 26 bytes]",
+            "exit code: 3"
+        ]
+    );
 }
 
 #[test]

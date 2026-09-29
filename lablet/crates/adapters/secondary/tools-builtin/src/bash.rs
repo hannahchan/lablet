@@ -95,14 +95,44 @@ impl Group {
 
     /// Waits for the group to go, and says whether it went.
     async fn went(&mut self) -> bool {
-        let gone = async {
-            while self.is_there() {
-                tokio::time::sleep(LOOKS_EVERY).await;
-            }
-        };
-        let went = tokio::time::timeout(GONE_WITHIN, gone).await.is_ok();
+        let went = went(|| self.is_there()).await;
         self.running = !went;
         went
+    }
+}
+
+/// Waits for as long as `is_there` says that something is, and no longer
+/// than [`GONE_WITHIN`], and says whether it went.
+///
+/// What looks is a parameter so that a test can say what's seen, and when.
+async fn went(is_there: impl Fn() -> bool) -> bool {
+    let gone = async {
+        while is_there() {
+            tokio::time::sleep(LOOKS_EVERY).await;
+        }
+    };
+    tokio::time::timeout(GONE_WITHIN, gone).await.is_ok()
+}
+
+/// How a call ends whose command ran for as long as it may and was killed,
+/// once the shell was `waited` for.
+///
+/// It's a timeout only when everything the command started `went`, because
+/// a timeout says that the work has stopped.
+async fn ended_by_the_kill(
+    terms: Terms,
+    waited: std::io::Result<ExitStatus>,
+    went: impl Future<Output = bool>,
+) -> ToolError {
+    let killed = format!("the command was killed after {:?}", terms.limit);
+    match waited {
+        Ok(_) if went.await => terms.ran_out(Tool::Bash),
+        Ok(_) => failed(format!(
+            "{killed}, and {GONE_WITHIN:?} later a process it started hadn't gone"
+        )),
+        Err(error) => failed(format!(
+            "{killed}, and the shell couldn't be waited for: {error}"
+        )),
     }
 }
 
@@ -215,16 +245,8 @@ impl BuiltIn for Bash {
         let reading = read_to_the_end(&mut wrote, &mut shell, &mut text);
         let Ok(read) = tokio::time::timeout(terms.limit, reading).await else {
             group.kill();
-            let killed = format!("the command was killed after {:?}", terms.limit);
-            return Err(match shell.wait().await {
-                Ok(_) if group.went().await => terms.ran_out(Tool::Bash),
-                Ok(_) => failed(format!(
-                    "{killed}, and {GONE_WITHIN:?} later a process it started hadn't gone"
-                )),
-                Err(error) => failed(format!(
-                    "{killed}, and the shell couldn't be waited for: {error}"
-                )),
-            });
+            let waited = shell.wait().await;
+            return Err(ended_by_the_kill(terms, waited, group.went()).await);
         };
         let status =
             read.map_err(|error| failed(format!("what the command wrote wasn't read: {error}")))?;
@@ -232,7 +254,7 @@ impl BuiltIn for Bash {
         // another process to have. What it left running is left running.
         group.running = false;
 
-        text.line(&ended(status));
+        text.close(&ended(status));
         Ok(ToolOutput {
             output: text.kept(),
             is_error: false,
@@ -240,3 +262,6 @@ impl BuiltIn for Bash {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

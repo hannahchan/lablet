@@ -633,6 +633,253 @@ fn an_output_kept_in_two_parts_with_nothing_missing_is_sent_whole() {
     );
 }
 
+// The closing line.
+
+const CLOSING: &str = "exit code: 3";
+
+/// `text` fed a character at a time, and `closing` said of it.
+fn closed(keep: Option<OutputKeep>, text: &str, closing: &str) -> KeptOutput {
+    let mut output = fed(keep, text);
+    output.close(closing);
+    output
+}
+
+/// What the model is sent of `text` and its closing line when an executor
+/// kept what `cap` asks for, and the size the outcome holds.
+fn sent_closed(text: &str, cap: OutputCap) -> (Vec<String>, Option<u64>) {
+    let (content, truncated_from_bytes) = closed(Some(cap.keeps()), text, CLOSING).cut(Some(cap));
+    let content = texts(&content).into_iter().map(str::to_owned).collect();
+    (content, truncated_from_bytes)
+}
+
+#[test]
+fn a_closing_line_is_held_apart_from_the_text_and_counts_as_fed_and_as_kept() {
+    let output = closed(Some(keep(10, 5)), SIXTEEN, CLOSING);
+
+    assert_eq!(texts(&output.content), ["0123456789"]);
+    assert_eq!(output.tail, "bcdef");
+    assert_eq!(output.closing, CLOSING);
+    assert_eq!(output.total_bytes(), 16 + 12);
+    assert_eq!(output.kept_bytes(), 10 + 5 + 12);
+}
+
+#[test]
+fn every_cut_sends_the_closing_line_after_everything_else() {
+    assert_eq!(
+        sent_closed(SIXTEEN, cap(10, OutputCut::Head)),
+        (
+            strings(&[
+                "0123456789",
+                "[truncated: the first 10 of 28 bytes]",
+                CLOSING
+            ]),
+            Some(28)
+        )
+    );
+    assert_eq!(
+        sent_closed(SIXTEEN, cap(10, OutputCut::HeadTail)),
+        (
+            strings(&[
+                "01234",
+                "[truncated: 6 of 28 bytes left out]",
+                "bcdef",
+                CLOSING
+            ]),
+            Some(28)
+        )
+    );
+    assert_eq!(
+        sent_closed(SIXTEEN, cap(10, OutputCut::Preview { bytes: 4 })),
+        (
+            strings(&[
+                "0123",
+                "[output too large: the first 4 of 28 bytes]",
+                CLOSING
+            ]),
+            Some(28)
+        )
+    );
+}
+
+#[test]
+fn an_output_within_the_cap_is_sent_as_if_its_closing_line_had_been_fed_last() {
+    for cut in CUTS {
+        for max_bytes in [28, 29, u64::MAX] {
+            let cap = cap(max_bytes, cut);
+            let closed = closed(Some(cap.keeps()), SIXTEEN, CLOSING);
+            let mut pushed = fed(Some(cap.keeps()), SIXTEEN);
+            pushed.push(CLOSING);
+
+            assert_eq!(closed.total_bytes(), pushed.total_bytes(), "{cap:?}");
+            assert_eq!(closed.kept_bytes(), pushed.kept_bytes(), "{cap:?}");
+            let sent = closed.cut(Some(cap));
+            assert_eq!(sent, pushed.cut(Some(cap)), "{cap:?}");
+            assert_eq!(
+                sent,
+                (
+                    vec![ToolResultContent::Text(
+                        "0123456789abcdefexit code: 3".to_owned()
+                    )],
+                    None
+                ),
+                "{cap:?}"
+            );
+        }
+    }
+}
+
+/// Nothing of the text is left out, and the size is still past the cap, as
+/// it was when the line was fed as text.
+#[test]
+fn an_output_that_its_closing_line_takes_past_the_cap_is_cut() {
+    assert_eq!(
+        sent_closed(SIXTEEN, cap(27, OutputCut::Head)),
+        (
+            strings(&[SIXTEEN, "[truncated: the first 16 of 28 bytes]", CLOSING]),
+            Some(28)
+        )
+    );
+    assert_eq!(
+        sent_closed(SIXTEEN, cap(27, OutputCut::HeadTail)),
+        (
+            strings(&[
+                "0123456789abc",
+                "[truncated: 0 of 28 bytes left out]",
+                "def",
+                CLOSING
+            ]),
+            Some(28)
+        )
+    );
+}
+
+#[test]
+fn a_closing_line_goes_on_from_the_end_of_an_output_kept_in_two_parts() {
+    let output = closed(Some(keep(4, 4)), "012345", CLOSING);
+
+    assert_eq!(
+        output.cut(None),
+        (
+            vec![ToolResultContent::Text("012345exit code: 3".to_owned())],
+            None
+        )
+    );
+}
+
+/// The start kept nothing of the item, so nothing told it that the item
+/// has text, which the line goes on from as it would have had it been fed.
+#[test]
+fn a_closing_line_goes_on_from_an_item_that_is_all_held_at_the_end() {
+    let closed = closed(Some(keep(0, 16)), "ab", CLOSING);
+    let mut pushed = fed(Some(keep(0, 16)), "ab");
+    pushed.push(CLOSING);
+
+    let sent = closed.cut(None);
+
+    assert_eq!(
+        sent,
+        (
+            vec![ToolResultContent::Text("abexit code: 3".to_owned())],
+            None
+        )
+    );
+    assert_eq!(sent, pushed.cut(None));
+}
+
+#[test]
+fn a_closing_line_is_an_item_of_its_own_where_the_text_before_it_ended_an_item() {
+    let mut after_an_item = KeptOutput::whole("abcd");
+    after_an_item.item();
+    after_an_item.close(CLOSING);
+    let mut of_nothing = KeptOutput::new(None);
+    of_nothing.close(CLOSING);
+
+    let (after_an_item, truncated_from_bytes) = after_an_item.cut(None);
+    let (of_nothing, _) = of_nothing.cut(Some(cap(12, OutputCut::Head)));
+
+    assert_eq!(texts(&after_an_item), ["abcd", CLOSING]);
+    assert_eq!(truncated_from_bytes, None);
+    assert_eq!(texts(&of_nothing), [CLOSING]);
+}
+
+#[test]
+fn a_closing_line_replaces_the_one_said_before() {
+    let mut output = KeptOutput::whole("abcd\n");
+    output.close("exit code: 0");
+    output.close("signal: 9");
+
+    assert_eq!(output.total_bytes(), 5 + 9);
+    assert_eq!(output.kept_bytes(), 5 + 9);
+    assert_eq!(
+        output.clone().cut(None),
+        (
+            vec![ToolResultContent::Text("abcd\nsignal: 9".to_owned())],
+            None
+        )
+    );
+
+    output.close("");
+
+    assert_eq!(output, KeptOutput::whole("abcd\n"));
+}
+
+#[test]
+fn no_more_of_a_closing_line_is_kept_than_its_limit_up_to_a_character_boundary() {
+    assert_eq!(KeptOutput::CLOSING_MAX_BYTES, 256);
+    let kept_of = |line: &str| {
+        let mut output = KeptOutput::new(None);
+        output.close(line);
+        assert_eq!(output.total_bytes(), output.closing.len() as u64);
+        assert_eq!(output.kept_bytes(), output.closing.len() as u64);
+        output.closing
+    };
+    let at_the_limit = format!("{}\u{20ac}", "x".repeat(253));
+
+    assert_eq!(kept_of(&at_the_limit), at_the_limit);
+    assert_eq!(kept_of(&"x".repeat(300)), "x".repeat(256));
+    assert_eq!(
+        kept_of(&format!("{}{EUROS}", "x".repeat(254))),
+        "x".repeat(254),
+        "the limit falls inside the first of the characters"
+    );
+}
+
+/// The line is sent on top of the cap, which is why it has a limit of its
+/// own.
+#[test]
+fn a_closing_line_is_sent_whole_under_a_cap_that_sends_nothing_else() {
+    assert_eq!(
+        sent_closed(SIXTEEN, cap(0, OutputCut::Head)),
+        (
+            strings(&["[truncated: the first 0 of 28 bytes]", CLOSING]),
+            Some(28)
+        )
+    );
+}
+
+#[test]
+fn an_output_that_was_not_all_kept_is_cut_and_still_closed() {
+    let kept = || closed(Some(keep(4, 3)), "0123456789", CLOSING);
+
+    let (uncapped, truncated_from_bytes) = kept().cut(None);
+    let (head_tail, _) = kept().cut(Some(cap(100, OutputCut::HeadTail)));
+
+    assert_eq!(
+        texts(&uncapped),
+        ["0123", "[truncated: the first 4 of 22 bytes]", CLOSING]
+    );
+    assert_eq!(truncated_from_bytes, Some(22));
+    assert_eq!(
+        texts(&head_tail),
+        [
+            "0123",
+            "[truncated: 3 of 22 bytes left out]",
+            "789",
+            CLOSING
+        ]
+    );
+}
+
 fn any_cap() -> impl proptest::strategy::Strategy<Value = OutputCap> {
     use proptest::strategy::Strategy;
 
@@ -652,6 +899,26 @@ fn any_items() -> impl proptest::strategy::Strategy<Value = Vec<String>> {
     proptest::collection::vec("[ab\u{e9}\u{20ac}\u{1d11e}]{1,16}", 0..4)
 }
 
+/// A closing line, which half of the outputs have none of.
+fn any_closing() -> impl proptest::strategy::Strategy<Value = String> {
+    proptest::prop_oneof![
+        proptest::strategy::Just(String::new()),
+        "[ab\u{e9}\u{20ac}\u{1d11e}]{1,8}",
+    ]
+}
+
+/// `items` fed as [`fed_in_steps`] feeds them, and `closing` said of them.
+fn closed_in_steps(
+    keep: Option<OutputKeep>,
+    items: &[&str],
+    step: usize,
+    closing: &str,
+) -> KeptOutput {
+    let mut output = fed_in_steps(keep, items, step);
+    output.close(closing);
+    output
+}
+
 proptest::proptest! {
     #![proptest_config(proptest::prelude::ProptestConfig::with_cases(2_000))]
 
@@ -660,46 +927,58 @@ proptest::proptest! {
     /// arrived, and the executor never held more than its limits.
     #[test]
     fn what_was_kept_is_cut_as_the_whole_output_would_be(
-        items in any_items(), cap in any_cap(), step in 1_usize..6
+        items in any_items(), closing in any_closing(), cap in any_cap(), step in 1_usize..6
     ) {
         let items: Vec<&str> = items.iter().map(String::as_str).collect();
         let keeps = cap.keeps();
 
-        let kept = fed_in_steps(Some(keeps), &items, step);
-        let whole = fed_in_steps(None, &items, 16);
+        let kept = closed_in_steps(Some(keeps), &items, step, &closing);
+        let whole = closed_in_steps(None, &items, 16, &closing);
 
-        proptest::prop_assert!(kept.kept_bytes() <= keeps.head + keeps.tail);
+        proptest::prop_assert!(
+            kept.kept_bytes() <= keeps.head + keeps.tail + closing.len() as u64
+        );
         proptest::prop_assert_eq!(kept.total_bytes(), whole.total_bytes());
         proptest::prop_assert_eq!(kept.cut(Some(cap)), whole.cut(Some(cap)));
     }
 
-    /// An output is cut exactly when it's longer than the cap. What's sent
-    /// of one that's cut is the output's own start and its own end, within
-    /// the cap between them, and the line.
+    /// An output is cut exactly when it's longer than the cap, its closing
+    /// line counted. What's sent of one that's cut is the output's own start
+    /// and its own end, within the cap between them, the line, and the
+    /// closing line whole.
     #[test]
     fn what_is_sent_is_the_start_and_the_end_of_the_output_within_the_cap(
-        items in any_items(), cap in any_cap(), step in 1_usize..6
+        items in any_items(), closing in any_closing(), cap in any_cap(), step in 1_usize..6
     ) {
         let items: Vec<&str> = items.iter().map(String::as_str).collect();
         let text = items.concat();
-        let total = text.len() as u64;
+        let total = (text.len() + closing.len()) as u64;
 
         let (content, truncated_from_bytes) =
-            fed_in_steps(Some(cap.keeps()), &items, step).cut(Some(cap));
+            closed_in_steps(Some(cap.keeps()), &items, step, &closing).cut(Some(cap));
 
         proptest::prop_assert_eq!(truncated_from_bytes, (total > cap.max_bytes).then_some(total));
         let sent = texts(&content);
         if truncated_from_bytes.is_none() {
-            proptest::prop_assert_eq!(sent, items);
+            let mut fed_last = fed_in_steps(None, &items, 16);
+            fed_last.push(&closing);
+            proptest::prop_assert_eq!(sent, texts(&fed_last.content));
         } else {
             let line = sent.iter().position(|text| text.starts_with('[')).unwrap();
-            let (start, end) = (sent[..line].concat(), sent[line + 1..].concat());
+            let after = &sent[line + 1..];
+            let after = if closing.is_empty() {
+                after
+            } else {
+                proptest::prop_assert_eq!(after.last(), Some(&closing.as_str()));
+                &after[..after.len() - 1]
+            };
+            let (start, end) = (sent[..line].concat(), after.concat());
             proptest::prop_assert!(text.starts_with(&start), "{start:?} of {text:?}");
             proptest::prop_assert!(text.ends_with(&end), "{end:?} of {text:?}");
-            proptest::prop_assert!(sent[line + 1..].len() <= 1);
+            proptest::prop_assert!(after.len() <= 1);
             proptest::prop_assert!((start.len() + end.len()) as u64 <= cap.max_bytes);
             let ToolResultContent::Text(worded) =
-                cap.line(start.len() as u64, end.len() as u64, total);
+                cap.line(start.len() as u64, (end.len() + closing.len()) as u64, total);
             proptest::prop_assert_eq!(sent[line], worded);
         }
     }

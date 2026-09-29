@@ -15,14 +15,11 @@ use serde_json::json;
 
 use crate::harness::{Scratch, id_in, is_there, name};
 
-/// The line `bash` ends the text of a command with that exited with 0 and
-/// wrote no newline last.
-const EXIT_LINE: &str = "\nexit code: 0";
-
 /// Which tool the text of the output case comes from.
 #[derive(Clone, Copy)]
 enum Writer {
-    /// `bash`, of a command that writes it.
+    /// `bash`, of a command that writes it and then exits, which `bash`
+    /// closes the text with a line about.
     Bash,
     /// `read_file`, of a file that holds it.
     ReadFile,
@@ -68,26 +65,18 @@ impl Subject for Builtin {
         Arc::clone(&self.tools) as _
     }
 
-    fn writes(&self, bytes: u64) -> Asked {
+    fn writes(&self, text: &str) -> Asked {
+        let file = format!("written-{}.txt", self.next());
+        self.scratch.holds(&file, text);
         match self.writer {
-            Writer::Bash => {
-                let written = bytes - EXIT_LINE.len() as u64;
-                Asked {
-                    name: name("bash"),
-                    input: json!({
-                        "command": format!("head -c {written} /dev/zero | tr '\\0' x")
-                    }),
-                }
-            }
-            Writer::ReadFile => {
-                let file = format!("written-{}.txt", self.next());
-                let length = usize::try_from(bytes).unwrap();
-                self.scratch.holds(&file, "x".repeat(length));
-                Asked {
-                    name: name("read_file"),
-                    input: json!({ "path": file }),
-                }
-            }
+            Writer::Bash => Asked {
+                name: name("bash"),
+                input: json!({ "command": format!("cat {file}") }),
+            },
+            Writer::ReadFile => Asked {
+                name: name("read_file"),
+                input: json!({ "path": file }),
+            },
         }
     }
 

@@ -20,7 +20,6 @@ fn a_fake_model_resolves_to_what_the_fake_provider_applies() {
             "script": "scripts/run.yaml",
             "name": "scripted-1",
             "api_key_env": null,
-            "base_url": null,
             "max_tokens": 32_000,
             "temperature": null,
             "cache_scope": "shared",
@@ -254,7 +253,7 @@ fn digest(more: &str) -> String {
 /// output goes. A default that changes, or a key that does, changes the
 /// digest of every config, which a release has to say.
 const FAKE_CANONICAL: &str = concat!(
-    r#"{"model":{"api_key_env":null,"base_url":null,"cache_scope":"shared","max_tokens":32000,"#,
+    r#"{"model":{"api_key_env":null,"cache_scope":"shared","max_tokens":32000,"#,
     r#""name":"scripted-1","pricing":null,"provider":"fake","script":"scripts/run.yaml","#,
     r#""temperature":null},"#,
     r#""prompt":{"skills":[],"skills_mode":"tool","system":"You fix tests.","system_file":null},"#,
@@ -277,7 +276,7 @@ fn the_digest_is_of_the_settings_that_say_what_a_run_does_with_every_default_fil
     assert_eq!(digest(""), expected);
     assert_eq!(
         expected,
-        "40fba433b2fd6dd2828b8c7eb90e107b4c5f38048ce9e58d931d246521a0a5c9"
+        "4ebd5348534834b52564b22d793709142a62d4a994f38620d2ad5e91f8a01098"
     );
 }
 
@@ -390,6 +389,71 @@ fn a_default_spelled_out_and_a_value_written_another_way_leave_the_digest_as_it_
         yaml("").digest(),
         "a provider's own default is the same stated or not"
     );
+}
+
+fn resolved_tools(text: &str) -> Value {
+    serde_json::to_value(yaml(text).resolved().tools).unwrap()
+}
+
+#[test]
+fn lists_that_offer_the_same_tools_share_a_digest_however_they_name_them() {
+    for list in ["allow", "deny"] {
+        let digest = |names: &str| digest(&format!("tools: {{ {list}: {names} }}"));
+        let both = digest("[bash, read_file]");
+
+        assert_eq!(
+            digest("[read_file, bash]"),
+            both,
+            "{list}, in another order"
+        );
+        assert_eq!(
+            digest("[bash, read_file, bash]"),
+            both,
+            "{list}, a name twice"
+        );
+        assert_eq!(digest("[bash, bash]"), digest("[bash]"), "{list}");
+        assert_ne!(digest("[bash]"), both, "{list}, of other tools");
+        assert_eq!(
+            resolved_tools(&format!(
+                "tools: {{ {list}: [write_file, bash, write_file] }}"
+            ))[list],
+            json!(["bash", "write_file"])
+        );
+    }
+}
+
+#[test]
+fn no_allow_list_is_held_apart_from_a_list() {
+    assert_eq!(resolved_tools("")["allow"], json!(null));
+    assert_eq!(
+        resolved_tools("tools: { allow: null }")["allow"],
+        json!(null)
+    );
+    assert_eq!(resolved_tools("tools: { allow: [] }")["allow"], json!([]));
+    assert_eq!(
+        yaml("tools: { allow: [bash] }").resolved().tools.allow,
+        Some(["bash".to_owned()].into())
+    );
+    assert_ne!(digest("tools: { allow: [] }"), digest(""));
+}
+
+#[test]
+fn the_length_of_a_preview_is_resolved_only_under_the_cut_that_makes_one() {
+    for cut in ["head", "head_tail"] {
+        let stated = format!("tools: {{ output_cut: {cut}, output_preview_bytes: 100 }}");
+        let plain = format!("tools: {{ output_cut: {cut} }}");
+
+        assert_eq!(digest(&stated), digest(&plain), "{cut}");
+        assert_eq!(yaml(&stated).resolved(), yaml(&plain).resolved(), "{cut}");
+        let resolved = resolved_tools(&stated);
+        assert_eq!(resolved["output_cut"], json!(cut));
+        assert_eq!(resolved.get("output_preview_bytes"), None, "{cut}");
+    }
+    assert_eq!(
+        resolved_tools("tools: { output_preview_bytes: 100 }")["output_preview_bytes"],
+        json!(100)
+    );
+    assert_ne!(digest("tools: { output_preview_bytes: 100 }"), digest(""));
 }
 
 #[test]

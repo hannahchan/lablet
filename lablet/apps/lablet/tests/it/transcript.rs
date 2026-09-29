@@ -388,8 +388,32 @@ async fn a_path_that_holds_no_run_id_is_every_runs_file() {
 }
 
 #[tokio::test]
+async fn each_run_has_a_directory_of_its_own_made_for_its_transcript() {
+    let scratch = Scratch::new("directory-each");
+    let configured = scratch.at("out/{run_id}/transcript.json");
+    let config = scratch.config(ENDS, json!({ "run": { "transcript_path": configured } }));
+    let mut lablet = lablet::build(config).await.unwrap();
+    let diagnostics = Diagnostics::capture();
+
+    for run in ["run-a", "run-b"] {
+        lablet.run(request().run_id(RunId::new(run).unwrap())).await;
+    }
+    lablet.shutdown().await;
+
+    assert_eq!(diagnostics.lines(), [""; 0]);
+    for run in ["run-a", "run-b"] {
+        let transcript = scratch.at(&format!("out/{run}/transcript.json"));
+        assert_eq!(json_of(&transcript)["run_id"], json!(run));
+    }
+}
+
+#[tokio::test]
 async fn a_transcript_that_cannot_be_written_is_reported_and_the_outcome_is_as_it_was() {
     let scratch = Scratch::new("no-directory");
+    scratch.write(
+        "no-such-directory",
+        "a file, where the path has a directory",
+    );
     let nowhere = scratch.at("no-such-directory/{run_id}.json");
     let config = scratch.config(ENDS, json!({ "run": { "transcript_path": nowhere } }));
     let mut lablet = lablet::build(config).await.unwrap();
@@ -404,7 +428,7 @@ async fn a_transcript_that_cannot_be_written_is_reported_and_the_outcome_is_as_i
     assert_eq!(outcome.stop_reason(), StopReason::Completed);
     assert_eq!(outcome.error(), None);
     assert_eq!(outcome.result().text, "Nothing to fix.");
-    assert!(!scratch.at("no-such-directory").exists());
+    assert!(scratch.at("no-such-directory").is_file());
     let lines = diagnostics.lines();
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(

@@ -252,6 +252,248 @@ async fn a_file_that_cannot_be_written_is_an_error_that_names_it_and_is_tried_ag
 }
 
 #[tokio::test]
+async fn a_file_that_was_moved_between_two_runs_is_not_written_to_by_the_second() {
+    let scratch = Scratch::new("moved");
+    let (path, moved) = (scratch.path("runs.otlp.jsonl"), scratch.path("first.jsonl"));
+    let sink = Sink::new(FileTarget::Path(path.clone()));
+    let exporter = spans_to(&sink);
+
+    sink.start(&id(FIRST));
+    exporter.export(vec![span("chat first")]).await.unwrap();
+    std::fs::rename(&path, &moved).unwrap();
+    sink.start(&id(SECOND));
+    exporter.export(vec![span("chat second")]).await.unwrap();
+    exporter.export(vec![span("chat second")]).await.unwrap();
+
+    let (at_the_path, moved) = (
+        Exported::read(&path).unwrap(),
+        Exported::read(&moved).unwrap(),
+    );
+    assert_eq!(moved.lines, 1);
+    assert_eq!(moved.spans[0].name, "chat first");
+    assert_eq!(at_the_path.lines, 2);
+    assert!(
+        at_the_path
+            .spans
+            .iter()
+            .all(|span| span.name == "chat second")
+    );
+}
+
+// A write that fails partway
+
+/// What a file holds, which outlives the writers that were opened to it.
+type Written = Arc<Mutex<Vec<u8>>>;
+
+/// A file that fails once it has taken `room` bytes, and takes a write
+/// that's longer than its room for as much as it has room for.
+struct Fills {
+    written: Written,
+    room: usize,
+}
+
+impl io::Write for Fills {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let taken = bytes.len().min(self.room);
+        if taken == 0 {
+            return Err(io::Error::other("no space left on the device"));
+        }
+        self.room -= taken;
+        self.written
+            .lock()
+            .unwrap()
+            .extend_from_slice(&bytes[..taken]);
+        Ok(taken)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A file at `runs.otlp.jsonl` as the sink holds one, and what it holds.
+struct Appended {
+    held: Option<Held<Fills>>,
+    written: Written,
+}
+
+impl Appended {
+    fn new() -> Self {
+        Self {
+            held: None,
+            written: Written::default(),
+        }
+    }
+
+    /// Appends `line`. A file that has to be opened for it has `room`.
+    fn append_to(&mut self, path: &str, line: &str, room: usize) -> io::Result<()> {
+        let written = Arc::clone(&self.written);
+        Held::append(&mut self.held, Path::new(path), line, |_| {
+            Ok(Fills { written, room })
+        })
+    }
+
+    fn append(&mut self, line: &str, room: usize) -> io::Result<()> {
+        self.append_to("runs.otlp.jsonl", line, room)
+    }
+
+    fn text(&self) -> String {
+        String::from_utf8(self.written.lock().unwrap().clone()).unwrap()
+    }
+}
+
+const ONE: &str = "{\"resourceSpans\":[1]}\n";
+const TWO: &str = "{\"resourceSpans\":[2]}\n";
+const THREE: &str = "{\"resourceSpans\":[3]}\n";
+
+#[test]
+fn a_line_that_follows_part_of_another_begins_a_line_of_its_own_and_reads_back() {
+    let mut file = Appended::new();
+
+    file.append(ONE, ONE.len() + 9).unwrap();
+    let failed = file.append(TWO, 0).unwrap_err();
+    file.append(THREE, usize::MAX).unwrap();
+    file.append(ONE, 0).unwrap();
+
+    assert_eq!(failed.to_string(), "no space left on the device");
+    assert_eq!(
+        file.text(),
+        format!("{ONE}{{\"resourc\n{THREE}{ONE}"),
+        "what was written of the line that failed is a line of its own, and the only one"
+    );
+    let text = file.text();
+    let read: Vec<_> = text
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .collect();
+    assert_eq!(
+        read,
+        [
+            Some(json!({ "resourceSpans": [1] })),
+            None,
+            Some(json!({ "resourceSpans": [3] })),
+            Some(json!({ "resourceSpans": [1] })),
+        ]
+    );
+}
+
+#[test]
+fn a_write_that_failed_before_it_wrote_anything_leaves_no_line_behind() {
+    let mut file = Appended::new();
+
+    file.append(ONE, ONE.len()).unwrap();
+    file.append(TWO, 0).unwrap_err();
+    file.append(THREE, usize::MAX).unwrap();
+
+    assert_eq!(file.text(), format!("{ONE}{THREE}"));
+}
+
+#[test]
+fn a_file_that_failed_is_opened_again_and_one_that_did_not_is_kept_open() {
+    let mut file = Appended::new();
+
+    file.append(ONE, ONE.len() + TWO.len()).unwrap();
+    file.append(TWO, 0).unwrap();
+    assert!(
+        file.append(THREE, 0).is_err(),
+        "the file that's open is full"
+    );
+    file.append(THREE, THREE.len()).unwrap();
+
+    assert_eq!(file.text(), format!("{ONE}{TWO}{THREE}"));
+}
+
+#[test]
+fn a_newline_that_could_not_be_written_is_written_before_the_line_after() {
+    let mut file = Appended::new();
+
+    file.append(ONE, 4).unwrap_err();
+    file.append(TWO, 0).unwrap_err();
+    file.append(THREE, usize::MAX).unwrap();
+
+    assert_eq!(file.text(), format!("{{\"re\n{THREE}"));
+}
+
+#[test]
+fn a_file_that_was_let_go_of_still_ends_in_the_part_of_a_line_it_was_left_with() {
+    let mut file = Appended::new();
+
+    file.append(ONE, 4).unwrap_err();
+    file.held.as_mut().unwrap().let_go();
+    file.append(TWO, usize::MAX).unwrap();
+
+    assert_eq!(file.text(), format!("{{\"re\n{TWO}"));
+}
+
+#[test]
+fn part_of_a_line_in_one_file_puts_no_newline_in_another() {
+    let mut file = Appended::new();
+
+    file.append_to("first.otlp.jsonl", ONE, 4).unwrap_err();
+    file.append_to("second.otlp.jsonl", TWO, usize::MAX)
+        .unwrap();
+
+    assert_eq!(file.text(), format!("{{\"re{TWO}"));
+}
+
+#[test]
+fn a_file_that_takes_nothing_and_says_so_without_an_error_is_an_error() {
+    struct TakesNothing;
+
+    impl io::Write for TakesNothing {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Ok(0)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut held = None;
+
+    let failed = Held::append(&mut held, Path::new("runs.otlp.jsonl"), ONE, |_| {
+        Ok(TakesNothing)
+    });
+
+    assert_eq!(failed.unwrap_err().kind(), io::ErrorKind::WriteZero);
+}
+
+#[test]
+fn a_write_that_was_interrupted_is_made_again() {
+    struct Interrupted {
+        written: Vec<u8>,
+        interrupts: bool,
+    }
+
+    impl io::Write for Interrupted {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.interrupts = !self.interrupts;
+            if !self.interrupts {
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            self.written.extend_from_slice(&bytes[..1]);
+            Ok(1)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut file = Interrupted {
+        written: Vec::new(),
+        interrupts: true,
+    };
+    let mut torn = false;
+
+    whole(&mut file, ONE, &mut torn).unwrap();
+
+    assert_eq!(file.written, ONE.as_bytes());
+    assert!(!torn);
+}
+
+#[tokio::test]
 async fn standard_error_takes_a_line_as_a_file_does() {
     let sink = Sink::new(FileTarget::Stderr);
     sink.start(&id(FIRST));

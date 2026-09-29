@@ -134,8 +134,8 @@ impl OutputCap {
     }
 
     /// The line that says what was left out of an output of `total` bytes, of
-    /// which `start` and `end` bytes were sent. Worded here for the same
-    /// reason as [`ToolResultContent::omitted`].
+    /// which `start` bytes were sent before the line and `end` after it.
+    /// Worded here for the same reason as [`ToolResultContent::omitted`].
     fn line(self, start: u64, end: u64, total: u64) -> ToolResultContent {
         ToolResultContent::Text(match self.cut {
             OutputCut::Head => format!("[truncated: the first {start} of {total} bytes]"),
@@ -162,6 +162,13 @@ impl OutputCap {
 /// is one run of text, whatever items it came from. Neither begins or ends
 /// inside a character.
 ///
+/// A closing line is held apart from both, and beside them: it's short,
+/// and it's counted as text that was fed and kept. It's what an executor
+/// says of the output as a whole once all of it is there, such as how a
+/// command ended, and the model is sent it last whatever the cut leaves
+/// out, where a line that was fed last is lost to every cut that sends only
+/// the start.
+///
 /// The fields are private, so the size can't disagree with what was fed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeptOutput {
@@ -170,10 +177,16 @@ pub struct KeptOutput {
     /// Whether the next text the start keeps begins an item.
     fresh: bool,
     tail: String,
-    total_bytes: u64,
+    closing: String,
+    /// The size of what was fed, which the closing line is no part of.
+    fed_bytes: u64,
 }
 
 impl KeptOutput {
+    /// The most that's kept of a closing line, in bytes. The line is sent on
+    /// top of what the cap allows, so this is what bounds it.
+    pub const CLOSING_MAX_BYTES: usize = 256;
+
     /// Nothing yet, of an output that `keep` is kept of. `None` keeps
     /// everything.
     #[must_use]
@@ -183,7 +196,8 @@ impl KeptOutput {
             content: Vec::new(),
             fresh: true,
             tail: String::new(),
-            total_bytes: 0,
+            closing: String::new(),
+            fed_bytes: 0,
         }
     }
 
@@ -209,10 +223,10 @@ impl KeptOutput {
     /// character left over, and what the start holds is always the output's
     /// own beginning with nothing missing.
     pub fn push(&mut self, text: &str) {
-        let room = self.keep.head.saturating_sub(self.total_bytes);
+        let room = self.keep.head.saturating_sub(self.fed_bytes);
         let room = usize::try_from(room).unwrap_or(usize::MAX);
         let (kept, rest) = text.split_at(text.floor_char_boundary(room));
-        self.total_bytes = self.total_bytes.saturating_add(text.len() as u64);
+        self.fed_bytes = self.fed_bytes.saturating_add(text.len() as u64);
         if !kept.is_empty() {
             match self.content.last_mut() {
                 Some(ToolResultContent::Text(item)) if !self.fresh => item.push_str(kept),
@@ -237,31 +251,50 @@ impl KeptOutput {
         self.tail.push_str(&text[skipped..]);
     }
 
-    /// The size in bytes of everything that was fed, kept or not.
-    #[must_use]
-    pub const fn total_bytes(&self) -> u64 {
-        self.total_bytes
+    /// Says `line` of the output as a whole, in place of a line said before.
+    ///
+    /// At most [`Self::CLOSING_MAX_BYTES`] of it are kept, up to a character
+    /// boundary, so an executor can't send the model text past the cap by
+    /// saying it here.
+    pub fn close(&mut self, line: &str) {
+        let kept = line.floor_char_boundary(Self::CLOSING_MAX_BYTES);
+        line[..kept].clone_into(&mut self.closing);
     }
 
-    /// The size in bytes of the text that's held.
+    /// The size in bytes of everything that was fed, kept or not, and of the
+    /// closing line.
+    #[must_use]
+    pub const fn total_bytes(&self) -> u64 {
+        self.fed_bytes.saturating_add(self.closing.len() as u64)
+    }
+
+    /// The size in bytes of the text that's held, the closing line's with
+    /// it.
     #[must_use]
     pub fn kept_bytes(&self) -> u64 {
-        ToolResultContent::bytes(&self.content).saturating_add(self.tail.len() as u64)
+        ToolResultContent::bytes(&self.content)
+            .saturating_add(self.tail.len() as u64)
+            .saturating_add(self.closing.len() as u64)
     }
 
     /// What the model is sent, and the size of the whole output when that's
     /// less than all of it.
     ///
-    /// An output no longer than the cap is sent whole. A longer one is cut as
-    /// the cap says, from what was kept, and so is one of any length that
-    /// wasn't all kept: it can't be sent whole, so it says what's missing.
+    /// An output no longer than the cap, its closing line counted, is sent
+    /// whole: the line goes on from the text before it, as if it had been
+    /// fed. A longer one is cut as the cap says, from what was kept, and so
+    /// is one of any length that wasn't all kept: it can't be sent whole, so
+    /// it says what's missing. The closing line follows whatever a cut
+    /// sends, as an item of its own.
     pub(crate) fn cut(self, cap: Option<OutputCap>) -> (Vec<ToolResultContent>, Option<u64>) {
         let cap = cap.unwrap_or(OutputCap::NONE);
-        let gap = self.kept_bytes() < self.total_bytes;
+        let total_bytes = self.total_bytes();
+        let gap = self.kept_bytes() < total_bytes;
         let Self {
             mut content,
+            fresh,
             tail,
-            total_bytes,
+            closing,
             ..
         } = self;
         if !gap {
@@ -273,10 +306,15 @@ impl KeptOutput {
                 ..Self::new(None)
             };
             whole.push(&tail);
-            content = whole.content;
             if total_bytes <= cap.max_bytes {
-                return (content, None);
+                // The line begins an item where the text before it ended
+                // one. The end is one run whatever items it was fed as, so
+                // a line that follows it goes on from it.
+                whole.fresh = fresh && tail.is_empty();
+                whole.push(&closing);
+                return (whole.content, None);
             }
+            content = whole.content;
         }
 
         let mut sent = Self::new(Some(cap.sends()));
@@ -297,10 +335,15 @@ impl KeptOutput {
             ..
         } = sent;
         let start = ToolResultContent::bytes(&content);
-        content.push(cap.line(start, end.len() as u64, total_bytes));
-        if !end.is_empty() {
-            content.push(ToolResultContent::Text(end));
-        }
+        // The closing line is sent, so it's no part of what was left out.
+        let after = (end.len() + closing.len()) as u64;
+        content.push(cap.line(start, after, total_bytes));
+        content.extend(
+            [end, closing]
+                .into_iter()
+                .filter(|text| !text.is_empty())
+                .map(ToolResultContent::Text),
+        );
         (content, Some(total_bytes))
     }
 }

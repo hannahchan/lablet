@@ -2,7 +2,7 @@
 
 The Cargo workspace that builds lablet: a lightweight, instrumented agent loop, as a library and a `lablet` binary. What it does and why is in [../product/](../product/); how to work on the code is in [../contributing/README.md](../contributing/README.md). User-facing docs will live in [docs/](docs/).
 
-Every crate but one is an empty shell from the phase 0 scaffold, and its doc comment names the [build-plan](../product/build-plan.md) phase that fills it. The exception is `telemetry-registry`, whose sources `cargo xtask weaver generate` writes from the registry in `telemetry/`.
+The loop, the library, and every adapter a run needs without a network are built: the scripted provider, the built-in tools, the telemetry observer with its OTLP/JSON file exporter, and the transcript writer. `provider-anthropic`, `provider-openai`, and `tools-mcp` are still empty shells from the phase 0 scaffold, and each one's doc comment names the [build-plan](../product/build-plan.md) phase that fills it. The `lablet` binary is phase 5's. The sources of `telemetry-registry` are written by `cargo xtask weaver generate` from the registry in `telemetry/`.
 
 ## Layout
 

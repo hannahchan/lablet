@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use lablet_model::StopReason;
+use lablet_model::{RunSummary, StopReason};
 use lablet_run::RunObserver;
 use lablet_telemetry_registry::attribute as key;
 use lablet_telemetry_registry::signals::{
@@ -123,6 +123,7 @@ pub async fn the_numbers_of_the_wide_event_are_the_sums_of_the_steps(subject: &d
 
     let exported = read_back(subject);
     assert_the_wide_event_sums_its_steps(&exported, RUN);
+    assert_the_wide_event_counts_the_tokens_the_run_returned(&exported, RUN, &finished.summary);
     let wide = &the_wide_event(&exported, RUN).attributes;
     let summary = &finished.summary;
     // The script makes every total one that no other total of its kind
@@ -487,6 +488,66 @@ pub fn assert_the_wide_event_sums_its_steps(exported: &Exported, run: &str) {
     told.assert_sums_the_provider_calls();
     told.assert_sums_the_tool_calls();
     told.assert_agrees_with_the_root_span();
+}
+
+/// Holds the token counts of the wide event of the run `run` to the ones
+/// the run returned, as `summary`: what the provider calls that were
+/// answered reported, and what the attempts that failed did. A count that
+/// no call reported is one the wide event doesn't hold.
+///
+/// The spans are the observer's word as the wide event is, so an observer
+/// that misreads a count says it alike in both, and only what the loop
+/// returned can tell.
+///
+/// # Panics
+///
+/// Panics when the run hasn't one wide event among `exported`, and when a
+/// token count of the wide event isn't the one the run returned.
+pub fn assert_the_wide_event_counts_the_tokens_the_run_returned(
+    exported: &Exported,
+    run: &str,
+    summary: &RunSummary,
+) {
+    let wide = &the_wide_event(exported, run).attributes;
+    let (usage, failed) = (summary.outcome.usage, summary.failed_usage);
+    for (key, returned) in [
+        (key::GEN_AI_USAGE_INPUT_TOKENS, Some(usage.input_tokens)),
+        (key::GEN_AI_USAGE_OUTPUT_TOKENS, Some(usage.output_tokens)),
+        (
+            key::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+            usage.reasoning_output_tokens,
+        ),
+        (
+            key::GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+            usage.cache_read_tokens,
+        ),
+        (
+            key::GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
+            usage.cache_write_tokens,
+        ),
+        (
+            key::LABLET_PROVIDER_FAILED_INPUT_TOKENS,
+            failed.map(|failed| failed.input_tokens),
+        ),
+        (
+            key::LABLET_PROVIDER_FAILED_OUTPUT_TOKENS,
+            failed.map(|failed| failed.output_tokens),
+        ),
+        (
+            key::LABLET_PROVIDER_FAILED_CACHE_READ_INPUT_TOKENS,
+            failed.and_then(|failed| failed.cache_read_tokens),
+        ),
+        (
+            key::LABLET_PROVIDER_FAILED_CACHE_WRITE_INPUT_TOKENS,
+            failed.and_then(|failed| failed.cache_write_tokens),
+        ),
+    ] {
+        assert_eq!(
+            counted(wide, key),
+            returned,
+            "`{key}` of the wide event, and the count the run returned"
+        );
+    }
 }
 
 /// Whether the call a tool span is of named a tool the run offered.

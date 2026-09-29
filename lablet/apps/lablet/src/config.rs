@@ -24,7 +24,7 @@ use serde::Deserialize;
 pub(crate) use model::Setting;
 pub use model::{Api, CacheScope, Effort, Model, Pricing, Provider, Thinking};
 pub use prompt::{Prompt, SkillsMode};
-pub use resolved::{Applied, ResolvedConfig, ResolvedModel};
+pub use resolved::{Applied, ResolvedConfig, ResolvedModel, ResolvedTools};
 pub use run::{Completion, Context, Run, TranscriptFormat};
 pub use telemetry::{Otlp, OtlpProtocol, Telemetry, TelemetryFile};
 pub use tools::{
@@ -69,7 +69,8 @@ impl fmt::Display for Format {
 }
 
 /// Why a config was refused. Each refusal of a setting names its key and
-/// the value that was refused.
+/// the value that was refused, but for `model.api_key_env`, whose value no
+/// refusal shows.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConfigError {
     /// The config's file couldn't be read.
@@ -104,6 +105,14 @@ pub enum ConfigError {
         value: String,
         /// The rule the value breaks.
         reason: String,
+    },
+    /// `model.api_key_env` holds what no variable is named. A key that was
+    /// written where the variable's name belongs is a secret, so the
+    /// refusal holds nothing of the value.
+    #[error("model.api_key_env is refused: {reason}")]
+    KeyVariable {
+        /// The rule the value breaks.
+        reason: &'static str,
     },
     /// A setting the config needs isn't stated.
     #[error("{key} isn't set: {reason}")]
@@ -210,8 +219,9 @@ impl Config {
         self.source.as_deref()
     }
 
-    /// The config with every default filled in, and without the defaults
-    /// the provider can't apply.
+    /// The config with every default filled in, and without the settings
+    /// that nothing of it applies: a default the provider can't apply, and
+    /// the length of a preview under a cut that makes none.
     #[must_use]
     pub fn resolved(&self) -> ResolvedConfig {
         let Self {
@@ -231,7 +241,7 @@ impl Config {
                 script: when(applied(Setting::Script), model.script.clone()),
                 name: model.name.clone(),
                 api_key_env: model.key_variable().map(str::to_owned),
-                base_url: model.base_url.clone(),
+                base_url: when(applied(Setting::BaseUrl), model.base_url.clone()),
                 max_tokens: model.max_tokens,
                 temperature: model.temperature,
                 thinking: when(
@@ -249,7 +259,7 @@ impl Config {
                 pricing: model.pricing,
             },
             prompt: prompt.clone(),
-            tools: tools.clone(),
+            tools: tools.into(),
             telemetry: telemetry.clone(),
         }
     }

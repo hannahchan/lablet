@@ -300,13 +300,126 @@ fn a_write_takes_the_place_of_whatever_the_file_held() {
     );
 }
 
+/// No directory that holds the run id can be there before the run is.
+#[test]
+fn the_directories_a_path_is_missing_are_made() {
+    let scratch = Scratch::new("directories");
+    let configured = scratch.path("out/{run_id}/transcript.json");
+    let (first, second) = (
+        document(FIRST, "You fix tests."),
+        document(SECOND, "You write docs."),
+    );
+
+    for (run, document) in [(FIRST, &first), (SECOND, &second), (FIRST, &first)] {
+        let file = TranscriptFile::for_run(&configured, &id(run)).unwrap();
+
+        assert_eq!(file.write(document), Ok(()), "{run}");
+    }
+
+    let read = |run: &str| {
+        std::fs::read_to_string(scratch.path(&format!("out/{run}/transcript.json"))).unwrap()
+    };
+    assert_eq!(read(FIRST), compact(&first));
+    assert_eq!(read(SECOND), compact(&second));
+    for run in [FIRST, SECOND] {
+        let beside = std::fs::read_dir(scratch.path(&format!("out/{run}"))).unwrap();
+        assert_eq!(beside.count(), 1, "nothing is left beside the transcript");
+    }
+}
+
+#[test]
+fn a_write_that_fails_leaves_what_the_path_held_and_nothing_beside_it() {
+    let scratch = Scratch::new("whole-or-not");
+    let file = TranscriptFile::for_run(&scratch.path("transcript.json"), &id(FIRST)).unwrap();
+    let held = document(FIRST, "You fix tests.");
+    file.write(&held).unwrap();
+
+    let failed = file.replace(|mut to| {
+        to.write_all(b"{\"schema_version\":1,\"run_id\":")?;
+        to.flush()?;
+        Err(io::Error::other("no space left"))
+    });
+
+    assert_eq!(failed.unwrap_err().to_string(), "no space left");
+    assert_eq!(
+        std::fs::read_to_string(file.path()).unwrap(),
+        compact(&held)
+    );
+    let beside: Vec<_> = std::fs::read_dir(&scratch.0)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(beside, ["transcript.json"]);
+}
+
+#[test]
+fn a_write_that_fails_where_no_file_was_leaves_none() {
+    let scratch = Scratch::new("none-or-whole");
+    let file = TranscriptFile::for_run(&scratch.path("out/transcript.json"), &id(FIRST)).unwrap();
+
+    let failed = file.replace(|mut to| {
+        to.write_all(b"{\"schema_version\":1,")?;
+        Err(io::Error::other("no space left"))
+    });
+
+    assert!(failed.is_err());
+    assert_eq!(std::fs::read_dir(scratch.path("out")).unwrap().count(), 0);
+}
+
+/// What a link at the path led to is another file than the run's
+/// transcript, and the transcript takes the link's place.
+#[test]
+fn a_write_replaces_a_link_at_the_path_and_leaves_what_it_led_to() {
+    let scratch = Scratch::new("link");
+    std::fs::write(scratch.path("elsewhere.json"), "kept").unwrap();
+    std::os::unix::fs::symlink(
+        scratch.path("elsewhere.json"),
+        scratch.path("transcript.json"),
+    )
+    .unwrap();
+    let file = TranscriptFile::for_run(&scratch.path("transcript.json"), &id(FIRST)).unwrap();
+    let document = document(FIRST, "You fix tests.");
+
+    file.write(&document).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path("elsewhere.json")).unwrap(),
+        "kept"
+    );
+    assert!(!file.path().is_symlink());
+    assert_eq!(
+        std::fs::read_to_string(file.path()).unwrap(),
+        compact(&document)
+    );
+}
+
+#[test]
+fn a_path_that_names_no_file_is_an_error() {
+    let scratch = Scratch::new("no-file");
+    for configured in [PathBuf::new(), "/".into(), scratch.path("out/..")] {
+        let file = TranscriptFile::for_run(&configured, &id(FIRST)).unwrap();
+
+        let refused = file.write(&document(FIRST, "You fix tests.")).unwrap_err();
+
+        assert_eq!(
+            refused,
+            TranscriptWriteError::Unwritable {
+                path: configured.clone(),
+                reason: "the path names no file".to_owned(),
+            },
+            "{configured:?}"
+        );
+    }
+    assert!(!scratch.path("out").exists(), "nothing was made on the way");
+}
+
 #[test]
 fn a_path_that_cannot_be_written_is_an_error_that_names_the_path_and_says_why() {
     let scratch = Scratch::new("unwritable");
     std::fs::write(scratch.path("a-file"), "not a directory").unwrap();
     for unwritable in [
-        scratch.path("no-such-directory/transcript.json"),
         scratch.path("a-file/transcript.json"),
+        scratch.path("a-file/out/transcript.json"),
         scratch.0.clone(),
     ] {
         let file = TranscriptFile::for_run(&unwritable, &id(FIRST)).unwrap();

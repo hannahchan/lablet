@@ -41,13 +41,15 @@ impl Text {
         }
     }
 
-    /// Takes `line` as a line of its own, after the text so far.
-    pub(crate) fn line(&mut self, line: &str) {
+    /// Says `line` of the text as a whole, which is all there: the text
+    /// ends its last line, and `line` is its closing line, which the model is
+    /// sent whatever the call's cut leaves out of the text.
+    pub(crate) fn close(&mut self, line: &str) {
         self.end_the_character();
         if !self.at_a_line {
             self.push("\n");
         }
-        self.push(line);
+        self.kept.close(line);
     }
 
     /// What was kept of the text, and the size of all of it.

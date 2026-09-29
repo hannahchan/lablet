@@ -7,8 +7,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 /// The variables a command starts with when lablet's own environment holds
-/// them. Nothing else of lablet's environment reaches a command, so a key
-/// that lablet was started with isn't there for the model to read.
+/// them. Nothing else of lablet's environment is in a command's own, so
+/// `env` shows no key that lablet was started with. A command can still read
+/// lablet's environment through the process table, as `ps eww -p $PPID` and
+/// `/proc/<pid>/environ` do, which only the environment lablet runs in can
+/// keep it from.
 pub const ENVIRONMENT: [&str; 8] = [
     "HOME", "PATH", "SHELL", "USER", "LANG", "TERM", "TMPDIR", "TZ",
 ];

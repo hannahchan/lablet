@@ -89,7 +89,10 @@ impl Settings {
                 max_consecutive_invalid_turns: run.max_consecutive_invalid_turns,
             },
             retry: retry(run)?,
-            provider: selected(&config.model)?,
+            provider: {
+                key_variable(&config.model)?;
+                selected(&config.model)?
+            },
             request: request(&config.model, &resolved.model)?,
             pricing: config.model.pricing.map(pricing).transpose()?,
             system: system(&config.prompt)?,
@@ -137,6 +140,28 @@ fn retry(run: &config::Run) -> Result<RetryPolicy, ConfigError> {
             "the jitter is a share of a wait, from 0 to 1",
         ),
     })
+}
+
+/// Holds `model.api_key_env` to the name of a variable, whichever
+/// provider is selected: anything else there is a mistake, and the mistake
+/// to expect is the key itself.
+fn key_variable(model: &config::Model) -> Result<(), ConfigError> {
+    let Some(named) = &model.api_key_env else {
+        return Ok(());
+    };
+    let mut bytes = named.bytes();
+    let begins_a_name = bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_');
+    if begins_a_name && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_') {
+        Ok(())
+    } else {
+        Err(ConfigError::KeyVariable {
+            reason: "it holds something other than the name of an environment variable, \
+                     which is ASCII letters, digits and `_` and begins with no digit. What \
+                     it holds isn't shown, since a key may have been written in its place",
+        })
+    }
 }
 
 fn selected(model: &config::Model) -> Result<Selected, ConfigError> {

@@ -32,24 +32,31 @@
 //!
 //! A command starts with the variables of [`ENVIRONMENT`] that lablet's own
 //! environment holds and with what [`Settings::env`] adds, and with nothing
-//! else of lablet's, so the model can't read an API key with `env`.
+//! else of lablet's, so the model can't read an API key with `env`. That
+//! holds of the command's environment and of nothing else: a command can
+//! read lablet's own through the process table, as `ps eww -p $PPID` and
+//! `/proc/<pid>/environ` do.
 //!
 //! The result is what the command wrote, standard output and standard error
 //! in the order they were written, then one line with the exit code, as
-//! `exit code: 0`. A command that exits with another code is a result like
-//! any other and not an error: a failing test is something a command
-//! reports. A call returns once the shell has exited and nothing it started
-//! holds its output open.
+//! `exit code: 0`. The line is the output's closing line, so the model is
+//! sent it whatever the run's output cap leaves out of what the command
+//! wrote. A command that exits with another code is a result like any other
+//! and not an error: a failing test is something a command reports. A call
+//! returns once the shell has exited and nothing it started holds its output
+//! open.
 //!
 //! A command that runs for the shorter of the call's deadline and
 //! [`Settings::timeout`] is killed with its whole process group, and the
-//! call returns `timeout` once the group has gone. A group counts as gone
-//! when none of its processes is left in the process table. A process that
-//! was killed stays there until its parent takes it out, and a process whose
-//! parent was killed with it is left to the system's first process. Where
-//! that's lablet itself, as in a container started without an init, nothing
-//! takes it out, and the call returns `failed` after five seconds rather
-//! than say that something stopped which it can't see to have stopped.
+//! call returns `timeout` once the group has gone. A process that left the
+//! group, as one started with `setsid` does, is beyond the kill: it's
+//! neither stopped nor waited for. A group counts as gone when none of its
+//! processes is left in the process table. A process that was killed stays
+//! there until its parent takes it out, and a process whose parent was
+//! killed with it is left to the system's first process. Where that's lablet
+//! itself, as in a container started without an init, nothing takes it out,
+//! and the call returns `failed` after five seconds rather than say that
+//! something stopped which it can't see to have stopped.
 //!
 //! # `read_file`
 //!

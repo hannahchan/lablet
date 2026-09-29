@@ -343,6 +343,171 @@ fn a_run_that_ended_on_a_call_that_failed_has_a_chat_span_more() {
     assert_the_wide_event_sums_its_steps(&ended, RUN);
 }
 
+/// A run that reports the tokens [`exported`] tells of: an attempt that
+/// failed and two responses.
+const TOKENS: &str = r"
+- error:
+    kind: retryable
+    message: 529 overloaded
+    usage: { input_tokens: 800, output_tokens: 3, cache_write_tokens: 50 }
+- response:
+    content:
+      - tool_use: { id: call_1, name: bash, input: { json: { command: cargo test } } }
+    usage: { input_tokens: 1000, output_tokens: 50, cache_read_tokens: 200 }
+    finish: tool_use
+- response:
+    content:
+      - text: The parser test passes now.
+    usage: { input_tokens: 1100, output_tokens: 20, reasoning_output_tokens: 5 }
+    finish: end_turn
+";
+
+/// What the loop returns of a run of `script` that nothing observes.
+async fn returned(script: &str) -> RunSummary {
+    let mut service = playing(script, Arc::new(Unobserved)).await;
+    run(&mut service, RUN).await.summary
+}
+
+fn miscounts(exported: &Exported, summary: &RunSummary) -> bool {
+    catch_unwind(AssertUnwindSafe(|| {
+        assert_the_wide_event_counts_the_tokens_the_run_returned(exported, RUN, summary);
+    }))
+    .is_err()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_wide_event_that_counts_the_tokens_the_run_returned_passes() {
+    let summary = returned(TOKENS).await;
+
+    assert_the_wide_event_counts_the_tokens_the_run_returned(&exported(), RUN, &summary);
+    assert_eq!(
+        (
+            summary.outcome.usage.input_tokens,
+            summary.failed_usage.unwrap().input_tokens
+        ),
+        (2_100, 800),
+        "the run reported tokens, so the check held the wide event to some"
+    );
+}
+
+/// The observer this is there for: it misreads a count where it reads the
+/// loop's events, so its spans and its wide event say the same wrong
+/// number, and the sums of its spans are the numbers of its wide event.
+#[tokio::test(start_paused = true)]
+async fn an_observer_that_is_off_in_its_spans_and_its_wide_event_alike_is_refused() {
+    /// Where [`exported`] holds the span of the attempt that failed, of the
+    /// first response, of the second, and of the run.
+    const FAILED: usize = 0;
+    const FIRST: usize = 1;
+    const SECOND: usize = 6;
+    const ROOT_SPAN: usize = 7;
+    let summary = returned(TOKENS).await;
+    let chat_of = |exported: &mut Exported, chat: usize, key: &str, held: u64| {
+        exported.spans[chat]
+            .attributes
+            .insert(key.to_owned(), json!(held));
+    };
+
+    for (key, in_the_chat, chat, off_by_one) in [
+        (
+            key::GEN_AI_USAGE_INPUT_TOKENS,
+            key::GEN_AI_USAGE_INPUT_TOKENS,
+            FIRST,
+            (1_001, 2_101),
+        ),
+        (
+            key::GEN_AI_USAGE_OUTPUT_TOKENS,
+            key::GEN_AI_USAGE_OUTPUT_TOKENS,
+            FIRST,
+            (51, 71),
+        ),
+        (
+            key::GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+            key::GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+            FIRST,
+            (201, 201),
+        ),
+        (
+            key::GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
+            key::GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
+            FIRST,
+            (1, 1),
+        ),
+        (
+            key::LABLET_PROVIDER_FAILED_INPUT_TOKENS,
+            key::GEN_AI_USAGE_INPUT_TOKENS,
+            FAILED,
+            (801, 801),
+        ),
+        (
+            key::LABLET_PROVIDER_FAILED_OUTPUT_TOKENS,
+            key::GEN_AI_USAGE_OUTPUT_TOKENS,
+            FAILED,
+            (4, 4),
+        ),
+        (
+            key::LABLET_PROVIDER_FAILED_CACHE_READ_INPUT_TOKENS,
+            key::GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+            FAILED,
+            (1, 1),
+        ),
+        (
+            key::LABLET_PROVIDER_FAILED_CACHE_WRITE_INPUT_TOKENS,
+            key::GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
+            FAILED,
+            (51, 51),
+        ),
+    ] {
+        let (of_the_chat, of_the_run) = off_by_one;
+        let mut off = with(key, Some(json!(of_the_run)));
+        chat_of(&mut off, chat, in_the_chat, of_the_chat);
+        if chat == FIRST {
+            chat_of(&mut off, ROOT_SPAN, key, of_the_run);
+        }
+
+        assert!(!is_refused(&off), "{key}: the spans sum to the wide event");
+        assert!(miscounts(&off, &summary), "{key}");
+    }
+
+    let mut reasoning = with(key::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS, None);
+    for span in [SECOND, ROOT_SPAN] {
+        reasoning.spans[span]
+            .attributes
+            .remove(key::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS);
+    }
+    assert!(!is_refused(&reasoning));
+    assert!(
+        miscounts(&reasoning, &summary),
+        "a count the run returned and the wide event lacks"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_run_none_of_whose_attempts_failed_has_none_of_their_tokens_counted() {
+    let summary = returned(
+        r"
+- response:
+    content:
+      - text: Nothing to fix.
+    usage: { input_tokens: 2100, output_tokens: 70, reasoning_output_tokens: 5, cache_read_tokens: 200 }
+    finish: end_turn
+",
+    )
+    .await;
+    let mut none_failed = exported();
+    for failed in [
+        key::LABLET_PROVIDER_FAILED_INPUT_TOKENS,
+        key::LABLET_PROVIDER_FAILED_OUTPUT_TOKENS,
+        key::LABLET_PROVIDER_FAILED_CACHE_WRITE_INPUT_TOKENS,
+    ] {
+        none_failed.records[0].attributes.remove(failed);
+    }
+
+    assert_eq!(summary.failed_usage, None);
+    assert!(miscounts(&exported(), &summary));
+    assert_the_wide_event_counts_the_tokens_the_run_returned(&none_failed, RUN, &summary);
+}
+
 /// A wide event that holds every key the registry requires, and the
 /// per-tool keys of [`sums`].
 fn declared() -> LogRecord {

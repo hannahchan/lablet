@@ -87,6 +87,40 @@ async fn two_runs_of_one_observer_are_appended_to_the_one_file_it_was_given() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_file_that_was_moved_after_a_run_holds_that_run_and_its_path_the_run_after() {
+    let scratch = Scratch::new("moved-file");
+    let path = scratch.directory().join("runs.otlp.jsonl");
+    let moved = scratch.directory().join("first.otlp.jsonl");
+    let mut harness = Harness::playing(
+        FAILS_CALLS_ENDS,
+        Settings {
+            target: FileTarget::Path(path.clone()),
+            ..Settings::in_scratch(&scratch)
+        },
+    )
+    .await;
+
+    harness.run(RUN).await;
+    harness.observer.flush().await.unwrap();
+    std::fs::rename(&path, &moved).unwrap();
+    harness.provider.rewind();
+    harness.run(OTHER_RUN).await;
+    harness.observer.shutdown().await.unwrap();
+
+    let (moved, at_the_path) = (
+        Exported::read(&moved).unwrap(),
+        Exported::read(&path).unwrap(),
+    );
+    for (file, run) in [(&moved, RUN), (&at_the_path, OTHER_RUN)] {
+        assert_eq!(runs_of(file), [run]);
+        assert_eq!(file.spans.len(), 8, "{run}");
+        for span in &file.spans {
+            assert_eq!(span.attributes[key::GEN_AI_CONVERSATION_ID], run);
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_destination_that_cannot_be_written_changes_nothing_about_the_run() {
     let scratch = Scratch::new("unwritable");
     let mut written = Harness::playing(FAILS_CALLS_ENDS, Settings::in_scratch(&scratch)).await;

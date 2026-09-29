@@ -172,16 +172,71 @@ async fn of_a_mebibyte_a_command_wrote_four_bytes_of_each_end_are_kept_and_all_i
 
     let total = MIB + "\nexit code: 0".len() as u64;
     assert_eq!(output.output.total_bytes(), total);
-    assert_eq!(output.output.kept_bytes(), 8);
+    assert_eq!(output.output.kept_bytes(), 8 + "exit code: 0".len() as u64);
     let cap = OutputCap::new(8, OutputCut::HeadTail).unwrap();
     assert_eq!(
         sent(output.output, Some(cap)),
         [
             "xxxx".to_owned(),
-            format!("[truncated: {} of {total} bytes left out]", total - 8),
-            "e: 0".to_owned()
+            format!("[truncated: {} of {total} bytes left out]", MIB + 1 - 8),
+            "xxx\n".to_owned(),
+            "exit code: 0".to_owned()
         ]
     );
+}
+
+/// A preview of 2,000 bytes under a cap of 50,000 is the cut of a run whose
+/// config names none, and like `head` it sends nothing of the end of what
+/// the command wrote.
+#[tokio::test]
+async fn the_exit_code_of_a_command_that_wrote_more_than_the_cap_is_shown_under_every_cut() {
+    let scratch = Scratch::new("bash-exit-code-cut");
+    let tools = scratch.tools();
+    let lines: Vec<String> = (1..=20_000).map(|line| line.to_string()).collect();
+    let wrote = lines.join("\n") + "\n";
+    let exit_code = "exit code: 3";
+    let total = wrote.len() + exit_code.len();
+    let left_out = wrote.len() - 50_000;
+
+    for (cut, expected) in [
+        (
+            OutputCut::Preview { bytes: 2_000 },
+            vec![
+                &wrote[..2_000],
+                &format!("[output too large: the first 2000 of {total} bytes]"),
+                exit_code,
+            ],
+        ),
+        (
+            OutputCut::Head,
+            vec![
+                &wrote[..50_000],
+                &format!("[truncated: the first 50000 of {total} bytes]"),
+                exit_code,
+            ],
+        ),
+        (
+            OutputCut::HeadTail,
+            vec![
+                &wrote[..25_000],
+                &format!("[truncated: {left_out} of {total} bytes left out]"),
+                &wrote[wrote.len() - 25_000..],
+                exit_code,
+            ],
+        ),
+    ] {
+        let cap = OutputCap::new(50_000, cut).unwrap();
+        let command = json!({ "command": "seq 1 20000; exit 3" });
+
+        let output = tools
+            .execute(keeping(cap.keeps(), call("bash", command)))
+            .await
+            .unwrap();
+
+        assert!(!output.is_error, "{cut:?}");
+        assert_eq!(output.output.total_bytes(), total as u64, "{cut:?}");
+        assert_eq!(sent(output.output, Some(cap)), expected, "{cut:?}");
+    }
 }
 
 #[tokio::test]

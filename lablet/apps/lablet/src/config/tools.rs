@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::written::{duration, path};
 
 /// The `tools` section.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Tools {
     /// The built-in tools.

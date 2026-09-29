@@ -28,7 +28,8 @@ pub struct Model {
     /// `None` is `ANTHROPIC_API_KEY` for `anthropic` and no variable for
     /// the others.
     pub api_key_env: Option<String>,
-    /// Where the API is served, for a gateway or a local server.
+    /// `anthropic` and `openai` only: where the API is served, for a
+    /// gateway or a local server.
     pub base_url: Option<String>,
     /// The cap on output tokens for each call.
     pub max_tokens: u32,
@@ -81,6 +82,7 @@ impl Default for Model {
 pub(crate) enum Setting {
     Api,
     Script,
+    BaseUrl,
     Thinking,
     Effort,
     Seed,
@@ -89,9 +91,10 @@ pub(crate) enum Setting {
 }
 
 impl Setting {
-    pub(crate) const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 8] = [
         Self::Api,
         Self::Script,
+        Self::BaseUrl,
         Self::Thinking,
         Self::Effort,
         Self::Seed,
@@ -103,6 +106,7 @@ impl Setting {
         match self {
             Self::Api => "model.api",
             Self::Script => "model.script",
+            Self::BaseUrl => "model.base_url",
             Self::Thinking => "model.thinking",
             Self::Effort => "model.effort",
             Self::Seed => "model.seed",
@@ -144,6 +148,8 @@ impl Model {
         match setting {
             Setting::Api | Setting::Seed => self.provider == Provider::Openai,
             Setting::Script => self.provider == Provider::Fake,
+            // A script is played where lablet runs, so nothing is served.
+            Setting::BaseUrl => self.provider != Provider::Fake,
             Setting::Thinking | Setting::Cache => self.provider == Provider::Anthropic,
             Setting::Effort => self.provider == Provider::Anthropic || api == Some(Api::Responses),
             Setting::ReasoningReplay => api == Some(Api::ChatCompletions),
@@ -159,6 +165,7 @@ impl Model {
                 .script
                 .as_ref()
                 .map(|script| script.display().to_string()),
+            Setting::BaseUrl => self.base_url.clone(),
             Setting::Thinking => self.thinking.map(|thinking| thinking.to_string()),
             Setting::Effort => self.effort.map(|effort| effort.to_string()),
             Setting::Seed => self.seed.map(|seed| seed.to_string()),

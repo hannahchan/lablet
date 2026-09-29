@@ -856,3 +856,48 @@ The build took about 2.24 million tokens and the fix pass 0.33 million. The revi
 Decided by the human. The public contract was the config schema, the outcome JSON and the telemetry registry, and the transcript was left out of it while spec section 1 called it what a grader or a composing framework reads. It's the fourth part now, and a breaking change to it needs a major bump like a breaking change to any of the other three.
 
 Nothing had to be built for this. The transcript document got its `schema_version` on 2026-09-21, and its fixture joined the changelog gate's watched list with the documents crate, so it was already held the way the outcome is. What was missing was the sentence that says a reader may rely on it.
+
+## 2026-09-29 Phase 4, closed
+
+Six items landed, each with its gates green and its own commit: the documents crate with the transcript writer, the scripted provider, the observer with its file exporter and reader, the wide-event mapping with the summary's totals grouped, the built-in tools, and the library. A run built from a config string with the scripted provider and the built-in tools leaves its spans, its log records, its wide event and its transcript. `lablet-model`, `lablet-policy` and `lablet-run` hold 100% of lines and regions, and the one mutant that survives is the equivalent one already recorded.
+
+The items landed in another order than the plan's. The plan put the library before the built-in tools, and the tools were built first, so `build` was written once with every adapter it composes.
+
+What the builder decided on the way:
+
+- **Spans are built as finished data.** The loop measures when a call started and how long it took, and the event that ends a span carries both. So the observer makes each span whole when it ends and never opens one on a clock of its own, and it needs no tracer.
+- **The wide event is made when the observer is flushed.** It counts the records the exporter lost, and the count is whole only once everything else of the run has been exported. It goes in an export of its own, so it's the last line of its run.
+- **The observer fills the wide event in one match over a generated enum.** The registry crate gains an enum of the wide event's keys and one of its template keys. The match has no wildcard arm, so a key the registry gains doesn't build until the observer says what it holds.
+- **`lablet.mcp.servers` is required only of a run that has servers.** It was always required, and a run without servers would have written an empty list beside no lifetime.
+- **`prost-derive` is a wrapper of the banned `anyhow`.** `deny.toml` lists it, which is the procedure the file documents for a dependency that brings a banned crate and can't be built without it.
+- **A killed group that hasn't gone in 5 seconds ends the call as `failed`.** `timeout` says the work has stopped, and a call that can't say so doesn't say `timeout`. `nix` is taken for the signal, since unsafe code is forbidden.
+- **A tool's description leaves out the root's path.** Otherwise `lablet.tools.digest` would differ between two machines that offer the same tools.
+- **The resource leaves the run's context.** `telemetry.resource` goes to the observer when it's built, where the resource is fixed. The field in `RunContext` was read by nothing, and a second copy could have differed from the first.
+- **A run id can be made from a ULID's value, and a checked task put under a system prompt.** `RunId::ulid` and `Prompts::with_system` leave `Lablet::run` no error arm that nothing could reach. The domain still reads no clock and draws no random number: the value is the caller's to make.
+- **`build_observed` takes a caller's observers.** Spec section 7 offered no way to register the observer that section 5's fan-out assumes.
+- **`build` refuses a stated setting the provider can't apply.** The plan gave this to phase 5. The resolved config needed the same table to leave out the defaults a provider can't apply, so the refusal came with it.
+- **A relative path in a config starts at the working directory.** The spec didn't say.
+
+What the review changed. Four reviewers read the phase, one each for the built-in tools, the library, the telemetry, and the documents with the scripted provider and the conformance cases. Each was given the files to read and not the diff. They found one defect of high severity.
+
+- **The exit code survives every cut.** `bash` wrote its exit code as the last line of its output, and the `head` and `preview` cuts send only the start. With the defaults, a command that wrote more than the cap reached the model with no exit code, so the model couldn't tell whether a long test run had passed. `KeptOutput` gains a closing line, a short line about the whole output that every cut sends last. No more than 256 bytes of it are kept, so an executor can't use it to get round the cap.
+- **The wait for a killed group is held by a test.** Nothing failed when the wait was removed, because the shell's own exit usually took long enough. The wait takes its probe as a parameter and is tested under a paused clock, the branch that answers `failed` included.
+- **Two configs with the same effect share a digest.** `tools.allow` and `tools.deny` were hashed in the order they were written, and `tools.output_preview_bytes` was hashed whatever the cut.
+- **A stated setting with no effect is refused.** `model.base_url` with the scripted provider, and a `tools.max_description_chars` other than the default, which phase 8 delivers.
+- **The value of `model.api_key_env` is in no message.** A key pasted there by mistake was echoed by the refusal. The value must be the name of a variable, and every refusal names the key alone.
+- **A telemetry write that failed partway doesn't corrupt the next line,** and a file that was moved between two runs isn't written to: the file is opened at the start of each run.
+- **A transcript is written whole or not at all, into a directory that's made.** A path with `{run_id}` in a directory lost every transcript, since no such directory can exist before the run, and a write that failed left a partial file where the last transcript was.
+- **Two conformance cases hold what they name.** The output case asserted sizes and not text, and the observer case compared the wide event's token counts with the spans', which the same observer wrote.
+
+Two claims were narrowed and nothing was built for them. A command can't read lablet's environment with `env`, but it runs as the user lablet runs as and can read it from the process table. And a process that leaves its group, as one started with `setsid` does, is beyond the kill. Both are the environment's to prevent, as spec section 6 says of `bash` as a whole.
+
+Dismissed, each with its reason. A panic in a caller's observer is a defect in the caller's code, and an observer returns nothing, so it has no way to fail a run. `lablet.result.text` is an empty text for a run that has none, which is what the outcome writes, and `lablet.result.text_bytes` agrees. An executor that answers shared calls one at a time is slow and not wrong, since the loop owns concurrency. And nothing in lablet reads an outcome document, so a missing key that the read accepts is met by tests only.
+
+Left open:
+
+- **Where lablet is a container's first process with no init, a timed-out command that had children reports `failed` after 5 seconds.** The children become lablet's to take from the process table, and until they're taken the group still answers. It's unverified, since no Linux host was at hand. `docker run --init` avoids it, and taking the group's members in the wait would fix it.
+- **A flush that times out would leak into the next run's count of lost records.** It can't happen with the file exporter alone. Phase 6, which adds the network exporter, holds the count for each run.
+- **The library has no way to cancel a run.** `build` wires a cancellation that never fires, and phase 5's CLI needs a way in.
+- **Phase 5's `main.rs` should consider clearing the process's `PR_SET_DUMPABLE` flag on Linux,** which stops a command reading lablet's environment from `/proc`. It's a setting of the whole process, so it's the binary's to make and not the library's.
+
+The build took about 3.02 million tokens and the fix pass 0.47 million. The review took 0.60 million against a budget of 0.30 to 0.45 million, so it ran a third over for the second phase in a row. Giving reviewers the files held each one to its area, and the two that read the largest areas still took 0.18 million each.

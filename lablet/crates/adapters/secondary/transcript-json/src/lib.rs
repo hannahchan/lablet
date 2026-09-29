@@ -9,12 +9,18 @@ use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use lablet_documents::TranscriptDocument;
 use lablet_model::RunId;
 
 /// What a configured path holds where the run id belongs.
 const RUN_ID: &[u8] = b"{run_id}";
+
+/// How many transcripts this process has begun to write, which with the
+/// process's id is what keeps two writes from one temporary file, whether
+/// they're of one process or of two.
+static WRITES: AtomicU64 = AtomicU64::new(0);
 
 /// The file one run's transcript is written to.
 ///
@@ -45,7 +51,8 @@ pub enum TranscriptWriteError {
         /// Which rule of a path component it breaks.
         reason: &'static str,
     },
-    /// The file couldn't be made or written whole.
+    /// The file couldn't be made or written whole, or a directory on the
+    /// way to it couldn't be made.
     #[error("the transcript couldn't be written to {}: {reason}", path.display())]
     Unwritable {
         /// The file that was to be written.
@@ -95,20 +102,57 @@ impl TranscriptFile {
     }
 
     /// Writes `document` as compact JSON and a newline, in place of
-    /// whatever the file held. The directory isn't made: a path into one
-    /// that doesn't exist is a path that can't be written.
+    /// whatever the file held, and makes the directories the path is
+    /// missing: a path that holds the run id as a directory names one that
+    /// no run has made yet.
+    ///
+    /// The file holds the document whole or is left as it was. The document
+    /// is written to a temporary file beside the path, which takes the
+    /// path's place once it's whole, so a symbolic link at the path is
+    /// replaced and what it led to is left alone.
     ///
     /// # Errors
     ///
-    /// Returns [`TranscriptWriteError::Unwritable`] when the file can't be
-    /// made or written whole.
+    /// Returns [`TranscriptWriteError::Unwritable`] when a directory or the
+    /// file can't be made, and when the document can't be written whole.
+    /// The path then holds what it held, and nothing is left beside it.
     pub fn write(&self, document: &TranscriptDocument) -> Result<(), TranscriptWriteError> {
-        File::create(&self.path)
-            .and_then(|file| render(document, BufWriter::new(file)))
+        self.replace(|file| render(document, BufWriter::new(file)))
             .map_err(|error| TranscriptWriteError::Unwritable {
                 path: self.path.clone(),
                 reason: error.to_string(),
             })
+    }
+
+    /// Puts what `fill` writes in place of whatever the file held, once
+    /// `fill` has written all of it.
+    fn replace(&self, fill: impl FnOnce(File) -> io::Result<()>) -> io::Result<()> {
+        let Some(name) = self.path.file_name() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the path names no file",
+            ));
+        };
+        if let Some(directory) = self.path.parent() {
+            std::fs::create_dir_all(directory)?;
+        }
+        let mut temporary = OsString::from(".");
+        temporary.push(name);
+        temporary.push(format!(
+            ".{}-{}.tmp",
+            std::process::id(),
+            WRITES.fetch_add(1, Ordering::Relaxed)
+        ));
+        let temporary = self.path.with_file_name(temporary);
+
+        let replaced = File::create(&temporary)
+            .and_then(fill)
+            .and_then(|()| std::fs::rename(&temporary, &self.path));
+        if replaced.is_err() {
+            // It may not have been made, and then there's nothing to remove.
+            let _ = std::fs::remove_file(&temporary);
+        }
+        replaced
     }
 }
 

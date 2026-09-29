@@ -344,6 +344,18 @@ fn later(scratch: &Scratch) -> Vec<(Value, Unsupported, &'static str, &'static s
             "10",
             "`run.completion_schema`",
         ),
+        (
+            fake(json!({ "tools": { "max_description_chars": 1_024 } })),
+            Unsupported::MaxDescriptionChars,
+            "8",
+            "a value of `tools.max_description_chars` other than its default",
+        ),
+        (
+            fake(json!({ "tools": { "max_description_chars": null } })),
+            Unsupported::MaxDescriptionChars,
+            "8",
+            "a value of `tools.max_description_chars` other than its default",
+        ),
     ]
 }
 
@@ -360,6 +372,47 @@ async fn what_a_later_phase_delivers_is_refused_with_the_phase_that_delivers_it(
             format!("{named} isn't supported yet: phase {phase} of the build plan delivers it")
         );
     }
+}
+
+#[tokio::test]
+async fn a_default_that_a_later_phase_applies_builds_stated_or_not() {
+    let scratch = Scratch::new("default-stated");
+    let stated = scratch.config(ENDS, json!({ "tools": { "max_description_chars": 2_048 } }));
+    let plain = scratch.config(ENDS, json!({}));
+    assert_eq!(stated.digest(), plain.digest());
+
+    for config in [stated, plain] {
+        let mut lablet = lablet::build(config).await.unwrap();
+
+        let finished = lablet.run(request()).await;
+        lablet.shutdown().await;
+        assert_eq!(
+            finished.summary.outcome.stop_reason(),
+            lablet::StopReason::Completed
+        );
+    }
+}
+
+#[tokio::test]
+async fn where_a_script_is_served_is_refused_since_nothing_serves_it() {
+    let scratch = Scratch::new("fake-base-url");
+    let mut tree = scratch.tree(ENDS, json!({}));
+    tree["model"]["base_url"] = json!("http://localhost:4000");
+
+    let error = refusal(read(&tree)).await;
+
+    assert_eq!(
+        error,
+        BuildError::Config(ConfigError::NotApplied {
+            key: "model.base_url",
+            value: "http://localhost:4000".to_owned(),
+            reached: "the provider `fake`".to_owned(),
+        })
+    );
+    assert_eq!(
+        error.to_string(),
+        "model.base_url: http://localhost:4000 is refused: the provider `fake` can't apply it"
+    );
 }
 
 #[tokio::test]
@@ -408,25 +461,47 @@ async fn a_provider_that_needs_a_key_needs_the_variable_that_holds_it_to_be_set(
 
     let error = refusal(anthropic(NO_VARIABLE)).await;
     assert_eq!(
-        error,
-        refused(
-            "model.api_key_env",
-            NO_VARIABLE,
-            "the variable isn't set, and the provider `anthropic` needs a key"
-        )
-    );
-    assert_eq!(
         error.to_string(),
-        format!(
-            "model.api_key_env: {NO_VARIABLE} is refused: the variable isn't set, and the \
-             provider `anthropic` needs a key"
-        )
+        "model.api_key_env is refused: the variable it names isn't set, and the provider \
+         `anthropic` needs a key"
     );
+    assert!(matches!(error, BuildError::KeyVariable { .. }), "{error:?}");
+    assert!(!format!("{error:?}").contains(NO_VARIABLE), "{error:?}");
     assert_eq!(
         refusal(anthropic(KEY_VARIABLE)).await,
         BuildError::from(Unsupported::Anthropic),
         "the variable is checked before the adapter is selected"
     );
+}
+
+#[tokio::test]
+async fn a_key_written_where_its_variable_is_named_is_refused_and_never_shown() {
+    let pasted = "sk-ant-api03-0123456789abcdef";
+    let scratch = Scratch::new("pasted-key");
+    let mut fake = scratch.tree(ENDS, json!({}));
+    fake["model"]["api_key_env"] = json!(pasted);
+    let anthropic = json!({ "model": { "api_key_env": pasted }, "prompt": { "system": "Hi." } });
+
+    for tree in [fake, anthropic] {
+        let error = refusal(read(&tree)).await;
+
+        assert!(
+            matches!(error, BuildError::Config(ConfigError::KeyVariable { .. })),
+            "{error:?}"
+        );
+        assert!(
+            error
+                .to_string()
+                .starts_with("model.api_key_env is refused: "),
+            "{error}"
+        );
+        for shown in [error.to_string(), format!("{error:?}")] {
+            assert!(
+                !shown.contains(pasted) && !shown.contains("sk-ant"),
+                "{shown}"
+            );
+        }
+    }
 }
 
 #[tokio::test]

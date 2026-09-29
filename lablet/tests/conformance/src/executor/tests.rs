@@ -15,6 +15,9 @@ use super::*;
 enum Fault {
     /// It keeps the contract.
     None,
+    /// It keeps the contract, and closes what a tool wrote with a line of
+    /// its own.
+    ClosesWithALine,
     /// At the deadline it returns and leaves the work going.
     LeavesTheWorkGoing,
     /// It returns `timeout` as soon as it's called.
@@ -33,6 +36,10 @@ enum Fault {
     CountsWhatItKept,
     /// It keeps 8 bytes of a call that has no `keep`.
     KeepsLittleOfEveryCall,
+    /// It keeps as the end of a text what followed its start.
+    KeepsTheWrongEnd,
+    /// It keeps as the start of a text what follows its first line.
+    KeepsTheWrongStart,
     /// It offers its shared tool as one that runs alone.
     OffersNothingShared,
     /// It answers every call to its shared tool as it answered the first.
@@ -93,19 +100,27 @@ impl Fake {
         }
     }
 
-    fn write(&self, bytes: u64, keep: Option<OutputKeep>) -> ToolOutput {
+    fn write(&self, text: &str, keep: Option<OutputKeep>) -> ToolOutput {
+        let cut = keep.is_some();
         let keep = match self.fault {
             Fault::KeepsEverything => None,
             Fault::KeepsLittleOfEveryCall => Some(KEPT),
             _ => keep,
         };
-        let room = keep.map_or(u64::MAX, |keep| keep.head);
+        let room = keep.map_or(usize::MAX, |keep| usize::try_from(keep.head).unwrap());
+        let lines: Vec<&str> = text.split_inclusive('\n').collect();
         let mut output = KeptOutput::new(keep);
-        for piece in 0..bytes / 8 {
-            if self.fault == Fault::CountsWhatItKept && piece * 8 >= room {
-                break;
-            }
-            output.push("12345678");
+        for (line, written) in lines.iter().enumerate() {
+            let fed = match self.fault {
+                Fault::CountsWhatItKept if line * written.len() >= room => break,
+                Fault::KeepsTheWrongEnd if cut => lines[line.min(1)],
+                Fault::KeepsTheWrongStart if cut => lines[line.max(1)],
+                _ => written,
+            };
+            output.push(fed);
+        }
+        if self.fault == Fault::ClosesWithALine {
+            output.close("exit code: 0");
         }
         ToolOutput {
             output,
@@ -171,7 +186,7 @@ impl ToolExecutor for Fake {
                 (says, Some(kind)) => Err(ToolError::new(kind, says)),
                 (says, None) => Ok(said(says, None)),
             },
-            "write" => Ok(self.write(call.input["bytes"].as_u64().unwrap(), call.keep)),
+            "write" => Ok(self.write(call.input["text"].as_str().unwrap(), call.keep)),
             "echo" => Ok(self.echo(call.input["text"].as_str().unwrap()).await),
             other => Err(ToolError::new(
                 match self.fault {
@@ -189,10 +204,10 @@ impl Subject for Arc<Fake> {
         Arc::clone(self) as _
     }
 
-    fn writes(&self, bytes: u64) -> Asked {
+    fn writes(&self, text: &str) -> Asked {
         Asked {
             name: named("write"),
-            input: json!({ "bytes": bytes }),
+            input: json!({ "text": text }),
         }
     }
 
@@ -260,6 +275,7 @@ fn assert_refused(refusal: Option<String>, words: &str) {
 async fn an_executor_that_keeps_the_contract_passes_every_case() {
     assert_eq!(at_the_deadline(Fault::None).await, None);
     assert_eq!(of_the_output(Fault::None).await, None);
+    assert_eq!(of_the_output(Fault::ClosesWithALine).await, None);
     assert_eq!(of_shared_calls(Fault::None).await, None);
     assert_eq!(of_an_unknown_name(Fault::None).await, None);
 }
@@ -330,6 +346,26 @@ async fn an_executor_that_keeps_less_than_everything_of_a_call_with_no_keep_is_r
         of_the_output(Fault::KeepsLittleOfEveryCall).await,
         "a call with no `keep` has everything kept",
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_executor_that_keeps_the_right_sizes_of_the_wrong_text_is_refused() {
+    for fault in [Fault::KeepsTheWrongEnd, Fault::KeepsTheWrongStart] {
+        assert_refused(
+            of_the_output(fault).await,
+            "the start of the text, the line, the end of the text",
+        );
+    }
+}
+
+#[test]
+fn the_text_a_tool_is_to_write_reads_alike_in_no_two_places() {
+    let written = numbered(WRITTEN_BYTES);
+
+    assert_eq!(written.len() as u64, WRITTEN_BYTES);
+    assert!(written.starts_with("0      \n1      \n"), "{written:.32}");
+    assert!(written.ends_with("131070 \n131071 \n"));
+    assert_eq!(numbered(SHORT_BYTES).len() as u64, SHORT_BYTES);
 }
 
 #[tokio::test(start_paused = true)]

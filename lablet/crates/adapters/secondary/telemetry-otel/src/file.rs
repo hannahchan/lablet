@@ -51,9 +51,86 @@ enum Destination {
 #[derive(Debug)]
 struct Open {
     destination: Destination,
-    /// The file that was written last, kept open while the lines keep going
-    /// to it.
-    file: Option<(PathBuf, File)>,
+    /// The file that was written last.
+    held: Option<Held<File>>,
+}
+
+/// A file that lines were written to, which is a `W`.
+#[derive(Debug)]
+struct Held<W> {
+    path: PathBuf,
+    /// The file, kept open while the lines keep going to it; `None` until a
+    /// line opens it again.
+    file: Option<W>,
+    /// Whether a write that failed left part of a line at the end of the
+    /// file.
+    torn: bool,
+}
+
+impl<W: io::Write> Held<W> {
+    /// Appends `line` to the file at `path`, which `open` opens unless
+    /// `held` is that file and has it open.
+    ///
+    /// A file that failed is let go of, so the next line opens it again, in
+    /// case what was wrong with it has been put right.
+    fn append(
+        held: &mut Option<Self>,
+        path: &Path,
+        line: &str,
+        open: impl FnOnce(&Path) -> io::Result<W>,
+    ) -> io::Result<()> {
+        let held = match held {
+            Some(held) if held.path == path => held,
+            _ => held.insert(Self {
+                path: path.to_owned(),
+                file: None,
+                torn: false,
+            }),
+        };
+        let written = held.write(line, open);
+        if written.is_err() {
+            held.let_go();
+        }
+        written
+    }
+
+    fn write(&mut self, line: &str, open: impl FnOnce(&Path) -> io::Result<W>) -> io::Result<()> {
+        let file = match &mut self.file {
+            Some(file) => file,
+            None => self.file.insert(open(&self.path)?),
+        };
+        // A line written straight after part of another would be one line
+        // with it, and an export that was written whole would be lost to
+        // one that wasn't.
+        if self.torn {
+            whole(file, "\n", &mut self.torn)?;
+        }
+        whole(file, line, &mut self.torn)?;
+        file.flush()
+    }
+
+    /// Closes the file, which the next line opens again.
+    fn let_go(&mut self) {
+        self.file = None;
+    }
+}
+
+/// Writes all of `text` to `file`, and says in `torn` whether `file` then
+/// ends with a part of `text` that isn't all of it.
+fn whole(file: &mut impl io::Write, text: &str, torn: &mut bool) -> io::Result<()> {
+    let mut left = text.as_bytes();
+    while !left.is_empty() {
+        match file.write(left) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(wrote) => {
+                left = &left[wrote..];
+                *torn = !left.is_empty();
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 /// What the file exporters of one observer write to. The spans, the log
@@ -97,31 +174,33 @@ impl Sink {
             target,
             open: Arc::new(Mutex::new(Open {
                 destination,
-                file: None,
+                held: None,
             })),
         }
     }
 
     /// Names the file of the run that's starting, when each run has its
-    /// own. Nothing is opened here: the loop is waiting.
+    /// own, and lets go of the file that's open, so that the run's first
+    /// line opens its path: a file that was moved since it was opened would
+    /// take the lines its path is to hold. Nothing is opened here: the loop
+    /// is waiting.
     pub(crate) fn start(&self, run_id: &RunId) {
-        let FileTarget::EachRun { directory } = &self.target else {
-            return;
-        };
-        let destination = match name_of(run_id) {
-            Ok(name) => Destination::File(directory.join(name)),
-            Err(reason) => Destination::Refused(reason),
-        };
-        self.open
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .destination = destination;
+        let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(held) = &mut open.held {
+            held.let_go();
+        }
+        if let FileTarget::EachRun { directory } = &self.target {
+            open.destination = match name_of(run_id) {
+                Ok(name) => Destination::File(directory.join(name)),
+                Err(reason) => Destination::Refused(reason),
+            };
+        }
     }
 
     /// Writes one line, whole, and sees it through to the file.
     fn write(&self, line: &str) -> Result<(), String> {
         let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
-        let Open { destination, file } = &mut *open;
+        let Open { destination, held } = &mut *open;
         match destination {
             Destination::Unnamed => {
                 Err("no run has started, so the telemetry has no file to go to".to_owned())
@@ -134,28 +213,15 @@ impl Sink {
                     .and_then(|()| stderr.flush())
                     .map_err(|error| format!("standard error couldn't be written: {error}"))
             }
-            Destination::File(path) => append(file, path, line).map_err(|error| {
-                // A file that failed is opened again for the next line, in
-                // case what was wrong with it has been put right.
-                *file = None;
-                format!("{} couldn't be written: {error}", path.display())
-            }),
+            Destination::File(path) => Held::append(held, path, line, to_append)
+                .map_err(|error| format!("{} couldn't be written: {error}", path.display())),
         }
     }
 }
 
-/// Appends `line` to the file at `path`, which is opened, and made when
-/// it's missing, unless `file` is that file already.
-fn append(file: &mut Option<(PathBuf, File)>, path: &Path, line: &str) -> io::Result<()> {
-    let file = match file {
-        Some((open, file)) if open == path => file,
-        _ => {
-            let opened = OpenOptions::new().create(true).append(true).open(path)?;
-            &mut file.insert((path.to_owned(), opened)).1
-        }
-    };
-    file.write_all(line.as_bytes())?;
-    file.flush()
+/// Opens the file at `path` to append to, and makes it when it's missing.
+fn to_append(path: &Path) -> io::Result<File> {
+    OpenOptions::new().create(true).append(true).open(path)
 }
 
 /// One request as one line: its compact JSON and a newline.

@@ -1,7 +1,9 @@
 //! The resolved config: what a config comes to once every default is filled
 //! in, and the digest that groups the runs made from it.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 
 use serde::{Serialize, Serializer};
@@ -9,8 +11,9 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 use super::model::{Api, CacheScope, Effort, Pricing, Provider, Thinking};
+use super::tools::{Builtin, McpLifetime, McpResult, McpServer, OutputCut, Tools};
 use super::written::path;
-use super::{Prompt, Run, Telemetry, Tools};
+use super::{Prompt, Run, Telemetry};
 
 /// A config with every default filled in.
 ///
@@ -27,29 +30,29 @@ pub struct ResolvedConfig {
     /// The `prompt` section.
     pub prompt: Prompt,
     /// The `tools` section.
-    pub tools: Tools,
+    pub tools: ResolvedTools,
     /// The `telemetry` section.
     pub telemetry: Telemetry,
 }
 
-/// A setting that only some providers apply.
+/// A setting that only some configs apply: one that's one provider's, or
+/// one that goes with another setting's value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Applied<T> {
-    /// The provider can't apply the setting, so the resolved config leaves
-    /// it out.
+    /// Nothing applies the setting, so the resolved config leaves it out.
     No,
-    /// The provider applies the setting, with this value.
+    /// The setting is applied, with this value.
     Yes(T),
 }
 
 impl<T> Applied<T> {
-    /// Whether the provider can't apply the setting.
+    /// Whether nothing applies the setting.
     #[must_use]
     pub const fn is_no(&self) -> bool {
         matches!(self, Self::No)
     }
 
-    /// The setting's value, when the provider applies it.
+    /// The setting's value, when it's applied.
     #[must_use]
     pub fn value(self) -> Option<T> {
         match self {
@@ -88,7 +91,8 @@ pub struct ResolvedModel {
     /// The environment variable that holds the API key.
     pub api_key_env: Option<String>,
     /// Where the API is served.
-    pub base_url: Option<String>,
+    #[serde(skip_serializing_if = "Applied::is_no")]
+    pub base_url: Applied<Option<String>>,
     /// The cap on output tokens for each call.
     pub max_tokens: u32,
     /// The sampling temperature.
@@ -121,6 +125,76 @@ fn script<S: Serializer>(
     match script {
         Applied::No => serializer.serialize_none(),
         Applied::Yes(script) => path::optional(script, serializer),
+    }
+}
+
+/// The `tools` section with every default filled in.
+///
+/// What two configs state differently to the same effect is held one way,
+/// so they share a digest: a run asks of `allow` and `deny` only whether
+/// they hold a name, which makes each a set, and the length of a preview
+/// says nothing under a cut that makes none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResolvedTools {
+    /// The built-in tools.
+    pub builtin: Builtin,
+    /// The MCP servers.
+    pub mcp: Vec<McpServer>,
+    /// How long the MCP servers live.
+    pub mcp_lifetime: McpLifetime,
+    /// Which part the model is sent of an MCP result that has two.
+    pub mcp_result: McpResult,
+    /// The only tools offered; `None` offers every tool, which no list
+    /// does, so it isn't a list of nothing.
+    pub allow: Option<BTreeSet<String>>,
+    /// Tools that are never offered.
+    pub deny: BTreeSet<String>,
+    /// How many calls of one turn may run at once.
+    pub max_concurrent_calls: NonZeroU32,
+    /// The size in bytes above which a tool result is cut.
+    pub max_output_bytes: Option<u64>,
+    /// What's kept of a result that's cut.
+    pub output_cut: OutputCut,
+    /// How many bytes a preview keeps, where the cut is a preview.
+    #[serde(skip_serializing_if = "Applied::is_no")]
+    pub output_preview_bytes: Applied<u64>,
+    /// The length in characters above which a tool description or a
+    /// server's instructions are cut.
+    pub max_description_chars: Option<u32>,
+}
+
+impl From<&Tools> for ResolvedTools {
+    fn from(tools: &Tools) -> Self {
+        let Tools {
+            builtin,
+            mcp,
+            mcp_lifetime,
+            mcp_result,
+            allow,
+            deny,
+            max_concurrent_calls,
+            max_output_bytes,
+            output_cut,
+            output_preview_bytes,
+            max_description_chars,
+        } = tools;
+        let set = |names: &Vec<String>| names.iter().cloned().collect();
+        Self {
+            builtin: builtin.clone(),
+            mcp: mcp.clone(),
+            mcp_lifetime: *mcp_lifetime,
+            mcp_result: *mcp_result,
+            allow: allow.as_ref().map(set),
+            deny: set(deny),
+            max_concurrent_calls: *max_concurrent_calls,
+            max_output_bytes: *max_output_bytes,
+            output_cut: *output_cut,
+            output_preview_bytes: match output_cut {
+                OutputCut::Preview => Applied::Yes(*output_preview_bytes),
+                OutputCut::Head | OutputCut::HeadTail => Applied::No,
+            },
+            max_description_chars: *max_description_chars,
+        }
     }
 }
 
