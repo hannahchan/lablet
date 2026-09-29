@@ -384,7 +384,6 @@ impl Harness {
             started_unix_ms: STARTED_UNIX_MS,
             config_digest: CONFIG_DIGEST.to_owned(),
             agent_version: VERSION.to_owned(),
-            resource: Vec::new(),
             transcript_path: self.transcript_path.clone(),
             skills_count: self.skills_count,
             mcp: self.mcp.clone(),

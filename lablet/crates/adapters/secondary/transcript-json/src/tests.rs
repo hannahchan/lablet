@@ -54,7 +54,6 @@ fn document(run: &str, system: &str) -> TranscriptDocument {
         started_unix_ms: 1_790_000_000_123,
         config_digest: "9f2c".to_owned(),
         agent_version: "0.1.0".to_owned(),
-        resource: Vec::new(),
         transcript_path: None,
         skills_count: 0,
         mcp: None,

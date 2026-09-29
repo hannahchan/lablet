@@ -49,7 +49,6 @@ pub(crate) fn context() -> RunContext {
         config_digest: "9f2c6a1d0b7e4c35a8f1d2e3b4c5a6978877665544332211ffeeddccbbaa0099"
             .to_owned(),
         agent_version: "0.1.0".to_owned(),
-        resource: vec![("team".to_owned(), "evals".to_owned())],
         transcript_path: Some("out/transcript.json".into()),
         skills_count: 2,
         mcp: Some(

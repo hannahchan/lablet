@@ -114,7 +114,7 @@ Acceptance: a doctest builds a `Lablet` from a config string, runs twice, and as
 
 ## Phase 5: CLI and config surface
 
-- `main.rs` and the `clap` derive CLI: `init`, `run`, `check` (including `--resolved`), `schema`, `--set`, `${VAR}` substitution, prompt sources, diagnostic logging on stderr, the end-of-run summary line and `--quiet`, Ctrl-C and `SIGTERM` into the `Cancellation` port, exit codes, and the error message contract from spec §7. `check` and `build` refuse a setting the config states and the selected provider can't apply, `--run-id`, `--task`, `--experiment` and `--trial` fill the run request, a message shows a config value as it was written, and a telemetry file path of `-` implies `--quiet`.
+- `main.rs` and the `clap` derive CLI: `init`, `run`, `check` (including `--resolved`), `schema`, `--set`, `${VAR}` substitution, prompt sources, diagnostic logging on stderr, the end-of-run summary line and `--quiet`, Ctrl-C and `SIGTERM` into the `Cancellation` port, exit codes, and the error message contract from spec §7. `check` refuses a setting the config states and the selected provider can't apply, as `build` has since phase 4, `--run-id`, `--task`, `--experiment` and `--trial` fill the run request, a message shows a config value as it was written, and a telemetry file path of `-` implies `--quiet`.
 - `lablet/schema.json` checked in and covered by the changelog gate.
 
 Acceptance: `lablet init --provider fake && lablet run --config lablet.yaml --prompt "..."` completes with no edits, writes an OTLP/JSON file, and prints a `RunOutcome`. The CLI and the phase 4 doctest produce identical outcomes for the same config. Scenarios C1 to C7 and C10 to C18 pass, with the exit codes of L9 and E15.

@@ -1377,6 +1377,16 @@ fn a_run_with_no_system_prompt_is_allowed() {
     );
 }
 
+#[test]
+fn a_task_keeps_its_text_under_another_system_prompt() {
+    let prompts = Prompts::new("", " Fix the test. ")
+        .expect("the task isn't blank")
+        .with_system("You fix tests.");
+
+    assert_eq!(prompts.system(), "You fix tests.");
+    assert_eq!(prompts.task(), " Fix the test. ");
+}
+
 /// A run whose last response made `calls`, and nothing else.
 fn having_called(calls: Vec<ContentBlock>) -> Pending {
     pending(start().responded(

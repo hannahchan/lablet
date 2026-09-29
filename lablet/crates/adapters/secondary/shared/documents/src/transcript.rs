@@ -65,7 +65,6 @@ impl TranscriptDocument {
             started_unix_ms,
             config_digest,
             agent_version,
-            resource: _,
             transcript_path: _,
             skills_count: _,
             mcp: _,

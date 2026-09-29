@@ -49,8 +49,8 @@ fn the_fixture_states_the_version_this_crate_writes() {
 }
 
 /// What a context holds beyond what names the run is the wide event's to
-/// report: the resource attributes, the path, the skills, the MCP servers
-/// and whether content is captured are in no key of the document.
+/// report: the path, the skills, the MCP servers and whether content is
+/// captured are in no key of the document.
 #[test]
 fn the_document_has_the_version_what_names_the_run_its_tools_and_its_conversation() {
     assert_eq!(

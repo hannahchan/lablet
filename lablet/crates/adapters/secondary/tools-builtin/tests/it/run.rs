@@ -112,7 +112,6 @@ async fn run(script: &str, tools: BuiltinTools) -> FinishedRun {
         started_unix_ms: 1_790_000_000_000,
         config_digest: "0".repeat(64),
         agent_version: "0.1.0".to_owned(),
-        resource: Vec::new(),
         transcript_path: None,
         skills_count: 0,
         mcp: None,

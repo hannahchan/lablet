@@ -51,7 +51,6 @@ pub(crate) fn context() -> RunContext {
         started_unix_ms: STARTED_UNIX_MS,
         config_digest: CONFIG_DIGEST.to_owned(),
         agent_version: "0.1.0".to_owned(),
-        resource: Vec::new(),
         transcript_path: None,
         skills_count: 0,
         mcp: None,

@@ -94,6 +94,23 @@ id! {
 }
 
 impl RunId {
+    /// The digits a ULID is written in, which are Crockford's base 32.
+    const ULID_DIGITS: &'static [u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+    /// The run id that's the ULID `value`, written as its 26 digits.
+    ///
+    /// Every ULID is a run id, so whoever generates one needs no error path
+    /// for an id that can't be refused. The domain reads no clock and draws
+    /// no random number, so the value is the caller's to make.
+    #[must_use]
+    pub fn ulid(value: u128) -> Self {
+        let digit = |place: u32| {
+            let [index, ..] = ((value >> (5 * place)) & 31).to_le_bytes();
+            char::from(Self::ULID_DIGITS[usize::from(index)])
+        };
+        Self((0..26).rev().map(digit).collect())
+    }
+
     /// A number that's a pure function of the run, the turn and the attempt,
     /// which is what the jitter of a retry is read from: two runs that fail
     /// together wait differently, and one run waits the same every time it's

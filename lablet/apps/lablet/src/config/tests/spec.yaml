@@ -1,0 +1,79 @@
+run:
+  completion: natural # natural | explicit
+  max_turns: null # a cap on turns; null means none, and the timeout and the token budget bound the run
+  timeout: 10m
+  max_total_tokens: null # input + output summed over every provider call, failed attempts included, so context sent again counts again (ten turns growing to 20,000 tokens of context count about 110,000); input already includes cached tokens; null means unlimited
+  max_retries: 10 # retries per provider call, so eleven attempts; 0 never retries
+  retry_backoff_base: 500ms # the wait after the first failed attempt; it doubles each time
+  retry_backoff_max: 32s
+  retry_jitter: 0.25 # up to this share is added to a wait, derived from the run id; 0 means none
+  retry_hint_max: 60s # a server that asks for a longer wait ends the retries
+  max_consecutive_invalid_turns: 3 # turns in a row in which no call reached a tool: every call named no tool, had arguments that didn't parse, or was rejected; null means no cap
+  provider_timeout: 10m # long enough for a response of max_tokens to finish; a call never gets longer than the run has left
+  context: full # full | { mask: { trigger_tokens: 150000, keep_last: 5 } } (phase 7a, where the capture settles the default and the values)
+  transcript_path: null # write the full conversation at run end; may hold {run_id}
+  transcript_format: json # json | atif (ATIF v1.8, phase 10)
+  completion_schema: null # explicit mode: JSON schema for the task_complete argument, which is checked against it (phase 10); null means any object
+
+model:
+  provider: anthropic # anthropic | openai | fake
+  api: null # openai only: responses | chat_completions; null means responses without a base_url and chat_completions with one
+  script: null # fake only: path to the scripted responses
+  name: claude-sonnet-5
+  api_key_env: ANTHROPIC_API_KEY # never the key itself; optional for openai (Ollama) and fake
+  base_url: null # override for gateways, Ollama, vLLM
+  max_tokens: 32000
+  temperature: null # sent only when set; rejected by current Anthropic models
+  thinking: provider_default # provider_default | adaptive | disabled | { budget: 2048 } (tokens, at least 1 and below max_tokens); anthropic only
+  effort: null # low | medium | high | xhigh | max; anthropic, and openai with the responses API
+  seed: null # openai only
+  reasoning_replay: false # chat_completions only: send reasoning back as reasoning_content
+  cache: true # anthropic only: breakpoints on the system prompt, the tool specs and the latest message
+  cache_scope: shared # shared | run; run sends the run id as a cache key, so no two runs share what's cached after the tool specs
+  pricing: null # { input, output, cache_read, cache_write } USD per million tokens
+
+prompt:
+  system: "You are ..." # exactly one of system or system_file
+  system_file: null
+  skills: [] # paths to SKILL.md files
+  skills_mode: tool # tool | inline; tool lists each skill's name and description and loads a body when the model asks; inline appends every body to the system prompt
+
+tools:
+  builtin:
+    root: null # required when a built-in is enabled; never a directory that holds lablet's own files
+    enabled: [] # bash, read_file, write_file; task_complete is implied by run.completion: explicit
+    timeout: 120s
+    env: {} # added to the short list of variables bash starts with
+  mcp:
+    - name: docs # letters, digits, - and _
+      transport: stdio
+      command: npx
+      args: ["-y", "@example/docs-mcp"]
+      env: {} # added to the short list of variables the server starts with
+      startup_timeout: 30s
+      call_timeout: 300s
+      names: prefixed # prefixed | own; prefixed offers a tool as mcp__<name>__<tool>
+      instructions: true # send the server's instructions after the system prompt
+    - name: search
+      transport: http
+      url: http://localhost:8080/mcp
+      headers: {}
+  mcp_lifetime: run # run | lablet; run starts the servers again for each run after the first
+  mcp_result: structured # structured | content; which of the two the model is sent when a result has both
+  allow: null # list of tool names as the model sees them; null means all; a name no tool has is an error
+  deny: [] # removed after allow is applied; a name no tool has is an error
+  max_concurrent_calls: 10 # calls to shared tools in one turn run together, at most this many at a time; 1 runs every call alone
+  max_output_bytes: 50000 # a tool result longer than this is cut; null means no cap
+  output_cut: preview # preview | head | head_tail; what's kept of a result that's cut
+  output_preview_bytes: 2000 # preview only
+  max_description_chars: 2048 # a tool description or a server's instructions longer than this is cut; null means no cap
+
+telemetry:
+  capture_content: false
+  otlp:
+    endpoint: null # e.g. http://localhost:4317; null disables the network exporter and makes the file exporter the default
+    protocol: grpc # grpc | http
+    headers: {}
+  file:
+    path: null # OTLP/JSON lines; file path, "-" for stderr, which implies --quiet; null means lablet-<run_id>.otlp.jsonl when otlp.endpoint is also null
+  resource: {} # extra resource attributes

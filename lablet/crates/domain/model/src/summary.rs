@@ -33,8 +33,6 @@ pub struct RunContext {
     pub config_digest: String,
     /// The lablet version.
     pub agent_version: String,
-    /// The composer's extra resource attributes, in config order.
-    pub resource: Vec<(String, String)>,
     /// Where the transcript is written, when it is.
     pub transcript_path: Option<PathBuf>,
     /// How many skill files were appended to the system prompt.

@@ -12,6 +12,31 @@ fn an_identifier_keeps_the_string_it_was_built_from() {
     assert_eq!(String::from(tool), "read_file");
 }
 
+/// The value is that of `01ARZ3NDEKTSV4RRFFQ69G5FAV`, the example the ULID
+/// specification gives.
+#[test]
+fn a_ulid_is_the_run_id_its_26_digits_spell() {
+    let example = 0x0156_3E3A_B5D3_D676_4C61_EFB9_9302_BD5B;
+
+    assert_eq!(RunId::ulid(example).as_str(), "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+    assert_eq!(RunId::ulid(0).as_str(), "0".repeat(26));
+    assert_eq!(RunId::ulid(31).as_str(), format!("{}Z", "0".repeat(25)));
+    assert_eq!(RunId::ulid(32).as_str(), format!("{}10", "0".repeat(24)));
+    assert_eq!(
+        RunId::ulid(u128::MAX).as_str(),
+        format!("7{}", "Z".repeat(25))
+    );
+}
+
+#[test]
+fn a_ulid_is_an_id_that_new_accepts_as_it_is_written() {
+    for value in [0, 1, 0x0156_3E3A_B5D3_D676_4C61_EFB9_9302_BD5B, u128::MAX] {
+        let id = RunId::ulid(value);
+
+        assert_eq!(RunId::new(id.as_str()), Ok(id));
+    }
+}
+
 #[test]
 fn an_identifier_displays_as_its_string() {
     assert_eq!(RunId::new("run-1").unwrap().to_string(), "run-1");

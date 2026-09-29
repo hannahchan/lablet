@@ -93,6 +93,20 @@ impl Prompts {
         })
     }
 
+    /// The same task under `system`, in place of the system prompt these
+    /// prompts held.
+    ///
+    /// It's for whoever takes a task before the system prompt it runs under
+    /// is at hand: the task was checked when these prompts were made, so
+    /// nothing is left to refuse.
+    #[must_use]
+    pub fn with_system(self, system: impl Into<String>) -> Self {
+        Self {
+            system: system.into(),
+            ..self
+        }
+    }
+
     /// The system prompt.
     #[must_use]
     pub fn system(&self) -> &str {
