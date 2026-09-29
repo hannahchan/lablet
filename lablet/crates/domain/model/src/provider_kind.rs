@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 pub enum ProviderKind {
     /// The Anthropic Messages API.
     Anthropic,
-    /// Any server that speaks OpenAI chat completions.
+    /// OpenAI, and any server that speaks one of its APIs.
     Openai,
     /// The scripted provider.
     Fake,

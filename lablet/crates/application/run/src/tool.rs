@@ -21,8 +21,9 @@ pub struct ToolCall {
     pub name: ToolName,
     /// The arguments the model produced.
     pub input: serde_json::Value,
-    /// The time the run had left when the call's turn came. The executor
-    /// takes no longer than the shorter of this and its own limit.
+    /// The time the run had left when the call began. The executor takes
+    /// no longer than the shorter of this and its own limit. Zero is a
+    /// deadline the call has reached already, never the absence of one.
     pub deadline: Duration,
     /// How much of the tool's text the run's output cap can use, which is
     /// what the executor's [`KeptOutput`] is made from. `None` when the run

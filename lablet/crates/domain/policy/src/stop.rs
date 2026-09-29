@@ -125,9 +125,10 @@ impl StopPolicy {
     ///
     /// It's the only place a call's deadline is taken from the run's timeout,
     /// so no call's deadline is later than the run's. Its `None` is what
-    /// keeps a tool phase from starting and what leaves a call unrun whose
-    /// turn comes too late. The timeout of points A and B is read from here
-    /// too, so a run those points let go on always has time to give a call.
+    /// keeps a tool phase from starting, and what leaves a provider call
+    /// attempt unmade and a tool call unrun whose turn comes too late. The
+    /// timeout of points A and B is read from here too, so a run those
+    /// points let go on has time to give a call on the reading they took.
     #[must_use]
     pub fn time_left(&self, elapsed: Duration) -> Option<Duration> {
         self.timeout

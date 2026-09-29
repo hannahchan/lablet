@@ -124,6 +124,18 @@ pub struct Progress {
     pub consecutive_invalid_turns: u32,
 }
 
+/// The timing of a provider call attempt that failed, as the run counted it.
+///
+/// [`Run::failed_attempt`] gives it back, so what the loop tells an observer
+/// of the attempt is what the summary's provider latencies hold of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FailedAttempt {
+    /// When the attempt began, in whole milliseconds since the run started.
+    pub started_ms: u64,
+    /// How long the attempt took, in whole milliseconds.
+    pub latency_ms: u64,
+}
+
 /// One run, from its first provider call to the outcome it becomes, while it
 /// waits for a provider response.
 ///
@@ -186,21 +198,34 @@ impl Run {
         self.transcript.messages(&self.input)
     }
 
-    /// Records a provider call attempt that failed after `latency`, and the
-    /// `usage` it reported, when the provider billed for it and said so.
+    /// Records a provider call attempt that started `started` into the run
+    /// and failed after `latency`, and the `usage` it reported, when the
+    /// provider billed for it and said so. Gives back the attempt's timing
+    /// as it was counted, which is the latency the summary's totals hold.
     ///
     /// That usage is in no turn, because a failed attempt made none, so the
     /// outcome's usage leaves it out. It counts toward the token budget and
     /// the cost, or a run that fails more often would look cheaper than it
     /// was.
-    pub fn failed_attempt(&mut self, latency: Duration, usage: Option<Usage>) {
-        let latency_ms = whole_ms(latency);
+    pub fn failed_attempt(
+        &mut self,
+        started: Duration,
+        latency: Duration,
+        usage: Option<Usage>,
+    ) -> FailedAttempt {
+        let attempt = FailedAttempt {
+            started_ms: whole_ms(started),
+            latency_ms: whole_ms(latency),
+        };
         self.failed_attempts = self.failed_attempts.saturating_add(1);
-        self.failed_latency_total_ms = self.failed_latency_total_ms.saturating_add(latency_ms);
-        self.failed_latency_max_ms = self.failed_latency_max_ms.max(latency_ms);
+        self.failed_latency_total_ms = self
+            .failed_latency_total_ms
+            .saturating_add(attempt.latency_ms);
+        self.failed_latency_max_ms = self.failed_latency_max_ms.max(attempt.latency_ms);
         if let Some(usage) = usage {
             self.failed_usage = Some(self.failed() + usage);
         }
+        attempt
     }
 
     /// Records the provider call attempt that returned `response` as the
@@ -588,23 +613,24 @@ impl Pending {
         let mut rest = calls.as_slice();
         while let Some((first, others)) = rest.split_first() {
             let shared = |call: &ToolUse| (schedule.concurrency)(call) == ToolConcurrency::Shared;
-            // Counted from the call after the first, so a group always holds
-            // the call it starts with and the loop always moves on.
-            let len = if shared(first) {
-                1 + others.iter().take_while(|call| shared(call)).count()
+            // A group is the call it starts with and the calls that run
+            // beside it, which are cut from the calls after it. So a group
+            // always holds a call and the loop always moves on.
+            let more = if shared(first) {
+                others.iter().take_while(|call| shared(call)).count()
             } else {
-                1
+                0
             };
-            let (group, after) = rest.split_at(len);
+            let (beside, after) = others.split_at(more);
             rest = after;
 
             // A pool rather than an ordered queue: a call starts as soon as
             // any call of its group ends, not only when the earliest one
             // does, and each answer carries its place so the outcomes can be
             // put back in call order.
-            let mut waiting = group.iter().enumerate();
+            let mut waiting = std::iter::once(first).chain(beside).enumerate();
             let mut running = FuturesUnordered::new();
-            let mut answered = Vec::with_capacity(len);
+            let mut answered = Vec::new();
             loop {
                 while running.len() < max {
                     let Some((at, call)) = waiting.next() else {

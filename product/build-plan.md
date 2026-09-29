@@ -13,8 +13,8 @@ Sequencing rationale: the loop is proven against fakes before any real adapter e
 | 2     | Domain                                              | Done, 2026-09-20 |
 | 3     | The loop                                            | Done, 2026-09-21 |
 | 3a    | The run's states as types, and tool calls in groups | Done, 2026-09-24 |
-| 3b    | The domain and the loop after the design review     | Next             |
-| 4     | Library and first traced run                        | Not started      |
+| 3b    | The domain and the loop after the design review     | Done, 2026-09-29 |
+| 4     | Library and first traced run                        | Next             |
 | 5     | CLI and config surface                              | Not started      |
 | 6     | OTLP network export and live-check                  | Not started      |
 | 7     | Anthropic, and the capture of the primary reference | Not started      |
@@ -25,7 +25,7 @@ Sequencing rationale: the loop is proven against fakes before any real adapter e
 | 11    | Hardening and release                               | Not started      |
 | 12    | After the release                                   | Not started      |
 
-A date is the date of the `decisions.md` entry that closed the phase. Spec §1, §3, §4 and §5 describe phase 3b's design, so until that phase closes the code is at phase 3a and the spec is ahead of it.
+A date is the date of the `decisions.md` entry that closed the phase. Spec §6 and §7 describe what phases 4 to 10 build, so they're ahead of the code.
 
 ## Phase 0: Scaffold
 

@@ -20,6 +20,7 @@ macro_rules! display_as_str {
 
 mod id;
 mod labels;
+mod mcp;
 mod message;
 mod outcome;
 mod output;
@@ -35,6 +36,7 @@ mod usage;
 
 pub use id::{IdError, RunId, ToolCallId, ToolName};
 pub use labels::RunLabels;
+pub use mcp::{McpLifetime, McpServer, McpServers, NoMcpServers};
 pub use message::{
     ContentBlock, Message, ToolInput, ToolResult, ToolResultContent, ToolUse, UserContent,
 };
@@ -46,9 +48,11 @@ pub use provider::{
     ProviderResponse, RequestParams, ResponseError, Thinking, UnknownReason,
 };
 pub use provider_kind::ProviderKind;
-pub use run::{BlankTask, Final, Pending, Progress, Prompts, Responded, Run, RunSetup, Schedule};
+pub use run::{
+    BlankTask, FailedAttempt, Final, Pending, Progress, Prompts, Responded, Run, RunSetup, Schedule,
+};
 pub use stop::{Calls, CompletionMode, StopClass, StopReason};
-pub use summary::{FinishedRun, McpLifetime, RunContext, RunSummary, ToolStats};
+pub use summary::{FinishedRun, RunContext, RunSummary, ToolStats};
 pub use tool::{
     Answer, ToolCallEnd, ToolCallOutcome, ToolCallStatus, ToolConcurrency, ToolSource, ToolSpec,
 };

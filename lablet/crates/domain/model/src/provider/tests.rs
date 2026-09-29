@@ -191,6 +191,21 @@ fn a_provider_api_prints_what_it_serialises_as() {
     }
 }
 
+/// An API names its provider, so a model's record has no provider to get
+/// wrong. OpenAI has two APIs, and a server that only speaks one of them is
+/// reported under its family.
+#[test]
+fn an_api_is_its_provider_s_and_no_other_s() {
+    for (api, provider) in [
+        (ProviderApi::Messages, ProviderKind::Anthropic),
+        (ProviderApi::Responses, ProviderKind::Openai),
+        (ProviderApi::ChatCompletions, ProviderKind::Openai),
+        (ProviderApi::Script, ProviderKind::Fake),
+    ] {
+        assert_eq!(api.provider(), provider, "{api}");
+    }
+}
+
 fn bash(id: &str) -> ContentBlock {
     ContentBlock::ToolUse(ToolUse {
         id: ToolCallId::new(id).unwrap(),
@@ -227,7 +242,6 @@ fn a_script_cannot_put_a_tool_result_in_a_completion() {
 #[test]
 fn a_model_ref_and_an_endpoint_have_one_json_form() {
     let model = ModelRef {
-        provider: ProviderKind::Openai,
         api: ProviderApi::ChatCompletions,
         name: "qwen3".to_owned(),
         replays_reasoning: true,
@@ -240,11 +254,11 @@ fn a_model_ref_and_an_endpoint_have_one_json_form() {
     assert_eq!(
         serde_json::to_value(&model).unwrap(),
         json!({
-            "provider": "openai",
             "api": "chat_completions",
             "name": "qwen3",
             "replays_reasoning": true,
-        })
+        }),
+        "the provider is read from the API, so the form holds none"
     );
     assert_eq!(
         serde_json::from_value::<ModelRef>(serde_json::to_value(&model).unwrap()).unwrap(),

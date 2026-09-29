@@ -5,8 +5,8 @@ use serde_json::{Value, json};
 use super::*;
 use crate::outcome::RawOutcome;
 use crate::{
-    CacheScope, CompletionMode, Cost, Effort, Endpoint, FinishReason, ModelRef, Prompts,
-    ProviderApi, ProviderKind, Rates, RequestParams, Run, RunOutcome, RunSetup, StopReason,
+    CacheScope, CompletionMode, Cost, Effort, Endpoint, FinishReason, McpLifetime, McpServer,
+    ModelRef, Prompts, ProviderApi, Rates, RequestParams, Run, RunOutcome, RunSetup, StopReason,
     Thinking, TokenCounts, ToolName, ToolStats, Usage,
 };
 use crate::{RunId, RunLabels, TaskResult};
@@ -24,9 +24,22 @@ fn a_run_context_has_one_json_form() {
         resource: vec![("experiment.id".to_owned(), "exp-7".to_owned())],
         transcript_path: Some(PathBuf::from("out/transcript.json")),
         skills_count: 2,
-        mcp_servers: vec!["docs".to_owned(), "tickets".to_owned()],
-        mcp_server_versions: vec!["1.4.0".to_owned(), "0.9.2".to_owned()],
-        mcp_lifetime: Some(McpLifetime::Lablet),
+        mcp: Some(
+            McpServers::new(
+                McpLifetime::Lablet,
+                vec![
+                    McpServer {
+                        name: "docs".to_owned(),
+                        version: "1.4.0".to_owned(),
+                    },
+                    McpServer {
+                        name: "tickets".to_owned(),
+                        version: "0.9.2".to_owned(),
+                    },
+                ],
+            )
+            .unwrap(),
+        ),
         capture_content: true,
     };
     let expected = json!({
@@ -38,9 +51,13 @@ fn a_run_context_has_one_json_form() {
         "resource": [["experiment.id", "exp-7"]],
         "transcript_path": "out/transcript.json",
         "skills_count": 2,
-        "mcp_servers": ["docs", "tickets"],
-        "mcp_server_versions": ["1.4.0", "0.9.2"],
-        "mcp_lifetime": "lablet",
+        "mcp": {
+            "lifetime": "lablet",
+            "servers": [
+                { "name": "docs", "version": "1.4.0" },
+                { "name": "tickets", "version": "0.9.2" },
+            ],
+        },
         "capture_content": true,
     });
 
@@ -52,7 +69,7 @@ fn a_run_context_has_one_json_form() {
 }
 
 #[test]
-fn a_run_without_mcp_servers_has_no_lifetime_for_them() {
+fn a_run_without_mcp_servers_has_none_to_report_and_no_lifetime_for_them() {
     let context = RunContext {
         run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").unwrap(),
         labels: RunLabels::default(),
@@ -62,14 +79,12 @@ fn a_run_without_mcp_servers_has_no_lifetime_for_them() {
         resource: Vec::new(),
         transcript_path: None,
         skills_count: 0,
-        mcp_servers: Vec::new(),
-        mcp_server_versions: Vec::new(),
-        mcp_lifetime: None,
+        mcp: None,
         capture_content: false,
     };
 
     let json = serde_json::to_value(&context).unwrap();
-    assert_eq!(json["mcp_lifetime"], Value::Null);
+    assert_eq!(json["mcp"], Value::Null);
     assert_eq!(
         json["labels"],
         json!({ "task": null, "experiment": null, "trial": null })
@@ -77,23 +92,10 @@ fn a_run_without_mcp_servers_has_no_lifetime_for_them() {
     assert_eq!(serde_json::from_value::<RunContext>(json).unwrap(), context);
 }
 
-#[test]
-fn an_mcp_lifetime_prints_what_it_serialises_as() {
-    for (lifetime, spelling) in [(McpLifetime::Run, "run"), (McpLifetime::Lablet, "lablet")] {
-        assert_eq!(lifetime.to_string(), spelling);
-        assert_eq!(serde_json::to_value(lifetime).unwrap(), json!(spelling));
-        assert_eq!(
-            serde_json::from_value::<McpLifetime>(json!(spelling)).unwrap(),
-            lifetime
-        );
-    }
-}
-
 fn summary() -> RunSummary {
     let bash = ToolName::new("bash").unwrap();
     RunSummary {
         model: ModelRef {
-            provider: ProviderKind::Openai,
             api: ProviderApi::ChatCompletions,
             name: "qwen3".to_owned(),
             replays_reasoning: true,
@@ -162,7 +164,6 @@ fn a_run_summary_has_one_json_form() {
         json,
         json!({
             "model": {
-                "provider": "openai",
                 "api": "chat_completions",
                 "name": "qwen3",
                 "replays_reasoning": true,

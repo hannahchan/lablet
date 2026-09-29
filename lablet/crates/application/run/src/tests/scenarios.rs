@@ -5,10 +5,10 @@ use std::time::Duration;
 
 use lablet_model::{
     CacheScope, CompletionMode, ContentBlock, Endpoint, FinishReason, ModelRef, OutputCap,
-    OutputCut, OutputKeep, Prompts, ProviderApi, ProviderErrorKind, ProviderKind, ProviderResponse,
-    Rates, RequestParams, RunContext, RunId, RunLabels, RunSummary, StopReason, Thinking,
-    TokenCounts, ToolCallEnd, ToolCallId, ToolCallStatus, ToolConcurrency, ToolInput, ToolName,
-    ToolSource, ToolSpec, ToolUse, Usage,
+    OutputCut, OutputKeep, Prompts, ProviderApi, ProviderErrorKind, ProviderResponse, Rates,
+    RequestParams, RunContext, RunId, RunLabels, RunSummary, StopReason, Thinking, TokenCounts,
+    ToolCallEnd, ToolCallId, ToolCallStatus, ToolConcurrency, ToolInput, ToolName, ToolSource,
+    ToolSpec, ToolUse, Usage,
 };
 use lablet_policy::{Pricing, RetryPolicy, RetrySettings, StopPolicy};
 
@@ -47,9 +47,7 @@ fn context() -> RunContext {
         resource: Vec::new(),
         transcript_path: None,
         skills_count: 0,
-        mcp_servers: Vec::new(),
-        mcp_server_versions: Vec::new(),
-        mcp_lifetime: None,
+        mcp: None,
         capture_content: false,
     }
 }
@@ -60,7 +58,6 @@ fn prompts() -> Prompts {
 
 fn model() -> ModelRef {
     ModelRef {
-        provider: ProviderKind::Fake,
         api: ProviderApi::Script,
         name: "fake-1".to_owned(),
         replays_reasoning: false,
@@ -1948,16 +1945,22 @@ async fn a_turn_in_which_a_call_reached_a_tool_ends_the_count_whatever_the_tool_
     }
 }
 
-#[tokio::test]
-async fn one_response_that_makes_three_invalid_calls_is_one_invalid_turn() {
-    let mut harness = Harness::new(vec![
+/// One response that makes three invalid calls, and the response that ends
+/// the run.
+fn three_invalid_calls_at_once() -> Vec<Answer> {
+    vec![
         Answer::now(calling(&[
             ("invented", parsed()),
             ("bash", unparsed()),
             ("also_invented", parsed()),
         ])),
         Answer::now(says("Done.", &[], FinishReason::EndTurn)),
-    ]);
+    ]
+}
+
+#[tokio::test]
+async fn one_response_that_makes_three_invalid_calls_is_one_invalid_turn() {
+    let mut harness = Harness::new(three_invalid_calls_at_once());
     harness.stop.max_consecutive_invalid_turns = Some(nz(3));
 
     let run = harness.run().await;
@@ -1971,21 +1974,38 @@ async fn one_response_that_makes_three_invalid_calls_is_one_invalid_turn() {
     );
 }
 
+/// `script`, then three more invalid turns, then the response that ends the
+/// run: twice the turns a cap of three allows in a row.
+fn and_three_more_invalid_turns(mut script: Vec<Answer>) -> Vec<Answer> {
+    script.extend((0..3).map(|_| Answer::now(calling(&[("invented", parsed())]))));
+    script.push(Answer::now(says("Done.", &[], FinishReason::EndTurn)));
+    script
+}
+
 #[tokio::test]
 async fn without_a_cap_on_invalid_turns_every_such_run_goes_on() {
-    let beside = [None, Some(("read_file", parsed()))];
-    for beside in beside {
-        let mut script = three_invalid_turns(beside);
-        script.extend((0..3).map(|_| Answer::now(calling(&[("invented", parsed())]))));
-        script.push(Answer::now(says("Done.", &[], FinishReason::EndTurn)));
+    let scripts = [
+        (and_three_more_invalid_turns(three_invalid_turns(None)), 7),
+        (
+            and_three_more_invalid_turns(three_invalid_turns(Some(("read_file", parsed())))),
+            7,
+        ),
+        (three_invalid_calls_at_once(), 2),
+    ];
+    for (script, turns) in scripts {
         let mut harness = Harness::new(script);
         harness.stop.max_consecutive_invalid_turns = None;
 
         let run = harness.run().await;
 
-        assert_eq!(run.stop_reason(), StopReason::Completed);
-        assert_eq!(run.turns(), 7);
-        assert_eq!(run.error(), None);
+        assert_eq!(run.stop_reason(), StopReason::Completed, "{turns} turns");
+        assert_eq!(run.turns(), turns);
+        assert_eq!(
+            run.provider.calls(),
+            turns as usize,
+            "every response of the script was asked for"
+        );
+        assert_eq!(run.error(), None, "{turns} turns");
     }
 }
 
@@ -2069,6 +2089,89 @@ async fn provider_latency_counts_the_failed_attempts_too() {
         190,
         "the successful attempt began after the failure and its 100ms backoff"
     );
+}
+
+/// When each attempt of the run began and how long it took, as the event
+/// that ended the attempt says, in order.
+fn attempts(run: &Run) -> Vec<(&'static str, u64, u64)> {
+    run.observer
+        .events()
+        .iter()
+        .filter_map(|event| match &event.kind {
+            EventKind::ProviderCallFailed {
+                started_ms,
+                latency_ms,
+                ..
+            } => Some((event.kind.name(), *started_ms, *latency_ms)),
+            EventKind::ProviderCallFinished { record, .. } => {
+                Some((event.kind.name(), record.started_ms, record.latency_ms))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The summary's provider latencies count the failed attempts, so an
+/// observer can account for them only when the failed attempts say how long
+/// they took. The slowest attempt of the first run is one that failed, and
+/// the second run has no attempt but one that failed.
+#[tokio::test]
+async fn the_latencies_of_a_run_s_attempts_sum_to_the_summary_s_total_and_the_longest_is_its_max() {
+    let failing_twice_and_then_once = vec![
+        Answer::Fails(overloaded(), ms(90)),
+        Answer::Fails(overloaded(), ms(250)),
+        Answer::Responds(
+            Box::new(says("On it.", &["bash"], FinishReason::ToolUse)),
+            ms(60),
+        ),
+        Answer::Fails(overloaded(), ms(30)),
+        Answer::Responds(Box::new(says("Done.", &[], FinishReason::EndTurn)), ms(120)),
+    ];
+    let failing_for_good = vec![Answer::Fails(
+        ProviderError::new(ProviderErrorKind::Fatal, "bad request"),
+        ms(70),
+    )];
+    let runs = [
+        (
+            failing_twice_and_then_once,
+            vec![
+                ("ProviderCallFailed", 0, 90),
+                ("ProviderCallFailed", 190, 250),
+                ("ProviderCallFinished", 640, 60),
+                ("ProviderCallFailed", 700, 30),
+                ("ProviderCallFinished", 830, 120),
+            ],
+            (550, 250),
+        ),
+        (
+            failing_for_good,
+            vec![("ProviderCallFailed", 0, 70)],
+            (70, 70),
+        ),
+    ];
+    for (script, attempted, (total, max)) in runs {
+        let run = Harness::new(script).run().await;
+
+        let attempts = attempts(&run);
+        assert_eq!(
+            attempts, attempted,
+            "each attempt began where the one before it ended, a backoff later when that one failed"
+        );
+        let latencies = attempts.iter().map(|(_, _, latency_ms)| *latency_ms);
+        let summary = &run.finished.summary;
+        assert_eq!(
+            latencies.clone().sum::<u64>(),
+            summary.provider_latency_total_ms
+        );
+        assert_eq!(latencies.max(), Some(summary.provider_latency_max_ms));
+        assert_eq!(
+            (
+                summary.provider_latency_total_ms,
+                summary.provider_latency_max_ms
+            ),
+            (total, max)
+        );
+    }
 }
 
 /// The retry field is the whole answer: a wait means another attempt follows,
@@ -3610,12 +3713,16 @@ async fn a_provider_attempt_is_given_the_shorter_of_the_provider_timeout_and_the
 }
 
 /// Point A reads the clock ahead of the attempt, and here the observer
-/// takes the run's whole time between the two. The attempt is given none,
-/// which an adapter reports as a deadline reached; the fake's script answers
-/// whatever the deadline, and a response that ends the run completes it.
+/// takes the run's whole time between the two. The attempt's turn comes when
+/// the time has gone, so it's never made: the response the script holds
+/// would have completed the run, and nothing asks for it.
 #[tokio::test]
-async fn an_attempt_that_begins_when_the_run_s_time_has_gone_is_given_no_time() {
-    let mut harness = Harness::new(vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))]);
+async fn an_attempt_whose_turn_comes_when_the_run_s_time_has_gone_is_never_made() {
+    let mut harness = Harness::new(vec![Answer::now(says(
+        "Never reached.",
+        &[],
+        FinishReason::EndTurn,
+    ))]);
     harness.observer = Arc::new(Recorder::slow_over(
         Arc::clone(&harness.clock),
         "TurnStarted",
@@ -3625,8 +3732,153 @@ async fn an_attempt_that_begins_when_the_run_s_time_has_gone_is_given_no_time() 
 
     let run = harness.run().await;
 
-    assert_eq!(run.provider.deadlines(), [Duration::ZERO]);
+    assert_eq!(run.stop_reason(), StopReason::Timeout);
+    assert_eq!(run.error(), None);
+    assert_eq!(run.provider.calls(), 0, "the provider is never called");
+    assert_eq!(
+        run.observer.names(),
+        ["RunStarted", "TurnStarted", "RunFinished"],
+        "and no attempt is announced"
+    );
+    assert_eq!(run.turns(), 0);
+    assert_eq!(run.finished.summary.provider_latency_total_ms, 0);
+    assert_eq!(run.finished.summary.outcome.duration_ms, 10_000);
+}
+
+/// The observer takes two seconds over being told of each attempt, and
+/// they're the observer's: an attempt begins once the observer has been
+/// told, takes what the provider took, and is given what the run has left
+/// then. The first attempt's turn comes at 0 s and the second's at 2.19 s,
+/// after the first has failed and the backoff has passed.
+#[tokio::test]
+async fn the_time_an_observer_takes_over_the_start_of_an_attempt_is_not_the_attempt_s() {
+    let mut harness = Harness::new(vec![
+        Answer::Fails(overloaded(), ms(90)),
+        Answer::Responds(Box::new(says("Done.", &[], FinishReason::EndTurn)), ms(400)),
+    ]);
+    harness.observer = Arc::new(Recorder::slow_over(
+        Arc::clone(&harness.clock),
+        "ProviderCallStarted",
+        secs(2),
+    ));
+    harness.stop.timeout = secs(10);
+    harness.calls.provider_timeout = secs(60);
+
+    let run = harness.run().await;
+
     assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(
+        run.provider.deadlines(),
+        [secs(8), ms(5_810)],
+        "what the run had left when each attempt's turn came, less the observer's 2 s"
+    );
+    assert_eq!(
+        attempts(&run),
+        [
+            ("ProviderCallFailed", 2_000, 90),
+            ("ProviderCallFinished", 4_190, 400),
+        ]
+    );
+    let record = run.finished.transcript.turns()[0].record();
+    assert_eq!((record.started_ms, record.latency_ms), (4_190, 400));
+    assert_eq!(run.finished.summary.provider_latency_total_ms, 490);
+    assert_eq!(run.finished.summary.provider_latency_max_ms, 400);
+}
+
+/// The attempt's turn came with the whole of the run's time left, so it's
+/// made, and the observer took all of it over being told. A deadline is
+/// never less than none: the attempt is given zero, which an adapter reports
+/// as a deadline reached. The fake's script answers whatever the deadline,
+/// and a response that ends the run completes it.
+#[tokio::test]
+async fn an_attempt_whose_observer_took_the_last_of_the_run_s_time_is_given_none() {
+    let mut harness = Harness::new(vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))]);
+    harness.observer = Arc::new(Recorder::slow_over(
+        Arc::clone(&harness.clock),
+        "ProviderCallStarted",
+        secs(11),
+    ));
+    harness.stop.timeout = secs(10);
+
+    let run = harness.run().await;
+
+    assert_eq!(run.provider.deadlines(), [Duration::ZERO]);
+    assert_eq!(attempts(&run), [("ProviderCallFinished", 11_000, 0)]);
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+}
+
+/// What the observer was told of each call's end, in order: how long the
+/// call took.
+fn tool_latencies(run: &Run) -> Vec<u64> {
+    run.observer
+        .events()
+        .iter()
+        .filter_map(|event| match &event.kind {
+            EventKind::ToolCallFinished { latency_ms, .. } => Some(*latency_ms),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A run with a timeout of 10 s whose first response arrives 3 s in and
+/// calls `bash`, which takes a second, and whose observer takes `taking`
+/// over being told that the call began; and the executor.
+async fn told_of_a_call_s_start_over(taking: Duration) -> (Run, Arc<FakeTools>) {
+    let mut harness = Harness::new(vec![
+        Answer::Responds(
+            Box::new(says("On it.", &["bash"], FinishReason::ToolUse)),
+            secs(3),
+        ),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.observer = Arc::new(Recorder::slow_over(
+        Arc::clone(&harness.clock),
+        "ToolCallStarted",
+        taking,
+    ));
+    let tools =
+        Arc::new(FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")]).taking(secs(1)));
+    harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
+    harness.stop.timeout = secs(10);
+    (harness.run().await, tools)
+}
+
+/// The observer's two seconds are in neither the call's start nor its
+/// latency, and the call isn't given them as time to run in.
+#[tokio::test]
+async fn the_time_an_observer_takes_over_the_start_of_a_tool_call_is_not_the_call_s() {
+    let (run, tools) = told_of_a_call_s_start_over(secs(2)).await;
+
+    assert_eq!(
+        deadlines(&tools),
+        [("call_0".to_owned(), secs(5))],
+        "the 7 s the run had left when the call's turn came, less the observer's 2 s"
+    );
+    let outcome = &run.finished.transcript.turns()[0].tool_calls()[0];
+    assert_eq!(outcome.status.as_str(), "ok");
+    assert_eq!((outcome.started_ms, outcome.latency_ms), (5_000, 1_000));
+    assert_eq!(tool_latencies(&run), [1_000]);
+    assert_eq!(run.finished.summary.tool_latency_total_ms, 1_000);
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+}
+
+/// The call's turn came with 7 s left, so it's announced and handed to the
+/// executor, and the observer took 8 s over the announcement. The call is
+/// given no time, which the executor reports as a deadline reached, and
+/// point B stops the run.
+#[tokio::test]
+async fn a_tool_call_whose_observer_took_the_last_of_the_run_s_time_is_given_none() {
+    let (run, tools) = told_of_a_call_s_start_over(secs(8)).await;
+
+    assert_eq!(deadlines(&tools), [("call_0".to_owned(), Duration::ZERO)]);
+    let outcome = &run.finished.transcript.turns()[0].tool_calls()[0];
+    assert_eq!(
+        outcome.status,
+        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Timeout)
+    );
+    assert_eq!((outcome.started_ms, outcome.latency_ms), (11_000, 0));
+    assert_eq!(run.stop_reason(), StopReason::Timeout);
+    assert_eq!(run.provider.calls(), 1);
 }
 
 // O11: the labels a run was asked for under. An observer reads them from the
@@ -3965,7 +4217,6 @@ async fn the_cache_key_is_no_part_of_the_system_prompt_nor_of_its_size_or_its_di
 #[tokio::test]
 async fn the_summary_names_the_api_whether_reasoning_is_sent_back_and_the_cache_scope() {
     let reached = ModelRef {
-        provider: ProviderKind::Openai,
         api: ProviderApi::ChatCompletions,
         name: "qwen3".to_owned(),
         replays_reasoning: true,

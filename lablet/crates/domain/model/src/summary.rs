@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CompletionMode, Cost, Endpoint, FinishReason, ModelRef, Rates, RequestParams, RunId, RunLabels,
-    RunOutcome, ToolName, Transcript, Turn, Usage,
+    CompletionMode, Cost, Endpoint, FinishReason, McpServers, ModelRef, Rates, RequestParams,
+    RunId, RunLabels, RunOutcome, ToolName, Transcript, Turn, Usage,
 };
 
 /// What only the composition root knows about a run: its part of the wide
@@ -17,8 +17,8 @@ use crate::{
 /// parameters, it reports itself, in [`RunSummary`].
 ///
 /// Neither digest of what the model was shown is here. The loop takes both
-/// from what it sends, so none can be paired with a prompt or a tool set it
-/// wasn't taken from.
+/// from what it sends, so no caller of the loop can pair one with a prompt or
+/// a tool set it wasn't taken from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunContext {
     /// The run's id.
@@ -40,45 +40,14 @@ pub struct RunContext {
     pub transcript_path: Option<PathBuf>,
     /// How many skill files were appended to the system prompt.
     pub skills_count: u32,
-    /// The names of the configured MCP servers.
-    pub mcp_servers: Vec<String>,
-    /// The version each of those servers gave of itself, in the order of
-    /// `mcp_servers`.
-    pub mcp_server_versions: Vec<String>,
-    /// How long the MCP servers live; `None` for a run that has none.
-    pub mcp_lifetime: Option<McpLifetime>,
+    /// The MCP servers that serve the run, with the version each gave of
+    /// itself and how long they live; `None` for a run that has none.
+    pub mcp: Option<McpServers>,
     /// Whether prompts, responses, and tool content may reach telemetry. The
     /// loop reads it to fill the content fields of its events, and an observer
     /// reads it before emitting the result from the summary.
     pub capture_content: bool,
 }
-
-/// How long a run's MCP servers live.
-///
-/// A server that outlives a run carries what the run left in it to the next,
-/// so two runs on one `Lablet` are comparable only when the record says
-/// which they had.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum McpLifetime {
-    /// The servers are started again for each run.
-    Run,
-    /// The servers are started once and serve every run of their `Lablet`.
-    Lablet,
-}
-
-impl McpLifetime {
-    /// The serde spelling.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Run => "run",
-            Self::Lablet => "lablet",
-        }
-    }
-}
-
-display_as_str!(McpLifetime);
 
 /// One tool's share of a run.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]

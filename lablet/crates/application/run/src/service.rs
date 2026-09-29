@@ -63,6 +63,19 @@ struct Answered {
     latency: Duration,
 }
 
+/// When a call began: a reading of the clock taken once an observer has been
+/// told of the call, so that nothing measured from it holds the time the
+/// observer took.
+struct Began {
+    /// The reading, which the call's latency is measured from.
+    at: Instant,
+    /// How far into the run the call began.
+    offset: Duration,
+    /// The time the run has left for the call, and none when the observer
+    /// took the last of what the run had when the call's turn came.
+    left: Duration,
+}
+
 /// What became of one tool call. The loop is the only hop between an executor
 /// and an observer, so the call's transport metadata travels with its result
 /// or the `mcp.*` attributes have no way to be set.
@@ -332,6 +345,13 @@ impl RunService {
     ///
     /// A retry is a provider call, so point A is asked before each one as it
     /// was before the first attempt, once the wait is over.
+    ///
+    /// Point A reads the clock ahead of the attempt, and an observer is told
+    /// of things between the two, which takes time. So the clock is read
+    /// again when the attempt's turn comes, and an attempt whose turn comes
+    /// when the run's time has gone isn't made: nothing is announced, the
+    /// provider isn't called, and the run stops for its time, as a tool call
+    /// in the same state is never run.
     async fn call(
         &self,
         run_id: &RunId,
@@ -342,9 +362,10 @@ impl RunService {
     ) -> Result<Answered, Stopped> {
         let mut attempt = 1;
         loop {
-            let began = self.clock.now();
-            let began_at = began.saturating_duration_since(started);
-            let result = {
+            if self.stop.time_left(self.elapsed(started)).is_none() {
+                return Err(Stopped::just(StopReason::Timeout));
+            }
+            let (began, result) = {
                 let messages = run.messages();
                 let request_bytes = bytes.measure(&messages);
                 self.emit(
@@ -356,7 +377,9 @@ impl RunService {
                     },
                 )
                 .await;
-                self.provider
+                let began = self.begin(started);
+                let result = self
+                    .provider
                     .complete(ProviderRequest {
                         system: run.transcript().system(),
                         messages: &messages,
@@ -367,23 +390,24 @@ impl RunService {
                         effort: self.request.effort,
                         seed: self.request.seed,
                         cache_key: self.cache_key(run_id),
-                        deadline: self.provider_deadline(began_at),
+                        deadline: began.left.min(self.calls.provider_timeout),
                     })
-                    .await
+                    .await;
+                (began, result)
             };
-            let latency = self.clock.now().saturating_duration_since(began);
+            let latency = self.clock.now().saturating_duration_since(began.at);
 
             let error = match result {
                 Ok(response) => {
                     return Ok(Answered {
                         response,
-                        began: began_at,
+                        began: began.offset,
                         latency,
                     });
                 }
                 Err(error) => error,
             };
-            run.failed_attempt(latency, error.usage);
+            let failed = run.failed_attempt(began.offset, latency, error.usage);
 
             let next =
                 self.after_failure(run, &error, run_id.salt(turn, attempt), attempt, started);
@@ -393,6 +417,8 @@ impl RunService {
                     turn,
                     attempt,
                     error,
+                    started_ms: failed.started_ms,
+                    latency_ms: failed.latency_ms,
                     retry: next.as_ref().ok().copied(),
                 },
             )
@@ -416,18 +442,24 @@ impl RunService {
         }
     }
 
-    /// The deadline of a provider attempt that begins `elapsed` into the
-    /// run: the shorter of the provider timeout and the time the run has
-    /// left, so that no attempt is given longer than the run has.
+    /// Reads the clock for a call an observer has just been told of, which
+    /// is when the call begins.
     ///
-    /// Point A found time left before the attempt, on a reading of the clock
-    /// taken ahead of this one. Should the last of it go between the two,
-    /// the attempt has no time at all, and the adapter reports the deadline
-    /// as reached.
-    fn provider_deadline(&self, elapsed: Duration) -> Duration {
-        self.stop
-            .time_left(elapsed)
-            .map_or(Duration::ZERO, |left| left.min(self.calls.provider_timeout))
+    /// The call's turn came on a reading taken before the observer was told,
+    /// and that reading decided that the call is made at all. Its start, its
+    /// latency and its deadline are taken from this one: the first two so
+    /// that neither counts the observer's time as the call's, and the
+    /// deadline so that the call isn't given time the observer has used. An
+    /// observer that used all the run had left leaves a deadline of zero,
+    /// which a call has reached before it starts.
+    fn begin(&self, started: Instant) -> Began {
+        let at = self.clock.now();
+        let offset = at.saturating_duration_since(started);
+        Began {
+            at,
+            offset,
+            left: self.stop.time_left(offset).unwrap_or(Duration::ZERO),
+        }
     }
 
     /// What follows a failed attempt: the wait before the next one, or why
@@ -494,10 +526,12 @@ impl RunService {
     /// it, or a call that's never run because its turn came when the run
     /// had no time left.
     ///
-    /// The clock is read once, when the call's turn comes, which for a call
-    /// of a later group is after the groups ahead of it. The call's start and
-    /// its deadline are both taken from that reading, so the deadline is the
-    /// time the run had left when the call is said to have started.
+    /// The clock is read when the call's turn comes, which for a call of a
+    /// later group is after the groups ahead of it, and that reading decides
+    /// whether the call is run. It's read again once the observer has been
+    /// told of the call ([`RunService::begin`]), and the call's start, its
+    /// latency and its deadline are taken from there, so the deadline is
+    /// the time the run had left when the call is said to have started.
     ///
     /// Nothing is started for a call that's never run, so an observer isn't
     /// told of it and the output cap, which cuts what a call wrote, has
@@ -510,17 +544,16 @@ impl RunService {
         started: Instant,
         capture: bool,
     ) -> Answer {
-        let began = self.clock.now();
-        let began_at = began.saturating_duration_since(started);
-        let Some(left) = self.stop.time_left(began_at) else {
+        let turned = self.elapsed(started);
+        if self.stop.time_left(turned).is_none() {
             return Answer::measured(
                 ToolCallStatus::NotRun,
                 KeptOutput::whole("the run reached its timeout before this call started"),
                 None,
-                began_at,
+                turned,
                 Duration::ZERO,
             );
-        };
+        }
 
         let source = self.tools.source(&call.name).cloned();
         let input = match &call.input {
@@ -541,14 +574,15 @@ impl RunService {
         .await;
 
         let trace_context = self.observer.trace_context(&call.id);
-        let settled = self.settle(&call, source, left, trace_context).await;
-        let latency = self.clock.now().saturating_duration_since(began);
+        let began = self.begin(started);
+        let settled = self.settle(&call, source, began.left, trace_context).await;
+        let latency = self.clock.now().saturating_duration_since(began.at);
 
         let answer = Answer::measured(
             settled.status,
             settled.output,
             self.calls.output_cap,
-            began_at,
+            began.offset,
             latency,
         );
         self.emit(

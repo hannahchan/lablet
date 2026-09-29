@@ -14,11 +14,13 @@ use crate::{ContentBlock, ProviderKind, Usage};
 /// whether its reasoning is sent back, don't hand it the same conversation
 /// after the first call. A record that named the provider and the model
 /// alone would call them the same.
+///
+/// The provider isn't a field, because the API decides it
+/// ([`ProviderApi::provider`]): a field beside `api` could name a provider
+/// that API doesn't belong to.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ModelRef {
-    /// The provider that serves the model.
-    pub provider: ProviderKind,
-    /// The API the adapter speaks to it.
+    /// The API the adapter speaks to the model's provider.
     pub api: ProviderApi,
     /// The model name sent in requests.
     pub name: String,
@@ -50,6 +52,17 @@ impl ProviderApi {
             Self::Responses => "responses",
             Self::ChatCompletions => "chat_completions",
             Self::Script => "script",
+        }
+    }
+
+    /// The provider family whose API this is, which is the provider of every
+    /// model reached through it.
+    #[must_use]
+    pub const fn provider(self) -> ProviderKind {
+        match self {
+            Self::Messages => ProviderKind::Anthropic,
+            Self::Responses | Self::ChatCompletions => ProviderKind::Openai,
+            Self::Script => ProviderKind::Fake,
         }
     }
 }

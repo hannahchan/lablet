@@ -39,6 +39,8 @@ pub struct ProviderRequest<'a> {
     pub cache_key: Option<&'a str>,
     /// How long the adapter may take before it gives up on this attempt:
     /// the shorter of the provider timeout and the time the run has left.
+    /// Zero is a deadline the attempt has reached already, never the
+    /// absence of one.
     pub deadline: Duration,
 }
 

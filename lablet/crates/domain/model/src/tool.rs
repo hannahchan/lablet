@@ -79,11 +79,15 @@ impl core::fmt::Display for ToolSource {
 ///
 /// "The model called a tool the run doesn't have" used to be three facts that
 /// could disagree: a status, a missing source, and a name absent from the
-/// run's tool list. It's one here. A call has a [`ToolSource`] exactly when a
-/// tool ran, so the summary reads both what it counts as unknown and which
-/// calls earn a per-tool entry from this one value, and the
-/// `lablet.tool.source` and `gen_ai.tool.type` attributes of the call's
-/// `execute_tool` span are present on exactly the same calls.
+/// run's tool list. It's one here. A status holds a [`ToolSource`] exactly
+/// when a tool ran, and the summary reads both what it counts as unknown and
+/// which calls earn a per-tool entry from this one value.
+///
+/// The `lablet.tool.source` and `gen_ai.tool.type` attributes of the call's
+/// `execute_tool` span aren't read from it. They're on every call whose name
+/// resolved to a tool, a tool that ran or not: a call whose arguments didn't
+/// parse and one the loop rejected have both, from the source the loop
+/// announced the call with, and a status that holds none.
 ///
 /// Every status but [`ToolCallEnd::Ok`] is an error result for the model, and
 /// [`ToolCallStatus::as_str`] is the `error.type` of the span; a call that

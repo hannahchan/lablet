@@ -49,7 +49,9 @@ pub enum EventKind {
         /// Which turn.
         turn: u32,
     },
-    /// One attempt of a provider call began.
+    /// One attempt of a provider call began. An attempt whose turn came when
+    /// the run had no time left began nothing, so it has no event: the run
+    /// stops, and `RunFinished` says why.
     ProviderCallStarted {
         /// Which turn the attempt belongs to.
         turn: u32,
@@ -70,7 +72,10 @@ pub enum EventKind {
         /// The response as the transcript stored it, when content is captured.
         response: Option<Vec<ContentBlock>>,
     },
-    /// An attempt failed.
+    /// An attempt failed. Its timing is what the run counted of it, so the
+    /// latencies of a run's failed and finished attempts sum to the
+    /// summary's `provider_latency_total_ms`, and the longest of them is its
+    /// `provider_latency_max_ms`.
     ProviderCallFailed {
         /// Which turn.
         turn: u32,
@@ -78,6 +83,11 @@ pub enum EventKind {
         attempt: u32,
         /// Why.
         error: ProviderError,
+        /// When the attempt began, in whole milliseconds since the run
+        /// started.
+        started_ms: u64,
+        /// How long the attempt took, in whole milliseconds.
+        latency_ms: u64,
         /// How long the loop waits before the attempt that follows, or `None`
         /// when this attempt was the last. One field rather than a flag beside
         /// a duration, so "retrying after no wait" and "not retrying, after
