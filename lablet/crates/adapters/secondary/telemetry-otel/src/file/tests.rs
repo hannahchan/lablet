@@ -225,6 +225,37 @@ async fn a_run_id_that_would_be_a_path_has_no_file_and_the_run_after_it_has_its_
     );
 }
 
+/// A run id is held to the bytes lablet holds it to before its run, which
+/// a name has room for beside `lablet-` and `.otlp.jsonl`.
+#[tokio::test]
+async fn a_run_id_longer_than_128_bytes_has_no_file_and_one_as_long_as_that_has_its_own() {
+    let scratch = Scratch::new("long-run-id");
+    let sink = Sink::new(FileTarget::EachRun {
+        directory: scratch.path().to_owned(),
+    });
+    let exporter = spans_to(&sink);
+    let at_the_cap = "é".repeat(64);
+    let over = format!("{at_the_cap}r");
+
+    sink.start(&id(&over));
+    let refused = exporter.export(vec![span("chat over")]).await.unwrap_err();
+    sink.start(&id(&at_the_cap));
+    exporter.export(vec![span("chat at")]).await.unwrap();
+
+    assert_eq!(
+        refused.to_string(),
+        format!(
+            "Operation failed: the run id {over:?} can't be part of the name of the run's \
+             telemetry file: it's longer than 128 bytes"
+        )
+    );
+    assert_eq!(
+        lines(&scratch.at(&format!("lablet-{at_the_cap}.otlp.jsonl"))).len(),
+        1
+    );
+    assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 1);
+}
+
 #[tokio::test]
 async fn a_file_that_cannot_be_written_is_an_error_that_names_no_path_and_is_tried_again() {
     let scratch = Scratch::new("missing-directory");

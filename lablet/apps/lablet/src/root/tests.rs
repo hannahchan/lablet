@@ -55,6 +55,31 @@ fn a_file_that_does_not_exist_yet_resolves_by_the_part_of_its_path_that_does() {
 }
 
 #[test]
+fn a_parent_after_a_name_that_does_not_exist_yet_leads_back_to_where_the_name_is_made() {
+    let scratch = laid_out("missing-parent");
+    symlink(scratch.at("work"), scratch.at("out/linked")).unwrap();
+
+    assert_eq!(
+        resolved(&scratch.at("nothere/../work/transcript.json")),
+        scratch.at("work/transcript.json")
+    );
+    assert_eq!(
+        resolved(&scratch.at("out/{run_id}/../../work/{run_id}.json")),
+        scratch.at("work/{run_id}.json")
+    );
+    assert_eq!(
+        resolved(&scratch.at("nothere/../out/linked/transcript.json")),
+        scratch.at("work/transcript.json"),
+        "a link the parent leads back to is followed"
+    );
+    assert_eq!(
+        resolved(&scratch.at("out/linked/../out/transcript.json")),
+        scratch.at("out/transcript.json"),
+        "the parent of a link is the parent of where it leads"
+    );
+}
+
+#[test]
 fn a_path_that_is_not_absolute_starts_at_the_working_directory() {
     let here = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
 
@@ -95,6 +120,52 @@ fn the_root_holds_what_leads_under_it_and_nothing_beside_it() {
         "a link that leads out of the root leads to what the file tools refuse"
     );
     assert!(!holds(""), "the directory above the root isn't under it");
+}
+
+#[test]
+fn the_root_holds_what_a_parent_after_a_name_that_does_not_exist_yet_leads_back_under_it() {
+    let scratch = laid_out("held-parent");
+    let root = scratch.at("work");
+    let holds =
+        |path: &str| held(&root, [(OwnFile::Transcript, scratch.at(path).as_path())]).is_some();
+
+    assert!(holds("nothere/../work/transcript.json"));
+    assert!(holds("out/{run_id}/../../work/transcript.json"));
+    assert!(!holds("work/nothere/../../out/transcript.json"));
+}
+
+/// The transcript is put in place of whatever its path names, so a link at
+/// the path is replaced where it is, while the other files are read or
+/// appended to through it.
+#[test]
+fn a_transcript_lands_where_its_link_is_and_the_other_files_where_theirs_leads() {
+    let scratch = laid_out("held-link");
+    let root = scratch.at("work");
+    scratch.write("out/elsewhere.json", "");
+    scratch.write("work/within.json", "");
+    symlink(
+        scratch.at("out/elsewhere.json"),
+        scratch.at("work/leads-out.json"),
+    )
+    .unwrap();
+    symlink(
+        scratch.at("work/within.json"),
+        scratch.at("out/leads-in.json"),
+    )
+    .unwrap();
+    let holds =
+        |file: OwnFile, path: &str| held(&root, [(file, scratch.at(path).as_path())]).is_some();
+
+    assert!(holds(OwnFile::Transcript, "work/leads-out.json"));
+    assert!(!holds(OwnFile::Transcript, "out/leads-in.json"));
+    for file in [
+        OwnFile::Config,
+        OwnFile::SystemPrompt,
+        OwnFile::TaskPrompt,
+        OwnFile::Telemetry,
+    ] {
+        assert!(holds(file, "out/leads-in.json"), "{file:?}");
+    }
 }
 
 #[test]

@@ -5,7 +5,7 @@
 //! what it's measured with and write over its own record.
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// A file of lablet's own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -36,24 +36,57 @@ impl fmt::Display for OwnFile {
     }
 }
 
+impl OwnFile {
+    /// Where lablet's reading or writing of the file at `path` lands.
+    fn lands(self, path: &Path) -> PathBuf {
+        match self {
+            // The transcript is written in place of whatever its path names,
+            // so a link there is replaced and what it leads to is left alone.
+            Self::Transcript => replaced(path),
+            // The others are read, or appended to, through a link.
+            Self::Config | Self::SystemPrompt | Self::TaskPrompt | Self::Telemetry => {
+                resolved(path)
+            }
+        }
+    }
+}
+
 /// Where `path` leads once every symbolic link on the part of it that
 /// exists is followed. The file itself needn't exist, and a transcript or
-/// a telemetry file doesn't before its run: the names after the part that
-/// exists are taken as they're written.
+/// a telemetry file doesn't before its run: a name past the part that
+/// exists is taken as it's written, since it can only be made as a
+/// directory or a file and never as a link, and a `..` after it leads back
+/// to the directory the name was to be made in.
 pub(crate) fn resolved(path: &Path) -> PathBuf {
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
-    let mut exists = absolute.clone();
-    let mut missing = Vec::new();
-    loop {
-        if let Ok(mut resolved) = std::fs::canonicalize(&exists) {
-            resolved.extend(missing.iter().rev());
-            return resolved;
+    let mut resolved = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            // What's resolved so far has no link left on it, so its parent
+            // is the directory `..` names.
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            component => {
+                resolved.push(component);
+                // A name that exists may be a link.
+                if let Ok(real) = std::fs::canonicalize(&resolved) {
+                    resolved = real;
+                }
+            }
         }
-        let Some(name) = exists.file_name().map(ToOwned::to_owned) else {
-            return absolute;
-        };
-        missing.push(name);
-        exists.pop();
+    }
+    resolved
+}
+
+/// Where a file that's put in place of whatever `path` names lands: under
+/// its own name, in the directory the rest of `path` leads to.
+fn replaced(path: &Path) -> PathBuf {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
+    match (absolute.parent(), absolute.file_name()) {
+        (Some(directory), Some(name)) => resolved(directory).join(name),
+        // A path that names no file has nothing put in its place.
+        _ => resolved(&absolute),
     }
 }
 
@@ -64,7 +97,7 @@ pub(crate) fn held<'a>(
 ) -> Option<(OwnFile, &'a Path)> {
     files
         .into_iter()
-        .find(|(_, file)| resolved(file).starts_with(root))
+        .find(|(file, path)| file.lands(path).starts_with(root))
 }
 
 #[cfg(test)]

@@ -249,6 +249,39 @@ fn environment(name: &str) -> Option<OsString> {
     std::env::var_os(name)
 }
 
+/// Whether a `Lablet` built from `config` writes its telemetry to standard
+/// error, which a `telemetry.file.path` of `-` does once `${VAR}` is
+/// substituted. It's the answer [`build`] comes to, for a caller that has
+/// to know before the build: one that shares standard error with the
+/// telemetry says nothing of its own there, and a log that reports on the
+/// build is installed before it.
+///
+/// A config whose variables can't all be substituted gives `false`:
+/// [`build`] refuses it before any telemetry is written.
+#[must_use]
+pub fn telemetry_on_stderr(config: &Config) -> bool {
+    telemetry_on_stderr_in(config, &environment)
+}
+
+/// [`telemetry_on_stderr`], where `env` is lablet's environment.
+pub(crate) fn telemetry_on_stderr_in(config: &Config, env: Env<'_>) -> bool {
+    config
+        .substituted(env)
+        .is_ok_and(|real| file_target(&real) == FileTarget::Stderr)
+}
+
+/// Where the telemetry of `real`, a config with `${VAR}` substituted, goes.
+/// Only a path that's `-` whole is standard error, so `-/` names a file.
+fn file_target(real: &Config) -> FileTarget {
+    match &real.telemetry.file.path {
+        None => FileTarget::EachRun {
+            directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        },
+        Some(path) if path.as_os_str() == "-" => FileTarget::Stderr,
+        Some(path) => FileTarget::Path(path.clone()),
+    }
+}
+
 /// Checks `config` whole, as [`build`] does, and stops before the provider
 /// is selected, so the answer is the same for every provider: one this
 /// lablet has no adapter for yet passes, and no call reaches a provider.
@@ -355,16 +388,18 @@ async fn prepare(written: &Config, env: Env<'_>) -> Result<Prepared, BuildError>
     let provider = match &settings.provider {
         Selected::Anthropic => Ready::Anthropic,
         Selected::Openai => Ready::Openai,
-        Selected::Fake { script } => Ready::Fake(read_script(script).map_err(refused)?),
+        Selected::Fake { script } => {
+            // The script is read where it is and named as the config writes
+            // it, since the provider puts its name in the errors a run ends
+            // with.
+            let name = written
+                .written_text("model.script")
+                .unwrap_or_else(|| script.display().to_string());
+            Ready::Fake(read_script(script, &name).map_err(refused)?)
+        }
     };
 
-    let target = match &real.telemetry.file.path {
-        None => FileTarget::EachRun {
-            directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        },
-        Some(path) if path.as_os_str() == "-" => FileTarget::Stderr,
-        Some(path) => FileTarget::Path(path.clone()),
-    };
+    let target = file_target(&real);
 
     let executors = match settings.builtin.clone() {
         Some(builtin) => {
@@ -584,8 +619,9 @@ fn supported(config: &Config) -> Result<(), Unsupported> {
     }
 }
 
-/// The script the file at `path` holds, in the format its name says.
-fn read_script(path: &Path) -> Result<Script, Refusal> {
+/// The script the file at `path` holds, in the format its name says,
+/// named `name`.
+fn read_script(path: &Path, name: &str) -> Result<Script, Refusal> {
     let refuse = |reason: String| Refusal::invalid("model.script", reason);
     let format = match Format::of(path) {
         Some(Format::Yaml) => ScriptFormat::Yaml,
@@ -598,7 +634,7 @@ fn read_script(path: &Path) -> Result<Script, Refusal> {
     };
     let text = std::fs::read_to_string(path).map_err(|error| refuse(error.to_string()))?;
     Script::read(ScriptSource {
-        name: &path.display().to_string(),
+        name,
         text: &text,
         format,
     })

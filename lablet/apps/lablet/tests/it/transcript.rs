@@ -473,6 +473,8 @@ async fn a_transcript_that_cannot_be_written_is_reported_and_the_outcome_is_as_i
 /// `lablet run --run-id` refuses it.
 #[test]
 fn a_run_id_that_cannot_be_part_of_a_path_is_refused_by_the_request() {
+    // A byte over the cap in 65 characters, so it's bytes that are counted.
+    let over = format!("{}r", "é".repeat(64));
     for (id, reason) in [
         ("../run-a", "it holds a `/`"),
         ("runs/a", "it holds a `/`"),
@@ -480,6 +482,7 @@ fn a_run_id_that_cannot_be_part_of_a_path_is_refused_by_the_request() {
         (".", "it names the directory itself"),
         ("..", "it names the directory above"),
         ("run\0a", "it holds a NUL"),
+        (over.as_str(), "it's longer than 128 bytes"),
     ] {
         let refused = request().run_id(RunId::new(id).unwrap()).unwrap_err();
 
@@ -497,6 +500,7 @@ fn a_run_id_that_cannot_be_part_of_a_path_is_refused_by_the_request() {
             )
         );
     }
+    let at_the_cap = "é".repeat(64);
     for id in [
         "run-a",
         "...",
@@ -504,9 +508,34 @@ fn a_run_id_that_cannot_be_part_of_a_path_is_refused_by_the_request() {
         "a.",
         "run a",
         "01K5F3Z8Q4X9T2M7B6W1R0VNEC",
+        at_the_cap.as_str(),
     ] {
         assert!(request().run_id(RunId::new(id).unwrap()).is_ok(), "{id}");
     }
+}
+
+/// The longest run id a request takes names its transcript, with room in
+/// the name for what the path writes beside it.
+#[tokio::test]
+async fn a_run_id_as_long_as_a_request_takes_names_its_transcript() {
+    let scratch = Lab::new("run-id-at-the-cap");
+    let run = format!("{}-{}", "r".repeat(100), "0123456789abcdefghijklmnopq");
+    assert_eq!(run.len(), 128);
+    let config = scratch.config(
+        ENDS,
+        json!({ "run": { "transcript_path": scratch.at("out/transcript-{run_id}.json") } }),
+    );
+    let mut lablet = lablet::build(config).await.unwrap();
+    let diagnostics = Diagnostics::capture();
+
+    lablet
+        .run(request().run_id(RunId::new(run.as_str()).unwrap()).unwrap())
+        .await;
+    lablet.shutdown().await;
+
+    assert_eq!(diagnostics.lines(), [""; 0]);
+    let transcript = scratch.at(&format!("out/transcript-{run}.json"));
+    assert_eq!(json_of(&transcript)["run_id"], json!(run));
 }
 
 #[tokio::test]

@@ -153,19 +153,26 @@ pub(crate) struct Sink {
     open: Arc<Mutex<Open>>,
 }
 
+/// The most bytes a run id may hold in the name of its file: what lablet
+/// holds a run id to before its run, which a file's name has room for
+/// beside `lablet-` and `.otlp.jsonl`.
+const RUN_ID_MAX_BYTES: usize = 128;
+
 /// The name of a run's own file.
 ///
 /// # Errors
 ///
 /// Returns why the run id can't be part of a file's name: a name that held
 /// a separator would be a path, and would put the file somewhere other than
-/// the directory the target names.
+/// the directory the target names, and one too long would name no file.
 fn name_of(run_id: &RunId) -> Result<String, String> {
     let id = run_id.as_str();
     let reason = if id.contains('/') {
         "it holds a `/`"
     } else if id.contains('\0') {
         "it holds a NUL"
+    } else if id.len() > RUN_ID_MAX_BYTES {
+        "it's longer than 128 bytes"
     } else {
         return Ok(format!("lablet-{id}.otlp.jsonl"));
     };

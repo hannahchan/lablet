@@ -150,6 +150,62 @@ fn rust_log_brings_the_diagnostic_log_back_beside_the_otlp_lines() {
     );
 }
 
+/// The variable a config's telemetry path is read from.
+const TELEMETRY: &str = "LABLET_TEST_TELEMETRY";
+
+/// Runs the lab's config with its telemetry path written as `path`, and
+/// [`TELEMETRY`] holding `held`.
+fn with_the_telemetry_path(lab: &Lab, path: &str, held: &str) -> super::harness::Ran {
+    let blocked = lab.write("blocked", "");
+    lab.write_config(
+        ENDS,
+        json!({
+            "run": { "transcript_path": blocked.join("transcript.json") },
+            "telemetry": { "file": { "path": path } },
+        }),
+    );
+    let mut command = lab.lablet(&["run", "--config", CONFIG, "--prompt", "Say hello."]);
+    command.env(TELEMETRY, held);
+    ran(command, "")
+}
+
+#[test]
+fn a_dash_a_variable_gives_the_telemetry_path_leaves_standard_error_nothing_but_otlp_lines() {
+    let lab = Lab::new("summary-stderr-variable");
+
+    let run = with_the_telemetry_path(&lab, &format!("${{{TELEMETRY}}}"), "-");
+
+    assert_eq!(run.code, Some(0), "{run:?}");
+    let exported = Exported::parse(&run.stderr).unwrap();
+    assert_eq!(exported.records_of("lablet.run").len(), 1, "{run:?}");
+}
+
+#[test]
+fn a_telemetry_path_that_is_a_dash_and_more_names_a_file_and_leaves_the_log_and_the_summary() {
+    let from_the_variable = format!("${{{TELEMETRY}}}/");
+    for (path, held) in [("-/", ""), (from_the_variable.as_str(), "-")] {
+        let lab = Lab::new("summary-stderr-slash");
+
+        let run = with_the_telemetry_path(&lab, path, held);
+
+        assert_eq!(run.code, Some(0), "{path}: {run:?}");
+        let lines = run.stderr_lines();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("the telemetry file couldn't be written")),
+            "{path}: {run:?}"
+        );
+        assert!(
+            lines
+                .last()
+                .is_some_and(|line| line.starts_with("completed: ")),
+            "{path}: {run:?}"
+        );
+        assert!(!run.stderr.contains("resourceSpans"), "{path}: {run:?}");
+    }
+}
+
 #[test]
 fn the_warning_those_runs_are_given_reaches_standard_error_when_the_telemetry_is_elsewhere() {
     let lab = Lab::new("summary-warning");

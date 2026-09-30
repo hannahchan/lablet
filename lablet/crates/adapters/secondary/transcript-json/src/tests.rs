@@ -166,6 +166,31 @@ fn a_run_id_that_is_not_one_path_component_is_refused_where_the_path_holds_the_p
     }
 }
 
+/// A run id is held to the bytes lablet holds it to before its run, so a
+/// name keeps room for what the path writes beside it.
+#[test]
+fn a_run_id_longer_than_128_bytes_is_refused_where_the_path_holds_the_placeholder() {
+    let at_the_cap = "é".repeat(64);
+    let over = format!("{at_the_cap}r");
+
+    let file = TranscriptFile::for_run(Path::new("out/{run_id}.json"), &id(&at_the_cap)).unwrap();
+    assert_eq!(file.path(), Path::new(&format!("out/{at_the_cap}.json")));
+    assert_eq!(
+        TranscriptFile::for_run(Path::new("out/{run_id}.json"), &id(&over)),
+        Err(TranscriptWriteError::RunIdNotOneComponent {
+            run_id: over.clone(),
+            reason: "it's longer than 128 bytes",
+        })
+    );
+    assert_eq!(
+        TranscriptFile::for_run(Path::new("out/transcript.json"), &id(&over))
+            .as_ref()
+            .map(TranscriptFile::path),
+        Ok(Path::new("out/transcript.json")),
+        "a path that holds no placeholder takes any run id"
+    );
+}
+
 #[test]
 fn a_refused_run_id_is_named_with_the_rule_it_breaks() {
     let refused =

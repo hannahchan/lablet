@@ -18,6 +18,11 @@ use lablet_model::RunId;
 /// What a configured path holds where the run id belongs.
 const RUN_ID: &[u8] = b"{run_id}";
 
+/// The most bytes a run id may hold where it takes the place of
+/// `{run_id}`: what lablet holds a run id to before its run, so a file's
+/// name keeps room for what a path writes beside it.
+const RUN_ID_MAX_BYTES: usize = 128;
+
 /// How many temporary names this process has tried. With the process's id
 /// it keeps two writes of this process apart. It can't keep this process
 /// apart from another, which in another PID namespace can have the same
@@ -82,10 +87,11 @@ impl TranscriptFile {
     /// # Errors
     ///
     /// Returns [`TranscriptWriteError::RunIdNotOneComponent`] when the path
-    /// holds `{run_id}` and the run id isn't one component of a path. A
-    /// caller names a run id, and the config names where transcripts go:
-    /// an id that held a separator, or that named the directory above,
-    /// would move the file out of there.
+    /// holds `{run_id}` and the run id isn't one component of a path, or
+    /// is longer than 128 bytes. A caller names a run id, and the config
+    /// names where transcripts go: an id that held a separator, or that
+    /// named the directory above, would move the file out of there, and
+    /// one too long would name no file.
     pub fn for_run(configured: &Path, run_id: &RunId) -> Result<Self, TranscriptWriteError> {
         let configured = configured.as_os_str().as_bytes();
         let mut path = Vec::with_capacity(configured.len());
@@ -210,14 +216,15 @@ fn temporary_beside(
 }
 
 /// The run id as the bytes of one path component, which is a name that
-/// holds no separator and no NUL and isn't one of the two every directory
-/// has.
+/// holds no separator and no NUL, isn't one of the two every directory
+/// has, and is no longer than [`RUN_ID_MAX_BYTES`].
 fn one_component(run_id: &RunId) -> Result<&[u8], TranscriptWriteError> {
     let reason = match run_id.as_str() {
         "." => "it names the directory itself",
         ".." => "it names the directory above",
         id if id.contains('/') => "it holds a `/`",
         id if id.contains('\0') => "it holds a NUL",
+        id if id.len() > RUN_ID_MAX_BYTES => "it's longer than 128 bytes",
         id => return Ok(id.as_bytes()),
     };
     Err(TranscriptWriteError::RunIdNotOneComponent {

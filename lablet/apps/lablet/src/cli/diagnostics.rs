@@ -2,17 +2,9 @@
 //! which is about the run.
 
 use std::ffi::OsStr;
-use std::path::Path;
 
-use lablet::Config;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
-
-/// Whether the config sends the telemetry to standard error, which a file
-/// path of `-` does.
-pub(crate) fn telemetry_on_stderr(config: &Config) -> bool {
-    config.telemetry.file.path.as_deref() == Some(Path::new("-"))
-}
 
 /// What the diagnostic log shows: what `rust_log`, the value of `RUST_LOG`,
 /// asks for, and warnings when it's unset or empty. `None` is no log at

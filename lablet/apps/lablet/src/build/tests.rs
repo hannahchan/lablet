@@ -373,3 +373,24 @@ async fn a_config_that_states_only_what_it_must_resolves_to_every_default_of_the
     assert_eq!(checked.resolved(), &spec.resolved());
     assert_eq!(checked.tools(), []);
 }
+
+/// C15: whether the telemetry is on standard error is read from the path
+/// as a run writes to it, once `${VAR}` is substituted, and only a path
+/// that's `-` whole is standard error.
+#[test]
+fn the_telemetry_is_on_standard_error_when_its_path_is_a_dash_once_variables_are_substituted() {
+    let on_stderr = |path: &str, env: Env<'_>| {
+        let config = config(&format!("telemetry: {{ file: {{ path: {path} }} }}"));
+        telemetry_on_stderr_in(&config, env)
+    };
+
+    assert!(on_stderr(r#""-""#, &nothing));
+    assert!(on_stderr("'${T}'", &holding("T", "-")));
+
+    assert!(!on_stderr("'${T}'", &holding("T", "telemetry.jsonl")));
+    assert!(!on_stderr("'${T}'", &nothing), "a build refuses it");
+    assert!(!on_stderr(r#""-/""#, &nothing), "it names a file");
+    assert!(!on_stderr("'${T}/'", &holding("T", "-")), "it names a file");
+    assert!(!on_stderr(r#""-.jsonl""#, &nothing));
+    assert!(!on_stderr("null", &nothing));
+}

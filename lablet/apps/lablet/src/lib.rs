@@ -122,7 +122,9 @@ mod lablet;
 mod root;
 mod settings;
 
-pub use build::{BuildError, Checked, ErrorClass, Unsupported, build, build_observed, check};
+pub use build::{
+    BuildError, Checked, ErrorClass, Unsupported, build, build_observed, check, telemetry_on_stderr,
+};
 pub use cancel::CancelHandle;
 pub use config::{Config, ConfigError, Format, Place, RawConfig, ResolvedConfig, schema};
 pub use lablet::{Lablet, RunIdRefused, RunRequest};
