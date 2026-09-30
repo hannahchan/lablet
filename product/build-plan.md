@@ -15,8 +15,8 @@ Sequencing rationale: the loop is proven against fakes before any real adapter e
 | 3a    | The run's states as types, and tool calls in groups | Done, 2026-09-24 |
 | 3b    | The domain and the loop after the design review     | Done, 2026-09-29 |
 | 4     | Library and first traced run                        | Done, 2026-09-29 |
-| 5     | CLI and config surface                              | Next             |
-| 6     | OTLP network export and live-check                  | Not started      |
+| 5     | CLI and config surface                              | Done, 2026-09-30 |
+| 6     | OTLP network export and live-check                  | Next             |
 | 7     | Anthropic, and the capture of the primary reference | Not started      |
 | 7a    | Context management                                  | Not started      |
 | 8     | MCP, and the first transfer check                   | Not started      |
@@ -164,6 +164,7 @@ Acceptance: scenarios K1 to K3 pass, the floors hold, and every earlier scenario
 - The capture of the matrix's MCP rows, run and compared as phase 7's was.
 - The first transfer check. One comparison of two tool surfaces, such as a server with one of its tools and without it, is run in lablet and in the primary reference as it ships, with its tool search on. The human runs the reference. When the two disagree on which surface did better and tool search is why, tool search leaves phase 12 for a phase of its own before phase 9, and `decisions.md` records the move.
 - `tools-mcp` added to the `ToolExecutor` conformance matrix.
+- A refused setting inside an entry of `tools.mcp` names its own key, its line and its value, as every other refusal does. Today serde reads a server's fields through the buffer its internally tagged enum uses, so a refusal names the server, at its first key's line, and shows the whole server (the phase 5 review; "Phase 5, closed" in `decisions.md`).
 
 Acceptance: scenarios T1, T3, T5 to T9, T12, and T18 to T20 pass in CI against the test server. Manual: a run using a public MCP server over stdio completes, its tool spans carry the `mcp.*` attributes, and removing a tool via `tools.deny` changes the `RunStarted` tool list and nothing else; the capture and the transfer check are recorded.
 

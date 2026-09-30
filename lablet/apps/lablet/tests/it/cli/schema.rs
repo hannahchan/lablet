@@ -200,6 +200,27 @@ fn schema_prints_the_checked_in_file_which_is_a_json_schema() {
 }
 
 #[test]
+fn a_reader_that_closed_its_end_is_told_on_standard_error_and_nothing_panics() {
+    let lab = Lab::new("schema-closed");
+    // The read end is gone before lablet starts, so its first write fails
+    // whatever the size of a pipe's buffer.
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let mut command = lab.lablet(&["schema"]);
+    command.stdout(writer).stderr(std::process::Stdio::piped());
+
+    let finished = command.output().unwrap();
+
+    let stderr = String::from_utf8(finished.stderr).unwrap();
+    assert_eq!(finished.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.starts_with("lablet: standard output couldn't be written: "),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
+#[test]
 fn a_schema_that_breaks_a_rule_of_json_schema_has_the_fault_found() {
     let defs: Map<String, Value> = [("Run".to_owned(), Value::Bool(true))]
         .into_iter()

@@ -197,13 +197,18 @@ fn print_outcome(outcome: lablet::RunOutcome) {
     }
 }
 
-/// Writes `document` on standard output, ended by a newline.
-#[expect(
-    clippy::print_stdout,
-    reason = "a command's document, its outcome, its check or the schema, is what it writes on standard output"
-)]
+/// Writes `document` on standard output, ended by a newline: the one place
+/// lablet writes there. A reader that closed its end, as `head` does, isn't
+/// a failure of the command, so a write that fails is said on standard error
+/// and the exit code stays what the command's work says, where `println!`
+/// would panic and exit 101.
 fn print(document: &str) {
-    println!("{document}");
+    let mut out = io::stdout().lock();
+    if let Err(error) = writeln!(out, "{document}").and_then(|()| out.flush()) {
+        say(&format!(
+            "lablet: standard output couldn't be written: {error}"
+        ));
+    }
 }
 
 /// Installs the diagnostic log on standard error, when there's one.
