@@ -65,7 +65,8 @@ struct Arguments {
 /// The process group of one command.
 ///
 /// A group that's dropped while its command runs is killed, so a call that
-/// was given up leaves nothing running.
+/// was given up leaves nothing running, as a call the loop drops when its
+/// run is cancelled is.
 struct Group {
     id: Pid,
     running: bool,
@@ -136,6 +137,12 @@ async fn ended_by_the_kill(
 }
 
 impl Drop for Group {
+    // The kill is sent and nothing waits for the group to go, where a call
+    // that timed out waits for it in `ended_by_the_kill`: a drop is how a
+    // cancelled run stops a call, and a run that's stopping has only the
+    // time its container's stop allows to write what it writes. A killed
+    // process can't carry on, so what's left of it is an entry in the
+    // process table for whoever it was left to.
     fn drop(&mut self) {
         if self.running {
             self.kill();

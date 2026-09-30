@@ -216,6 +216,11 @@ impl Run {
     /// provider billed for it and said so. Gives back the attempt's timing
     /// as it was counted, which is the latency the summary's totals hold.
     ///
+    /// An attempt that was dropped because the run was cancelled while it
+    /// was in flight is one that failed too, having answered nothing and
+    /// reported nothing: it took its time and it was an attempt, so the
+    /// provider latencies and the retries count it as they count any other.
+    ///
     /// That usage is in no turn, because a failed attempt made none, so the
     /// outcome's usage leaves it out. It counts toward the token budget and
     /// the cost, or a run that fails more often would look cheaper than it

@@ -158,6 +158,12 @@ impl Kept {
                 latency_ms,
                 ..
             } => open.failed((turn, attempt), &error, (started_ms, latency_ms)),
+            EventKind::ProviderCallCancelled {
+                turn,
+                attempt,
+                started_ms,
+                latency_ms,
+            } => open.cancelled((turn, attempt), (started_ms, latency_ms)),
             EventKind::ToolCallStarted {
                 call_id,
                 name,
@@ -291,6 +297,14 @@ impl Open {
         let mut attributes = error.usage.as_ref().map(spent).unwrap_or_default();
         attributes.insert(key::ERROR_TYPE.to_owned(), json!(error.kind.as_str()));
         self.chat(attempt, timing, attributes);
+    }
+
+    fn cancelled(&mut self, attempt: (u32, u32), timing: (u64, u64)) {
+        let attributes = [(
+            key::ERROR_TYPE.to_owned(),
+            json!(StopReason::Cancelled.as_str()),
+        )];
+        self.chat(attempt, timing, attributes.into_iter().collect());
     }
 
     /// The span of the call `call`, which sent the model `sent.0` bytes,

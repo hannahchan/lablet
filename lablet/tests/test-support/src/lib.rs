@@ -13,7 +13,7 @@ mod clock;
 mod run;
 mod scratch;
 
-pub use clock::{NeverCancelled, TokioClock};
+pub use clock::{CancelledAfter, NeverCancelled, TokioClock};
 pub use run::{
     AGENT_VERSION, CONFIG_DIGEST, MODEL, PROMPT, RunBuilder, SCRIPT, STARTED_UNIX_MS, SYSTEM,
     Unobserved, context, prompts, request, scripted,

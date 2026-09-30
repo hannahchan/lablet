@@ -20,7 +20,7 @@ use lablet_run::{
     RunService, ToolCall, ToolError, ToolErrorKind, ToolExecutor, ToolOutput, TraceContext,
 };
 use lablet_telemetry_otel::{FileTarget, FlushError, OtelObserver};
-use lablet_test_support::{RunBuilder, Scratch, context, request, scripted};
+use lablet_test_support::{CancelledAfter, RunBuilder, Scratch, context, request, scripted};
 use serde_json::json;
 
 pub use lablet_test_support::{
@@ -230,6 +230,9 @@ pub struct Settings {
     pub skills_count: u32,
     /// The MCP servers the context says serve the runs.
     pub mcp: Option<McpServers>,
+    /// How long after the loop is built its runs are cancelled, when they
+    /// are.
+    pub cancelled_after: Option<Duration>,
 }
 
 impl Settings {
@@ -237,7 +240,7 @@ impl Settings {
     /// one tool call at a time, and each have a file of their own in
     /// `scratch`. Their tools are all built in and `bash` runs alone. They
     /// have nothing a run may be without: no cap on turns, no pricing, no
-    /// transcript, no skills and no MCP servers.
+    /// transcript, no skills and no MCP servers. Nothing cancels them.
     pub fn in_scratch(scratch: &Scratch) -> Self {
         Self {
             target: FileTarget::EachRun {
@@ -257,6 +260,7 @@ impl Settings {
             transcript_path: None,
             skills_count: 0,
             mcp: None,
+            cancelled_after: None,
         }
     }
 }
@@ -294,6 +298,7 @@ impl Harness {
             transcript_path,
             skills_count,
             mcp,
+            cancelled_after,
         } = settings;
         let provider = scripted(script);
         let tools = Arc::new(Tools::new(&bash_does, bash_concurrency, read_file_source));
@@ -304,7 +309,11 @@ impl Harness {
             ])
             .file(target)
             .build();
-        let service = RunBuilder::new(Arc::clone(&provider) as _)
+        let mut builder = RunBuilder::new(Arc::clone(&provider) as _);
+        if let Some(after) = cancelled_after {
+            builder = builder.cancellation(Arc::new(CancelledAfter::new(after)));
+        }
+        let service = builder
             .tools(vec![Arc::clone(&tools) as _, Arc::new(Writer) as _])
             .observer(Arc::new(observer.clone()))
             .max_turns(max_turns)

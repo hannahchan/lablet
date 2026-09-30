@@ -75,6 +75,23 @@ async fn a_loop_built_with_nothing_said_tries_a_call_three_times_more_after_wait
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_loop_built_with_a_cancellation_is_stopped_by_it() {
+    let slow = "- response: { content: [{ text: Done. }], finish: end_turn, latency: 10m }\n";
+    let mut service = RunBuilder::new(scripted(slow))
+        .cancellation(Arc::new(crate::CancelledAfter::new(Duration::from_secs(1))))
+        .build()
+        .await;
+
+    let finished = service.run(context(RUN), prompts()).await;
+
+    assert_eq!(
+        finished.summary.outcome.stop_reason(),
+        StopReason::Cancelled
+    );
+    assert_eq!(finished.summary.outcome.duration_ms, 1_000);
+}
+
 #[test]
 fn a_run_s_context_names_the_run_and_nothing_a_run_may_be_without() {
     let context = context(RUN);

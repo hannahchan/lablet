@@ -102,7 +102,9 @@ impl ModelProvider for FakeProvider {
     /// and answers with its response or its failure.
     ///
     /// An entry is played once, whatever came of the attempt, so the
-    /// attempt after a failure is answered by the entry after it.
+    /// attempt after a failure is answered by the entry after it. An
+    /// attempt that's dropped stops its wait there, and has played its
+    /// entry all the same.
     ///
     /// # Errors
     ///

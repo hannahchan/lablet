@@ -85,7 +85,9 @@ spans:
     note: >
       Every attempt has a span, a failed one included, which starts when the attempt began and
       lasts as long as the attempt took. A failed attempt's span carries the usage the provider
-      reported for it, when it reported any.
+      reported for it, when it reported any. An attempt that was in flight when the run was
+      cancelled was dropped there, and its span ends then, with an `error.type` of `cancelled`
+      and no usage.
     name:
       note: "`chat {gen_ai.request.model}`"
     attributes:
@@ -139,9 +141,11 @@ spans:
         requirement_level:
           conditionally_required: If the provider reported the count for the attempt.
       - ref: error.type
-        brief: "The class of provider error: `retryable`, `context_exhausted`, `auth`, `fatal`, or `malformed`."
+        brief: >
+          The class of provider error: `retryable`, `context_exhausted`, `auth`, `fatal`, or
+          `malformed`; or `cancelled` when the run was cancelled while the attempt was in flight.
         requirement_level:
-          conditionally_required: If the call failed.
+          conditionally_required: If the call failed or was cancelled.
       - ref: lablet.turn
         requirement_level: required
       - ref: lablet.attempt
@@ -181,8 +185,9 @@ spans:
       - ref: error.type
         brief: >
           How the call failed, which is its `lablet.tool.status`: `tool_error` when the tool ran
-          and reported an error, `timeout` or `failed` when the executor did, and `unknown`,
-          `malformed_input`, or `rejected` when the loop answered the call itself.
+          and reported an error, `timeout` or `failed` when the executor did, `cancelled` when the
+          run was cancelled while the call ran, and `unknown`, `malformed_input`, or `rejected`
+          when the loop answered the call itself.
         requirement_level:
           conditionally_required: If the call's status isn't `ok`.
       - ref: lablet.turn
@@ -205,16 +210,16 @@ spans:
         requirement_level: required
       - ref: mcp.method.name
         requirement_level:
-          conditionally_required: If the tool is served over MCP.
+          conditionally_required: If the tool is served over MCP and the call wasn't cancelled.
       - ref: mcp.session.id
         requirement_level:
-          conditionally_required: If the tool is served over MCP and the transport has a session.
+          conditionally_required: If the tool is served over MCP, the call wasn't cancelled, and the transport has a session.
       - ref: mcp.protocol.version
         requirement_level:
-          conditionally_required: If the tool is served over MCP and the version was negotiated.
+          conditionally_required: If the tool is served over MCP, the call wasn't cancelled, and the version was negotiated.
       - ref: jsonrpc.request.id
         requirement_level:
-          conditionally_required: If the tool is served over MCP and the request had an id.
+          conditionally_required: If the tool is served over MCP, the call wasn't cancelled, and the request had an id.
       - ref: rpc.response.status_code
         brief: The error code of the JSON-RPC response.
         requirement_level:
@@ -222,4 +227,4 @@ spans:
       - ref: network.transport
         brief: "`pipe` for a stdio MCP server, `tcp` for an HTTP one."
         requirement_level:
-          conditionally_required: If the tool is served over MCP.
+          conditionally_required: If the tool is served over MCP and the call wasn't cancelled.

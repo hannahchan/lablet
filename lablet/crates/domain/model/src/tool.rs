@@ -113,11 +113,12 @@ pub enum ToolCallStatus {
     /// it would report work as done that the same response only asked for,
     /// so the model is asked to make the call on its own.
     Rejected,
-    /// The call's turn came when the run had no time left, so nothing was
-    /// started for it. The model did nothing wrong, so it isn't an invalid
-    /// call. It's in the transcript, because a turn's outcomes answer every
-    /// call of its response, and nowhere else: no total counts it, and no
-    /// event reports it, so it has no span.
+    /// The call's turn came when the run had no time left, or once the run
+    /// had been cancelled, so nothing was started for it. The model did
+    /// nothing wrong, so it isn't an invalid call. It's in the transcript,
+    /// because a turn's outcomes answer every call of its response, and
+    /// nowhere else: no total counts it, and no event reports it, so it has
+    /// no span.
     NotRun,
     /// A tool ran.
     Ran {
@@ -141,6 +142,12 @@ pub enum ToolCallEnd {
     Timeout,
     /// The executor failed before the tool could answer.
     Failed,
+    /// The run was cancelled while the call ran, so the call was stopped
+    /// where it was and nothing it would have returned was kept. It ran, so
+    /// it isn't [`ToolCallStatus::NotRun`]: it has a span and counts in the
+    /// totals, as an error, for the time it took. No executor reports it;
+    /// the loop does, when it drops the call.
+    Cancelled,
 }
 
 impl ToolCallEnd {
@@ -152,6 +159,7 @@ impl ToolCallEnd {
             Self::ToolError => "tool_error",
             Self::Timeout => "timeout",
             Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
         }
     }
 }
@@ -208,8 +216,8 @@ impl ToolCallStatus {
     /// and it reached no tool. A call that reached a tool isn't one whatever
     /// the tool returned, and neither is a call the executor failed: those
     /// say how the tools did, where this says the model can't call them. A
-    /// call that was never run isn't one either: the run's time was gone
-    /// before anything could be said of the call.
+    /// call that was never run isn't one either: the run's time was gone,
+    /// or the run was cancelled, before anything could be said of the call.
     #[must_use]
     pub const fn is_invalid(&self) -> bool {
         match self {
@@ -248,7 +256,7 @@ impl ToolCallStatus {
 
 display_as_str!(ToolCallEnd);
 
-every_variant!(ToolCallEnd::ALL = [Ok, ToolError, Timeout, Failed]);
+every_variant!(ToolCallEnd::ALL = [Ok, ToolError, Timeout, Failed, Cancelled]);
 
 every_variant!(
     /// Every status of a call no tool ran for, each once. The rest are a

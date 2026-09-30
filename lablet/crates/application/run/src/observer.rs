@@ -56,7 +56,9 @@ pub enum EventKind {
     },
     /// One attempt of a provider call began. An attempt whose turn came when
     /// the run had no time left began nothing, so it has no event: the run
-    /// stops, and `RunFinished` says why.
+    /// stops, and `RunFinished` says why. Every attempt that began has one
+    /// event that ends it: `ProviderCallFinished`, `ProviderCallFailed` or
+    /// `ProviderCallCancelled`.
     ProviderCallStarted {
         /// Which turn the attempt belongs to.
         turn: u32,
@@ -101,8 +103,27 @@ pub enum EventKind {
         /// next attempt, and `RunFinished` says so.
         retry: Option<Duration>,
     },
+    /// The run was cancelled while an attempt was in flight, and the loop
+    /// dropped the attempt. It answered nothing and reported nothing, and
+    /// it's the last attempt of the run. Its timing is what the run counted
+    /// of it, as a failed attempt's is, so the latencies the provider
+    /// events carry still sum to the summary's.
+    ProviderCallCancelled {
+        /// Which turn.
+        turn: u32,
+        /// Which attempt was dropped.
+        attempt: u32,
+        /// When the attempt began, in whole milliseconds since the run
+        /// started.
+        started_ms: u64,
+        /// How long the attempt had taken when it was dropped, in whole
+        /// milliseconds.
+        latency_ms: u64,
+    },
     /// A tool call began. A call that's never run began nothing, so it has
-    /// neither this event nor the one that ends a call, and no span.
+    /// neither this event nor the one that ends a call, and no span. Every
+    /// call that began has the event that ends it, a call the run was
+    /// cancelled during among them.
     ToolCallStarted {
         /// Which turn made the call.
         turn: u32,
@@ -165,6 +186,7 @@ impl EventKind {
             Self::ProviderCallStarted { .. } => "ProviderCallStarted",
             Self::ProviderCallFinished { .. } => "ProviderCallFinished",
             Self::ProviderCallFailed { .. } => "ProviderCallFailed",
+            Self::ProviderCallCancelled { .. } => "ProviderCallCancelled",
             Self::ToolCallStarted { .. } => "ToolCallStarted",
             Self::ToolCallFinished { .. } => "ToolCallFinished",
             Self::RunFinished { .. } => "RunFinished",

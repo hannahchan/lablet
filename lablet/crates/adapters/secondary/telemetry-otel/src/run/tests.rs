@@ -714,7 +714,11 @@ fn the_span_of_a_call_that_did_not_end_well_names_its_status_as_its_error() {
             ToolCallStatus::MalformedInput
             | ToolCallStatus::Rejected
             | ToolCallStatus::Ran {
-                ended: ToolCallEnd::ToolError | ToolCallEnd::Timeout | ToolCallEnd::Failed,
+                ended:
+                    ToolCallEnd::ToolError
+                    | ToolCallEnd::Timeout
+                    | ToolCallEnd::Failed
+                    | ToolCallEnd::Cancelled,
                 ..
             } => {}
             ToolCallStatus::Unknown

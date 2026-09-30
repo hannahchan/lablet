@@ -191,6 +191,11 @@ pub trait ToolExecutor: Send + Sync {
     /// returns, so work that outlived its call would still be writing while
     /// a call the model placed after it runs.
     ///
+    /// A dropped call stops its work. The loop drops the calls in flight
+    /// when the run is cancelled, and a run stops in the time its futures
+    /// take to drop, so the drop starts the stop and doesn't wait for it:
+    /// a process it started is killed, and a request it sent is abandoned.
+    ///
     /// The executor feeds the tool's text to a [`KeptOutput`] made from
     /// [`ToolCall::keep`], as the text arrives, so it never holds more than
     /// the run's cap can use however much the tool writes. An output kept

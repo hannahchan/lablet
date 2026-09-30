@@ -145,6 +145,7 @@ pub(crate) enum ToolCallEnd {
     ToolError,
     Timeout,
     Failed,
+    Cancelled,
 }
 
 impl From<model::ToolCallEnd> for ToolCallEnd {
@@ -154,6 +155,7 @@ impl From<model::ToolCallEnd> for ToolCallEnd {
             model::ToolCallEnd::ToolError => Self::ToolError,
             model::ToolCallEnd::Timeout => Self::Timeout,
             model::ToolCallEnd::Failed => Self::Failed,
+            model::ToolCallEnd::Cancelled => Self::Cancelled,
         }
     }
 }

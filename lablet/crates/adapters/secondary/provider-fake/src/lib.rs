@@ -144,6 +144,13 @@
 //! reached. The entry has been played all the same, and what it held is
 //! never answered, its usage included.
 //!
+//! # Dropped attempts
+//!
+//! An attempt that's dropped before it answers, as the loop drops the one
+//! in flight when a run is cancelled, stops where it is: its wait ends with
+//! it, and nothing of it goes on. Its entry has been played, so the attempt
+//! after it is answered by the entry after that.
+//!
 //! # When the script runs out
 //!
 //! An attempt made after the last entry fails at once with the kind

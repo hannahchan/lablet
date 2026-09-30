@@ -592,7 +592,9 @@ async fn calling_a_tool_that_always(failure: impl Fn() -> Answers) -> Run {
 async fn a_tool_that_always_fails_never_stops_a_run_however_it_fails() {
     for ended in ToolCallEnd::ALL {
         let failure: Scripted = match ended {
-            ToolCallEnd::Ok => continue,
+            // A call is stopped only when the run is cancelled, which ends
+            // the run: C8's scenarios hold what becomes of it.
+            ToolCallEnd::Ok | ToolCallEnd::Cancelled => continue,
             ToolCallEnd::ToolError => || Answers::ToolError("1 failed".to_owned()),
             ToolCallEnd::Timeout => {
                 || Answers::Fails(crate::ToolErrorKind::Timeout, "took too long".to_owned())
@@ -678,16 +680,45 @@ async fn a_call_to_a_name_the_run_does_not_offer_is_an_error_result_and_gets_no_
     assert_eq!(outcome.status, ToolCallStatus::Unknown);
 }
 
-// C8: cancellation.
+// C8: cancellation stops what's in flight, runs nothing after it, and the
+// run still returns whole.
+
+/// The event of each kind, by name, in the order the loop emitted them.
+fn named(run: &Run, name: &str) -> Vec<EventKind> {
+    run.observer
+        .events()
+        .into_iter()
+        .filter(|event| event.kind.name() == name)
+        .map(|event| event.kind)
+        .collect()
+}
+
+/// What the model would have been sent for each call of each turn.
+fn contents(run: &Run) -> Vec<Vec<String>> {
+    run.finished
+        .transcript
+        .turns()
+        .iter()
+        .map(|turn| {
+            turn.tool_calls()
+                .iter()
+                .map(|outcome| match outcome.content.as_slice() {
+                    [ToolResultContent::Text(text)] => text.clone(),
+                    other => panic!("a call's content is one text block: {other:?}"),
+                })
+                .collect()
+        })
+        .collect()
+}
 
 #[tokio::test]
-async fn a_cancelled_run_stops_at_the_next_point_it_is_polled() {
+async fn a_run_cancelled_once_its_response_came_starts_none_of_the_response_s_calls() {
     let mut harness = Harness::new(vec![
         Answer::now(says("One.", &["bash"], FinishReason::ToolUse)),
         Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
     ]);
-    // Answered once, before the first call, then true at the point after the
-    // first tool phase.
+    // Answered once, before the first provider call, then true when the
+    // call's turn comes.
     harness.cancel = Arc::new(FakeCancel::after(1));
 
     let run = harness.run().await;
@@ -699,27 +730,402 @@ async fn a_cancelled_run_stops_at_the_next_point_it_is_polled() {
         1,
         "the scripted second answer was never bought"
     );
+    assert_eq!(
+        statuses(&run),
+        [vec!["not_run"]],
+        "the turn has an outcome for its call, which never started"
+    );
+    assert_eq!(
+        contents(&run),
+        [vec![
+            "the run was cancelled before this call started".to_owned()
+        ]]
+    );
+    assert_eq!(
+        run.observer.names(),
+        [
+            "RunStarted",
+            "TurnStarted",
+            "ProviderCallStarted",
+            "ProviderCallFinished",
+            "RunFinished",
+        ],
+        "nothing was started for the call, so nothing reports it"
+    );
+    assert_eq!(run.finished.summary.outcome.tool_calls, 0);
+}
 
-    let turns = run.finished.transcript.turns();
+#[tokio::test]
+async fn a_run_cancelled_during_a_provider_attempt_drops_it_and_makes_no_other() {
+    let cancel = Arc::new(FakeCancel::never());
+    let mut harness = Harness::new(vec![
+        Answer::Responds(
+            Box::new(says("On it.", &["bash"], FinishReason::ToolUse)),
+            ms(250),
+        ),
+        Answer::Fails(overloaded(), ms(40)),
+        Answer::Cancels(Arc::clone(&cancel), ms(70)),
+        Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.cancel = cancel;
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Cancelled);
+    assert_eq!(run.error(), None);
     assert_eq!(
-        turns.len(),
-        1,
-        "the transcript of a cancelled run comes back"
+        run.provider.calls(),
+        3,
+        "no attempt followed the one in flight"
     );
     assert_eq!(
-        turns[0].tool_calls().len(),
-        1,
-        "the call in flight ran to its end rather than being abandoned"
+        run.provider.dropped(),
+        ["x3"],
+        "the attempt in flight was dropped"
+    );
+    assert_eq!(run.turns(), 1, "the first turn is whole");
+    assert_eq!(statuses(&run), [vec!["ok"]]);
+    assert_eq!(
+        run.observer.names(),
+        [
+            "RunStarted",
+            "TurnStarted",
+            "ProviderCallStarted",
+            "ProviderCallFinished",
+            "ToolCallStarted",
+            "ToolCallFinished",
+            "TurnStarted",
+            "ProviderCallStarted",
+            "ProviderCallFailed",
+            "ProviderCallStarted",
+            "ProviderCallCancelled",
+            "RunFinished",
+        ],
+        "every attempt that started has an event that ends it"
+    );
+    let [dropped] = named(&run, "ProviderCallCancelled")
+        .try_into()
+        .expect("one attempt was dropped");
+    assert!(
+        matches!(
+            dropped,
+            EventKind::ProviderCallCancelled {
+                turn: 2,
+                attempt: 2,
+                started_ms: 390,
+                latency_ms: 70,
+            }
+        ),
+        "{dropped:?}"
+    );
+    let summary = &run.finished.summary;
+    assert_eq!(
+        summary.provider.retries, 1,
+        "the attempt that was dropped was the call's second"
     );
     assert_eq!(
-        turns[0].tool_calls()[0].status,
-        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok),
-        "and its outcome was recorded"
+        (
+            summary.provider.latency.total_ms(),
+            summary.provider.latency.max_ms()
+        ),
+        (360, 250),
+        "the attempt that was dropped took its time"
     );
     assert_eq!(
-        run.observer.names().last(),
-        Some(&"RunFinished"),
-        "a cancelled run still publishes its wide event"
+        summary.outcome.duration_ms, 460,
+        "the run ended when the attempt was dropped"
+    );
+}
+
+#[tokio::test]
+async fn a_run_cancelled_during_its_first_provider_attempt_has_no_turn() {
+    let cancel = Arc::new(FakeCancel::never());
+    let mut harness = Harness::new(vec![
+        Answer::Cancels(Arc::clone(&cancel), ms(70)),
+        Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.cancel = cancel;
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Cancelled);
+    assert_eq!(run.provider.calls(), 1);
+    assert_eq!(run.turns(), 0);
+    assert_eq!(
+        run.observer.names(),
+        [
+            "RunStarted",
+            "TurnStarted",
+            "ProviderCallStarted",
+            "ProviderCallCancelled",
+            "RunFinished",
+        ]
+    );
+    let summary = &run.finished.summary;
+    assert_eq!(
+        summary.provider.retries, 0,
+        "a call's first attempt is no retry"
+    );
+    assert_eq!(summary.provider.latency.total_ms(), 70);
+    assert_eq!(summary.failed_usage, None, "the attempt reported nothing");
+}
+
+#[tokio::test]
+async fn a_run_cancelled_during_a_backoff_stops_waiting_and_makes_no_further_attempt() {
+    let cancel = Arc::new(FakeCancel::never());
+    let mut harness = Harness::new(vec![
+        Answer::Fails(overloaded(), ms(40)),
+        Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
+    ]);
+    harness
+        .clock
+        .interrupts_the_next_sleep(Arc::clone(&cancel), ms(30));
+    harness.cancel = cancel;
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Cancelled);
+    assert_eq!(run.provider.calls(), 1, "no attempt after the backoff");
+    assert_eq!(run.clock.sleeps(), [ms(100)], "the loop began a wait");
+    assert_eq!(
+        run.finished.summary.outcome.duration_ms, 70,
+        "and stopped 30 ms into it rather than at its end"
+    );
+    assert_eq!(run.turns(), 0);
+    assert_eq!(
+        run.observer.names(),
+        [
+            "RunStarted",
+            "TurnStarted",
+            "ProviderCallStarted",
+            "ProviderCallFailed",
+            "RunFinished",
+        ]
+    );
+    let [(_, retry)] = run.failures().try_into().expect("one attempt failed");
+    assert_eq!(
+        retry,
+        Some(ms(100)),
+        "the failure reported the wait the loop began"
+    );
+    assert_eq!(run.finished.summary.provider.retries, 0);
+}
+
+#[tokio::test]
+async fn a_run_cancelled_during_a_tool_call_stops_it_and_starts_no_later_group() {
+    let cancel = Arc::new(FakeCancel::never());
+    let mut harness = Harness::new(vec![
+        Answer::now(says(
+            "On it.",
+            &["bash", "read_file"],
+            FinishReason::ToolUse,
+        )),
+        Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
+    ]);
+    let served = Arc::new(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![
+                spec("bash", ToolSource::Builtin),
+                spec("read_file", ToolSource::Builtin),
+            ],
+        )
+        .answers("bash", Answers::Stalls(Some(Arc::clone(&cancel)), ms(250))),
+    );
+    harness.tools = vec![Arc::clone(&served) as Arc<dyn crate::ToolExecutor>];
+    harness.cancel = cancel;
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Cancelled);
+    assert_eq!(run.error(), None);
+    assert_eq!(run.provider.calls(), 1, "no provider call followed");
+    assert_eq!(
+        statuses(&run),
+        [vec!["cancelled", "not_run"]],
+        "the turn has an outcome for every call: the one in flight was stopped, and the one \
+         after it never started"
+    );
+    assert_eq!(
+        run.finished.transcript.turns()[0].tool_calls()[0].status,
+        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Cancelled)
+    );
+    assert_eq!(
+        contents(&run),
+        [vec![
+            "the run was cancelled while this call ran, and the call was stopped".to_owned(),
+            "the run was cancelled before this call started".to_owned(),
+        ]]
+    );
+    assert_eq!(
+        served.spans(),
+        ["+call_0", "xcall_0"],
+        "the call in flight was dropped, and the later group reached no executor"
+    );
+    assert_eq!(
+        run.observer.names(),
+        [
+            "RunStarted",
+            "TurnStarted",
+            "ProviderCallStarted",
+            "ProviderCallFinished",
+            "ToolCallStarted",
+            "ToolCallFinished",
+            "RunFinished",
+        ]
+    );
+    let [stopped] = named(&run, "ToolCallFinished")
+        .try_into()
+        .expect("one call ended");
+    assert!(
+        matches!(
+            &stopped,
+            EventKind::ToolCallFinished {
+                call_id,
+                status: ToolCallStatus::Ran {
+                    ended: ToolCallEnd::Cancelled,
+                    ..
+                },
+                latency_ms: 250,
+                ..
+            } if call_id.as_str() == "call_0"
+        ),
+        "{stopped:?}"
+    );
+    let summary = &run.finished.summary;
+    assert_eq!(
+        summary.outcome.tool_calls, 1,
+        "the call that ran counts, and the one that never started doesn't"
+    );
+    assert_eq!(
+        (summary.tool_calls.errors, summary.tool_calls.latency_ms),
+        (1, 250)
+    );
+    assert_eq!(
+        summary
+            .per_tool
+            .keys()
+            .map(ToolName::as_str)
+            .collect::<Vec<_>>(),
+        ["bash"]
+    );
+    assert_eq!(summary.outcome.duration_ms, 250);
+}
+
+#[tokio::test]
+async fn a_run_cancelled_while_a_shared_group_runs_stops_every_call_in_flight() {
+    let cancel = Arc::new(FakeCancel::never());
+    let mut harness = Harness::new(vec![
+        Answer::now(says(
+            "On it.",
+            &["read_file", "read_file", "bash"],
+            FinishReason::ToolUse,
+        )),
+        Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
+    ]);
+    let mut read_file = spec("read_file", ToolSource::Builtin);
+    read_file.concurrency = ToolConcurrency::Shared;
+    let served = Arc::new(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![spec("bash", ToolSource::Builtin), read_file],
+        )
+        .answers("read_file", Answers::Stalls(None, Duration::ZERO))
+        .answers(
+            "read_file",
+            Answers::Stalls(Some(Arc::clone(&cancel)), ms(40)),
+        ),
+    );
+    harness.tools = vec![Arc::clone(&served) as Arc<dyn crate::ToolExecutor>];
+    harness.cancel = cancel;
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Cancelled);
+    assert_eq!(run.provider.calls(), 1, "no provider call followed");
+    assert_eq!(
+        statuses(&run),
+        [vec!["cancelled", "cancelled", "not_run"]],
+        "both calls of the group were in flight and stopped, and the call after the group \
+         never started"
+    );
+    let mut spans = served.spans();
+    spans.sort_unstable();
+    assert_eq!(
+        spans,
+        ["+call_0", "+call_1", "xcall_0", "xcall_1"],
+        "both calls were dropped, and bash reached no executor"
+    );
+    let names = run.observer.names();
+    assert_eq!(
+        names
+            .iter()
+            .filter(|name| **name == "ToolCallStarted")
+            .count(),
+        2
+    );
+    assert_eq!(
+        names
+            .iter()
+            .filter(|name| **name == "ToolCallFinished")
+            .count(),
+        2,
+        "every call that started ended"
+    );
+    assert_eq!(names.last(), Some(&"RunFinished"));
+    let latencies: Vec<u64> = run.finished.transcript.turns()[0]
+        .tool_calls()
+        .iter()
+        .map(|outcome| outcome.latency_ms)
+        .collect();
+    assert_eq!(
+        latencies,
+        [40, 40, 0],
+        "both ran until the run was cancelled"
+    );
+    assert_eq!(run.finished.summary.outcome.tool_calls, 2);
+}
+
+#[tokio::test]
+async fn a_call_whose_turn_comes_once_the_run_is_cancelled_and_out_of_time_is_said_to_be_cancelled()
+{
+    let cancel = Arc::new(FakeCancel::never());
+    let mut harness = Harness::new(vec![Answer::now(says(
+        "One.",
+        &["bash", "read_file"],
+        FinishReason::ToolUse,
+    ))]);
+    harness.tools = vec![Arc::new(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![
+                spec("bash", ToolSource::Builtin),
+                spec("read_file", ToolSource::Builtin),
+            ],
+        )
+        .answers(
+            "bash",
+            Answers::Cancelling(Arc::clone(&cancel), "bash ran".to_owned()),
+        ),
+    )];
+    harness.cancel = cancel;
+    // The observer takes the rest of the run's time over the end of `bash`,
+    // so when `read_file`'s turn comes the run is both cancelled and out of
+    // time.
+    harness.observer = Arc::new(super::fakes::Recorder::slow_over(
+        Arc::clone(&harness.clock),
+        "ToolCallFinished",
+        harness.stop.timeout,
+    ));
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Cancelled);
+    assert_eq!(statuses(&run), [vec!["ok", "not_run"]]);
+    assert_eq!(
+        contents(&run)[0][1],
+        "the run was cancelled before this call started",
+        "cancellation comes before the timeout, as it does at points A and B"
     );
 }
 
@@ -794,7 +1200,7 @@ async fn a_run_cancelled_before_it_starts_with_no_time_to_run_is_cancelled() {
         &[],
         FinishReason::EndTurn,
     ))]);
-    harness.cancel = Arc::new(FakeCancel::after(0));
+    harness.cancel = Arc::new(FakeCancel::already());
     harness.stop.timeout = Duration::ZERO;
 
     let run = harness.run().await;
@@ -2071,6 +2477,9 @@ async fn the_third_invalid_turn_in_a_row_stops_the_run_and_no_provider_call_foll
 async fn a_turn_in_which_a_call_reached_a_tool_ends_the_count_whatever_the_tool_returned() {
     for ended in ToolCallEnd::ALL {
         let (returned, reached): (Scripted, &str) = match ended {
+            // A call is stopped only when the run is cancelled, which ends
+            // the run before any count is read.
+            ToolCallEnd::Cancelled => continue,
             ToolCallEnd::Ok => (|| Answers::Text("ok".to_owned()), "ok"),
             ToolCallEnd::ToolError => (|| Answers::ToolError("1 failed".to_owned()), "tool_error"),
             ToolCallEnd::Timeout => (
@@ -2605,7 +3014,7 @@ async fn a_zero_token_budget_stops_the_run_before_its_first_provider_call() {
 #[tokio::test]
 async fn a_run_cancelled_before_its_first_poll_never_calls_the_provider() {
     let mut harness = Harness::new(vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))]);
-    harness.cancel = Arc::new(FakeCancel::after(0));
+    harness.cancel = Arc::new(FakeCancel::already());
 
     let run = harness.run().await;
 
@@ -3259,13 +3668,13 @@ async fn a_cap_of_one_gives_the_sequential_event_stream_and_the_same_transcript(
 // E11: a retry is a provider call, so it's polled for cancellation.
 
 #[tokio::test]
-async fn a_run_cancelled_during_a_backoff_makes_no_further_attempt() {
+async fn a_run_cancelled_as_a_backoff_ends_makes_no_further_attempt() {
     let mut harness = Harness::new(vec![
         Answer::fails(ProviderErrorKind::Retryable),
         Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
     ]);
-    // Answered before the attempt and again once it failed, then true at the
-    // poll after the backoff.
+    // Answered before the attempt and again once it failed, then true when
+    // it's asked again, after the backoff.
     harness.cancel = Arc::new(FakeCancel::after(2));
 
     let run = harness.run().await;

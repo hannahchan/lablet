@@ -310,9 +310,10 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 
 | Value | Description | Stability |
 | --- | --- | --- |
+| `cancelled` | The run was cancelled while the call ran, so the call was stopped where it was. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `failed` | The executor failed before the tool could answer. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `malformed_input` | The model's arguments for the call weren't valid JSON, so nothing ran. | ![Development](https://img.shields.io/badge/-development-blue) |
-| `not_run` | The call's turn came when the run had no time left, so nothing was started for it. No span carries it. | ![Development](https://img.shields.io/badge/-development-blue) |
+| `not_run` | The call's turn came when the run had no time left, or once the run had been cancelled, so nothing was started for it. No span carries it. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `ok` | The tool ran and returned a result. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `rejected` | The loop declined a `task_complete` call that wasn't the response's only call, so nothing ran. | ![Development](https://img.shields.io/badge/-development-blue) |
 | `timeout` | The call ran past its deadline, the shorter of its executor's own limit and the time the run had left. | ![Development](https://img.shields.io/badge/-development-blue) |

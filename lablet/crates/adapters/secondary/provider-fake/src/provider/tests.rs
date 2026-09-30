@@ -325,6 +325,29 @@ async fn an_attempt_the_deadline_cut_short_has_played_its_entry() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn an_attempt_that_is_dropped_part_way_stops_waiting_and_has_played_its_entry() {
+    let provider = playing(
+        r"
+- response: { content: [{ text: slow }], finish: end_turn, latency: 5m }
+- response: { content: [{ text: next }], finish: end_turn }
+",
+    );
+    let began = Instant::now();
+
+    let dropped =
+        tokio::time::timeout(Duration::from_secs(1), provider.complete(unhurried())).await;
+    let next = provider.complete(unhurried()).await.unwrap();
+
+    dropped.unwrap_err();
+    assert_eq!(said(&next), "next");
+    assert_eq!(
+        began.elapsed(),
+        Duration::from_secs(1),
+        "nothing of the dropped attempt was waited for"
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn an_attempt_after_the_last_entry_fails_fatally_and_says_what_to_do() {
     let provider = playing(THREE);
     for _ in 0..3 {

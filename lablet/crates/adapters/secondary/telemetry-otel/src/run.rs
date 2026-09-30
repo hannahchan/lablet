@@ -398,6 +398,24 @@ impl OpenRun {
             .span(span)
     }
 
+    /// An attempt was dropped because the run was cancelled while it was in
+    /// flight. Nothing failed, so there's no exception and no retry to
+    /// record, and the attempt reported no usage: the span says where the
+    /// attempt was stopped and why, and the record of its content, when
+    /// the run captures it, says what it was sent.
+    pub(crate) fn attempt_cancelled(&mut self, attempt: Attempt) -> Signals {
+        // The attempt ended because the run did, so it's named for the
+        // reason the run stopped.
+        let cancelled = Attributes::default().with(key::ERROR_TYPE, StopReason::Cancelled.as_str());
+        let why = "the run was cancelled while the attempt was in flight".to_owned();
+        let Some(span) = self.chat(attempt, cancelled, Ended::Badly(why)) else {
+            return Signals::default();
+        };
+        let exchange = self.conversation.as_mut().map(Conversation::unanswered);
+        let exchanged = exchange.map(|exchange| self.exchanged(&span, attempt.turn, exchange));
+        Signals::default().record(exchanged).span(span)
+    }
+
     /// A tool call began.
     pub(crate) fn call_began(
         &mut self,

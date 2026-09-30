@@ -419,6 +419,10 @@ impl Inner {
 
     /// One match over every kind of event, so that a kind the loop gains
     /// doesn't compile until the observer says what becomes of it.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one match over every kind of event, whose arms each take their event apart"
+    )]
     fn on(&self, event: RunEvent) {
         let RunEvent { run_id, kind } = event;
         let state = &mut *self.state();
@@ -476,6 +480,19 @@ impl Inner {
                     latency_ms,
                 };
                 run.attempt_failed(attempt, &error, retry)
+            }),
+            EventKind::ProviderCallCancelled {
+                turn,
+                attempt,
+                started_ms,
+                latency_ms,
+            } => self.during(state, &run_id, |run| {
+                run.attempt_cancelled(Attempt {
+                    turn,
+                    number: attempt,
+                    started_ms,
+                    latency_ms,
+                })
             }),
             // The turn is the one the call's last event names.
             EventKind::ToolCallStarted {

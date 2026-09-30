@@ -540,7 +540,7 @@ attributes:
           stability: development
         - id: not_run
           value: not_run
-          brief: The call's turn came when the run had no time left, so nothing was started for it. No span carries it.
+          brief: The call's turn came when the run had no time left, or once the run had been cancelled, so nothing was started for it. No span carries it.
           stability: development
         - id: timeout
           value: timeout
@@ -549,6 +549,10 @@ attributes:
         - id: failed
           value: failed
           brief: The executor failed before the tool could answer.
+          stability: development
+        - id: cancelled
+          value: cancelled
+          brief: The run was cancelled while the call ran, so the call was stopped where it was.
           stability: development
     stability: development
     brief: How a tool call ended.

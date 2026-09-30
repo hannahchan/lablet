@@ -286,17 +286,19 @@ pub enum LabletToolStatus {
     MalformedInput,
     /// The loop declined a `task_complete` call that wasn't the response's only call, so nothing ran.
     Rejected,
-    /// The call's turn came when the run had no time left, so nothing was started for it. No span carries it.
+    /// The call's turn came when the run had no time left, or once the run had been cancelled, so nothing was started for it. No span carries it.
     NotRun,
     /// The call ran past its deadline, the shorter of its executor's own limit and the time the run had left.
     Timeout,
     /// The executor failed before the tool could answer.
     Failed,
+    /// The run was cancelled while the call ran, so the call was stopped where it was.
+    Cancelled,
 }
 
 impl LabletToolStatus {
     /// Every value, each once, in the order the registry lists them.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Ok,
         Self::ToolError,
         Self::Unknown,
@@ -305,6 +307,7 @@ impl LabletToolStatus {
         Self::NotRun,
         Self::Timeout,
         Self::Failed,
+        Self::Cancelled,
     ];
 
     /// The value as it appears on the wire.
@@ -319,6 +322,7 @@ impl LabletToolStatus {
             Self::NotRun => "not_run",
             Self::Timeout => "timeout",
             Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
         }
     }
 }

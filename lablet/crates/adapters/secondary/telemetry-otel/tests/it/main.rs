@@ -3,6 +3,8 @@
 //! and the file is read back.
 
 #[cfg(test)]
+mod cancelled;
+#[cfg(test)]
 mod conformance;
 #[cfg(test)]
 mod content;

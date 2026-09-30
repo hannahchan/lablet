@@ -6,8 +6,10 @@
 //! provider is an adapter, written at phase 4, and answers to a config.
 
 use std::collections::VecDeque;
+use std::future::poll_fn;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Poll, Waker};
 use std::time::{Duration, Instant};
 
 use lablet_model::{
@@ -19,6 +21,20 @@ use crate::{
     ToolCall, ToolError, ToolExecutor, ToolOutput,
 };
 
+/// How many times a call in flight yields to the runtime, once the run is
+/// cancelled, before it gives up and returns. A loop that races the call
+/// against the cancellation drops it at the first; one that doesn't sees it
+/// return, with what says so, and the test fails rather than waiting for
+/// ever.
+const HOLDS_ON: usize = 64;
+
+/// Yields [`HOLDS_ON`] times.
+async fn hold_on() {
+    for _ in 0..HOLDS_ON {
+        tokio::task::yield_now().await;
+    }
+}
+
 /// A clock that only moves when a test moves it, and never waits.
 ///
 /// `sleep` adds the wait to the reading instead of blocking, so a run with a
@@ -28,6 +44,7 @@ pub struct FakeClock {
     origin: Instant,
     elapsed: Mutex<Duration>,
     slept: Mutex<Vec<Duration>>,
+    interrupted: Mutex<Option<(Arc<FakeCancel>, Duration)>>,
 }
 
 impl FakeClock {
@@ -37,7 +54,19 @@ impl FakeClock {
             origin: Instant::now(),
             elapsed: Mutex::new(Duration::ZERO),
             slept: Mutex::new(Vec::new()),
+            interrupted: Mutex::new(None),
         }
+    }
+
+    /// The next wait is cut short: `after` of it passes and the run is
+    /// cancelled, as a wait is that's under way when the user presses
+    /// Ctrl-C. A loop that goes on waiting sees it end at the time it was
+    /// asked for.
+    pub fn interrupts_the_next_sleep(&self, cancel: Arc<FakeCancel>, after: Duration) {
+        *self
+            .interrupted
+            .lock()
+            .expect("the fake clock isn't poisoned") = Some((cancel, after));
     }
 
     /// Moves the reading on, as a provider call or a tool call would.
@@ -65,51 +94,128 @@ impl Clock for FakeClock {
             .lock()
             .expect("the fake clock isn't poisoned")
             .push(duration);
+        let interrupted = self
+            .interrupted
+            .lock()
+            .expect("the fake clock isn't poisoned")
+            .take();
+        if let Some((cancel, after)) = interrupted {
+            self.advance(after);
+            cancel.cancel();
+            hold_on().await;
+            self.advance(duration.saturating_sub(after));
+            return;
+        }
         self.advance(duration);
     }
 }
 
-/// Cancellation a test turns on when it likes: after a count of polls, or
-/// from inside the run, as a user's Ctrl-C would.
+/// Cancellation a test turns on when it likes: from the start, after a
+/// count of the times the loop asked, or from inside the run, as a user's
+/// Ctrl-C would.
 pub struct FakeCancel {
     cancelled: AtomicBool,
-    /// Cancels once this many polls have been answered, so a test can cancel
+    /// Cancels once the loop has asked this many times, so a test can cancel
     /// at a chosen point in the loop rather than from the start.
     after_polls: Option<usize>,
     polls: AtomicUsize,
+    /// What's waiting to hear of the cancellation, which it wakes.
+    waiting: Mutex<Vec<Waker>>,
 }
 
 impl FakeCancel {
+    const fn new(cancelled: bool, after_polls: Option<usize>) -> Self {
+        Self {
+            cancelled: AtomicBool::new(cancelled),
+            after_polls,
+            polls: AtomicUsize::new(0),
+            waiting: Mutex::new(Vec::new()),
+        }
+    }
+
     /// Never cancels.
     pub const fn never() -> Self {
-        Self {
-            cancelled: AtomicBool::new(false),
-            after_polls: None,
-            polls: AtomicUsize::new(0),
-        }
+        Self::new(false, None)
     }
 
-    /// Answers `false` `polls` times and `true` after that.
+    /// Cancelled before the run starts.
+    pub const fn already() -> Self {
+        Self::new(true, None)
+    }
+
+    /// Answers `false` the first `polls` times the loop asks whether the run
+    /// is cancelled, and `true` from then on. Waiting for the cancellation
+    /// isn't asking: it hears of it once the loop has been told.
     pub const fn after(polls: usize) -> Self {
-        Self {
-            cancelled: AtomicBool::new(false),
-            after_polls: Some(polls),
-            polls: AtomicUsize::new(0),
-        }
+        Self::new(false, Some(polls))
     }
 
-    /// Cancels the run from here on, whatever the count, so a scripted tool
-    /// can cancel it part-way through a tool phase.
+    /// Cancels the run from here on, whatever the count, so a scripted call
+    /// can cancel it while it's in flight.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);
+        let waiting = std::mem::take(&mut *self.waiting.lock().expect("the fake isn't poisoned"));
+        for waker in waiting {
+            waker.wake();
+        }
+    }
+
+    fn is_set(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
     }
 }
 
+#[async_trait::async_trait]
 impl Cancellation for FakeCancel {
     fn is_cancelled(&self) -> bool {
         let polls = self.polls.fetch_add(1, Ordering::Relaxed);
-        self.after_polls.is_some_and(|after| polls >= after)
-            || self.cancelled.load(Ordering::Relaxed)
+        if self.after_polls.is_some_and(|after| polls >= after) && !self.is_set() {
+            self.cancel();
+        }
+        self.is_set()
+    }
+
+    async fn cancelled(&self) {
+        poll_fn(|context| {
+            if self.is_set() {
+                return Poll::Ready(());
+            }
+            self.waiting
+                .lock()
+                .expect("the fake isn't poisoned")
+                .push(context.waker().clone());
+            // Asked again once the waker is in, so a cancellation between the
+            // two looks isn't missed.
+            if self.is_set() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await;
+    }
+}
+
+/// Records, when it's dropped, that the call `id` was dropped in flight,
+/// unless the call returned first.
+struct Dropped<'a> {
+    id: String,
+    log: &'a Mutex<Vec<String>>,
+}
+
+impl Dropped<'_> {
+    /// The call returned, so it wasn't dropped in flight.
+    fn returned(self) {
+        std::mem::forget(self);
+    }
+}
+
+impl Drop for Dropped<'_> {
+    fn drop(&mut self) {
+        self.log
+            .lock()
+            .expect("the log isn't poisoned")
+            .push(format!("x{}", self.id));
     }
 }
 
@@ -120,6 +226,10 @@ pub enum Answer {
     /// The call fails, after `latency`, with whatever usage and hint the
     /// error carries.
     Fails(ProviderError, Duration),
+    /// The call takes `latency` and then cancels the run, as an attempt does
+    /// that's in flight when the user presses Ctrl-C. A loop that doesn't
+    /// drop it sees it answer with a response that says so.
+    Cancels(Arc<FakeCancel>, Duration),
 }
 
 impl Answer {
@@ -156,6 +266,7 @@ pub struct FakeProvider {
     shown: Mutex<Vec<Shown>>,
     deadlines: Mutex<Vec<Duration>>,
     ran_out: AtomicBool,
+    dropped: Mutex<Vec<String>>,
 }
 
 /// What one attempt carried beside the conversation.
@@ -182,7 +293,17 @@ impl FakeProvider {
             shown: Mutex::new(Vec::new()),
             deadlines: Mutex::new(Vec::new()),
             ran_out: AtomicBool::new(false),
+            dropped: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The attempts that were dropped before they returned, as `x` and the
+    /// attempt's number, counted from 1.
+    pub fn dropped(&self) -> Vec<String> {
+        self.dropped
+            .lock()
+            .expect("the fake provider isn't poisoned")
+            .clone()
     }
 
     /// The same, reached over the network at `endpoint`.
@@ -237,7 +358,7 @@ impl ModelProvider for FakeProvider {
         &self,
         request: ProviderRequest<'_>,
     ) -> Result<ProviderResponse, ProviderError> {
-        self.calls.fetch_add(1, Ordering::Relaxed);
+        let attempt = self.calls.fetch_add(1, Ordering::Relaxed) + 1;
         self.sent
             .lock()
             .expect("the fake provider isn't poisoned")
@@ -267,6 +388,26 @@ impl ModelProvider for FakeProvider {
             Some(Answer::Fails(error, latency)) => {
                 self.clock.advance(latency);
                 Err(error)
+            }
+            Some(Answer::Cancels(cancel, latency)) => {
+                let dropped = Dropped {
+                    id: attempt.to_string(),
+                    log: &self.dropped,
+                };
+                self.clock.advance(latency);
+                cancel.cancel();
+                hold_on().await;
+                dropped.returned();
+                Ok(ProviderResponse::new(
+                    vec![lablet_model::ContentBlock::Text(
+                        "the attempt in flight was never dropped".to_owned(),
+                    )],
+                    lablet_model::Usage::default(),
+                    lablet_model::FinishReason::EndTurn,
+                    None,
+                    None,
+                )
+                .expect("a response with no calls is a response"))
             }
             // A script that runs out is a test that didn't say what happens
             // next, which is worth failing loudly rather than looping. The
@@ -299,8 +440,15 @@ pub enum Answers {
     /// Fails over MCP, so the metadata comes back on the error instead.
     FailsOverMcp(crate::ToolErrorKind, String, crate::McpCallMeta),
     /// Cancels the run while the call is running, and then returns this
-    /// text, as a call does that was in flight when the user pressed Ctrl-C.
+    /// text at once, as a call does that ended just as the user pressed
+    /// Ctrl-C.
     Cancelling(Arc<FakeCancel>, String),
+    /// Starts, lets every other call of its group start, takes `latency`,
+    /// and cancels the run when it holds a cancellation, as a call does
+    /// that's in flight when the user presses Ctrl-C. Its drop is recorded
+    /// among the spans as `x` and the call's id. A loop that doesn't drop it
+    /// sees it return a result that says so.
+    Stalls(Option<Arc<FakeCancel>>, Duration),
 }
 
 /// An executor serving named tools with scripted answers.
@@ -412,6 +560,18 @@ impl FakeTools {
         self
     }
 
+    /// The next answer to `name`, taken, when it's one that stalls.
+    fn stalling(&self, name: &ToolName) -> Option<Answers> {
+        let mut answers = self
+            .answers
+            .lock()
+            .expect("the fake executor isn't poisoned");
+        let at = answers
+            .iter()
+            .position(|(answers_to, _)| answers_to == name)?;
+        matches!(answers[at].1, Answers::Stalls(..)).then(|| answers.remove(at).1)
+    }
+
     /// Listing the tools fails, which ends the run before its first call.
     pub const fn cannot_list(mut self, kind: crate::ToolErrorKind) -> Self {
         self.listing = Some(kind);
@@ -450,6 +610,24 @@ impl ToolExecutor for FakeTools {
             .lock()
             .expect("the fake executor isn't poisoned")
             .push(format!("+{id}"));
+        if let Some(Answers::Stalls(cancel, latency)) = self.stalling(&call.name) {
+            let dropped = Dropped {
+                id,
+                log: &self.spans,
+            };
+            tokio::task::yield_now().await;
+            self.clock.advance(latency);
+            if let Some(cancel) = cancel {
+                cancel.cancel();
+            }
+            hold_on().await;
+            dropped.returned();
+            return Ok(ToolOutput {
+                output: KeptOutput::whole("the call in flight was never dropped"),
+                is_error: false,
+                mcp: None,
+            });
+        }
         if self.yielding {
             tokio::task::yield_now().await;
         }
@@ -492,6 +670,9 @@ impl ToolExecutor for FakeTools {
             }),
             Some(Answers::FailsOverMcp(kind, message, mcp)) => {
                 Err(ToolError::new(kind, message).over_mcp(mcp))
+            }
+            Some(Answers::Stalls(..)) => {
+                unreachable!("an answer that stalls is taken before the call takes its time")
             }
             Some(Answers::Cancelling(cancel, text)) => {
                 cancel.cancel();

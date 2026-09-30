@@ -78,6 +78,7 @@ const fn spelling(status: &ToolCallStatus) -> &'static str {
             ToolCallEnd::ToolError => "tool_error",
             ToolCallEnd::Timeout => "timeout",
             ToolCallEnd::Failed => "failed",
+            ToolCallEnd::Cancelled => "cancelled",
         },
     }
 }

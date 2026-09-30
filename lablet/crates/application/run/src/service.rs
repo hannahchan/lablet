@@ -1,14 +1,17 @@
 //! The loop: one run, from its first provider call to its outcome.
 
+use std::future::{Future, poll_fn};
 use std::num::NonZeroU32;
+use std::pin::pin;
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use lablet_model::{
     Answer, CacheScope, Cost, Final, FinishedRun, KeptOutput, Message, OutputCap, Pending,
     Progress, Prompts, ProviderErrorKind, ProviderResponse, Rates, RequestParams, Responded, Run,
-    RunContext, RunId, RunSetup, Schedule, StopReason, ToolCallStatus, ToolInput, ToolUse, Turn,
-    Usage,
+    RunContext, RunId, RunSetup, Schedule, StopReason, ToolCallEnd, ToolCallStatus, ToolInput,
+    ToolSource, ToolUse, Turn, Usage,
 };
 use lablet_policy::{Pricing, RetryPolicy, StopPolicy};
 
@@ -380,8 +383,7 @@ impl RunService {
                 .await;
                 let began = self.begin(started);
                 let result = self
-                    .provider
-                    .complete(ProviderRequest {
+                    .unless_cancelled(self.provider.complete(ProviderRequest {
                         system: run.transcript().system(),
                         messages: &messages,
                         tools: self.tools.specs(),
@@ -392,21 +394,38 @@ impl RunService {
                         seed: self.request.seed,
                         cache_key: self.cache_key(run_id),
                         deadline: began.left.min(self.calls.provider_timeout),
-                    })
+                    }))
                     .await;
                 (began, result)
             };
             let latency = self.clock.now().saturating_duration_since(began.at);
 
             let error = match result {
-                Ok(response) => {
+                Some(Ok(response)) => {
                     return Ok(Answered {
                         response,
                         began: began.offset,
                         latency,
                     });
                 }
-                Err(error) => error,
+                Some(Err(error)) => error,
+                // The attempt was dropped where it was. It took its time and
+                // it was an attempt, so the run counts it as one that failed,
+                // and its span ends with the event that says why.
+                None => {
+                    let dropped = run.failed_attempt(began.offset, latency, None);
+                    self.emit(
+                        run_id,
+                        EventKind::ProviderCallCancelled {
+                            turn,
+                            attempt,
+                            started_ms: dropped.started_ms,
+                            latency_ms: dropped.latency_ms,
+                        },
+                    )
+                    .await;
+                    return Err(Stopped::just(StopReason::Cancelled));
+                }
             };
             let failed = run.failed_attempt(began.offset, latency, error.usage);
 
@@ -425,12 +444,38 @@ impl RunService {
             )
             .await;
 
-            self.clock.sleep(next?).await;
+            // A wait the run was cancelled during is over then: a retry is a
+            // provider call, which a cancelled run never makes.
+            if self
+                .unless_cancelled(self.clock.sleep(next?))
+                .await
+                .is_none()
+            {
+                return Err(Stopped::just(StopReason::Cancelled));
+            }
             if let Some(stopped) = self.before_call(run, started) {
                 return Err(stopped);
             }
             attempt += 1;
         }
+    }
+
+    /// `work` to its end, or `None` when the run is cancelled first, and
+    /// then the work is dropped where it is.
+    ///
+    /// Dropping is the whole of stopping: nothing waits for the work to
+    /// wind down, so a cancelled run takes no longer to stop than its
+    /// futures take to drop, whatever call was in flight. The work is
+    /// polled first, so work that has ended counts as ended even when the
+    /// run was cancelled as it ended.
+    async fn unless_cancelled<T>(&self, work: impl Future<Output = T>) -> Option<T> {
+        let mut work = pin!(work);
+        let mut cancelled = self.cancel.cancelled();
+        poll_fn(|context| match work.as_mut().poll(context) {
+            Poll::Ready(done) => Poll::Ready(Some(done)),
+            Poll::Pending => cancelled.as_mut().poll(context).map(|()| None),
+        })
+        .await
     }
 
     /// What every request of the run `run_id` carries for the adapter to
@@ -525,7 +570,12 @@ impl RunService {
 
     /// One tool call, from the event that opens it to the event that closes
     /// it, or a call that's never run because its turn came when the run
-    /// had no time left.
+    /// had been cancelled or had no time left.
+    ///
+    /// A call the run is cancelled during is dropped where it is, and the
+    /// event that closes it still comes, so its span ends. The calls whose
+    /// turn comes after that are never run, so a cancelled tool phase
+    /// starts no later group, and the turn has an outcome for every call.
     ///
     /// The clock is read when the call's turn comes, which for a call of a
     /// later group is after the groups ahead of it, and that reading decides
@@ -546,10 +596,18 @@ impl RunService {
         capture: bool,
     ) -> Answer {
         let turned = self.elapsed(started);
-        if self.stop.time_left(turned).is_none() {
+        // Cancellation comes first, as it does at points A and B.
+        let unstarted = if self.cancel.is_cancelled() {
+            Some("the run was cancelled before this call started")
+        } else if self.stop.time_left(turned).is_none() {
+            Some("the run reached its timeout before this call started")
+        } else {
+            None
+        };
+        if let Some(why) = unstarted {
             return Answer::measured(
                 ToolCallStatus::NotRun,
-                KeptOutput::whole("the run reached its timeout before this call started"),
+                KeptOutput::whole(why),
                 None,
                 turned,
                 Duration::ZERO,
@@ -619,12 +677,10 @@ impl RunService {
     async fn settle(
         &self,
         call: &ToolUse,
-        source: Option<lablet_model::ToolSource>,
+        source: Option<ToolSource>,
         left: Duration,
         trace_context: Option<crate::TraceContext>,
     ) -> Settled {
-        use lablet_model::ToolCallEnd;
-
         let Some(source) = source else {
             return Settled::local(
                 ToolCallStatus::Unknown,
@@ -657,18 +713,28 @@ impl RunService {
             ToolInput::Json(value) => value.clone(),
         };
 
-        match self
-            .tools
-            .execute(ToolCall {
+        let executed = self
+            .unless_cancelled(self.tools.execute(ToolCall {
                 id: call.id.clone(),
                 name: call.name.clone(),
                 input,
                 deadline: left,
                 keep: self.calls.output_cap.map(OutputCap::keeps),
                 trace_context,
-            })
-            .await
-        {
+            }))
+            .await;
+        let Some(executed) = executed else {
+            // Whatever the call had written went with it, and the transport
+            // it went over is the executor's to say, which it didn't.
+            return Settled {
+                status: ToolCallStatus::ran(source, ToolCallEnd::Cancelled),
+                output: KeptOutput::whole(
+                    "the run was cancelled while this call ran, and the call was stopped",
+                ),
+                mcp: None,
+            };
+        };
+        match executed {
             Ok(output) => {
                 let ended = if output.is_error {
                     ToolCallEnd::ToolError

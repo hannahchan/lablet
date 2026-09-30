@@ -148,6 +148,7 @@ const fn registry_tool_status(status: &ToolCallStatus) -> LabletToolStatus {
             ToolCallEnd::ToolError => LabletToolStatus::ToolError,
             ToolCallEnd::Timeout => LabletToolStatus::Timeout,
             ToolCallEnd::Failed => LabletToolStatus::Failed,
+            ToolCallEnd::Cancelled => LabletToolStatus::Cancelled,
         },
     }
 }
@@ -164,6 +165,9 @@ const fn model_tool_status(registry: LabletToolStatus) -> ToolCallStatus {
         }
         LabletToolStatus::Timeout => ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Timeout),
         LabletToolStatus::Failed => ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Failed),
+        LabletToolStatus::Cancelled => {
+            ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Cancelled)
+        }
     }
 }
 

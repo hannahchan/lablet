@@ -23,8 +23,13 @@ impl Clock for TokioClock {
 /// stop.
 pub(crate) struct NeverCancelled;
 
+#[async_trait::async_trait]
 impl Cancellation for NeverCancelled {
     fn is_cancelled(&self) -> bool {
         false
+    }
+
+    async fn cancelled(&self) {
+        std::future::pending::<()>().await;
     }
 }

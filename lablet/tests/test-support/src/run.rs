@@ -13,7 +13,8 @@ use lablet_model::{
 use lablet_policy::{Pricing, RetryPolicy, RetrySettings, StopPolicy};
 use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
 use lablet_run::{
-    CallLimits, ModelProvider, RunEvent, RunObserver, RunService, ToolExecutor, ToolFilter, ToolSet,
+    CallLimits, Cancellation, ModelProvider, RunEvent, RunObserver, RunService, ToolExecutor,
+    ToolFilter, ToolSet,
 };
 
 use crate::must;
@@ -106,7 +107,8 @@ impl RunObserver for Unobserved {
 }
 
 /// Builds the loop around a provider. Unless a test says otherwise the loop
-/// offers no tool, tells no observer, has no cap on turns and an hour to
+/// offers no tool, tells no observer, is never cancelled, has no cap on
+/// turns and an hour to
 /// run, stops at the third invalid turn in a row, tries a failed call again
 /// three times after waits of 100 ms doubled each time with no jitter, asks
 /// for [`request`], prices nothing, gives an attempt a minute, sends a
@@ -115,6 +117,7 @@ pub struct RunBuilder {
     provider: Arc<dyn ModelProvider>,
     tools: Vec<Arc<dyn ToolExecutor>>,
     observer: Arc<dyn RunObserver>,
+    cancel: Arc<dyn Cancellation>,
     max_turns: Option<NonZeroU32>,
     max_retries: u32,
     request: RequestParams,
@@ -132,6 +135,7 @@ impl RunBuilder {
             provider,
             tools: Vec::new(),
             observer: Arc::new(Unobserved),
+            cancel: Arc::new(NeverCancelled),
             max_turns: None,
             max_retries: 3,
             request: request(),
@@ -153,6 +157,13 @@ impl RunBuilder {
     #[must_use]
     pub fn observer(mut self, observer: Arc<dyn RunObserver>) -> Self {
         self.observer = observer;
+        self
+    }
+
+    /// Asks `cancel` whether a run should stop.
+    #[must_use]
+    pub fn cancellation(mut self, cancel: Arc<dyn Cancellation>) -> Self {
+        self.cancel = cancel;
         self
     }
 
@@ -232,7 +243,7 @@ impl RunBuilder {
             Arc::new(must(tools, "offering the tools")),
             self.observer,
             Arc::new(TokioClock),
-            Arc::new(NeverCancelled),
+            self.cancel,
             StopPolicy {
                 max_turns: self.max_turns,
                 timeout: Duration::from_secs(3_600),
