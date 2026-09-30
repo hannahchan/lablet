@@ -11,6 +11,7 @@ use std::path::Path;
 use crate::error::{Error, Verb};
 use crate::gates::{CheckResult, Failure};
 use crate::process;
+use crate::report::Note;
 use crate::workspace::repo_root;
 
 /// The contract files, relative to the repository root. An entry ending in
@@ -137,32 +138,40 @@ pub fn resolve_base(
 }
 
 /// The note of a run that found no base to compare with.
-fn skipped() -> String {
-    format!(
-        "warning: skipped, no base commit to compare with (no merge-base with origin/main or \
-         main; a shallow clone?). CI must check out full history, or set {BASE_VARIABLE}"
-    )
+fn skipped() -> Note {
+    Note::Warning(format!(
+        "skipped, no base commit to compare with (no merge-base with origin/main or main; a \
+         shallow clone?). CI must check out full history, or set {BASE_VARIABLE}"
+    ))
 }
 
-/// Every path that differs between `base` and the working tree, untracked
-/// files included. Rename detection is off: with it git names only the new
-/// path, and a contract file moved out of the contract is exactly the change
-/// the gate is for. `-z` keeps git from quoting an unusual name, which would
-/// no longer start with a contract path.
+/// Every path whose content differs between `base` and the working tree,
+/// untracked files included. Rename detection is off: with it git names only
+/// the new path, and a contract file moved out of the contract is exactly the
+/// change the gate is for. `-z` keeps git from quoting an unusual name, which
+/// would no longer start with a contract path.
 fn changed_paths(directory: &Path, base: &str) -> Result<Vec<String>, Error> {
     let git = |args: &[&str]| process::capture_in(directory, "git", args);
     // A diff against a commit refreshes the index's stat data unless told
-    // not to, which writes to the repository a gate only reads.
-    let mut changed = nul_separated(&git(&[
+    // not to, which writes to the repository a gate only reads. Told not to,
+    // `--name-only` lists a file whose timestamp moved and whose content
+    // didn't, where `--numstat` compares the content: each record is
+    // `added\tdeleted\tpath`, and the path is kept whole whatever it holds.
+    let numstat = git(&[
         "-c",
         "diff.autoRefreshIndex=false",
         "diff",
-        "--name-only",
+        "--numstat",
         "--no-renames",
         "-z",
         base,
         "--",
-    ])?);
+    ])?;
+    let mut changed: Vec<String> = nul_separated(&numstat)
+        .iter()
+        .filter_map(|record| record.splitn(3, '\t').nth(2))
+        .map(str::to_owned)
+        .collect();
     changed.extend(nul_separated(&git(&[
         "ls-files",
         "--others",
@@ -192,7 +201,7 @@ fn check_in(root: &Path, from_environment: Option<&str>) -> CheckResult {
     };
 
     let changed = changed_paths(root, &base.revision)?;
-    let at_base = git(root, &["show", &format!("{}:{CHANGELOG}", base.revision)]).ok();
+    let at_base = process::git_file_at(root, &base.revision, CHANGELOG)?;
     let path = root.join(CHANGELOG);
     let now = match std::fs::read_to_string(&path) {
         Ok(text) => Some(text),
@@ -210,15 +219,17 @@ fn conclude(verdict: Verdict, base: &Base, base_is_head: bool) -> CheckResult {
     match verdict {
         // On `main` without LABLET_CHANGELOG_BASE the base is the commit being
         // judged: only the working tree was compared, and the note says so.
-        Verdict::NoContractChange if base_is_head => Ok(Some(format!(
+        Verdict::NoContractChange if base_is_head => Ok(Some(Note::Info(format!(
             "no contract file changed in the working tree; the base {since} is HEAD, so no \
              commit was compared"
-        ))),
-        Verdict::NoContractChange => Ok(Some(format!("no contract file changed since {since}"))),
-        Verdict::Recorded(paths) => Ok(Some(format!(
+        )))),
+        Verdict::NoContractChange => Ok(Some(Note::Info(format!(
+            "no contract file changed since {since}"
+        )))),
+        Verdict::Recorded(paths) => Ok(Some(Note::Info(format!(
             "{} contract file(s) changed since {since}, with an Unreleased entry",
             paths.len()
-        ))),
+        )))),
         Verdict::Unchanged(paths) => Err(Failure::Verdict(failure(
             &paths,
             &since,
@@ -244,10 +255,6 @@ fn failure(paths: &[String], since: &str, missing: &str) -> String {
          {CHANGELOG} that says what changed for users."
     );
     message
-}
-
-fn git(root: &Path, args: &[&str]) -> Result<String, Error> {
-    process::capture_in(root, "git", args)
 }
 
 fn nul_separated(output: &str) -> Vec<String> {
@@ -449,27 +456,27 @@ mod tests {
         let recorded = paths(&["lablet/schema.json", "lablet/tests/fixtures/outcome.json"]);
         assert_eq!(
             conclude(Verdict::Recorded(recorded), &merge_base(), false).unwrap(),
-            Some(
+            Some(Note::Info(
                 "2 contract file(s) changed since a1a1a1a1a1a1 (merge-base with origin/main), \
                  with an Unreleased entry"
                     .to_owned()
-            )
+            ))
         );
         assert_eq!(
             conclude(Verdict::NoContractChange, &merge_base(), false).unwrap(),
-            Some(
+            Some(Note::Info(
                 "no contract file changed since a1a1a1a1a1a1 (merge-base with origin/main)"
                     .to_owned()
-            )
+            ))
         );
         // On `main`, whose merge-base with origin/main is the commit itself.
         assert_eq!(
             conclude(Verdict::NoContractChange, &merge_base(), true).unwrap(),
-            Some(
+            Some(Note::Info(
                 "no contract file changed in the working tree; the base a1a1a1a1a1a1 (merge-base \
                  with origin/main) is HEAD, so no commit was compared"
                     .to_owned()
-            )
+            ))
         );
     }
 
@@ -580,14 +587,18 @@ mod tests {
         );
         git(&["add", "--all"]);
         git(&["commit", "--quiet", "--message=only"]);
+        let note = check_in(dir.path(), None).unwrap();
         assert_eq!(
-            check_in(dir.path(), None).unwrap(),
-            Some(
-                "warning: skipped, no base commit to compare with (no merge-base with origin/main \
-                 or main; a shallow clone?). CI must check out full history, or set \
-                 LABLET_CHANGELOG_BASE"
+            note,
+            Some(Note::Warning(
+                "skipped, no base commit to compare with (no merge-base with origin/main or main; \
+                 a shallow clone?). CI must check out full history, or set LABLET_CHANGELOG_BASE"
                     .to_owned()
-            )
+            ))
+        );
+        assert!(
+            note.is_some_and(|note| note.to_string().starts_with("warning: skipped, ")),
+            "the warning is told as one"
         );
     }
 
@@ -623,6 +634,9 @@ mod tests {
         let registry = "lablet/telemetry/registry/spans";
         let chat = format!("{registry}/chat.yaml");
         dir.write(&chat, "groups: []\n");
+        // A tab in a name, which git's record separates its fields with.
+        let tabbed = format!("{registry}/a\tb.yaml");
+        dir.write(&tabbed, "groups: []\n");
         git(&["init", "--quiet", "--initial-branch=main"]);
         defy_git_defaults(dir.path(), "diff.noprefix");
         let resolved = git(&["rev-parse", "--show-toplevel"]);
@@ -637,6 +651,7 @@ mod tests {
         // rename detection on, would name only the new path.
         git(&["mv", &chat, "lablet/telemetry/retired-chat.yaml"]);
         git(&["commit", "--quiet", "--message=retire"]);
+        dir.write(&tabbed, "groups: [one]\n");
         // An untracked name git would quote without `-z`.
         dir.write(&format!("{registry}/a\"b.yaml"), "groups: []\n");
 
@@ -649,6 +664,7 @@ mod tests {
         assert_eq!(
             contract,
             [
+                "lablet/telemetry/registry/spans/a\tb.yaml",
                 "lablet/telemetry/registry/spans/chat.yaml",
                 "lablet/telemetry/registry/spans/a\"b.yaml"
             ]
@@ -685,10 +701,10 @@ mod tests {
         // On `main` the merge-base is the commit being judged.
         assert_eq!(
             check_in(dir.path(), None).unwrap(),
-            Some(format!(
+            Some(Note::Info(format!(
                 "no contract file changed in the working tree; the base {base} (merge-base with \
                  main) is HEAD, so no commit was compared"
-            ))
+            )))
         );
 
         git(&["switch", "--quiet", "--create", "topic"]);
@@ -705,10 +721,10 @@ mod tests {
         dir.write(CHANGELOG, &recorded);
         assert_eq!(
             check_in(dir.path(), None).unwrap(),
-            Some(format!(
+            Some(Note::Info(format!(
                 "1 contract file(s) changed since {base} (merge-base with main), with an \
                  Unreleased entry"
-            ))
+            )))
         );
 
         // The variable names a base that isn't HEAD.
@@ -716,10 +732,106 @@ mod tests {
         git(&["commit", "--quiet", "--all", "--message=entry"]);
         assert_eq!(
             check_in(dir.path(), Some(&named)).unwrap(),
-            Some(format!(
+            Some(Note::Info(format!(
                 "no contract file changed since {} (LABLET_CHANGELOG_BASE)",
                 &named[..12]
-            ))
+            )))
         );
+    }
+
+    /// A scratch repository on `main` holding `files`, committed.
+    fn committed_on_main(tag: &str, files: &[(&str, &str)]) -> TempDir {
+        let dir = TempDir::new(tag);
+        let git = |args: &[&str]| scratch_git(dir.path(), args);
+        for (path, text) in files {
+            dir.write(path, text);
+        }
+        git(&["init", "--quiet", "--initial-branch=main"]);
+        defy_git_defaults(dir.path(), "diff.noprefix");
+        assert_eq!(
+            std::fs::canonicalize(git(&["rev-parse", "--show-toplevel"]).trim()).unwrap(),
+            std::fs::canonicalize(dir.path()).unwrap(),
+            "git resolved outside the scratch repository"
+        );
+        git(&["add", "--all"]);
+        git(&["commit", "--quiet", "--message=base"]);
+        dir
+    }
+
+    /// An editor saving an unchanged buffer, or an edit put back, leaves a
+    /// newer timestamp and the same bytes. The gate only reads, so the index,
+    /// whose stat data is then stale, is left as it was.
+    #[test]
+    fn a_contract_file_whose_timestamp_moved_and_whose_content_did_not_is_unchanged() {
+        let files = [
+            (CHANGELOG, BEFORE),
+            ("lablet/schema.json", "{}\n"),
+            ("README.md", "Lablet.\n"),
+        ];
+        let dir = committed_on_main("changelog-touched", &files);
+        let git = |args: &[&str]| scratch_git(dir.path(), args).trim().to_owned();
+        let base = git(&["rev-parse", "--short=12", "HEAD"]);
+        git(&["switch", "--quiet", "--create", "topic"]);
+        dir.write("README.md", "Lablet, a loop.\n");
+        git(&["commit", "--quiet", "--all", "--message=readme"]);
+        let schema = std::fs::File::options()
+            .write(true)
+            .open(dir.path().join("lablet/schema.json"))
+            .unwrap();
+        let long_ago = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        schema.set_modified(long_ago).unwrap();
+
+        let index = || std::fs::read(dir.path().join(".git/index")).unwrap();
+        let before = index();
+        assert_eq!(
+            check_in(dir.path(), None).unwrap(),
+            Some(Note::Info(format!(
+                "no contract file changed since {base} (merge-base with main)"
+            )))
+        );
+        assert!(index() == before, "the changelog gate rewrote the index");
+    }
+
+    #[test]
+    fn a_base_without_a_changelog_takes_a_first_entry_as_recorded() {
+        let dir = committed_on_main("changelog-none-at-base", &[("lablet/schema.json", "{}\n")]);
+        let git = |args: &[&str]| scratch_git(dir.path(), args).trim().to_owned();
+        let base = git(&["rev-parse", "--short=12", "HEAD"]);
+        git(&["switch", "--quiet", "--create", "topic"]);
+        dir.write("lablet/schema.json", "{\"type\": \"object\"}\n");
+        dir.write(CHANGELOG, BEFORE);
+        assert_eq!(
+            check_in(dir.path(), None).unwrap(),
+            Some(Note::Info(format!(
+                "1 contract file(s) changed since {base} (merge-base with main), with an \
+                 Unreleased entry"
+            )))
+        );
+    }
+
+    /// Read as no changelog at the base, an unchanged `Unreleased` section
+    /// would pass as a first entry. A blob gone from the object store, as a
+    /// partial clone offline may lack it, is git failing to read it.
+    #[test]
+    fn a_changelog_at_the_base_that_git_cannot_read_is_an_error_and_not_an_absent_one() {
+        let files = [(CHANGELOG, BEFORE), ("lablet/schema.json", "{}\n")];
+        let dir = committed_on_main("changelog-unread-at-base", &files);
+        let git = |args: &[&str]| scratch_git(dir.path(), args).trim().to_owned();
+        let blob = git(&["rev-parse", &format!("HEAD:{CHANGELOG}")]);
+        git(&["switch", "--quiet", "--create", "topic"]);
+        dir.write("lablet/schema.json", "{\"type\": \"object\"}\n");
+        git(&["commit", "--quiet", "--all", "--message=schema"]);
+        let object = dir
+            .path()
+            .join(".git/objects")
+            .join(&blob[..2])
+            .join(&blob[2..]);
+        std::fs::remove_file(&object).unwrap();
+
+        let error = check_in(dir.path(), None).unwrap_err().into_error();
+        let Error::Failed { command, .. } = &error else {
+            panic!("{error:?}");
+        };
+        assert_eq!(command.to_string(), format!("git cat-file blob {blob}"));
     }
 }

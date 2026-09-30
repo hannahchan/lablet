@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Verb};
 use crate::gates::{CheckResult, Failure};
+use crate::report::Note;
 use crate::workspace::{self, Workspace};
 
 /// The floors one crate is held to.
@@ -240,10 +241,10 @@ pub fn conclude(what: &str, lines: &[Line]) -> CheckResult {
     println!("{report}");
     let unmeasured = count(&[Standing::NothingToMeasure]);
     Ok((unmeasured > 0).then(|| {
-        format!(
+        Note::Info(format!(
             "{unmeasured} of {} floor(s) had nothing to measure yet",
             lines.len()
-        )
+        ))
     }))
 }
 
@@ -497,8 +498,10 @@ mod tests {
         assert_eq!(empty.standing(), Standing::NothingToMeasure);
         let note = conclude("coverage", &[line(95, 100, 90), empty]).unwrap();
         assert_eq!(
-            note.as_deref(),
-            Some("1 of 2 floor(s) had nothing to measure yet")
+            note,
+            Some(Note::Info(
+                "1 of 2 floor(s) had nothing to measure yet".to_owned()
+            ))
         );
         assert_eq!(conclude("coverage", &[line(95, 100, 90)]).unwrap(), None);
 

@@ -46,3 +46,51 @@ fn a_task_that_does_not_exist_is_told_before_the_usage_and_exits_non_zero() {
         "{stderr}"
     );
 }
+
+/// `cargo xtask run` becomes cargo, as cargo becomes lablet, so lablet's exit
+/// status and the signals sent to xtask are lablet's: 2 for a run that began
+/// and stopped short, and a Ctrl-C that lablet cancels on. A stand-in `cargo`
+/// first on PATH says which process it runs as, then exits 2.
+#[test]
+fn run_hands_its_process_to_cargo_so_the_exit_status_is_what_cargo_ran() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let bin = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("stand-in-cargo-{}", std::process::id()));
+    std::fs::create_dir_all(&bin).unwrap();
+    let cargo = bin.join("cargo");
+    let script = "#!/bin/sh\necho \"$$ ${GIT_DIR-unset} $(pwd -P) $*\"\nexit 2\n";
+    std::fs::write(&cargo, script).unwrap();
+    std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let path =
+        std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&inherited)))
+            .unwrap();
+
+    let manifest_directory = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let xtask = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["run", "--", "--config", "lablet.toml"])
+        .env("CARGO_MANIFEST_DIR", manifest_directory)
+        .env("PATH", path)
+        // What git sets for a hook, which the command must not inherit.
+        .env("GIT_DIR", "/nonexistent")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let xtask_pid = xtask.id();
+    let output = xtask.wait_with_output().unwrap();
+    let _ = std::fs::remove_dir_all(&bin);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert_eq!(stderr, "", "xtask reported on a run that was cargo's");
+    let workspace = std::fs::canonicalize(manifest_directory.join("../lablet")).unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!(
+            "{xtask_pid} unset {} run --locked --bin lablet -- --config lablet.toml\n",
+            workspace.display()
+        )
+    );
+}

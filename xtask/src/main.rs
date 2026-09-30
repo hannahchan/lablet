@@ -19,6 +19,7 @@ mod process;
 mod report;
 mod workspace;
 
+use error::Error;
 use gates::{Mode, Step};
 
 const USAGE: &str = "\
@@ -64,8 +65,9 @@ Project:
 
 Tasks cover the lablet/ workspace and, where it applies, xtask. A gate runs
 every step even after one fails. On a terminal it lists each step; off one (a
-hook, a pipe) a green gate prints one line, and XTASK_VERBOSE=1 or CI=true
-lists the steps anyway. Pinned tools come from mise.toml.
+hook, a pipe) a green gate prints one line and any warning, and
+XTASK_VERBOSE=1 or CI=true lists the steps anyway. Pinned tools come from
+mise.toml.
 ";
 
 const WEAVER_USAGE: &str = "`weaver` takes `check`, `generate [--check]`, or `vendor [--check]`";
@@ -85,8 +87,18 @@ enum Usage {
     Run,
 }
 
-/// A task's steps and how to run them, or why the arguments are wrong.
-fn plan(task: &str, args: &[String]) -> Result<(Mode, Vec<Step>), Usage> {
+/// What a task does.
+enum Plan {
+    /// Runs these steps this way.
+    Steps(Mode, Vec<Step>),
+    /// Becomes cargo with these arguments, so that what cargo runs exits
+    /// with its own status and gets the signals sent to xtask, a Ctrl-C
+    /// among them.
+    Exec(Vec<String>),
+}
+
+/// What a task does, or why the arguments are wrong.
+fn plan(task: &str, args: &[String]) -> Result<Plan, Usage> {
     let flag_of = |task: &str, args: &[String], name: &str| match args {
         [] => Ok(false),
         [arg] if arg == name => Ok(true),
@@ -114,17 +126,17 @@ fn plan(task: &str, args: &[String]) -> Result<(Mode, Vec<Step>), Usage> {
             Some((Mode::Command, gates::weaver_vendor_steps(check)))
         }
         ("weaver", _) => return Err(Usage::Weaver),
-        ("run", []) => Some((Mode::Passthrough, gates::run_steps(&[]))),
+        ("run", []) => return Ok(Plan::Exec(gates::run_args(&[]))),
         ("run", [dashes, rest @ ..]) if dashes == "--" => {
-            Some((Mode::Passthrough, gates::run_steps(rest)))
+            return Ok(Plan::Exec(gates::run_args(rest)));
         }
         ("run", _) => return Err(Usage::Run),
         _ => None,
     };
-    if let Some(planned) = with_arguments {
-        return Ok(planned);
+    if let Some((mode, steps)) = with_arguments {
+        return Ok(Plan::Steps(mode, steps));
     }
-    let planned = match task {
+    let (mode, steps) = match task {
         "check" => (Mode::Command, gates::check_steps()),
         "test" => (Mode::Command, gates::test_steps()),
         "doc" => (Mode::Command, gates::doc_steps()),
@@ -147,19 +159,24 @@ fn plan(task: &str, args: &[String]) -> Result<(Mode, Vec<Step>), Usage> {
             task: task.to_owned(),
             got: arg.clone(),
         }),
-        None => Ok(planned),
+        None => Ok(Plan::Steps(mode, steps)),
     }
 }
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    exit_code(&args, gates::run)
+    exit_code(&args, gates::run, |args| process::exec("cargo", args))
 }
 
 /// What `cargo xtask <args>` exits with, `run` running the steps a task
-/// plans and saying whether all passed. Success is help, or a run in which
-/// every step passed; a usage error runs nothing.
-fn exit_code(args: &[String], run: impl FnOnce(Mode, &[Step]) -> bool) -> ExitCode {
+/// plans and saying whether all passed, and `exec` becoming the cargo a task
+/// names, which returns only why it could not. Success is help, or a run in
+/// which every step passed; a usage error runs nothing.
+fn exit_code(
+    args: &[String],
+    run: impl FnOnce(Mode, &[Step]) -> bool,
+    exec: impl FnOnce(&[&str]) -> Error,
+) -> ExitCode {
     let Some((task, args)) = args.split_first() else {
         eprint!("{USAGE}");
         return ExitCode::FAILURE;
@@ -169,8 +186,13 @@ fn exit_code(args: &[String], run: impl FnOnce(Mode, &[Step]) -> bool) -> ExitCo
         return ExitCode::SUCCESS;
     }
     match plan(task, args) {
-        Ok((mode, steps)) if run(mode, &steps) => ExitCode::SUCCESS,
-        Ok(_) => ExitCode::FAILURE,
+        Ok(Plan::Steps(mode, steps)) if run(mode, &steps) => ExitCode::SUCCESS,
+        Ok(Plan::Steps(..)) => ExitCode::FAILURE,
+        Ok(Plan::Exec(args)) => {
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            eprintln!("error: {}", error::chain(&exec(&args)));
+            ExitCode::FAILURE
+        }
         Err(usage) => {
             eprintln!("error: {}\n", error::chain(&usage));
             eprint!("{USAGE}");
@@ -195,7 +217,7 @@ mod tests {
     }
 
     /// A task as typed after `cargo xtask`, without arguments of its own.
-    fn plan_of(task: &str) -> Result<(Mode, Vec<Step>), Usage> {
+    fn plan_of(task: &str) -> Result<Plan, Usage> {
         let words: Vec<String> = task.split(' ').map(str::to_owned).collect();
         plan(&words[0], &words[1..])
     }
@@ -317,6 +339,17 @@ mod tests {
         );
     }
 
+    /// An `exec` that records what it was asked to become, and could not.
+    fn could_not_exec(asked: &std::cell::RefCell<Vec<String>>) -> impl FnOnce(&[&str]) -> Error {
+        move |args| {
+            asked.borrow_mut().push(args.join(" "));
+            Error::Missing {
+                what: "cargo is not installed".to_owned(),
+                remedy: "Install it".to_owned(),
+            }
+        }
+    }
+
     #[test]
     fn a_failed_run_exits_non_zero_and_a_passed_one_zero() {
         let words = |line: &str| -> Vec<String> { line.split(' ').map(str::to_owned).collect() };
@@ -328,30 +361,69 @@ mod tests {
                 passed
             }
         };
+        let asked = std::cell::RefCell::new(Vec::new());
+        let exec = || could_not_exec(&asked);
         assert_eq!(
-            exit_code(&words("lint-layers"), run(true)),
+            exit_code(&words("lint-layers"), run(true), exec()),
             ExitCode::SUCCESS
         );
         assert_eq!(
-            exit_code(&words("lint-layers"), run(false)),
+            exit_code(&words("lint-layers"), run(false), exec()),
             ExitCode::FAILURE
         );
         assert_eq!(*ran.borrow(), ["lint-layers", "lint-layers"]);
 
         // Help runs nothing and succeeds; a usage error runs nothing and fails.
-        assert_eq!(exit_code(&words("help"), run(false)), ExitCode::SUCCESS);
-        assert_eq!(exit_code(&[], run(true)), ExitCode::FAILURE);
-        assert_eq!(exit_code(&words("fnt"), run(true)), ExitCode::FAILURE);
         assert_eq!(
-            exit_code(&words("clippy --fix"), run(true)),
+            exit_code(&words("help"), run(false), exec()),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(exit_code(&[], run(true), exec()), ExitCode::FAILURE);
+        assert_eq!(
+            exit_code(&words("fnt"), run(true), exec()),
+            ExitCode::FAILURE
+        );
+        assert_eq!(
+            exit_code(&words("clippy --fix"), run(true), exec()),
             ExitCode::FAILURE
         );
         assert_eq!(ran.borrow().len(), 2);
+        assert!(asked.borrow().is_empty(), "{:?}", asked.borrow());
+    }
+
+    /// `run` runs no step: xtask becomes cargo, whose status is lablet's.
+    /// The binary's own test shows the status passing through.
+    #[test]
+    fn run_becomes_cargo_running_lablet_and_fails_only_when_cargo_could_not_start() {
+        let words = |line: &str| -> Vec<String> { line.split(' ').map(str::to_owned).collect() };
+        let asked = std::cell::RefCell::new(Vec::new());
+        let ran = std::cell::Cell::new(false);
+        let run = |_: Mode, _: &[Step]| {
+            ran.set(true);
+            true
+        };
+        for line in ["run", "run -- --config lablet.toml"] {
+            assert_eq!(
+                exit_code(&words(line), run, could_not_exec(&asked)),
+                ExitCode::FAILURE,
+                "{line}"
+            );
+        }
+        assert!(!ran.get());
+        assert_eq!(
+            *asked.borrow(),
+            [
+                "run --locked --bin lablet --",
+                "run --locked --bin lablet -- --config lablet.toml"
+            ]
+        );
     }
 
     #[test]
     fn ci_runs_the_pre_push_steps_as_a_gate() {
-        let (mode, steps) = plan("ci", &[]).unwrap();
+        let Plan::Steps(mode, steps) = plan("ci", &[]).unwrap() else {
+            panic!("`ci` runs no steps");
+        };
         assert!(matches!(mode, Mode::Gate("ci")));
         let labels = |steps: &[Step]| steps.iter().map(|step| step.label).collect::<Vec<_>>();
         assert_eq!(labels(&steps), labels(&gates::pre_push_steps()));

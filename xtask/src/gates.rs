@@ -11,12 +11,12 @@ use std::sync::LazyLock;
 use std::time::Instant;
 
 use crate::error::{Error, chain};
-use crate::report::{self, Row};
+use crate::report::{self, Note, Row};
 use crate::workspace::{Workspace, repo_root, workspace_root, xtask_manifest};
 use crate::{changelog, coverage, generated, lint_layers, lint_manifests, mutants, process};
 
 /// `Ok(None)` is a pass, `Ok(Some)` a pass with a note for the report.
-pub type CheckResult = Result<Option<String>, Failure>;
+pub type CheckResult = Result<Option<Note>, Failure>;
 
 /// Why a step did not pass: it ran and judged against the tree, or it could
 /// not run to a judgement.
@@ -135,11 +135,15 @@ pub fn build_steps(release: bool) -> Vec<Step> {
     vec![Step::cargo("build", &args)]
 }
 
-/// The `lablet` binary, with `args` handed to it.
-pub fn run_steps(args: &[String]) -> Vec<Step> {
-    let mut cargo = vec!["run", "--bin", "lablet", "--"];
-    cargo.extend(args.iter().map(String::as_str));
-    vec![Step::cargo("run", &cargo)]
+/// The cargo arguments that run the `lablet` binary, with `args` handed to
+/// it. cargo takes the place of xtask to run them: see `main`.
+pub fn run_args(args: &[String]) -> Vec<String> {
+    let cargo = ["run", LOCKED, "--bin", "lablet", "--"];
+    cargo
+        .into_iter()
+        .map(str::to_owned)
+        .chain(args.iter().cloned())
+        .collect()
 }
 
 /// rustfmt for Rust and dprint for JSON, TOML, Markdown, and YAML: a rewrite,
@@ -516,8 +520,6 @@ pub fn pre_push_steps() -> Vec<Step> {
 pub enum Mode {
     /// Output streams, and every step's outcome gets a line.
     Command,
-    /// Output streams and a pass adds nothing: the program's output is the point.
-    Passthrough,
     /// Output is shown only for a failed step, and a report closes the run.
     Gate(&'static str),
 }
@@ -527,7 +529,6 @@ pub fn run(mode: Mode, steps: &[Step]) -> bool {
     let capture = matches!(mode, Mode::Gate(_));
     let lists_passes = match mode {
         Mode::Command => true,
-        Mode::Passthrough => false,
         Mode::Gate(_) => verbose(),
     };
     let mut rows = Vec::new();
@@ -550,9 +551,11 @@ pub fn run(mode: Mode, steps: &[Step]) -> bool {
             let _ = std::io::stdout().flush();
         }
         match &result {
-            Ok(_) if !lists_passes => {}
-            Ok(None) => println!("[ok] {} ({elapsed:.1}s)", step.label),
-            Ok(Some(note)) => println!("[ok] {} ({elapsed:.1}s): {note}", step.label),
+            Ok(None) if lists_passes => println!("[ok] {} ({elapsed:.1}s)", step.label),
+            Ok(Some(note)) if lists_passes || matches!(note, Note::Warning(_)) => {
+                println!("[ok] {} ({elapsed:.1}s): {note}", step.label);
+            }
+            Ok(_) => {}
             Err(failure) => {
                 let diagnostic = diagnostic(failure, step.hint);
                 eprintln!("[FAIL] {} ({elapsed:.1}s)\n\n{diagnostic}\n", step.label);
@@ -562,7 +565,7 @@ pub fn run(mode: Mode, steps: &[Step]) -> bool {
             name: step.label.to_owned(),
             elapsed,
             ok: result.is_ok(),
-            note: result.unwrap_or_else(|_| Some(rerun(step.label))),
+            note: result.unwrap_or_else(|_| Some(Note::Info(rerun(step.label)))),
         });
     }
 
@@ -578,7 +581,7 @@ pub fn run(mode: Mode, steps: &[Step]) -> bool {
         Mode::Command if failed > 0 && rows.len() > 1 => {
             eprintln!("error: {failed} of {} step(s) failed", rows.len());
         }
-        Mode::Command | Mode::Passthrough => {}
+        Mode::Command => {}
     }
     failed == 0
 }
@@ -665,7 +668,7 @@ fn on_terminal() -> bool {
 
 /// Whether a green gate lists its steps: on a terminal, under `CI=true` where
 /// the log is the only record, or under `XTASK_VERBOSE=1`. A hook under an
-/// agent or a piped run gets one line.
+/// agent or a piped run gets one line, and a line for each step that warned.
 fn verbose() -> bool {
     static VERBOSE: LazyLock<bool> = LazyLock::new(|| {
         std::io::stdout().is_terminal()
@@ -968,7 +971,6 @@ mod tests {
         for more in [check_steps(), build_steps(true), fix_steps(), clean_steps()] {
             steps.extend(more);
         }
-        steps.extend(run_steps(&["--version".to_owned()]));
         for step in &steps {
             let Action::Command { program, args, .. } = &step.action else {
                 continue;
@@ -978,6 +980,7 @@ mod tests {
                 assert_eq!(locked, args[0] != "fmt", "{}: {args:?}", step.label);
             }
         }
+        assert_eq!(run_args(&["--version".to_owned()])[1], "--locked");
     }
 
     #[test]
@@ -997,8 +1000,8 @@ mod tests {
         assert!(deny[0].ends_with("deny.toml check --hide-inclusion-graph"));
         assert!(deny[1].ends_with("--hide-inclusion-graph -A advisory-not-detected -A license-not-encountered -A unmatched-skip"));
         assert_eq!(
-            args(&run_steps(&["--help".to_owned()])),
-            ["run --locked --bin lablet -- --help"]
+            run_args(&["--help".to_owned()]).join(" "),
+            "run --locked --bin lablet -- --help"
         );
         assert_eq!(args(&fmt_steps(false))[0], "fmt --all");
         assert_eq!(args(&fmt_steps(true))[0], "fmt --all -- --check");
@@ -1108,12 +1111,60 @@ mod tests {
             }),
             Step::check("second", || {
                 RAN.fetch_add(1, Ordering::SeqCst);
-                Ok(Some("a note".to_owned()))
+                Ok(Some(Note::Info("a note".to_owned())))
             }),
         ];
         let passed = run(Mode::Gate("test-gate"), &steps);
         assert_eq!(RAN.load(Ordering::SeqCst), 2);
         assert!(!passed);
+    }
+
+    /// Off a terminal a green gate is one line, which says a step warned, and
+    /// the warning itself is shown above it. The gate runs in a child of this
+    /// test binary whose output goes to a pipe, as a hook's or an agent's does.
+    #[test]
+    fn a_green_gate_off_a_terminal_still_shows_a_warning_and_says_a_step_warned() {
+        const CHILD: &str = "XTASK_TEST_GATE_OFF_A_TERMINAL";
+        if std::env::var_os(CHILD).is_some() {
+            let steps = [
+                Step::check("warns", || Ok(Some(Note::Warning("skipped".to_owned())))),
+                Step::check("notes", || Ok(Some(Note::Info("held back".to_owned())))),
+                Step::check("passes", || Ok(None)),
+            ];
+            assert!(run(Mode::Gate("gate"), &steps));
+            return;
+        }
+        let name = "gates::tests::a_green_gate_off_a_terminal_still_shows_a_warning_and_says_a_step_warned";
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env_remove("CI")
+            .env_remove("XTASK_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stdout}{stderr}");
+        // What the gate printed, less the timings and what libtest printed,
+        // which puts the test's name ahead of its first line.
+        let printed: Vec<String> = stdout
+            .lines()
+            .filter_map(|line| {
+                let at = line.find("[ok] ").or_else(|| line.find("gate · "))?;
+                Some(&line[at..])
+            })
+            .map(|line| {
+                let (before, after) = line.split_once(" (").unwrap_or((line, ""));
+                let after = after.split_once("s)").map_or(after, |(_, rest)| rest);
+                format!("{before}{after}")
+            })
+            .collect();
+        assert_eq!(printed.len(), 2, "{stdout}");
+        assert_eq!(printed[0], "[ok] warns: warning: skipped", "{stdout}");
+        assert!(
+            printed[1].starts_with("gate · 3 steps ok · 1 warned · "),
+            "{stdout}"
+        );
     }
 
     #[test]

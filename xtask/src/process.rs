@@ -278,6 +278,29 @@ pub fn git_commit(directory: &Path, revision: &str) -> Result<Option<String>, Er
     Ok(answer.map(|out| out.trim().to_owned()))
 }
 
+/// The text of `path` at `revision` in the repository at `directory`, or
+/// `None` when `revision` has no such path. `git show` exits alike for an
+/// absent path and for an object it could not read, so the path is looked up
+/// first and its object read apart.
+pub fn git_file_at(directory: &Path, revision: &str, path: &str) -> Result<Option<String>, Error> {
+    let name = format!("{revision}:{path}");
+    let Some(blob) = git_answer(directory, &["rev-parse", "--verify", "--quiet", &name])? else {
+        return Ok(None);
+    };
+    capture_in(directory, "git", &["cat-file", "blob", blob.trim()]).map(Some)
+}
+
+/// Replaces this process with `program`, run as [`command`] runs it, so its
+/// exit status and the signals sent to this process are its own. Returns
+/// only when it could not be started.
+pub fn exec(program: &str, args: &[&str]) -> Error {
+    use std::os::unix::process::CommandExt as _;
+    match command(program, args) {
+        Ok(mut command) => invocation(program, args).not_started()(command.exec()),
+        Err(error) => error,
+    }
+}
+
 /// The merge-base of HEAD and `branch` in the repository at `directory`, or
 /// `None` when there is none: the clone has no `branch`, or not enough of
 /// its history to reach one, as a shallow clone may not.

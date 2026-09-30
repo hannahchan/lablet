@@ -570,10 +570,10 @@ mod tests {
         let export: Export = serde_json::from_str(BRANCH_REPORT).unwrap();
         // `model`, whose branches were all taken, and `policy`, with none.
         assert_eq!(
-            conclude_branches(&export, &crates(true)[..2])
-                .unwrap()
-                .as_deref(),
-            Some("1 of 2 floor(s) had nothing to measure yet")
+            conclude_branches(&export, &crates(true)[..2]).unwrap(),
+            Some(crate::report::Note::Info(
+                "1 of 2 floor(s) had nothing to measure yet".to_owned()
+            ))
         );
 
         // A report from a run without `--branch` has no branch counts at all.

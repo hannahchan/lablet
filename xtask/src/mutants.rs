@@ -24,6 +24,7 @@ use crate::error::{Error, Verb};
 use crate::floors::{self, EQUIVALENT_MUTANTS, Equivalent, FLOORS, FloorCrate, Standing};
 use crate::gates::{CheckResult, Failure};
 use crate::process;
+use crate::report::Note;
 use crate::workspace::{self, Workspace, workspace_root};
 
 /// The part of cargo-mutants' `outcomes.json` that is read.
@@ -288,10 +289,10 @@ fn conclude(verdict: &Verdict) -> CheckResult {
         let unmeasured = count(&[Standing::NothingToMeasure]);
         let scoped = tallies.iter().any(|tally| tally.scope == Scope::Changed);
         return Ok((unmeasured > 0 && !scoped).then(|| {
-            format!(
+            Note::Info(format!(
                 "{unmeasured} of {} floor(s) had nothing to measure yet",
                 tallies.len()
-            )
+            ))
         }));
     }
 
@@ -434,9 +435,9 @@ fn test_changed(
     run: impl FnOnce(&[&str]) -> Result<ExitStatus, Error>,
 ) -> CheckResult {
     if diff.is_empty() {
-        return Ok(Some(format!(
+        return Ok(Some(Note::Info(format!(
             "nothing to test: no Rust file of a floor crate changed since {since}"
-        )));
+        ))));
     }
     let diff_path = output.join("changed.diff");
     std::fs::write(&diff_path, diff).map_err(Error::file(Verb::Write, &diff_path))?;
@@ -448,14 +449,14 @@ fn test_changed(
     let outcomes = test_mutants(&output, Some(&diff_path), run)?;
     let verdict = judge(&outcomes, crates, EQUIVALENT_MUTANTS, Scope::Changed);
     if verdict.tallies.iter().all(|tally| tally.viable == 0) {
-        return Ok(Some(format!(
+        return Ok(Some(Note::Info(format!(
             "nothing to test: what changed since {since} holds no viable mutant"
-        )));
+        ))));
     }
     conclude(&verdict)?;
-    Ok(Some(format!(
+    Ok(Some(Note::Info(format!(
         "only the mutants in what changed since {since}; the full run judges the floor"
-    )))
+    ))))
 }
 
 /// The merge-base with `origin/main`, else with `main` for a clone that has
@@ -1023,8 +1024,10 @@ mod tests {
 
         let verdict = judge(&outcomes, &crates(false), &[], Scope::Full);
         assert_eq!(
-            conclude(&verdict).unwrap().as_deref(),
-            Some("3 of 3 floor(s) had nothing to measure yet")
+            conclude(&verdict).unwrap(),
+            Some(Note::Info(
+                "3 of 3 floor(s) had nothing to measure yet".to_owned()
+            ))
         );
         assert_eq!(
             verdict.tallies[0].to_string(),
@@ -1140,9 +1143,9 @@ mod tests {
         };
         assert_eq!(
             test_changed("", since, &crates(true), dir.path(), untested).unwrap(),
-            Some(format!(
+            Some(Note::Info(format!(
                 "nothing to test: no Rust file of a floor crate changed since {since}"
-            ))
+            )))
         );
         assert!(!dir.path().join("changed.diff").exists());
 
@@ -1155,9 +1158,9 @@ mod tests {
         // No mutant in what changed, so cargo-mutants wrote no report.
         assert_eq!(
             scoped(None, exited(0)).unwrap(),
-            Some(format!(
+            Some(Note::Info(format!(
                 "nothing to test: what changed since {since} holds no viable mutant"
-            ))
+            )))
         );
         let changed = dir.path().join("changed");
         let diff_path = dir.path().join("changed.diff");
@@ -1175,9 +1178,9 @@ mod tests {
         let caught = [mutant(MODEL, "69:5", WHOLE_MS, "CaughtMutant")];
         assert_eq!(
             scoped(Some(&caught), exited(0)).unwrap(),
-            Some(format!(
+            Some(Note::Info(format!(
                 "only the mutants in what changed since {since}; the full run judges the floor"
-            ))
+            )))
         );
         let missed = [mutant(OBSERVER, "201:9", ON_TURN, "MissedMutant")];
         let error = scoped(Some(&missed), exited(2)).unwrap_err().into_verdict();
