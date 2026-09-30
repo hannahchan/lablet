@@ -8,6 +8,7 @@ use std::process::ExitCode;
 
 mod changelog;
 mod coverage;
+mod error;
 mod floors;
 mod gates;
 mod generated;
@@ -69,12 +70,30 @@ lists the steps anyway. Pinned tools come from mise.toml.
 
 const WEAVER_USAGE: &str = "`weaver` takes `check`, `generate [--check]`, or `vendor [--check]`";
 
+/// Why the arguments name no task to run.
+#[derive(Debug, thiserror::Error)]
+enum Usage {
+    #[error("unknown task `{0}`")]
+    UnknownTask(String),
+    #[error("`{task}` takes no arguments; got `{got}`")]
+    NoArguments { task: String, got: String },
+    #[error("`{task}` takes only `{flag}`")]
+    OnlyFlag { task: String, flag: String },
+    #[error("{WEAVER_USAGE}")]
+    Weaver,
+    #[error("`run` takes the binary's arguments after `--`")]
+    Run,
+}
+
 /// A task's steps and how to run them, or why the arguments are wrong.
-fn plan(task: &str, args: &[String]) -> Result<(Mode, Vec<Step>), String> {
+fn plan(task: &str, args: &[String]) -> Result<(Mode, Vec<Step>), Usage> {
     let flag_of = |task: &str, args: &[String], name: &str| match args {
         [] => Ok(false),
         [arg] if arg == name => Ok(true),
-        _ => Err(format!("`{task}` takes only `{name}`")),
+        _ => Err(Usage::OnlyFlag {
+            task: task.to_owned(),
+            flag: name.to_owned(),
+        }),
     };
     let flag = |name: &str| flag_of(task, args, name);
     let with_arguments = match (task, args) {
@@ -94,12 +113,12 @@ fn plan(task: &str, args: &[String]) -> Result<(Mode, Vec<Step>), String> {
             let check = flag_of("weaver vendor", rest, "--check")?;
             Some((Mode::Command, gates::weaver_vendor_steps(check)))
         }
-        ("weaver", _) => return Err(WEAVER_USAGE.to_owned()),
+        ("weaver", _) => return Err(Usage::Weaver),
         ("run", []) => Some((Mode::Passthrough, gates::run_steps(&[]))),
         ("run", [dashes, rest @ ..]) if dashes == "--" => {
             Some((Mode::Passthrough, gates::run_steps(rest)))
         }
-        ("run", _) => return Err("`run` takes the binary's arguments after `--`".to_owned()),
+        ("run", _) => return Err(Usage::Run),
         _ => None,
     };
     if let Some(planned) = with_arguments {
@@ -121,10 +140,13 @@ fn plan(task: &str, args: &[String]) -> Result<(Mode, Vec<Step>), String> {
         "ci" => (Mode::Gate("ci"), gates::pre_push_steps()),
         "setup" => (Mode::Command, gates::setup_steps()),
         "clean" => (Mode::Command, gates::clean_steps()),
-        other => return Err(format!("unknown task `{other}`")),
+        other => return Err(Usage::UnknownTask(other.to_owned())),
     };
     match args.first() {
-        Some(arg) => Err(format!("`{task}` takes no arguments; got `{arg}`")),
+        Some(arg) => Err(Usage::NoArguments {
+            task: task.to_owned(),
+            got: arg.clone(),
+        }),
         None => Ok(planned),
     }
 }
@@ -149,8 +171,8 @@ fn exit_code(args: &[String], run: impl FnOnce(Mode, &[Step]) -> bool) -> ExitCo
     match plan(task, args) {
         Ok((mode, steps)) if run(mode, &steps) => ExitCode::SUCCESS,
         Ok(_) => ExitCode::FAILURE,
-        Err(message) => {
-            eprintln!("error: {message}\n");
+        Err(usage) => {
+            eprintln!("error: {}\n", error::chain(&usage));
             eprint!("{USAGE}");
             ExitCode::FAILURE
         }
@@ -173,7 +195,7 @@ mod tests {
     }
 
     /// A task as typed after `cargo xtask`, without arguments of its own.
-    fn plan_of(task: &str) -> Result<(Mode, Vec<Step>), String> {
+    fn plan_of(task: &str) -> Result<(Mode, Vec<Step>), Usage> {
         let words: Vec<String> = task.split(' ').map(str::to_owned).collect();
         plan(&words[0], &words[1..])
     }
@@ -209,7 +231,7 @@ mod tests {
     fn an_unknown_task_and_a_stray_argument_are_usage_errors() {
         let error = |task: &str, args: &[&str]| {
             let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-            plan(task, &args).err()
+            plan(task, &args).err().map(|usage| usage.to_string())
         };
         assert_eq!(error("fnt", &[]).as_deref(), Some("unknown task `fnt`"));
         assert_eq!(

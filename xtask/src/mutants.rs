@@ -20,10 +20,11 @@ use std::fmt::{self, Write as _};
 use std::path::Path;
 use std::process::ExitStatus;
 
+use crate::error::{Error, Verb};
 use crate::floors::{self, EQUIVALENT_MUTANTS, Equivalent, FLOORS, FloorCrate, Standing};
-use crate::gates::CheckResult;
+use crate::gates::{CheckResult, Failure};
 use crate::process;
-use crate::workspace::{Workspace, workspace_root};
+use crate::workspace::{self, Workspace, workspace_root};
 
 /// The part of cargo-mutants' `outcomes.json` that is read.
 #[derive(Debug, Deserialize)]
@@ -335,7 +336,7 @@ fn conclude(verdict: &Verdict) -> CheckResult {
              entry, or correct it if the code was renamed or moved.",
         );
     }
-    Err(message)
+    Err(Failure::Verdict(message))
 }
 
 /// cargo-mutants' exit codes that still leave a full set of outcomes: all
@@ -372,8 +373,8 @@ fn mutants_args<'a>(output: &'a str, in_diff: Option<&'a str>) -> Vec<&'a str> {
 fn test_mutants(
     output: &Path,
     in_diff: Option<&Path>,
-    run: impl FnOnce(&[&str]) -> Result<ExitStatus, String>,
-) -> Result<Outcomes, String> {
+    run: impl FnOnce(&[&str]) -> Result<ExitStatus, Error>,
+) -> Result<Outcomes, Failure> {
     let output_arg = output.display().to_string();
     let diff_arg = in_diff.map(|diff| diff.display().to_string());
     let args = mutants_args(&output_arg, diff_arg.as_deref());
@@ -384,17 +385,17 @@ fn test_mutants(
         .code()
         .is_some_and(|code| EXITS_WITH_OUTCOMES.contains(&code))
     {
-        return Err(format!(
+        return Err(Failure::Verdict(format!(
             "{}; no mutants were tested (the tests must pass unmutated first)",
             process::command_failed("cargo", &args)
-        ));
+        )));
     }
-    read_outcomes(&report)
+    Ok(read_outcomes(&report)?)
 }
 
 /// How [`check`] and [`check_changed`] run cargo-mutants: through cargo
 /// itself, its output streamed.
-fn cargo(args: &[&str]) -> Result<ExitStatus, String> {
+fn cargo(args: &[&str]) -> Result<ExitStatus, Error> {
     process::stream("cargo", args, &[])
 }
 
@@ -430,7 +431,7 @@ fn test_changed(
     since: &str,
     crates: &[FloorCrate],
     output: &Path,
-    run: impl FnOnce(&[&str]) -> Result<ExitStatus, String>,
+    run: impl FnOnce(&[&str]) -> Result<ExitStatus, Error>,
 ) -> CheckResult {
     if diff.is_empty() {
         return Ok(Some(format!(
@@ -438,13 +439,11 @@ fn test_changed(
         )));
     }
     let diff_path = output.join("changed.diff");
-    std::fs::write(&diff_path, diff)
-        .map_err(|e| format!("could not write {}: {e}", diff_path.display()))?;
+    std::fs::write(&diff_path, diff).map_err(Error::file(Verb::Write, &diff_path))?;
     // Apart from the full run's, so the quick answer doesn't displace the
     // report the floor was last judged on.
     let output = output.join("changed");
-    std::fs::create_dir_all(&output)
-        .map_err(|e| format!("could not create {}: {e}", output.display()))?;
+    std::fs::create_dir_all(&output).map_err(Error::file(Verb::Create, &output))?;
 
     let outcomes = test_mutants(&output, Some(&diff_path), run)?;
     let verdict = judge(&outcomes, crates, EQUIVALENT_MUTANTS, Scope::Changed);
@@ -460,22 +459,19 @@ fn test_changed(
 }
 
 /// The merge-base with `origin/main`, else with `main` for a clone that has
-/// no remote, and which of the two it was.
-fn merge_base(directory: &Path) -> Result<(String, String), String> {
+/// no remote, and which of the two it was. Git failing to answer is its own
+/// error, not a missing merge-base.
+fn merge_base(directory: &Path) -> Result<(String, String), Error> {
     for branch in ["origin/main", "main"] {
-        let found = process::capture_in(directory, "git", &["merge-base", "HEAD", branch]);
-        if let Ok(revision) = found
-            && !revision.trim().is_empty()
-        {
-            let source = format!("merge-base with {branch}");
-            return Ok((revision.trim().to_owned(), source));
+        if let Some(revision) = process::git_merge_base(directory, branch)? {
+            return Ok((revision, format!("merge-base with {branch}")));
         }
     }
-    Err(
-        "no merge-base with origin/main or main, so there is nothing to scope the run to. \
-         Fetch origin, or run the full `cargo xtask mutants`"
+    Err(Error::Missing {
+        what: "no merge-base with origin/main or main, so there is nothing to scope the run to"
             .to_owned(),
-    )
+        remedy: "Fetch origin, or run the full `cargo xtask mutants`".to_owned(),
+    })
 }
 
 /// A full commit id cut to what a person reads.
@@ -541,7 +537,7 @@ const GIT_UNTRACKED: [&str; 5] = [
 /// in, and that is one level below the repository root. Rename detection is
 /// off so that a moved file counts as changed throughout: its tests may not
 /// have moved with it.
-fn changed_diff(workspace_root: &Path, base: &str, pathspecs: &[String]) -> Result<String, String> {
+fn changed_diff(workspace_root: &Path, base: &str, pathspecs: &[String]) -> Result<String, Error> {
     let git = |options: &[&str], revision: Option<&str>| {
         let mut args = options.to_vec();
         args.extend(revision);
@@ -552,9 +548,7 @@ fn changed_diff(workspace_root: &Path, base: &str, pathspecs: &[String]) -> Resu
     let mut diff = git(&GIT_DIFF, Some(base))?;
     let untracked = git(&GIT_UNTRACKED, None)?;
     for path in untracked.split('\0').filter(|path| !path.is_empty()) {
-        let file = workspace_root.join(path);
-        let text = std::fs::read_to_string(&file)
-            .map_err(|e| format!("could not read {}: {e}", file.display()))?;
+        let text = workspace::read(&workspace_root.join(path))?;
         diff.push_str(&added_file(path, &text));
     }
     Ok(diff)
@@ -589,10 +583,10 @@ fn added_file(path: &str, text: &str) -> String {
 /// when a diff holds no mutant, and a file's modification time can't tell the
 /// two apart: Linux stamps a file from a clock that may read earlier than the
 /// one a run's start was read from.
-fn forget_last_report(path: &Path) -> Result<(), String> {
+fn forget_last_report(path: &Path) -> Result<(), Error> {
     match std::fs::remove_file(path) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            Err(format!("could not remove {}: {e}", path.display()))
+            Err(Error::file(Verb::Remove, path)(e))
         }
         _ => Ok(()),
     }
@@ -601,20 +595,19 @@ fn forget_last_report(path: &Path) -> Result<(), String> {
 /// cargo-mutants writes no `outcomes.json` when it finds nothing to mutate,
 /// so a missing file is an empty run and not an error; the floors then fail
 /// any crate that must be measured.
-fn read_outcomes(path: &Path) -> Result<Outcomes, String> {
+fn read_outcomes(path: &Path) -> Result<Outcomes, Error> {
     if !path.is_file() {
         return Ok(Outcomes {
             outcomes: Vec::new(),
         });
     }
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("could not read {}: {e}", path.display()))?;
-    serde_json::from_str(&text).map_err(|e| format!("could not parse {}: {e}", path.display()))
+    workspace::read_json(path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::chain;
     use crate::workspace::fixture::{TempDir, defy_git_defaults, scratch_git};
     use std::cell::RefCell;
     use std::os::unix::process::ExitStatusExt as _;
@@ -731,7 +724,7 @@ mod tests {
             ]
         );
         assert!(verdict.stale.is_empty());
-        assert_eq!(conclude(&verdict), Ok(None));
+        assert_eq!(conclude(&verdict).unwrap(), None);
         assert_eq!(
             verdict.tallies[2].to_string(),
             "lablet-run: 1 of 2 viable mutants caught, 1 excused by name, meets the exact floor"
@@ -745,7 +738,7 @@ mod tests {
         let verdict = full(&mutants);
         assert_eq!(seen(&verdict)[2], ("lablet-run", 1, 3, 1, Standing::Below));
 
-        let error = conclude(&verdict).unwrap_err();
+        let error = conclude(&verdict).unwrap_err().into_verdict();
         assert!(
             error.starts_with("mutants: 1 floor(s) below or unmeasured\n"),
             "{error}"
@@ -781,7 +774,7 @@ mod tests {
             seen(&verdict)[1],
             ("lablet-policy", 99, 100, 0, Standing::Below)
         );
-        let error = conclude(&verdict).unwrap_err();
+        let error = conclude(&verdict).unwrap_err().into_verdict();
         let listed = format!("  {POLICY}:100:5: delete ! (missed)\n");
         assert!(error.contains(&listed), "{error}");
     }
@@ -795,7 +788,7 @@ mod tests {
             seen(&verdict)[0],
             ("lablet-model", 2, 3, 0, Standing::Below)
         );
-        let error = conclude(&verdict).unwrap_err();
+        let error = conclude(&verdict).unwrap_err().into_verdict();
         let listed = format!("  {MODEL}:80:5: {WHOLE_MS} (timed out)\n");
         assert!(error.contains(&listed), "{error}");
 
@@ -817,14 +810,14 @@ mod tests {
             seen(&verdict)[0],
             ("lablet-model", 2, 3, 0, Standing::Below)
         );
-        let error = conclude(&verdict).unwrap_err();
+        let error = conclude(&verdict).unwrap_err().into_verdict();
         let listed = format!("  {MODEL}:90:5: {WHOLE_MS} (Failure)\n");
         assert!(error.contains(&listed), "{error}");
 
         // A scoped run whose one mutant ended so has something to test.
         let verdict = scoped(&[mutant(MODEL, "90:5", WHOLE_MS, "Failure")]);
         assert_eq!(verdict.tallies[0].viable, 1);
-        let error = conclude(&verdict).unwrap_err();
+        let error = conclude(&verdict).unwrap_err().into_verdict();
         assert!(error.contains(&listed), "{error}");
     }
 
@@ -842,7 +835,7 @@ mod tests {
                 "{now:?}"
             );
 
-            let error = conclude(&verdict).unwrap_err();
+            let error = conclude(&verdict).unwrap_err().into_verdict();
             assert!(
                 error.starts_with("mutants: 1 mutant(s) named as equivalent matched nothing\n"),
                 "{error}"
@@ -867,7 +860,7 @@ mod tests {
             ]
         );
         assert!(verdict.stale.is_empty());
-        assert_eq!(conclude(&verdict), Ok(None));
+        assert_eq!(conclude(&verdict).unwrap(), None);
         assert_eq!(
             verdict.tallies[0].to_string(),
             "lablet-model: 1 of 1 viable mutants in what changed caught, 0 excused by name"
@@ -878,7 +871,7 @@ mod tests {
         );
 
         // The same outcomes fail a full run on both counts.
-        let error = conclude(&full(&changed)).unwrap_err();
+        let error = conclude(&full(&changed)).unwrap_err().into_verdict();
         assert!(
             error.starts_with(
                 "mutants: 2 floor(s) below or unmeasured, 1 mutant(s) named as equivalent \
@@ -900,7 +893,7 @@ mod tests {
             "lablet-run: 0 of 2 viable mutants in what changed caught, 1 excused by name, 1 not \
              caught"
         );
-        let error = conclude(&verdict).unwrap_err();
+        let error = conclude(&verdict).unwrap_err().into_verdict();
         let listed = format!("  {OBSERVER}:201:9: {ON_TURN} (missed)\n");
         assert!(error.contains(&listed), "{error}");
     }
@@ -931,7 +924,7 @@ mod tests {
         ];
         let verdict = full(&twice);
         assert_eq!(seen(&verdict)[2], ("lablet-run", 0, 2, 1, Standing::Below));
-        let error = conclude(&verdict).unwrap_err();
+        let error = conclude(&verdict).unwrap_err().into_verdict();
         let listed = format!("  {OBSERVER}:198:9: {TRACE_CONTEXT} (missed)\n");
         assert!(error.contains(&listed), "{error}");
 
@@ -1038,7 +1031,7 @@ mod tests {
             "lablet-model: nothing to measure yet (no viable mutants); the floor is exact"
         );
         let verdict = judge(&outcomes, &crates(true), &[], Scope::Full);
-        let error = conclude(&verdict).unwrap_err();
+        let error = conclude(&verdict).unwrap_err().into_verdict();
         for phrase in [
             "mutants: 3 floor(s) below or unmeasured",
             "NOTHING MEASURED (no viable mutants)",
@@ -1060,7 +1053,7 @@ mod tests {
         args: &'a RefCell<Vec<String>>,
         found: Option<&'a [String]>,
         status: ExitStatus,
-    ) -> impl FnOnce(&[&str]) -> Result<ExitStatus, String> + 'a {
+    ) -> impl FnOnce(&[&str]) -> Result<ExitStatus, Error> + 'a {
         move |given: &[&str]| {
             *args.borrow_mut() = given.iter().map(|arg| (*arg).to_owned()).collect();
             let output = given.iter().position(|arg| *arg == "--output").unwrap() + 1;
@@ -1099,7 +1092,12 @@ mod tests {
 
         dir.write("mutants.out/outcomes.json", "not JSON");
         let error = read_outcomes(&path).unwrap_err();
-        assert!(error.starts_with("could not parse "), "{error}");
+        assert!(
+            matches!(&error, Error::Parse { path: named, .. } if *named == path),
+            "{error:?}"
+        );
+        let prefix = format!("could not parse {}: ", path.display());
+        assert!(chain(&error).starts_with(&prefix), "{}", chain(&error));
     }
 
     /// cargo-mutants exits 1 on bad arguments, 4 when the tests fail
@@ -1117,7 +1115,9 @@ mod tests {
         for status in [exited(1), exited(4), exited(70), ExitStatus::from_raw(9)] {
             let dir = TempDir::new("mutants-exit");
             let run = cargo_mutants(&args, Some(&found), status);
-            let error = test_mutants(dir.path(), None, run).unwrap_err();
+            let error = test_mutants(dir.path(), None, run)
+                .unwrap_err()
+                .into_verdict();
             assert_eq!(
                 error,
                 format!(
@@ -1135,14 +1135,14 @@ mod tests {
     fn a_scoped_run_tests_nothing_on_an_empty_diff_and_otherwise_says_it_judged_only_the_diff() {
         let since = "a1a1a1a1a1a1 (merge-base with origin/main)";
         let dir = TempDir::new("mutants-changed");
-        let untested = |_: &[&str]| -> Result<ExitStatus, String> {
+        let untested = |_: &[&str]| -> Result<ExitStatus, Error> {
             unreachable!("cargo-mutants ran on an empty diff")
         };
         assert_eq!(
-            test_changed("", since, &crates(true), dir.path(), untested),
-            Ok(Some(format!(
+            test_changed("", since, &crates(true), dir.path(), untested).unwrap(),
+            Some(format!(
                 "nothing to test: no Rust file of a floor crate changed since {since}"
-            )))
+            ))
         );
         assert!(!dir.path().join("changed.diff").exists());
 
@@ -1154,10 +1154,10 @@ mod tests {
         };
         // No mutant in what changed, so cargo-mutants wrote no report.
         assert_eq!(
-            scoped(None, exited(0)),
-            Ok(Some(format!(
+            scoped(None, exited(0)).unwrap(),
+            Some(format!(
                 "nothing to test: what changed since {since} holds no viable mutant"
-            )))
+            ))
         );
         let changed = dir.path().join("changed");
         let diff_path = dir.path().join("changed.diff");
@@ -1174,13 +1174,13 @@ mod tests {
 
         let caught = [mutant(MODEL, "69:5", WHOLE_MS, "CaughtMutant")];
         assert_eq!(
-            scoped(Some(&caught), exited(0)),
-            Ok(Some(format!(
+            scoped(Some(&caught), exited(0)).unwrap(),
+            Some(format!(
                 "only the mutants in what changed since {since}; the full run judges the floor"
-            )))
+            ))
         );
         let missed = [mutant(OBSERVER, "201:9", ON_TURN, "MissedMutant")];
-        let error = scoped(Some(&missed), exited(2)).unwrap_err();
+        let error = scoped(Some(&missed), exited(2)).unwrap_err().into_verdict();
         assert!(
             error.starts_with("mutants: 1 floor(s) below or unmeasured\n"),
             "{error}"
@@ -1430,9 +1430,15 @@ mod tests {
         std::fs::create_dir_all(&report).unwrap();
         let args = RefCell::new(Vec::new());
         let run = cargo_mutants(&args, None, exited(0));
-        let error = test_mutants(dir.path(), None, run).unwrap_err();
-        let expected = format!("could not remove {}: ", report.display());
-        assert!(error.starts_with(&expected), "{error}");
+        let error = test_mutants(dir.path(), None, run)
+            .unwrap_err()
+            .into_error();
+        let Error::File { verb, path, source } = &error else {
+            panic!("{error:?}");
+        };
+        assert_eq!((*verb, path), (Verb::Remove, &report));
+        let expected = format!("could not remove {}: {source}", report.display());
+        assert_eq!(chain(&error), expected);
         assert_eq!(*args.borrow(), Vec::<String>::new(), "cargo-mutants ran");
     }
 
@@ -1464,23 +1470,38 @@ mod tests {
         git(&["commit", "--quiet", "--allow-empty", "--message=topic"]);
         let topic = git(&["rev-parse", "HEAD"]);
         let found = |revision: &str, branch: &str| {
-            Ok((revision.to_owned(), format!("merge-base with {branch}")))
+            (revision.to_owned(), format!("merge-base with {branch}"))
         };
-        assert_eq!(merge_base(dir.path()), found(&base, "main"));
+        assert_eq!(merge_base(dir.path()).unwrap(), found(&base, "main"));
 
         git(&["update-ref", "refs/remotes/origin/main", &topic]);
-        assert_eq!(merge_base(dir.path()), found(&topic, "origin/main"));
+        assert_eq!(
+            merge_base(dir.path()).unwrap(),
+            found(&topic, "origin/main")
+        );
 
         git(&["update-ref", "-d", "refs/remotes/origin/main"]);
         git(&["branch", "--quiet", "--delete", "--force", "main"]);
+        let error = merge_base(dir.path()).unwrap_err();
+        assert!(matches!(error, Error::Missing { .. }), "{error:?}");
         assert_eq!(
-            merge_base(dir.path()),
-            Err(
-                "no merge-base with origin/main or main, so there is nothing to scope the run to. \
-                 Fetch origin, or run the full `cargo xtask mutants`"
-                    .to_owned()
-            )
+            chain(&error),
+            "no merge-base with origin/main or main, so there is nothing to scope the run to. \
+             Fetch origin, or run the full `cargo xtask mutants`"
         );
+
+        // A `.git` file naming no repository stops git's search upward, so
+        // what lies above the temporary directory doesn't matter.
+        let outside = TempDir::new("mutants-not-a-repository");
+        outside.write(
+            ".git",
+            &format!("gitdir: {}\n", outside.path().join("none").display()),
+        );
+        let error = merge_base(outside.path()).unwrap_err();
+        let Error::Failed { stderr, .. } = &error else {
+            panic!("{error:?}");
+        };
+        assert!(stderr.contains("not a git repository"), "{stderr}");
     }
 
     #[test]

@@ -4,8 +4,11 @@
 //! root package, `[patch]`) is refused, so every reader fails safe on it.
 
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+use crate::error::{Error, Malformed, Verb};
 
 /// The repository root: the parent of xtask's manifest directory. `cargo run`
 /// names that directory at run time, so a binary cargo reuses from another
@@ -163,9 +166,8 @@ pub struct Workspace {
 
 impl Workspace {
     /// Reads the workspace rooted at `root`. The error names the file.
-    pub fn load(root: &Path) -> Result<Self, String> {
+    pub fn load(root: &Path) -> Result<Self, Error> {
         let manifest_path = root.join("Cargo.toml");
-        let file = manifest_path.display().to_string();
         let text = read(&manifest_path)?;
         let document: toml::Value = parse(&manifest_path, &text)?;
         let table = document.get("workspace");
@@ -180,14 +182,19 @@ impl Workspace {
                     .map(|key| format!("`[workspace] {key}`")),
             )
             .next();
+        let refuse = |feature| Error::Unsupported {
+            path: manifest_path.clone(),
+            feature,
+        };
         if let Some(feature) = refused {
-            return Err(format!("{file}: {}", unsupported(&feature)));
+            return Err(refuse(feature));
         }
         let table: WorkspaceTable = table
             .cloned()
-            .ok_or_else(|| format!("{file} has no [workspace] table"))?
+            .ok_or(Malformed::Lacks("`[workspace]` table"))
+            .map_err(Error::parse(&manifest_path))?
             .try_into()
-            .map_err(|e| format!("could not parse {file}: {e}"))?;
+            .map_err(Error::parse(&manifest_path))?;
 
         let mut members = Vec::new();
         for path in table.members {
@@ -197,11 +204,10 @@ impl Workspace {
                     .split('/')
                     .all(|part| !part.is_empty() && part != "." && part != "..");
             if !literal {
-                let feature = format!(
+                return Err(refuse(format!(
                     "workspace member `{path}` (a glob, a `.` or `..` component, an absolute \
                      path, or a trailing `/`, where a literal relative directory is wanted)"
-                );
-                return Err(format!("{file}: {}", unsupported(&feature)));
+                )));
             }
             let member_manifest = root.join(&path).join("Cargo.toml");
             let manifest: Manifest = parse(&member_manifest, &read(&member_manifest)?)?;
@@ -234,12 +240,18 @@ impl Workspace {
     }
 }
 
-fn read(path: &Path) -> Result<String, String> {
-    std::fs::read_to_string(path).map_err(|e| format!("could not read {}: {e}", path.display()))
+/// The text of the file at `path`. The error names the file.
+pub fn read(path: &Path) -> Result<String, Error> {
+    std::fs::read_to_string(path).map_err(Error::file(Verb::Read, path))
 }
 
-fn parse<T: serde::de::DeserializeOwned>(path: &Path, text: &str) -> Result<T, String> {
-    toml::from_str(text).map_err(|e| format!("could not parse {}: {e}", path.display()))
+fn parse<T: DeserializeOwned>(path: &Path, text: &str) -> Result<T, Error> {
+    toml::from_str(text).map_err(Error::parse(path))
+}
+
+/// The JSON file at `path`, read into a `T`. The error names the file.
+pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, Error> {
+    serde_json::from_str(&read(path)?).map_err(Error::parse(path))
 }
 
 #[cfg(test)]
@@ -413,6 +425,7 @@ pub mod fixture {
 mod tests {
     use super::fixture::TempDir;
     use super::*;
+    use crate::error::chain;
 
     #[test]
     fn the_repository_root_holds_xtask_and_the_workspace() {
@@ -432,15 +445,16 @@ mod tests {
         );
     }
 
-    /// A workspace whose root manifest is `root`, with a package `x` in each
-    /// of `on_disk`.
-    fn load(root: &str, on_disk: &[&str]) -> Result<Workspace, String> {
+    /// Why the workspace whose root manifest is `root`, with a package `x`
+    /// in each of `on_disk`, is refused, and the manifest it named.
+    fn refusal(root: &str, on_disk: &[&str]) -> (Error, PathBuf) {
         let dir = TempDir::new("load");
         dir.write("Cargo.toml", root);
         for member in on_disk {
             dir.write(&format!("{member}/Cargo.toml"), "[package]\nname = \"x\"\n");
         }
-        Workspace::load(dir.path())
+        let error = Workspace::load(dir.path()).unwrap_err();
+        (error, dir.path().join("Cargo.toml"))
     }
 
     #[test]
@@ -459,21 +473,23 @@ mod tests {
             "/crates/domain/x",
         ] {
             let root = format!("[workspace]\nmembers = [\"{path}\"]\n");
-            let error = load(&root, &["crates/domain/x"]).unwrap_err();
-            assert!(
-                error.contains(&format!("workspace member `{path}`")),
-                "{error}"
-            );
+            let (error, manifest) = refusal(&root, &["crates/domain/x"]);
+            assert!(matches!(error, Error::Unsupported { .. }), "{error:?}");
+            let error = chain(&error);
+            let named = format!("{}: workspace member `{path}`", manifest.display());
+            assert!(error.starts_with(&named), "{error}");
             assert!(
                 error.contains("is not supported by lablet's lints"),
                 "{error}"
             );
         }
-        load(
+        let dir = TempDir::new("load");
+        dir.write(
+            "Cargo.toml",
             "[workspace]\nmembers = [\"crates/domain/x\"]\n",
-            &["crates/domain/x"],
-        )
-        .unwrap();
+        );
+        dir.write("crates/domain/x/Cargo.toml", "[package]\nname = \"x\"\n");
+        Workspace::load(dir.path()).unwrap();
     }
 
     #[test]
@@ -500,23 +516,73 @@ mod tests {
                 "[workspace]\nmembers = []\ndefault-members = []\n",
             ),
         ] {
-            let error = load(root, &[]).unwrap_err();
-            assert!(error.contains(feature), "{error}");
+            let (error, manifest) = refusal(root, &[]);
+            assert!(matches!(error, Error::Unsupported { .. }), "{error:?}");
+            let error = chain(&error);
+            let named = format!("{}: {feature}", manifest.display());
+            assert!(error.starts_with(&named), "{error}");
             assert!(error.contains("extend xtask deliberately"), "{error}");
         }
     }
 
     #[test]
+    fn a_root_manifest_without_a_workspace_table_is_an_error_naming_it() {
+        let (error, manifest) = refusal("[lints]\n", &[]);
+        assert!(matches!(error, Error::Parse { .. }), "{error:?}");
+        assert_eq!(
+            chain(&error),
+            format!(
+                "could not parse {}: it has no `[workspace]` table",
+                manifest.display()
+            )
+        );
+    }
+
+    #[test]
     fn a_member_with_no_manifest_or_no_package_is_an_error_naming_the_file() {
-        let error = load("[workspace]\nmembers = [\"crates/gone\"]\n", &[]).unwrap_err();
-        assert!(error.contains("crates/gone/Cargo.toml"), "{error}");
+        let (error, root) = refusal("[workspace]\nmembers = [\"crates/gone\"]\n", &[]);
+        let gone = root.with_file_name("crates/gone/Cargo.toml");
+        let Error::File { verb, path, source } = &error else {
+            panic!("{error:?}");
+        };
+        assert_eq!((*verb, path), (Verb::Read, &gone));
+        assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+        let expected = format!("could not read {}: {source}", gone.display());
+        assert_eq!(chain(&error), expected);
 
         let dir = TempDir::new("virtual");
         dir.write("Cargo.toml", "[workspace]\nmembers = [\"a\"]\n");
         dir.write("a/Cargo.toml", "[dependencies]\n");
         let error = Workspace::load(dir.path()).unwrap_err();
-        assert!(error.contains("a/Cargo.toml"), "{error}");
-        assert!(error.contains("package"), "{error}");
+        let Error::Parse { path, .. } = &error else {
+            panic!("{error:?}");
+        };
+        assert_eq!(*path, dir.path().join("a/Cargo.toml"));
+        let error = chain(&error);
+        assert!(error.contains("missing field `package`"), "{error}");
+    }
+
+    #[test]
+    fn a_json_file_is_read_whole_and_a_bad_one_is_named() {
+        let dir = TempDir::new("json");
+        dir.write("good.json", "[1, 2]");
+        dir.write("bad.json", "[1,");
+        let good: Vec<u8> = read_json(&dir.path().join("good.json")).unwrap();
+        assert_eq!(good, [1, 2]);
+        let bad = dir.path().join("bad.json");
+        let error = read_json::<Vec<u8>>(&bad).unwrap_err();
+        assert!(
+            matches!(&error, Error::Parse { path, .. } if *path == bad),
+            "{error:?}"
+        );
+        let prefix = format!("could not parse {}: ", bad.display());
+        assert!(chain(&error).starts_with(&prefix), "{}", chain(&error));
+        let absent = dir.path().join("absent.json");
+        let error = read_json::<Vec<u8>>(&absent).unwrap_err();
+        assert!(
+            matches!(&error, Error::File { verb: Verb::Read, path, .. } if *path == absent),
+            "{error:?}"
+        );
     }
 
     #[test]

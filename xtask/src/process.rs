@@ -3,11 +3,13 @@
 //! a failure.
 
 use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output};
 use std::sync::OnceLock;
 
+use crate::error::{Error, NotStarted};
 use crate::workspace::{repo_root, workspace_root};
 
 /// A tool mise.toml pins.
@@ -50,36 +52,88 @@ pub const TOOLS: &[Tool] = &[
     },
 ];
 
-/// The line for a subprocess that could not start.
-pub fn could_not_run(program: &str, e: &std::io::Error) -> String {
-    format!("could not run `{program}`: {e}")
+/// A command as a person types it, and the directory it runs in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Invocation {
+    directory: PathBuf,
+    program: String,
+    args: Vec<String>,
 }
 
-/// The line for a subprocess that exited non-zero. It names the directory:
-/// a cargo command as printed does not work from the repository root, where
-/// `cargo xtask` is started.
+impl Invocation {
+    /// `program` with `args`, run in `directory`.
+    pub fn new(directory: &Path, program: &str, args: &[&str]) -> Self {
+        Self {
+            directory: directory.to_path_buf(),
+            program: program.to_owned(),
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+        }
+    }
+
+    /// Where it runs, as a person finds it: the repository root, a
+    /// directory below it, or anywhere else by its whole path.
+    pub fn place(&self) -> String {
+        let root = repo_root();
+        match self.directory.strip_prefix(&root) {
+            Ok(below) if below.as_os_str().is_empty() => "the repository root".to_owned(),
+            Ok(below) => format!("{}/", below.display()),
+            Err(_) => self.directory.display().to_string(),
+        }
+    }
+
+    /// The line for a run that exited unsuccessfully. It names the
+    /// directory: a cargo command as printed does not work from the
+    /// repository root, where `cargo xtask` is started.
+    pub fn failed(&self) -> String {
+        format!("command failed (in {}): {self}", self.place())
+    }
+
+    /// For `map_err`: the system would not start it.
+    pub fn not_started(&self) -> impl Fn(std::io::Error) -> Error {
+        |source| Error::Start {
+            command: self.clone(),
+            source: NotStarted::Io(source),
+        }
+    }
+}
+
+impl fmt::Display for Invocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.program)?;
+        for arg in &self.args {
+            write!(f, " {arg}")?;
+        }
+        Ok(())
+    }
+}
+
+/// `program` with `args`, where [`command`] runs it.
+pub fn invocation(program: &str, args: &[&str]) -> Invocation {
+    Invocation::new(&working_directory(program), program, args)
+}
+
+/// The line for a subprocess [`command`] ran that exited unsuccessfully.
 pub fn command_failed(program: &str, args: &[&str]) -> String {
-    let (_, place) = working_directory(program);
-    format!("command failed (in {place}): {program} {}", args.join(" "))
+    invocation(program, args).failed()
 }
 
 /// Cargo runs in the Rust workspace, everything else in the repository root.
-fn working_directory(program: &str) -> (PathBuf, &'static str) {
+fn working_directory(program: &str) -> PathBuf {
     if program == "cargo" {
-        (workspace_root(), "lablet/")
+        workspace_root()
     } else {
-        (repo_root(), "the repository root")
+        repo_root()
     }
 }
 
 /// A subprocess with the pinned tools first on PATH. A pinned tool that mise
 /// cannot provide is an error, not a run of whatever copy PATH holds.
-pub fn command(program: &str, args: &[&str]) -> Result<Command, String> {
-    command_in(&working_directory(program).0, program, args)
+pub fn command(program: &str, args: &[&str]) -> Result<Command, Error> {
+    command_in(&working_directory(program), program, args)
 }
 
 /// [`command`], in a directory the caller names.
-fn command_in(directory: &Path, program: &str, args: &[&str]) -> Result<Command, String> {
+fn command_in(directory: &Path, program: &str, args: &[&str]) -> Result<Command, Error> {
     command_running(directory, program, args, runs(program, args).as_deref())
 }
 
@@ -104,16 +158,17 @@ fn command_running(
     program: &str,
     args: &[&str],
     bin: Option<&str>,
-) -> Result<Command, String> {
+) -> Result<Command, Error> {
+    let not_started = |source| Error::Start {
+        command: Invocation::new(directory, program, args),
+        source,
+    };
     if !directory.is_dir() {
-        return Err(format!(
-            "{} does not exist, so `{program}` has nowhere to run",
-            directory.display()
-        ));
+        return Err(not_started(NotStarted::NoDirectory));
     }
     let tools = tools();
     if let Some(refused) = refusal(bin, tools) {
-        return Err(refused);
+        return Err(not_started(refused));
     }
     let mut command = Command::new(program);
     command
@@ -148,10 +203,12 @@ pub const GIT_REPOSITORY_ENV: &[&str] = &[
 ];
 
 /// Runs a subprocess with inherited output and returns its status.
-pub fn stream(program: &str, args: &[&str], env: &[(&str, &str)]) -> Result<ExitStatus, String> {
+pub fn stream(program: &str, args: &[&str], env: &[(&str, &str)]) -> Result<ExitStatus, Error> {
     let mut command = command(program, args)?;
     command.envs(env.iter().copied());
-    command.status().map_err(|e| could_not_run(program, &e))
+    command
+        .status()
+        .map_err(invocation(program, args).not_started())
 }
 
 /// `cargo <args>` on `toolchain`, as rustup is asked for it. By `rustup run`
@@ -170,39 +227,96 @@ pub fn stream_on(
     toolchain: &str,
     args: &[&str],
     env: &[(&str, &str)],
-) -> Result<ExitStatus, String> {
+) -> Result<ExitStatus, Error> {
     let rustup = on_toolchain(toolchain, args);
     let plugin = cargo_plugin(args);
     let mut command = command_running(&workspace_root(), "rustup", &rustup, plugin.as_deref())?;
     command.envs(env.iter().copied());
-    command.status().map_err(|e| could_not_run("rustup", &e))
+    command
+        .status()
+        .map_err(Invocation::new(&workspace_root(), "rustup", &rustup).not_started())
 }
 
 /// [`command_failed`], for [`stream_on`].
 pub fn command_failed_on(toolchain: &str, args: &[&str]) -> String {
-    let (_, place) = working_directory("cargo");
     let rustup = on_toolchain(toolchain, args);
-    format!("command failed (in {place}): rustup {}", rustup.join(" "))
+    Invocation::new(&workspace_root(), "rustup", &rustup).failed()
 }
 
-/// A subprocess's stdout, or on failure its stderr or why it could not start.
-pub fn capture_in(directory: &Path, program: &str, args: &[&str]) -> Result<String, String> {
-    let output = command_in(directory, program, args)?
-        .output()
-        .map_err(|e| could_not_run(program, &e))?;
+/// A subprocess's stdout. The error names the command and where it ran,
+/// with what it wrote on stderr when it ran and failed.
+pub fn capture_in(directory: &Path, program: &str, args: &[&str]) -> Result<String, Error> {
+    let (invocation, output) = output_in(directory, program, args)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
-        Err(String::from_utf8_lossy(&output.stderr)
+        Err(failed(invocation, &output))
+    }
+}
+
+/// Git's answer to a question about the repository at `directory`: its
+/// stdout, or `None` when it exits with status 1, which is how
+/// `rev-parse --verify --quiet` says a name is no commit and `merge-base`
+/// says two commits share no history. Any other failure is git failing to
+/// answer, as outside a repository, and an error.
+fn git_answer(directory: &Path, args: &[&str]) -> Result<Option<String>, Error> {
+    let (invocation, output) = output_in(directory, "git", args)?;
+    if output.status.success() {
+        Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
+    } else if output.status.code() == Some(1) {
+        Ok(None)
+    } else {
+        Err(failed(invocation, &output))
+    }
+}
+
+/// The commit `revision` names in the repository at `directory`, or `None`
+/// when it names none.
+pub fn git_commit(directory: &Path, revision: &str) -> Result<Option<String>, Error> {
+    let commit = format!("{revision}^{{commit}}");
+    let answer = git_answer(directory, &["rev-parse", "--verify", "--quiet", &commit])?;
+    Ok(answer.map(|out| out.trim().to_owned()))
+}
+
+/// The merge-base of HEAD and `branch` in the repository at `directory`, or
+/// `None` when there is none: the clone has no `branch`, or not enough of
+/// its history to reach one, as a shallow clone may not.
+pub fn git_merge_base(directory: &Path, branch: &str) -> Result<Option<String>, Error> {
+    // `merge-base` refuses a branch the clone lacks with the status it
+    // exits with outside a repository, so the branch is asked about first.
+    if git_commit(directory, branch)?.is_none() {
+        return Ok(None);
+    }
+    let answer = git_answer(directory, &["merge-base", "HEAD", branch])?;
+    Ok(answer.map(|out| out.trim().to_owned()))
+}
+
+/// Runs `program` to its end in `directory`, capturing both streams.
+fn output_in(
+    directory: &Path,
+    program: &str,
+    args: &[&str],
+) -> Result<(Invocation, Output), Error> {
+    let invocation = Invocation::new(directory, program, args);
+    let output = command_in(directory, program, args)?
+        .output()
+        .map_err(invocation.not_started())?;
+    Ok((invocation, output))
+}
+
+fn failed(command: Invocation, output: &Output) -> Error {
+    Error::Failed {
+        command,
+        stderr: String::from_utf8_lossy(&output.stderr)
             .trim_end()
-            .to_owned())
+            .to_owned(),
     }
 }
 
 /// Why a command that ends up running `bin` may not start, or `None` when it
 /// may: a pinned tool runs only from a directory mise named for it, never as
 /// whatever copy PATH holds.
-fn refusal(bin: Option<&str>, tools: &Tools) -> Option<String> {
+fn refusal(bin: Option<&str>, tools: &Tools) -> Option<NotStarted> {
     let bin = bin.filter(|bin| TOOLS.iter().any(|tool| tool.bin == *bin))?;
     if tools.provides(bin) {
         return None;
@@ -211,7 +325,10 @@ fn refusal(bin: Option<&str>, tools: &Tools) -> Option<String> {
         .failure
         .as_deref()
         .unwrap_or("it is not installed; run scripts/setup.sh (or `mise install`)");
-    Some(format!("{bin} is pinned in mise.toml, but {why}"))
+    Some(NotStarted::NotProvided {
+        bin: bin.to_owned(),
+        why: why.to_owned(),
+    })
 }
 
 /// `failure` is why `directories` may be empty: mise could not be run, or
@@ -347,7 +464,8 @@ fn is_executable(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::fixture::TempDir;
+    use crate::error::chain;
+    use crate::workspace::fixture::{TempDir, scratch_git};
     use std::collections::BTreeSet;
     use std::fs::Permissions;
     use std::os::unix::process::ExitStatusExt as _;
@@ -379,29 +497,37 @@ mod tests {
         format!("{bin} is pinned in mise.toml, but {why}")
     }
 
+    /// Why a program that ends up running `bin` may not start, as told.
+    fn refused_as(bin: Option<&str>, tools: &Tools) -> Option<String> {
+        refusal(bin, tools).map(|why| why.to_string())
+    }
+
     #[test]
     fn a_pinned_tool_runs_only_as_an_executable_file_in_a_directory_mise_listed() {
         let dir = tool_directory();
         let listed = mise_output(0, &format!("{}\n", dir.path().display()), "");
         let tools = Tools::from_mise(Ok(listed), "mise", None, None);
         assert_eq!(tools.failure, None);
-        assert_eq!(refusal(Some("weaver"), &tools), None);
+        assert_eq!(refused_as(Some("weaver"), &tools), None);
         assert_eq!(
-            refusal(Some("dprint"), &tools),
+            refused_as(Some("dprint"), &tools),
             Some(not_installed("dprint"))
         );
-        assert_eq!(refusal(Some("vale"), &tools), Some(not_installed("vale")));
         assert_eq!(
-            refusal(Some("shellcheck"), &tools),
+            refused_as(Some("vale"), &tools),
+            Some(not_installed("vale"))
+        );
+        assert_eq!(
+            refused_as(Some("shellcheck"), &tools),
             Some(not_installed("shellcheck"))
         );
         // What no pin names runs from PATH.
-        assert_eq!(refusal(Some("git"), &tools), None);
-        assert_eq!(refusal(None, &tools), None);
+        assert_eq!(refused_as(Some("git"), &tools), None);
+        assert_eq!(refused_as(None, &tools), None);
 
         // A cargo subcommand is its plugin, and any other program itself.
         let refused =
-            |program: &str, args: &[&str]| refusal(runs(program, args).as_deref(), &tools);
+            |program: &str, args: &[&str]| refused_as(runs(program, args).as_deref(), &tools);
         assert_eq!(
             refused("cargo", &["deny", "check"]),
             Some(not_installed("cargo-deny"))
@@ -418,7 +544,7 @@ mod tests {
         let tools = Tools::from_mise(Ok(failed), "mise", None, None);
         assert_eq!(tools.directories, Vec::<PathBuf>::new());
         assert_eq!(
-            refusal(Some("weaver"), &tools).as_deref(),
+            refused_as(Some("weaver"), &tools).as_deref(),
             Some(
                 "weaver is pinned in mise.toml, but `mise bin-paths` failed; run scripts/setup.sh, \
                  which trusts mise.toml and installs the pins:\nmise ERROR mise.toml is not trusted"
@@ -427,7 +553,7 @@ mod tests {
         let absent = std::io::Error::from(std::io::ErrorKind::NotFound);
         let tools = Tools::from_mise(Err(absent), "/opt/homebrew/bin/mise", None, None);
         assert_eq!(
-            refusal(Some("vale"), &tools).as_deref(),
+            refused_as(Some("vale"), &tools).as_deref(),
             Some(
                 "vale is pinned in mise.toml, but `/opt/homebrew/bin/mise` could not be run \
                  (entity not found); install mise from https://mise.jdx.dev/installing-mise.html, \
@@ -435,7 +561,7 @@ mod tests {
             )
         );
         // A command that needs no pinned tool still runs.
-        assert_eq!(refusal(Some("git"), &tools), None);
+        assert_eq!(refused_as(Some("git"), &tools), None);
     }
 
     #[test]
@@ -487,19 +613,103 @@ mod tests {
         );
         let capture = |program: &str, args: &[&str]| capture_in(&repo_root(), program, args);
         assert_eq!(
-            capture("sh", &["-c", "echo out; echo err >&2"]),
-            Ok("out\n".to_owned())
-        );
-        assert_eq!(
-            capture("sh", &["-c", "echo out; echo err >&2; exit 1"]),
-            Err("err".to_owned())
+            capture("sh", &["-c", "echo out; echo err >&2"]).unwrap(),
+            "out\n"
         );
 
         let missing = "lablet-xtask-no-such-program";
         let why = std::io::Error::from_raw_os_error(2);
-        let could_not = format!("could not run `{missing}`: {why}");
-        assert_eq!(capture(missing, &[]), Err(could_not.clone()));
-        assert_eq!(stream(missing, &[], &[]).err(), Some(could_not));
+        let could_not = format!("could not run `{missing}` (in the repository root): {why}");
+        assert_eq!(chain(&capture(missing, &[]).unwrap_err()), could_not);
+        assert_eq!(chain(&stream(missing, &[], &[]).unwrap_err()), could_not);
+    }
+
+    #[test]
+    fn a_captured_command_that_fails_is_named_with_where_it_ran_and_what_it_wrote_on_stderr() {
+        let failing = ["-c", "echo out; echo err >&2; echo more >&2; exit 1"];
+        let error = capture_in(&repo_root(), "sh", &failing).unwrap_err();
+        let Error::Failed { command, stderr } = &error else {
+            panic!("{error:?}");
+        };
+        assert_eq!(*command, Invocation::new(&repo_root(), "sh", &failing));
+        assert_eq!(stderr, "err\nmore");
+        assert_eq!(
+            chain(&error),
+            "command failed (in the repository root): sh -c echo out; echo err >&2; echo more \
+             >&2; exit 1\nerr\nmore"
+        );
+
+        // A command that wrote nothing is still named, and where it ran.
+        let error = capture_in(&workspace_root(), "sh", &["-c", "exit 1"]).unwrap_err();
+        assert_eq!(chain(&error), "command failed (in lablet/): sh -c exit 1");
+    }
+
+    #[test]
+    fn a_command_whose_directory_is_gone_is_named_and_never_started() {
+        let dir = TempDir::new("gone");
+        let gone = dir.path().join("gone");
+        let error = capture_in(&gone, "sh", &["-c", "exit 0"]).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                Error::Start {
+                    source: NotStarted::NoDirectory,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert_eq!(
+            chain(&error),
+            format!(
+                "could not run `sh -c exit 0` (in {}): the directory does not exist",
+                gone.display()
+            )
+        );
+    }
+
+    #[test]
+    fn git_answering_no_is_none_and_git_failing_to_answer_is_an_error() {
+        let dir = TempDir::new("git-answer");
+        let git = |args: &[&str]| scratch_git(dir.path(), args).trim().to_owned();
+        git(&["init", "--quiet", "--initial-branch=topic"]);
+        assert_eq!(
+            std::fs::canonicalize(git(&["rev-parse", "--show-toplevel"])).unwrap(),
+            std::fs::canonicalize(dir.path()).unwrap(),
+            "git resolved outside the scratch repository"
+        );
+        git(&["commit", "--quiet", "--allow-empty", "--message=base"]);
+        let base = git(&["rev-parse", "HEAD"]);
+        assert_eq!(git_commit(dir.path(), "HEAD").unwrap(), Some(base.clone()));
+        assert_eq!(git_commit(dir.path(), "main").unwrap(), None);
+        assert_eq!(git_merge_base(dir.path(), "main").unwrap(), None);
+
+        // History HEAD shares nothing with, as a shallow clone may hold.
+        let tree = git(&["mktree"]);
+        let unrelated = git(&["commit-tree", &tree, "-m", "unrelated"]);
+        git(&["update-ref", "refs/heads/main", &unrelated]);
+        assert_eq!(git_merge_base(dir.path(), "main").unwrap(), None);
+        git(&["update-ref", "refs/heads/main", &base]);
+        assert_eq!(git_merge_base(dir.path(), "main").unwrap(), Some(base));
+
+        // A `.git` file naming no repository stops git's search upward, so
+        // what lies above the temporary directory doesn't matter.
+        let outside = TempDir::new("git-no-answer");
+        let nowhere = outside.path().join("none");
+        outside.write(".git", &format!("gitdir: {}\n", nowhere.display()));
+        for error in [
+            git_commit(outside.path(), "HEAD").unwrap_err(),
+            git_merge_base(outside.path(), "main").unwrap_err(),
+        ] {
+            let Error::Failed { command, stderr } = &error else {
+                panic!("{error:?}");
+            };
+            assert!(
+                command.to_string().starts_with("git rev-parse"),
+                "{command}"
+            );
+            assert!(stderr.contains("not a git repository"), "{stderr}");
+        }
     }
 
     /// rustup prints its own error for the toolchain, which names it.

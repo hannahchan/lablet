@@ -8,7 +8,8 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::gates::CheckResult;
+use crate::error::{Error, Verb};
+use crate::gates::{CheckResult, Failure};
 use crate::process;
 use crate::workspace::repo_root;
 
@@ -105,34 +106,42 @@ pub struct Base {
 
 /// `LABLET_CHANGELOG_BASE` when it names a commit, else the merge-base with
 /// `origin/main`, else with `main`. An all-zero id, which GitHub sends for a
-/// new branch, counts as unset. The error is the note for a run that can
-/// compare nothing: spec §8 has an unresolvable base warn and pass.
+/// new branch, counts as unset. `None` is git answering that there is no
+/// base, a run that can compare nothing, which spec §8 has warn and pass:
+/// see [`skipped`]. Git failing to answer is an error, never that pass.
 pub fn resolve_base(
     from_environment: Option<&str>,
-    resolves: impl Fn(&str) -> bool,
-    merge_base: impl Fn(&str) -> Option<String>,
-) -> Result<Base, String> {
+    resolves: impl Fn(&str) -> Result<bool, Error>,
+    merge_base: impl Fn(&str) -> Result<Option<String>, Error>,
+) -> Result<Option<Base>, Error> {
     let named = from_environment
         .map(str::trim)
         .filter(|name| !name.is_empty() && !name.bytes().all(|b| b == b'0'));
-    if let Some(name) = named.filter(|name| resolves(name)) {
-        return Ok(Base {
+    if let Some(name) = named
+        && resolves(name)?
+    {
+        return Ok(Some(Base {
             revision: name.to_owned(),
             source: BASE_VARIABLE.to_owned(),
-        });
+        }));
     }
     for branch in ["origin/main", "main"] {
-        if let Some(revision) = merge_base(branch) {
-            return Ok(Base {
+        if let Some(revision) = merge_base(branch)? {
+            return Ok(Some(Base {
                 revision,
                 source: format!("merge-base with {branch}"),
-            });
+            }));
         }
     }
-    Err(format!(
+    Ok(None)
+}
+
+/// The note of a run that found no base to compare with.
+fn skipped() -> String {
+    format!(
         "warning: skipped, no base commit to compare with (no merge-base with origin/main or \
          main; a shallow clone?). CI must check out full history, or set {BASE_VARIABLE}"
-    ))
+    )
 }
 
 /// Every path that differs between `base` and the working tree, untracked
@@ -140,7 +149,7 @@ pub fn resolve_base(
 /// path, and a contract file moved out of the contract is exactly the change
 /// the gate is for. `-z` keeps git from quoting an unusual name, which would
 /// no longer start with a contract path.
-fn changed_paths(directory: &Path, base: &str) -> Result<Vec<String>, String> {
+fn changed_paths(directory: &Path, base: &str) -> Result<Vec<String>, Error> {
     let git = |args: &[&str]| process::capture_in(directory, "git", args);
     // A diff against a commit refreshes the index's stat data unless told
     // not to, which writes to the repository a gate only reads.
@@ -172,32 +181,26 @@ pub fn check() -> CheckResult {
 /// [`check`], for the repository at `root`, with `from_environment` read
 /// from [`BASE_VARIABLE`].
 fn check_in(root: &Path, from_environment: Option<&str>) -> CheckResult {
-    let commit = |revision: &str| {
-        let commit = format!("{revision}^{{commit}}");
-        git(root, &["rev-parse", "--verify", "--quiet", &commit])
-            .ok()
-            .map(|out| out.trim().to_owned())
-    };
+    let commit = |revision: &str| process::git_commit(root, revision);
     let base = resolve_base(
         from_environment,
-        |revision| commit(revision).is_some(),
-        |branch| {
-            git(root, &["merge-base", "HEAD", branch])
-                .ok()
-                .map(|out| out.trim().to_owned())
-                .filter(|revision| !revision.is_empty())
-        },
-    );
-    let base = match base {
-        Ok(base) => base,
-        Err(skipped) => return Ok(Some(skipped)),
+        |revision| Ok(commit(revision)?.is_some()),
+        |branch| process::git_merge_base(root, branch),
+    )?;
+    let Some(base) = base else {
+        return Ok(Some(skipped()));
     };
 
     let changed = changed_paths(root, &base.revision)?;
     let at_base = git(root, &["show", &format!("{}:{CHANGELOG}", base.revision)]).ok();
-    let now = std::fs::read_to_string(root.join(CHANGELOG)).ok();
+    let path = root.join(CHANGELOG);
+    let now = match std::fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(Error::file(Verb::Read, &path)(e).into()),
+    };
     let verdict = decide(&changed, at_base.as_deref(), now.as_deref());
-    conclude(verdict, &base, commit(&base.revision) == commit("HEAD"))
+    conclude(verdict, &base, commit(&base.revision)? == commit("HEAD")?)
 }
 
 /// The step's result for a verdict against `base`. `base_is_head` is whether
@@ -216,16 +219,16 @@ fn conclude(verdict: Verdict, base: &Base, base_is_head: bool) -> CheckResult {
             "{} contract file(s) changed since {since}, with an Unreleased entry",
             paths.len()
         ))),
-        Verdict::Unchanged(paths) => Err(failure(
+        Verdict::Unchanged(paths) => Err(Failure::Verdict(failure(
             &paths,
             &since,
             &format!("the `{UNRELEASED_HEADING}` section of {CHANGELOG} has not changed"),
-        )),
-        Verdict::Empty(paths) => Err(failure(
+        ))),
+        Verdict::Empty(paths) => Err(Failure::Verdict(failure(
             &paths,
             &since,
             &format!("{CHANGELOG} has no entry under `{UNRELEASED_HEADING}`"),
-        )),
+        ))),
     }
 }
 
@@ -243,7 +246,7 @@ fn failure(paths: &[String], since: &str, missing: &str) -> String {
     message
 }
 
-fn git(root: &Path, args: &[&str]) -> Result<String, String> {
+fn git(root: &Path, args: &[&str]) -> Result<String, Error> {
     process::capture_in(root, "git", args)
 }
 
@@ -421,18 +424,22 @@ mod tests {
         // Whether the base is HEAD changes only the note of a pass.
         for base_is_head in [false, true] {
             assert_eq!(
-                conclude(Verdict::Unchanged(schema()), &merge_base(), base_is_head),
-                Err(format!(
+                conclude(Verdict::Unchanged(schema()), &merge_base(), base_is_head)
+                    .unwrap_err()
+                    .into_verdict(),
+                format!(
                     "Contract files changed since a1a1a1a1a1a1 (merge-base with origin/main), but \
                      the `## [Unreleased]` section of CHANGELOG.md has not changed:{why}"
-                ))
+                )
             );
             assert_eq!(
-                conclude(Verdict::Empty(schema()), &merge_base(), base_is_head),
-                Err(format!(
+                conclude(Verdict::Empty(schema()), &merge_base(), base_is_head)
+                    .unwrap_err()
+                    .into_verdict(),
+                format!(
                     "Contract files changed since a1a1a1a1a1a1 (merge-base with origin/main), but \
                      CHANGELOG.md has no entry under `## [Unreleased]`:{why}"
-                ))
+                )
             );
         }
     }
@@ -441,28 +448,28 @@ mod tests {
     fn a_recorded_change_or_none_passes_with_a_note_naming_the_base() {
         let recorded = paths(&["lablet/schema.json", "lablet/tests/fixtures/outcome.json"]);
         assert_eq!(
-            conclude(Verdict::Recorded(recorded), &merge_base(), false),
-            Ok(Some(
+            conclude(Verdict::Recorded(recorded), &merge_base(), false).unwrap(),
+            Some(
                 "2 contract file(s) changed since a1a1a1a1a1a1 (merge-base with origin/main), \
                  with an Unreleased entry"
                     .to_owned()
-            ))
+            )
         );
         assert_eq!(
-            conclude(Verdict::NoContractChange, &merge_base(), false),
-            Ok(Some(
+            conclude(Verdict::NoContractChange, &merge_base(), false).unwrap(),
+            Some(
                 "no contract file changed since a1a1a1a1a1a1 (merge-base with origin/main)"
                     .to_owned()
-            ))
+            )
         );
         // On `main`, whose merge-base with origin/main is the commit itself.
         assert_eq!(
-            conclude(Verdict::NoContractChange, &merge_base(), true),
-            Ok(Some(
+            conclude(Verdict::NoContractChange, &merge_base(), true).unwrap(),
+            Some(
                 "no contract file changed in the working tree; the base a1a1a1a1a1a1 (merge-base \
                  with origin/main) is HEAD, so no commit was compared"
                     .to_owned()
-            ))
+            )
         );
     }
 
@@ -470,17 +477,18 @@ mod tests {
         environment: Option<&str>,
         known: &[&str],
         merge_bases: &[(&str, &str)],
-    ) -> Result<Base, String> {
+    ) -> Option<Base> {
         resolve_base(
             environment,
-            |revision| known.contains(&revision),
+            |revision| Ok(known.contains(&revision)),
             |branch| {
-                merge_bases
+                Ok(merge_bases
                     .iter()
                     .find(|(name, _)| *name == branch)
-                    .map(|(_, revision)| (*revision).to_owned())
+                    .map(|(_, revision)| (*revision).to_owned()))
             },
         )
+        .unwrap()
     }
 
     #[test]
@@ -500,15 +508,111 @@ mod tests {
     }
 
     #[test]
-    fn origin_main_is_preferred_to_the_local_main_and_no_merge_base_is_a_skip_note() {
+    fn origin_main_is_preferred_to_the_local_main_and_no_merge_base_is_none() {
         let found = base(None, &[], &[("main", "111"), ("origin/main", "222")]).unwrap();
         assert_eq!(found.revision, "222");
         let found = base(None, &[], &[("main", "111")]).unwrap();
         assert_eq!(found.revision, "111");
-        let skipped = base(None, &["main"], &[]).unwrap_err();
+        assert_eq!(base(None, &["main"], &[]), None);
+        assert_eq!(base(Some("gone"), &["main"], &[]), None);
+    }
+
+    fn git_did_not_answer() -> Error {
+        Error::Missing {
+            what: "git did not answer".to_owned(),
+            remedy: "Install git".to_owned(),
+        }
+    }
+
+    #[test]
+    fn git_failing_to_answer_is_an_error_and_not_a_missing_base() {
+        let unanswered = resolve_base(Some("abc123"), |_| Err(git_did_not_answer()), |_| Ok(None));
         assert!(
-            skipped.starts_with("warning: skipped, no base commit to compare with"),
-            "{skipped}"
+            matches!(unanswered, Err(Error::Missing { .. })),
+            "{unanswered:?}"
+        );
+        let unanswered = resolve_base(None, |_| Ok(true), |_| Err(git_did_not_answer()));
+        assert!(
+            matches!(unanswered, Err(Error::Missing { .. })),
+            "{unanswered:?}"
+        );
+    }
+
+    #[test]
+    fn a_directory_that_is_not_a_repository_fails_the_step_rather_than_skipping_it() {
+        let dir = TempDir::new("changelog-not-a-repository");
+        // A `.git` file naming no repository stops git's search upward, so
+        // what lies above the temporary directory doesn't matter.
+        dir.write(
+            ".git",
+            &format!("gitdir: {}\n", dir.path().join("none").display()),
+        );
+        for from_environment in [None, Some("abc123")] {
+            let error = check_in(dir.path(), from_environment)
+                .unwrap_err()
+                .into_error();
+            let Error::Failed { command, stderr } = &error else {
+                panic!("{error:?}");
+            };
+            assert!(
+                command.to_string().starts_with("git rev-parse"),
+                "{command}"
+            );
+            assert!(stderr.contains("not a git repository"), "{stderr}");
+        }
+
+        let gone = dir.path().join("gone");
+        let error = check_in(&gone, None).unwrap_err().into_error();
+        assert!(matches!(error, Error::Start { .. }), "{error:?}");
+    }
+
+    /// Spec §8: a base that can't be found warns, and the gate passes.
+    #[test]
+    fn a_repository_with_no_base_to_compare_with_passes_with_a_warning() {
+        let dir = TempDir::new("changelog-no-base");
+        let git = |args: &[&str]| scratch_git(dir.path(), args);
+        dir.write("lablet/schema.json", "{}\n");
+        git(&["init", "--quiet", "--initial-branch=topic"]);
+        assert_eq!(
+            std::fs::canonicalize(git(&["rev-parse", "--show-toplevel"]).trim()).unwrap(),
+            std::fs::canonicalize(dir.path()).unwrap(),
+            "git resolved outside the scratch repository"
+        );
+        git(&["add", "--all"]);
+        git(&["commit", "--quiet", "--message=only"]);
+        assert_eq!(
+            check_in(dir.path(), None).unwrap(),
+            Some(
+                "warning: skipped, no base commit to compare with (no merge-base with origin/main \
+                 or main; a shallow clone?). CI must check out full history, or set \
+                 LABLET_CHANGELOG_BASE"
+                    .to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn a_changelog_that_is_there_but_cannot_be_read_is_an_error_naming_it() {
+        let dir = TempDir::new("changelog-unreadable");
+        let git = |args: &[&str]| scratch_git(dir.path(), args);
+        dir.write("lablet/schema.json", "{}\n");
+        git(&["init", "--quiet", "--initial-branch=main"]);
+        assert_eq!(
+            std::fs::canonicalize(git(&["rev-parse", "--show-toplevel"]).trim()).unwrap(),
+            std::fs::canonicalize(dir.path()).unwrap(),
+            "git resolved outside the scratch repository"
+        );
+        git(&["add", "--all"]);
+        git(&["commit", "--quiet", "--message=base"]);
+        git(&["switch", "--quiet", "--create", "topic"]);
+        dir.write("lablet/schema.json", "{\"type\": \"object\"}\n");
+        // A directory where the file goes: it exists, and reads as none.
+        std::fs::create_dir(dir.path().join(CHANGELOG)).unwrap();
+        let error = check_in(dir.path(), None).unwrap_err().into_error();
+        let path = dir.path().join(CHANGELOG);
+        assert!(
+            matches!(&error, Error::File { verb: Verb::Read, path: named, .. } if *named == path),
+            "{error:?}"
         );
     }
 
@@ -580,17 +684,17 @@ mod tests {
 
         // On `main` the merge-base is the commit being judged.
         assert_eq!(
-            check_in(dir.path(), None),
-            Ok(Some(format!(
+            check_in(dir.path(), None).unwrap(),
+            Some(format!(
                 "no contract file changed in the working tree; the base {base} (merge-base with \
                  main) is HEAD, so no commit was compared"
-            )))
+            ))
         );
 
         git(&["switch", "--quiet", "--create", "topic"]);
         dir.write("lablet/schema.json", "{\"type\": \"object\"}\n");
         git(&["commit", "--quiet", "--all", "--message=schema"]);
-        let error = check_in(dir.path(), None).unwrap_err();
+        let error = check_in(dir.path(), None).unwrap_err().into_verdict();
         let unchanged = format!(
             "Contract files changed since {base} (merge-base with main), but the `## \
              [Unreleased]` section of CHANGELOG.md has not changed:\n\n  lablet/schema.json\n"
@@ -600,22 +704,22 @@ mod tests {
         let recorded = BEFORE.replace("- The scaffold.", "- The scaffold.\n- A schema type.");
         dir.write(CHANGELOG, &recorded);
         assert_eq!(
-            check_in(dir.path(), None),
-            Ok(Some(format!(
+            check_in(dir.path(), None).unwrap(),
+            Some(format!(
                 "1 contract file(s) changed since {base} (merge-base with main), with an \
                  Unreleased entry"
-            )))
+            ))
         );
 
         // The variable names a base that isn't HEAD.
         let named = git(&["rev-parse", "HEAD"]);
         git(&["commit", "--quiet", "--all", "--message=entry"]);
         assert_eq!(
-            check_in(dir.path(), Some(&named)),
-            Ok(Some(format!(
+            check_in(dir.path(), Some(&named)).unwrap(),
+            Some(format!(
                 "no contract file changed since {} (LABLET_CHANGELOG_BASE)",
                 &named[..12]
-            )))
+            ))
         );
     }
 }

@@ -17,6 +17,8 @@ toml = "=1.1.6"
 serde = { version = "=1.0.229", features = ["derive"] }
 # Reads the JSON reports of cargo-llvm-cov and cargo-mutants
 serde_json = "=1.0.151"
+# Error types that keep their cause, for a person to read
+thiserror = "=2.0.20"
 
 # xtask cannot inherit `[workspace.lints]` from lablet/Cargo.toml, so this is a
 # copy; `cargo xtask lint-manifests` holds the two in step.

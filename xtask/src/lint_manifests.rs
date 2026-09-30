@@ -55,8 +55,11 @@ pub fn lint(workspace: &Workspace, repo: &Path) -> Vec<String> {
         (config.to_owned(), repo.join(config)),
         (format!("{prefix}{config}"), workspace.root.join(config)),
     ] {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            findings.extend(check_cargo_config(&label, &text));
+        match std::fs::read_to_string(&path) {
+            Ok(text) => findings.extend(check_cargo_config(&label, &text)),
+            // Neither has to exist: cargo reads what there is.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => findings.push(format!("{label}: could not read: {e}")),
         }
     }
     findings
@@ -538,13 +541,13 @@ mod tests {
     }
 
     /// A workspace whose lint set is small enough to copy by hand.
+    const WORKSPACE_LINTS: &str = "[workspace.lints.rust]\nunsafe_code = \"forbid\"\n\n\
+                                   [workspace.lints.clippy]\n\
+                                   all = { level = \"warn\", priority = -1 }\n\
+                                   print_stdout = \"warn\"\n";
+
     fn workspace_with_lints(dependencies: &str) -> Workspace {
-        FixtureWorkspace::new(&format!(
-            "{dependencies}\n[workspace.lints.rust]\nunsafe_code = \"forbid\"\n\n\
-             [workspace.lints.clippy]\nall = {{ level = \"warn\", priority = -1 }}\n\
-             print_stdout = \"warn\"\n"
-        ))
-        .load()
+        FixtureWorkspace::new(&format!("{dependencies}\n{WORKSPACE_LINTS}")).load()
     }
 
     const XTASK_LINTS: &str = "[lints.rust]\nunsafe_code = \"forbid\"\n\n[lints.clippy]\n\
@@ -641,6 +644,29 @@ mod tests {
         std::fs::remove_file(repo.path().join("xtask/Cargo.toml")).unwrap();
         let findings = lint(&workspace, repo.path());
         assert!(findings[2].starts_with("xtask/Cargo.toml: could not read"));
+    }
+
+    #[test]
+    fn a_cargo_config_that_is_missing_passes_and_one_that_cannot_be_read_is_a_finding() {
+        let fixture = FixtureWorkspace::new(&format!("\n{WORKSPACE_LINTS}"));
+        let workspace = fixture.load();
+        let repo = TempDir::new("repo");
+        let xtask = format!("[package]\nname = \"xtask\"\n\n{XTASK_LINTS}");
+        repo.write("xtask/Cargo.toml", &xtask);
+        assert_findings(&lint(&workspace, repo.path()), &[]);
+
+        // A directory where each file goes: it is there, and can't be read.
+        fixture.write(".cargo/config.toml/inside", "");
+        repo.write(".cargo/config.toml/inside", "");
+        let why = std::fs::read_to_string(repo.path().join(".cargo/config.toml")).unwrap_err();
+        let root = workspace.root.file_name().unwrap().to_string_lossy();
+        assert_eq!(
+            lint(&workspace, repo.path()),
+            [
+                format!(".cargo/config.toml: could not read: {why}"),
+                format!("{root}/.cargo/config.toml: could not read: {why}"),
+            ]
+        );
     }
 
     #[test]

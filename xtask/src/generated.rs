@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use crate::gates::{CheckResult, weaver_diagnostic_args};
+use crate::error::{Error, Malformed, Verb};
+use crate::gates::{CheckResult, Failure, weaver_diagnostic_args};
 use crate::process;
 use crate::workspace::{Workspace, repo_root};
 
@@ -61,7 +62,7 @@ fn weaver_args(output: &Output, directory: &str) -> Vec<String> {
 struct Stage(PathBuf);
 
 impl Stage {
-    fn render() -> Result<Self, String> {
+    fn render() -> Result<Self, Error> {
         let root = repo_root();
         Self::render_with(&root, |program, args| {
             process::capture_in(&root, program, args).map(drop)
@@ -72,8 +73,8 @@ impl Stage {
     /// of running a program there.
     fn render_with(
         root: &Path,
-        mut run: impl FnMut(&str, &[&str]) -> Result<(), String>,
-    ) -> Result<Self, String> {
+        mut run: impl FnMut(&str, &[&str]) -> Result<(), Error>,
+    ) -> Result<Self, Error> {
         let relative = format!("lablet/target/weaver-generate/{}", std::process::id());
         let stage = Self(root.join(&relative));
         let _ = std::fs::remove_dir_all(&stage.0);
@@ -97,7 +98,7 @@ impl Drop for Stage {
     }
 }
 
-fn edition(workspace: &Workspace) -> Result<String, String> {
+fn edition(workspace: &Workspace) -> Result<String, Error> {
     workspace
         .document
         .get("workspace")
@@ -105,28 +106,32 @@ fn edition(workspace: &Workspace) -> Result<String, String> {
         .and_then(|table| table.get("edition"))
         .and_then(toml::Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| "lablet/Cargo.toml sets no `workspace.package.edition`".to_owned())
+        .ok_or(Malformed::Lacks("`workspace.package.edition`"))
+        .map_err(Error::parse(&workspace.root.join("Cargo.toml")))
 }
 
 /// Replaces the generated directories of the tree.
 pub fn write() -> CheckResult {
     let stage = Stage::render()?;
-    install(&stage.0, &repo_root())
+    install(&stage.0, &repo_root())?;
+    Ok(None)
 }
 
 /// Moves each rendering in `stage` over the directory it replaces under
 /// `root`, which need not exist yet.
-fn install(stage: &Path, root: &Path) -> CheckResult {
+fn install(stage: &Path, root: &Path) -> Result<(), Error> {
     for output in &OUTPUTS {
         let tree = root.join(output.tree);
-        let failed = |e: std::io::Error| format!("could not replace {}: {e}", tree.display());
         match std::fs::remove_dir_all(&tree) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(failed(e)),
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(Error::file(Verb::Replace, &tree)(e));
+            }
             _ => {}
         }
-        std::fs::rename(stage.join(output.staged), &tree).map_err(failed)?;
+        std::fs::rename(stage.join(output.staged), &tree)
+            .map_err(Error::file(Verb::Replace, &tree))?;
     }
-    Ok(None)
+    Ok(())
 }
 
 /// Fails when the tree differs from what the registry renders to. It writes
@@ -155,12 +160,12 @@ fn compare(stage: &Path, root: &Path) -> CheckResult {
         let _ = writeln!(message, "  {line}");
     }
     let _ = write!(message, "{FIX}");
-    Err(message)
+    Err(Failure::Verdict(message))
 }
 
 /// One line for each file that differs between `rendered` and `tree`, naming
 /// it under `label`.
-fn differences(rendered: &Path, tree: &Path, label: &str) -> Result<Vec<String>, String> {
+fn differences(rendered: &Path, tree: &Path, label: &str) -> Result<Vec<String>, Error> {
     let rendered = files(rendered, rendered)?;
     let mut in_tree = files(tree, tree)?;
     let mut lines = Vec::new();
@@ -179,21 +184,20 @@ fn differences(rendered: &Path, tree: &Path, label: &str) -> Result<Vec<String>,
 
 /// Every file under `directory`, keyed by its path relative to `base`. A
 /// directory that doesn't exist holds no files.
-fn files(base: &Path, directory: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    let failed = |e: std::io::Error| format!("could not read {}: {e}", directory.display());
+fn files(base: &Path, directory: &Path) -> Result<BTreeMap<String, Vec<u8>>, Error> {
     let entries = match std::fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(e) => return Err(failed(e)),
+        Err(e) => return Err(Error::file(Verb::Read, directory)(e)),
     };
     let mut found = BTreeMap::new();
     for entry in entries {
-        let path = entry.map_err(failed)?.path();
+        let path = entry.map_err(Error::file(Verb::Read, directory))?.path();
         if path.is_dir() {
             found.extend(files(base, &path)?);
         } else {
             let relative = path.strip_prefix(base).unwrap_or(&path);
-            let contents = std::fs::read(&path).map_err(failed)?;
+            let contents = std::fs::read(&path).map_err(Error::file(Verb::Read, &path))?;
             found.insert(relative.display().to_string(), contents);
         }
     }
@@ -203,6 +207,8 @@ fn files(base: &Path, directory: &Path) -> Result<BTreeMap<String, Vec<u8>>, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::chain;
+    use crate::process::Invocation;
     use crate::workspace::fixture::TempDir;
     use crate::workspace::workspace_root;
 
@@ -267,17 +273,19 @@ mod tests {
             "pub mod attributes;\n",
         );
         root.write(&format!("{REFERENCE}/README.md"), "# Telemetry\n");
-        assert_eq!(compare(stage.path(), root.path()), Ok(None));
+        assert_eq!(compare(stage.path(), root.path()).unwrap(), None);
 
         root.write(&format!("{REGISTRY_SOURCES}/lib.rs"), "pub mod old;\n");
         root.write(&format!("{REFERENCE}/spans.md"), "spans\n");
         assert_eq!(
-            compare(stage.path(), root.path()),
-            Err(format!(
+            compare(stage.path(), root.path())
+                .unwrap_err()
+                .into_verdict(),
+            format!(
                 "the generated files differ from what the registry renders to:\n  \
                  {REGISTRY_SOURCES}/lib.rs is out of date\n  {REFERENCE}/spans.md is no longer \
                  generated\nfix with: cargo xtask weaver generate"
-            ))
+            )
         );
     }
 
@@ -288,7 +296,7 @@ mod tests {
         root.write(&format!("{REGISTRY_SOURCES}/old.rs"), "\n");
         // The pages have never been rendered here.
         std::fs::create_dir_all(root.path().join("lablet/docs")).unwrap();
-        assert_eq!(install(stage.path(), root.path()), Ok(None));
+        install(stage.path(), root.path()).unwrap();
 
         let tree = |relative: &str| {
             let directory = root.path().join(relative);
@@ -312,8 +320,29 @@ mod tests {
         tree.write("src", "not a directory\n");
         let in_the_way = tree.path().join("src");
         let error = differences(rendered.path(), &in_the_way, "src").unwrap_err();
-        let expected = format!("could not read {}: ", in_the_way.display());
-        assert!(error.starts_with(&expected), "{error}");
+        let Error::File { verb, path, source } = &error else {
+            panic!("{error:?}");
+        };
+        assert_eq!((*verb, path), (Verb::Read, &in_the_way));
+        let expected = format!("could not read {}: {source}", in_the_way.display());
+        assert_eq!(chain(&error), expected);
+    }
+
+    /// A link to nothing is listed as an entry and can't be read.
+    #[test]
+    fn a_file_that_cannot_be_read_is_named_itself_not_its_directory() {
+        let (rendered, tree) = (TempDir::new("rendered"), TempDir::new("tree"));
+        rendered.write("lib.rs", "");
+        tree.write("lib.rs", "");
+        let dangling = tree.path().join("attributes.rs");
+        std::os::unix::fs::symlink(tree.path().join("gone.rs"), &dangling).unwrap();
+        let error = differences(rendered.path(), tree.path(), "src").unwrap_err();
+        let Error::File { verb, path, source } = &error else {
+            panic!("{error:?}");
+        };
+        assert_eq!((*verb, path), (Verb::Read, &dangling));
+        let expected = format!("could not read {}: {source}", dangling.display());
+        assert_eq!(chain(&error), expected);
     }
 
     #[test]
@@ -326,8 +355,12 @@ mod tests {
         root.write(REGISTRY_SOURCES, "in the way\n");
         let tree = root.path().join(REGISTRY_SOURCES);
         let error = install(stage.path(), root.path()).unwrap_err();
-        let expected = format!("could not replace {}: ", tree.display());
-        assert!(error.starts_with(&expected), "{error}");
+        let Error::File { verb, path, source } = &error else {
+            panic!("{error:?}");
+        };
+        assert_eq!((*verb, path), (Verb::Replace, &tree));
+        let expected = format!("could not replace {}: {source}", tree.display());
+        assert_eq!(chain(&error), expected);
         assert_eq!(std::fs::read_to_string(&tree).unwrap(), "in the way\n");
         assert!(!root.path().join(REFERENCE).exists());
     }
@@ -335,22 +368,38 @@ mod tests {
     /// Stands in for weaver and rustfmt under `root`: weaver writes a file
     /// where it is told to render, and the call numbered `failing`, counting
     /// from 1, fails. Returns the rendering and the programs run.
-    fn render(root: &Path, failing: usize) -> (Result<Stage, String>, Vec<String>) {
+    fn render(root: &Path, failing: usize) -> (Result<Stage, Error>, Vec<Invocation>) {
         let mut ran = Vec::new();
         let rendered = Stage::render_with(root, |program, args| {
-            ran.push(program.to_owned());
+            ran.push(Invocation::new(root, program, args));
             if program == "weaver" {
                 let directory = root.join(args[args.len() - 1]);
                 std::fs::create_dir_all(&directory).unwrap();
                 std::fs::write(directory.join("lib.rs"), "").unwrap();
             }
             if ran.len() == failing {
-                Err(format!("{program} failed"))
+                Err(Error::Failed {
+                    command: Invocation::new(root, program, args),
+                    stderr: format!("{program} failed"),
+                })
             } else {
                 Ok(())
             }
         });
         (rendered, ran)
+    }
+
+    /// The program each invocation ran.
+    fn programs(ran: &[Invocation]) -> Vec<String> {
+        ran.iter()
+            .map(|run| {
+                run.to_string()
+                    .split(' ')
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect()
     }
 
     #[test]
@@ -366,13 +415,16 @@ mod tests {
         ));
         for (failing, program) in [(1, "weaver"), (2, "weaver"), (3, "rustfmt")] {
             let (rendered, ran) = render(root.path(), failing);
-            assert_eq!(rendered.err(), Some(format!("{program} failed")));
+            // The failed command's own error, naming the command it was.
+            let error = rendered.err().unwrap();
+            let expected = format!("{}\n{program} failed", ran[failing - 1].failed());
+            assert_eq!(chain(&error), expected);
             assert_eq!(ran.len(), failing);
             assert!(!staged.exists(), "left by a failed {program}");
         }
 
         let (rendered, ran) = render(root.path(), 0);
-        assert_eq!(ran, ["weaver", "weaver", "rustfmt"]);
+        assert_eq!(programs(&ran), ["weaver", "weaver", "rustfmt"]);
         let rendered = rendered.unwrap();
         assert_eq!(rendered.0, staged);
         for output in &OUTPUTS {
@@ -382,12 +434,31 @@ mod tests {
         assert!(!staged.exists(), "left once the rendering was done with");
 
         // Without the workspace's edition, rustfmt never runs.
-        std::fs::remove_file(root.path().join("lablet/Cargo.toml")).unwrap();
+        let manifest = root.path().join("lablet/Cargo.toml");
+        std::fs::remove_file(&manifest).unwrap();
         let (rendered, ran) = render(root.path(), 0);
-        let error = rendered.err().unwrap_or_default();
-        assert!(error.starts_with("could not read "), "{error}");
-        assert_eq!(ran, ["weaver", "weaver"]);
+        let error = rendered.err().unwrap();
+        assert!(
+            matches!(&error, Error::File { verb: Verb::Read, path, .. } if *path == manifest),
+            "{error:?}"
+        );
+        assert_eq!(programs(&ran), ["weaver", "weaver"]);
         assert!(!staged.exists(), "left by a failed read of the edition");
+    }
+
+    #[test]
+    fn a_workspace_that_sets_no_edition_is_an_error_naming_its_manifest() {
+        let root = TempDir::new("no-edition");
+        root.write("Cargo.toml", "[workspace]\nmembers = []\n");
+        let workspace = Workspace::load(root.path()).unwrap();
+        let error = edition(&workspace).unwrap_err();
+        assert_eq!(
+            chain(&error),
+            format!(
+                "could not parse {}: it has no `workspace.package.edition`",
+                root.path().join("Cargo.toml").display()
+            )
+        );
     }
 
     #[test]

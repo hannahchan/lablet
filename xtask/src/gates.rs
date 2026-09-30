@@ -10,13 +10,26 @@ use std::path::Path;
 use std::sync::LazyLock;
 use std::time::Instant;
 
+use crate::error::{Error, chain};
 use crate::report::{self, Row};
 use crate::workspace::{Workspace, repo_root, workspace_root, xtask_manifest};
 use crate::{changelog, coverage, generated, lint_layers, lint_manifests, mutants, process};
 
-/// `Ok(None)` is a pass, `Ok(Some)` a pass with a note for the report, `Err`
-/// the whole diagnostic of a failure.
-pub type CheckResult = Result<Option<String>, String>;
+/// `Ok(None)` is a pass, `Ok(Some)` a pass with a note for the report.
+pub type CheckResult = Result<Option<String>, Failure>;
+
+/// Why a step did not pass: it ran and judged against the tree, or it could
+/// not run to a judgement.
+#[derive(Debug, thiserror::Error)]
+pub enum Failure {
+    /// The step's own verdict, as its whole diagnostic: a lint's findings, a
+    /// floor report, a changelog failure, a command's output.
+    #[error("{0}")]
+    Verdict(String),
+    /// Why the step reached no verdict.
+    #[error(transparent)]
+    Error(#[from] Error),
+}
 
 /// One named unit of a command or gate.
 pub struct Step {
@@ -193,7 +206,7 @@ fn listed(findings: &[String]) -> CheckResult {
         let _ = writeln!(message, "  {finding}\n");
     }
     let _ = write!(message, "{} violation(s) found.", findings.len());
-    Err(message)
+    Err(Failure::Verdict(message))
 }
 
 /// The prose vale reads, relative to the repository root. A directory is read
@@ -226,16 +239,21 @@ pub fn lint_shell_steps() -> Vec<Step> {
         // the step runs, rather than listing again and passing green having
         // linted nothing.
         Err(_) => vec![Step::check("lint-shell", || {
-            Err(shell_scripts(&repo_root()).err().unwrap_or_else(|| {
-                "the tracked file list couldn't be read when the gate was planned".to_owned()
-            }))
+            let error = shell_scripts(&repo_root())
+                .err()
+                .unwrap_or_else(|| Error::Missing {
+                    what: "the tracked file list couldn't be read when the gate was planned"
+                        .to_owned(),
+                    remedy: "Run the gate again".to_owned(),
+                });
+            Err(error.into())
         })],
     }
 }
 
 /// Tracked files that are shell: a `.sh` file, or one with no extension whose
 /// first line is a shell shebang, since the git hooks have none.
-fn shell_scripts(root: &Path) -> Result<Vec<String>, String> {
+fn shell_scripts(root: &Path) -> Result<Vec<String>, Error> {
     let listed = process::capture_in(root, "git", &["ls-files", "-z"])?;
     Ok(listed
         .split('\0')
@@ -267,9 +285,14 @@ pub fn lint_prose_steps(all: bool) -> Vec<Step> {
 fn lint_prose_steps_in(root: &Path, all: bool) -> Vec<Step> {
     if !root.join(VALE_CONFIG).is_file() {
         return vec![Step::check("lint-prose", || {
-            Err(format!(
-                "{VALE_CONFIG} is missing from the repository root, so vale has no style to apply"
-            ))
+            Err(Error::Missing {
+                what: format!(
+                    "{VALE_CONFIG} is missing from the repository root, so vale has no style to \
+                     apply"
+                ),
+                remedy: "Restore it from git, which tracks it".to_owned(),
+            }
+            .into())
         })];
     }
     let args = vale_args(root, all);
@@ -530,8 +553,8 @@ pub fn run(mode: Mode, steps: &[Step]) -> bool {
             Ok(_) if !lists_passes => {}
             Ok(None) => println!("[ok] {} ({elapsed:.1}s)", step.label),
             Ok(Some(note)) => println!("[ok] {} ({elapsed:.1}s): {note}", step.label),
-            Err(diagnostic) => {
-                let diagnostic = with_hint(diagnostic, step.hint);
+            Err(failure) => {
+                let diagnostic = diagnostic(failure, step.hint);
                 eprintln!("[FAIL] {} ({elapsed:.1}s)\n\n{diagnostic}\n", step.label);
             }
         }
@@ -583,28 +606,29 @@ fn rerun(label: &str) -> String {
 /// Captured, both streams share one pipe so their interleaving survives, and
 /// the failure carries the capture.
 fn run_command(program: &str, args: &[&str], env: &[(&str, &str)], capture: bool) -> CheckResult {
-    let failed = || format!("error: {}", process::command_failed(program, args));
+    let invocation = process::invocation(program, args);
+    let failed = || format!("error: {}", invocation.failed());
     if !capture {
         let status = process::stream(program, args, env)?;
         return if status.success() {
             Ok(None)
         } else {
-            Err(failed())
+            Err(Failure::Verdict(failed()))
         };
     }
 
-    let could_not_run = |e: std::io::Error| process::could_not_run(program, &e);
-    let (mut reader, writer) = std::io::pipe().map_err(could_not_run)?;
+    let could_not_run = invocation.not_started();
+    let (mut reader, writer) = std::io::pipe().map_err(&could_not_run)?;
     let mut command = process::command(program, args)?;
     command
         .envs(env.iter().copied())
-        .stdout(writer.try_clone().map_err(could_not_run)?)
+        .stdout(writer.try_clone().map_err(&could_not_run)?)
         .stderr(writer);
     if on_terminal() {
         command.env("CARGO_TERM_COLOR", "always");
         command.env("CLICOLOR_FORCE", "1");
     }
-    let mut child = command.spawn().map_err(could_not_run)?;
+    let mut child = command.spawn().map_err(&could_not_run)?;
     // The command holds the write ends; drop it or the reader never sees EOF.
     drop(command);
     let mut output = Vec::new();
@@ -613,18 +637,21 @@ fn run_command(program: &str, args: &[&str], env: &[(&str, &str)], capture: bool
     if status.success() {
         Ok(None)
     } else {
-        Err(format!(
+        Err(Failure::Verdict(format!(
             "{}\n{}",
             String::from_utf8_lossy(&output).trim_end(),
             failed()
-        ))
+        )))
     }
 }
 
-fn with_hint(diagnostic: &str, hint: Option<&str>) -> String {
-    match hint {
-        Some(hint) => format!("{diagnostic}\n{hint}"),
-        None => diagnostic.to_owned(),
+/// A failed step's diagnostic. A step's hint fixes what its verdict found,
+/// so it follows only a verdict: an error means the step never judged.
+fn diagnostic(failure: &Failure, hint: Option<&str>) -> String {
+    let told = chain(failure);
+    match (failure, hint) {
+        (Failure::Verdict(_), Some(hint)) => format!("{told}\n{hint}"),
+        _ => told,
     }
 }
 
@@ -650,6 +677,27 @@ fn verbose() -> bool {
 
 fn in_ci() -> bool {
     std::env::var("CI").is_ok_and(|v| v == "true")
+}
+
+#[cfg(test)]
+impl Failure {
+    /// The verdict, where one is expected.
+    #[track_caller]
+    pub fn into_verdict(self) -> String {
+        match self {
+            Self::Verdict(verdict) => verdict,
+            Self::Error(error) => panic!("no verdict, but an error: {}", chain(&error)),
+        }
+    }
+
+    /// The error, where one is expected.
+    #[track_caller]
+    pub fn into_error(self) -> Error {
+        match self {
+            Self::Error(error) => error,
+            Self::Verdict(verdict) => panic!("no error, but a verdict: {verdict}"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -718,12 +766,12 @@ mod tests {
             panic!("`{}` runs vale with no config to run it under", step.label);
         };
         assert_eq!(step.label, "lint-prose");
+        let error = check().unwrap_err().into_error();
+        assert!(matches!(error, Error::Missing { .. }), "{error:?}");
         assert_eq!(
-            check(),
-            Err(
-                ".vale.ini is missing from the repository root, so vale has no style to apply"
-                    .to_owned()
-            )
+            chain(&error),
+            ".vale.ini is missing from the repository root, so vale has no style to apply. \
+             Restore it from git, which tracks it"
         );
     }
 
@@ -753,16 +801,34 @@ mod tests {
         let failed = "error: command failed (in the repository root): sh -c echo held for the \
                       report; exit 3";
         assert_eq!(
-            run_command("sh", &script, &[], true),
-            Err(format!("held for the report\n{failed}"))
+            run_command("sh", &script, &[], true)
+                .unwrap_err()
+                .into_verdict(),
+            format!("held for the report\n{failed}")
         );
         let silent = ["-c", "exit 3"];
         assert_eq!(
-            run_command("sh", &silent, &[], false),
-            Err("error: command failed (in the repository root): sh -c exit 3".to_owned())
+            run_command("sh", &silent, &[], false)
+                .unwrap_err()
+                .into_verdict(),
+            "error: command failed (in the repository root): sh -c exit 3"
         );
-        assert_eq!(run_command("sh", &["-c", "true"], &[], true), Ok(None));
-        assert_eq!(run_command("sh", &["-c", "true"], &[], false), Ok(None));
+        assert_eq!(run_command("sh", &["-c", "true"], &[], true).unwrap(), None);
+        assert_eq!(
+            run_command("sh", &["-c", "true"], &[], false).unwrap(),
+            None
+        );
+
+        // One that can't start reached no verdict, captured or not.
+        let missing = "lablet-xtask-no-such-program";
+        let why = std::io::Error::from_raw_os_error(2);
+        for capture in [true, false] {
+            let error = run_command(missing, &[], &[], capture).unwrap_err();
+            assert_eq!(
+                chain(&error.into_error()),
+                format!("could not run `{missing}` (in the repository root): {why}")
+            );
+        }
     }
 
     #[test]
@@ -800,12 +866,26 @@ mod tests {
         for step in fmt_steps(false) {
             assert_eq!(step.hint, None, "{}", step.label);
         }
+        let verdict = || Failure::Verdict("error: command failed".to_owned());
         assert_eq!(
-            with_hint("error: command failed", Some(FMT_HINT)),
+            diagnostic(&verdict(), Some(FMT_HINT)),
             "error: command failed\nfix with: cargo xtask fmt"
         );
-        assert_eq!(with_hint("error", None), "error");
+        assert_eq!(diagnostic(&verdict(), None), "error: command failed");
         assert_eq!(rerun("clippy (xtask)"), "re-run: cargo xtask clippy");
+    }
+
+    /// `cargo xtask fmt` fails the same way when the formatter can't start.
+    #[test]
+    fn a_step_that_could_not_run_gets_no_hint_to_fix_what_it_never_judged() {
+        let error = Failure::Error(Error::Missing {
+            what: "dprint is not installed".to_owned(),
+            remedy: "Run `cargo xtask setup`".to_owned(),
+        });
+        assert_eq!(
+            diagnostic(&error, Some(FMT_HINT)),
+            "dprint is not installed. Run `cargo xtask setup`"
+        );
     }
 
     #[test]
@@ -1008,9 +1088,11 @@ mod tests {
 
     #[test]
     fn a_lint_passes_with_no_finding_and_lists_every_finding_otherwise() {
-        assert_eq!(listed(&[]), Ok(None));
+        assert_eq!(listed(&[]).unwrap(), None);
         assert_eq!(
-            listed(&["one".to_owned(), "two".to_owned()]).unwrap_err(),
+            listed(&["one".to_owned(), "two".to_owned()])
+                .unwrap_err()
+                .into_verdict(),
             "  one\n\n  two\n\n2 violation(s) found."
         );
     }
@@ -1022,7 +1104,7 @@ mod tests {
         let steps = [
             Step::check("first", || {
                 RAN.fetch_add(1, Ordering::SeqCst);
-                Err("first failed".to_owned())
+                Err(Failure::Verdict("first failed".to_owned()))
             }),
             Step::check("second", || {
                 RAN.fetch_add(1, Ordering::SeqCst);

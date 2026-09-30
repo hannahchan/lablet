@@ -17,7 +17,9 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::workspace::Workspace;
+use crate::error::{Error, Verb};
+use crate::gates::{CheckResult, Failure};
+use crate::workspace::{self, Workspace};
 
 /// The floors one crate is held to.
 #[derive(Debug, Clone, Copy)]
@@ -214,13 +216,13 @@ pub fn nothing_measured(package: &str, none_of: &str, floor: &str) -> String {
 ///
 /// The count is of floors rather than crates, because a crate can be held to
 /// more than one: coverage judges its lines and its regions apart.
-pub fn conclude(what: &str, lines: &[Line]) -> crate::gates::CheckResult {
+pub fn conclude(what: &str, lines: &[Line]) -> CheckResult {
     if lines.is_empty() {
-        return Err(format!(
+        return Err(Failure::Verdict(format!(
             "{what}: no floor crate was judged, so no floor was applied; xtask/src/floors.rs \
              names {} crate(s)",
             FLOORS.len()
-        ));
+        )));
     }
     let report = report(lines);
     let count = |standings: &[Standing]| {
@@ -231,9 +233,9 @@ pub fn conclude(what: &str, lines: &[Line]) -> crate::gates::CheckResult {
     };
     let failed = count(&[Standing::Below, Standing::NothingMeasured]);
     if failed > 0 {
-        return Err(format!(
+        return Err(Failure::Verdict(format!(
             "{what}: {failed} floor(s) below or unmeasured\n\n{report}"
-        ));
+        )));
     }
     println!("{report}");
     let unmeasured = count(&[Standing::NothingToMeasure]);
@@ -257,10 +259,9 @@ pub fn report<L: fmt::Display>(lines: &[L]) -> String {
 /// `target/xtask` under the workspace, where the floor checks keep their
 /// tools' reports. Created here: on a fresh clone `target/` does not exist
 /// yet, and cargo-mutants does not create the parent of its output directory.
-pub fn output_directory(workspace_root: &Path) -> Result<PathBuf, String> {
+pub fn output_directory(workspace_root: &Path) -> Result<PathBuf, Error> {
     let directory = workspace_root.join("target").join("xtask");
-    std::fs::create_dir_all(&directory)
-        .map_err(|e| format!("could not create {}: {e}", directory.display()))?;
+    std::fs::create_dir_all(&directory).map_err(Error::file(Verb::Create, &directory))?;
     Ok(directory)
 }
 
@@ -277,24 +278,23 @@ pub struct FloorCrate {
 }
 
 /// Every floor crate, read from disk. A floor naming a crate the workspace
-/// does not have is an error, so the list cannot rot silently; so is test
-/// code in a production file, and so is `mutants::skip` in one.
-pub fn crates(workspace: &Workspace) -> Result<Vec<FloorCrate>, String> {
+/// does not have fails, so the list cannot rot silently; so does test code
+/// in a production file, and so does `mutants::skip` in one.
+pub fn crates(workspace: &Workspace) -> Result<Vec<FloorCrate>, Failure> {
     let mut crates = Vec::new();
     let mut misplaced = Vec::new();
     let mut skipped = Vec::new();
     for floor in FLOORS {
         let member = workspace.member_named(floor.package).ok_or_else(|| {
-            format!(
+            Failure::Verdict(format!(
                 "xtask/src/floors.rs sets a floor for `{}`, but the workspace has no such package",
                 floor.package
-            )
+            ))
         })?;
         let directory = workspace.root.join(&member.path);
         let mut holds_code = false;
         for file in production_sources(&directory.join("src"))? {
-            let source = std::fs::read_to_string(&file)
-                .map_err(|e| format!("could not read {}: {e}", file.display()))?;
+            let source = workspace::read(&file)?;
             holds_code |= source.lines().any(defines_a_function);
             if let Some(line) = misplaced_test_code(&source) {
                 let relative = file.strip_prefix(&workspace.root).unwrap_or(&file);
@@ -312,18 +312,18 @@ pub fn crates(workspace: &Workspace) -> Result<Vec<FloorCrate>, String> {
         });
     }
     if !skipped.is_empty() {
-        return Err(format!(
+        return Err(Failure::Verdict(format!(
             "`mutants::skip` in a production file of a crate with a mutation floor:\n\n{}\n\n\
              cargo-mutants generates no mutant for what it marks, whatever a `cfg_attr` around it \
              says, so the floor would pass without judging that code. Catch its mutants with a \
              test, or name one no test can catch in EQUIVALENT_MUTANTS, with the reason.",
             skipped.join("\n")
-        ));
+        )));
     }
     if misplaced.is_empty() {
         return Ok(crates);
     }
-    Err(format!(
+    Err(Failure::Verdict(format!(
         "test code in a production file of a crate with a coverage floor:\n\n{}\n\nIn these \
          crates unit tests live in a sibling file (src/foo.rs and src/foo/tests.rs, or \
          src/tests.rs) declared as `#[cfg(test)] mod tests;`, with any helper modules below that \
@@ -333,11 +333,11 @@ pub fn crates(workspace: &Workspace) -> Result<Vec<FloorCrate>, String> {
          `#[cfg(not(test))]`. Coverage tells test code from production code by file name, so \
          such lines would count as covered production lines, or not be measured at all.",
         misplaced.join("\n")
-    ))
+    )))
 }
 
 /// The `.rs` files under `src` that [`TEST_FILES`] does not name, sorted.
-fn production_sources(src: &Path) -> Result<Vec<PathBuf>, String> {
+fn production_sources(src: &Path) -> Result<Vec<PathBuf>, Error> {
     let mut files = Vec::new();
     let mut pending = vec![src.to_path_buf()];
     while let Some(path) = pending.pop() {
@@ -346,8 +346,7 @@ fn production_sources(src: &Path) -> Result<Vec<PathBuf>, String> {
             continue;
         }
         if path.is_dir() || path == src {
-            let entries = std::fs::read_dir(&path)
-                .map_err(|e| format!("could not read {}: {e}", path.display()))?;
+            let entries = std::fs::read_dir(&path).map_err(Error::file(Verb::Read, &path))?;
             pending.extend(entries.flatten().map(|entry| entry.path()));
         } else if path.extension().is_some_and(|extension| extension == "rs") {
             files.push(path);
@@ -411,6 +410,7 @@ fn misplaced_test_code(source: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::chain;
     use crate::workspace::fixture::FixtureWorkspace;
 
     fn line(hit: u64, total: u64, floor: u64) -> Line {
@@ -507,7 +507,9 @@ mod tests {
             ..line(0, 0, 90)
         };
         assert_eq!(hidden.standing(), Standing::NothingMeasured);
-        let error = conclude("mutants", &[line(0, 0, 90), hidden]).unwrap_err();
+        let error = conclude("mutants", &[line(0, 0, 90), hidden])
+            .unwrap_err()
+            .into_verdict();
         assert!(
             error.starts_with("mutants: 1 floor(s) below or unmeasured"),
             "{error}"
@@ -520,12 +522,9 @@ mod tests {
     #[test]
     fn a_report_that_judged_no_floor_fails() {
         assert_eq!(
-            conclude("coverage", &[]),
-            Err(
-                "coverage: no floor crate was judged, so no floor was applied; \
-                 xtask/src/floors.rs names 3 crate(s)"
-                    .to_owned()
-            )
+            conclude("coverage", &[]).unwrap_err().into_verdict(),
+            "coverage: no floor crate was judged, so no floor was applied; xtask/src/floors.rs \
+             names 3 crate(s)"
         );
     }
 
@@ -535,16 +534,18 @@ mod tests {
         let directory = output_directory(workspace.path()).unwrap();
         assert_eq!(directory, workspace.path().join("target/xtask"));
         assert!(directory.is_dir());
-        assert_eq!(output_directory(workspace.path()), Ok(directory));
+        assert_eq!(output_directory(workspace.path()).unwrap(), directory);
 
         let blocked = crate::workspace::fixture::TempDir::new("output-blocked");
         blocked.write("target", "a file, where the directory goes\n");
         let error = output_directory(blocked.path()).unwrap_err();
-        let expected = format!(
-            "could not create {}: ",
-            blocked.path().join("target/xtask").display()
-        );
-        assert!(error.starts_with(&expected), "{error}");
+        let wanted = blocked.path().join("target/xtask");
+        let Error::File { verb, path, source } = &error else {
+            panic!("{error:?}");
+        };
+        assert_eq!((*verb, path), (Verb::Create, &wanted));
+        let expected = format!("could not create {}: {source}", wanted.display());
+        assert_eq!(chain(&error), expected);
     }
 
     #[test]
@@ -565,7 +566,9 @@ mod tests {
 
     #[test]
     fn one_crate_below_its_floor_fails_the_report_and_every_line_is_shown() {
-        let error = conclude("coverage", &[line(95, 100, 90), line(10, 100, 90)]).unwrap_err();
+        let error = conclude("coverage", &[line(95, 100, 90), line(10, 100, 90)])
+            .unwrap_err()
+            .into_verdict();
         assert!(
             error.starts_with("coverage: 1 floor(s) below or unmeasured"),
             "{error}"
@@ -651,7 +654,8 @@ mod tests {
             "skip.rs",
             "#[cfg_attr(windows, mutants::skip)]\nfn a() {}\n",
         )])
-        .unwrap_err();
+        .unwrap_err()
+        .into_verdict();
         assert!(
             skipped.contains("crates/domain/model/src/skip.rs:1"),
             "{skipped}"
@@ -659,7 +663,7 @@ mod tests {
     }
 
     /// The floor crates, `lablet-model` with `files` under its `src/`.
-    fn crates_with(files: &[(&str, &str)]) -> Result<Vec<FloorCrate>, String> {
+    fn crates_with(files: &[(&str, &str)]) -> Result<Vec<FloorCrate>, Failure> {
         let mut workspace = FixtureWorkspace::new("");
         for (path, name) in [
             ("crates/domain/model", "lablet-model"),
@@ -708,7 +712,8 @@ mod tests {
             ),
             ("usage/total.rs", "#[test]\nfn adds() {}\n"),
         ])
-        .unwrap_err();
+        .unwrap_err()
+        .into_verdict();
         for phrase in [
             "  crates/domain/model/src/usage.rs:5\n",
             "  crates/domain/model/src/usage/total.rs:1\n",
@@ -720,12 +725,27 @@ mod tests {
     }
 
     #[test]
-    fn a_floor_crate_without_a_source_directory_is_an_error() {
+    fn a_floor_crate_without_a_source_directory_is_an_error_naming_the_directory() {
         let workspace = FixtureWorkspace::new("")
             .member("crates/domain/model", "lablet-model", "")
             .load();
-        let error = crates(&workspace).unwrap_err();
-        assert!(error.contains("crates/domain/model/src"), "{error}");
+        let error = crates(&workspace).unwrap_err().into_error();
+        let src = workspace.root.join("crates/domain/model/src");
+        assert!(
+            matches!(&error, Error::File { verb: Verb::Read, path, .. } if *path == src),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_floor_naming_a_package_the_workspace_lacks_fails() {
+        let workspace = FixtureWorkspace::new("").member("crates/domain/model", "lablet-model", "");
+        workspace.write("crates/domain/model/src/lib.rs", "//! An empty shell.\n");
+        assert_eq!(
+            crates(&workspace.load()).unwrap_err().into_verdict(),
+            "xtask/src/floors.rs sets a floor for `lablet-policy`, but the workspace has no such \
+             package"
+        );
     }
 
     #[test]
