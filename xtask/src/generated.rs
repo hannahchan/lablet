@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::gates::{CheckResult, weaver_diagnostic_args};
 use crate::process;
-use crate::workspace::{Workspace, repo_root, workspace_root};
+use crate::workspace::{Workspace, repo_root};
 
 const REGISTRY: &str = "lablet/telemetry/registry";
 const FIX: &str = "fix with: cargo xtask weaver generate";
@@ -62,19 +62,31 @@ struct Stage(PathBuf);
 
 impl Stage {
     fn render() -> Result<Self, String> {
+        let root = repo_root();
+        Self::render_with(&root, |program, args| {
+            process::capture_in(&root, program, args).map(drop)
+        })
+    }
+
+    /// [`Stage::render`] for the repository at `root`, with `run` in place
+    /// of running a program there.
+    fn render_with(
+        root: &Path,
+        mut run: impl FnMut(&str, &[&str]) -> Result<(), String>,
+    ) -> Result<Self, String> {
         let relative = format!("lablet/target/weaver-generate/{}", std::process::id());
-        let stage = Self(repo_root().join(&relative));
+        let stage = Self(root.join(&relative));
         let _ = std::fs::remove_dir_all(&stage.0);
         for output in &OUTPUTS {
             let args = weaver_args(output, &format!("{relative}/{}", output.staged));
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
-            process::capture("weaver", &args)?;
+            run("weaver", &args)?;
         }
         // Weaver's output is unformatted, and `cargo fmt` reaches only the
         // members of a workspace. rustfmt follows `mod` lines from the root.
-        let edition = edition(&Workspace::load(&workspace_root())?)?;
+        let edition = edition(&Workspace::load(&root.join("lablet"))?)?;
         let lib = stage.0.join("src/lib.rs").display().to_string();
-        process::capture("rustfmt", &["--edition", &edition, &lib])?;
+        run("rustfmt", &["--edition", &edition, &lib])?;
         Ok(stage)
     }
 }
@@ -192,6 +204,7 @@ fn files(base: &Path, directory: &Path) -> Result<BTreeMap<String, Vec<u8>>, Str
 mod tests {
     use super::*;
     use crate::workspace::fixture::TempDir;
+    use crate::workspace::workspace_root;
 
     #[test]
     fn a_tree_that_matches_the_rendering_has_no_differences() {
@@ -290,6 +303,91 @@ mod tests {
             tree(REFERENCE),
             BTreeMap::from([file("README.md", "# Telemetry\n")])
         );
+    }
+
+    #[test]
+    fn a_file_where_a_generated_directory_belongs_is_an_error_not_an_empty_directory() {
+        let (rendered, tree) = (TempDir::new("rendered"), TempDir::new("tree"));
+        rendered.write("lib.rs", "");
+        tree.write("src", "not a directory\n");
+        let in_the_way = tree.path().join("src");
+        let error = differences(rendered.path(), &in_the_way, "src").unwrap_err();
+        let expected = format!("could not read {}: ", in_the_way.display());
+        assert!(error.starts_with(&expected), "{error}");
+    }
+
+    #[test]
+    fn a_generated_directory_that_cannot_be_removed_is_left_as_it_was_and_named() {
+        let (stage, root) = (TempDir::new("stage"), TempDir::new("root"));
+        // A file at both ends: removing the tree's fails for its not being a
+        // directory, where a rename alone would have replaced it.
+        stage.write("src", "rendered\n");
+        stage.write("docs/README.md", "# Telemetry\n");
+        root.write(REGISTRY_SOURCES, "in the way\n");
+        let tree = root.path().join(REGISTRY_SOURCES);
+        let error = install(stage.path(), root.path()).unwrap_err();
+        let expected = format!("could not replace {}: ", tree.display());
+        assert!(error.starts_with(&expected), "{error}");
+        assert_eq!(std::fs::read_to_string(&tree).unwrap(), "in the way\n");
+        assert!(!root.path().join(REFERENCE).exists());
+    }
+
+    /// Stands in for weaver and rustfmt under `root`: weaver writes a file
+    /// where it is told to render, and the call numbered `failing`, counting
+    /// from 1, fails. Returns the rendering and the programs run.
+    fn render(root: &Path, failing: usize) -> (Result<Stage, String>, Vec<String>) {
+        let mut ran = Vec::new();
+        let rendered = Stage::render_with(root, |program, args| {
+            ran.push(program.to_owned());
+            if program == "weaver" {
+                let directory = root.join(args[args.len() - 1]);
+                std::fs::create_dir_all(&directory).unwrap();
+                std::fs::write(directory.join("lib.rs"), "").unwrap();
+            }
+            if ran.len() == failing {
+                Err(format!("{program} failed"))
+            } else {
+                Ok(())
+            }
+        });
+        (rendered, ran)
+    }
+
+    #[test]
+    fn the_stage_is_removed_whether_the_rendering_fails_or_is_done_with() {
+        let root = TempDir::new("render");
+        root.write(
+            "lablet/Cargo.toml",
+            "[workspace]\nmembers = []\n\n[workspace.package]\nedition = \"2024\"\n",
+        );
+        let staged = root.path().join(format!(
+            "lablet/target/weaver-generate/{}",
+            std::process::id()
+        ));
+        for (failing, program) in [(1, "weaver"), (2, "weaver"), (3, "rustfmt")] {
+            let (rendered, ran) = render(root.path(), failing);
+            assert_eq!(rendered.err(), Some(format!("{program} failed")));
+            assert_eq!(ran.len(), failing);
+            assert!(!staged.exists(), "left by a failed {program}");
+        }
+
+        let (rendered, ran) = render(root.path(), 0);
+        assert_eq!(ran, ["weaver", "weaver", "rustfmt"]);
+        let rendered = rendered.unwrap();
+        assert_eq!(rendered.0, staged);
+        for output in &OUTPUTS {
+            assert!(staged.join(output.staged).join("lib.rs").is_file());
+        }
+        drop(rendered);
+        assert!(!staged.exists(), "left once the rendering was done with");
+
+        // Without the workspace's edition, rustfmt never runs.
+        std::fs::remove_file(root.path().join("lablet/Cargo.toml")).unwrap();
+        let (rendered, ran) = render(root.path(), 0);
+        let error = rendered.err().unwrap_or_default();
+        assert!(error.starts_with("could not read "), "{error}");
+        assert_eq!(ran, ["weaver", "weaver"]);
+        assert!(!staged.exists(), "left by a failed read of the edition");
     }
 
     #[test]

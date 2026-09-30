@@ -130,8 +130,15 @@ fn plan(task: &str, args: &[String]) -> Result<(Mode, Vec<Step>), String> {
 }
 
 fn main() -> ExitCode {
-    let mut args = std::env::args().skip(1);
-    let Some(task) = args.next() else {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    exit_code(&args, gates::run)
+}
+
+/// What `cargo xtask <args>` exits with, `run` running the steps a task
+/// plans and saying whether all passed. Success is help, or a run in which
+/// every step passed; a usage error runs nothing.
+fn exit_code(args: &[String], run: impl FnOnce(Mode, &[Step]) -> bool) -> ExitCode {
+    let Some((task, args)) = args.split_first() else {
         eprint!("{USAGE}");
         return ExitCode::FAILURE;
     };
@@ -139,9 +146,8 @@ fn main() -> ExitCode {
         print!("{USAGE}");
         return ExitCode::SUCCESS;
     }
-    let args: Vec<String> = args.collect();
-    match plan(&task, &args) {
-        Ok((mode, steps)) if gates::run(mode, &steps) => ExitCode::SUCCESS,
+    match plan(task, args) {
+        Ok((mode, steps)) if run(mode, &steps) => ExitCode::SUCCESS,
         Ok(_) => ExitCode::FAILURE,
         Err(message) => {
             eprintln!("error: {message}\n");
@@ -287,6 +293,38 @@ mod tests {
             Some("run -q --locked --manifest-path ../xtask/Cargo.toml --"),
             "the workspace copy of the alias has drifted from the root one"
         );
+    }
+
+    #[test]
+    fn a_failed_run_exits_non_zero_and_a_passed_one_zero() {
+        let words = |line: &str| -> Vec<String> { line.split(' ').map(str::to_owned).collect() };
+        let ran = std::cell::RefCell::new(Vec::new());
+        let run = |passed: bool| {
+            let ran = &ran;
+            move |_: Mode, steps: &[Step]| {
+                ran.borrow_mut().extend(steps.iter().map(|step| step.label));
+                passed
+            }
+        };
+        assert_eq!(
+            exit_code(&words("lint-layers"), run(true)),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            exit_code(&words("lint-layers"), run(false)),
+            ExitCode::FAILURE
+        );
+        assert_eq!(*ran.borrow(), ["lint-layers", "lint-layers"]);
+
+        // Help runs nothing and succeeds; a usage error runs nothing and fails.
+        assert_eq!(exit_code(&words("help"), run(false)), ExitCode::SUCCESS);
+        assert_eq!(exit_code(&[], run(true)), ExitCode::FAILURE);
+        assert_eq!(exit_code(&words("fnt"), run(true)), ExitCode::FAILURE);
+        assert_eq!(
+            exit_code(&words("clippy --fix"), run(true)),
+            ExitCode::FAILURE
+        );
+        assert_eq!(ran.borrow().len(), 2);
     }
 
     #[test]

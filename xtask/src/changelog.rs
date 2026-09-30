@@ -165,18 +165,24 @@ fn changed_paths(directory: &Path, base: &str) -> Result<Vec<String>, String> {
 
 /// The changelog gate as a step.
 pub fn check() -> CheckResult {
+    let from_environment = std::env::var(BASE_VARIABLE).ok();
+    check_in(&repo_root(), from_environment.as_deref())
+}
+
+/// [`check`], for the repository at `root`, with `from_environment` read
+/// from [`BASE_VARIABLE`].
+fn check_in(root: &Path, from_environment: Option<&str>) -> CheckResult {
     let commit = |revision: &str| {
         let commit = format!("{revision}^{{commit}}");
-        git(&["rev-parse", "--verify", "--quiet", &commit])
+        git(root, &["rev-parse", "--verify", "--quiet", &commit])
             .ok()
             .map(|out| out.trim().to_owned())
     };
-    let from_environment = std::env::var(BASE_VARIABLE).ok();
     let base = resolve_base(
-        from_environment.as_deref(),
+        from_environment,
         |revision| commit(revision).is_some(),
         |branch| {
-            git(&["merge-base", "HEAD", branch])
+            git(root, &["merge-base", "HEAD", branch])
                 .ok()
                 .map(|out| out.trim().to_owned())
                 .filter(|revision| !revision.is_empty())
@@ -187,9 +193,9 @@ pub fn check() -> CheckResult {
         Err(skipped) => return Ok(Some(skipped)),
     };
 
-    let changed = changed_paths(&repo_root(), &base.revision)?;
-    let at_base = git(&["show", &format!("{}:{CHANGELOG}", base.revision)]).ok();
-    let now = std::fs::read_to_string(repo_root().join(CHANGELOG)).ok();
+    let changed = changed_paths(root, &base.revision)?;
+    let at_base = git(root, &["show", &format!("{}:{CHANGELOG}", base.revision)]).ok();
+    let now = std::fs::read_to_string(root.join(CHANGELOG)).ok();
     let verdict = decide(&changed, at_base.as_deref(), now.as_deref());
     conclude(verdict, &base, commit(&base.revision) == commit("HEAD"))
 }
@@ -237,8 +243,8 @@ fn failure(paths: &[String], since: &str, missing: &str) -> String {
     message
 }
 
-fn git(args: &[&str]) -> Result<String, String> {
-    process::capture("git", args)
+fn git(root: &Path, args: &[&str]) -> Result<String, String> {
+    process::capture_in(root, "git", args)
 }
 
 fn nul_separated(output: &str) -> Vec<String> {
@@ -261,7 +267,7 @@ fn short(revision: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::fixture::{defy_git_defaults, scratch_git};
+    use crate::workspace::fixture::{TempDir, defy_git_defaults, scratch_git};
 
     const BEFORE: &str = "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- The scaffold.\n\n## [0.1.0] - 2026-01-01\n\n- First.\n";
 
@@ -488,6 +494,9 @@ mod tests {
             assert_eq!(found.revision, "def456");
             assert_eq!(found.source, "merge-base with origin/main");
         }
+        // The all-zero id is unset by what it is, not by failing to resolve.
+        let found = base(Some(&zeros), &[&zeros], &[("origin/main", "def456")]).unwrap();
+        assert_eq!(found.revision, "def456");
     }
 
     #[test]
@@ -546,5 +555,67 @@ mod tests {
     fn a_full_commit_id_is_shortened_and_a_ref_name_is_not() {
         assert_eq!(short(&"a1".repeat(20)), "a1a1a1a1a1a1");
         assert_eq!(short("origin/main"), "origin/main");
+        // Only the two together are a full id: its length, and hex digits.
+        let long_name = format!("topic/{}", "x".repeat(34));
+        assert_eq!(short(&long_name), long_name);
+        assert_eq!(short("abc123"), "abc123");
+    }
+
+    #[test]
+    fn the_gate_judges_the_working_tree_against_the_base_it_resolved() {
+        let dir = TempDir::new("changelog-gate");
+        let git = |args: &[&str]| scratch_git(dir.path(), args).trim().to_owned();
+        dir.write(CHANGELOG, BEFORE);
+        dir.write("lablet/schema.json", "{}\n");
+        git(&["init", "--quiet", "--initial-branch=main"]);
+        defy_git_defaults(dir.path(), "diff.noprefix");
+        assert_eq!(
+            std::fs::canonicalize(git(&["rev-parse", "--show-toplevel"])).unwrap(),
+            std::fs::canonicalize(dir.path()).unwrap(),
+            "git resolved outside the scratch repository"
+        );
+        git(&["add", "--all"]);
+        git(&["commit", "--quiet", "--message=base"]);
+        let base = git(&["rev-parse", "--short=12", "HEAD"]);
+
+        // On `main` the merge-base is the commit being judged.
+        assert_eq!(
+            check_in(dir.path(), None),
+            Ok(Some(format!(
+                "no contract file changed in the working tree; the base {base} (merge-base with \
+                 main) is HEAD, so no commit was compared"
+            )))
+        );
+
+        git(&["switch", "--quiet", "--create", "topic"]);
+        dir.write("lablet/schema.json", "{\"type\": \"object\"}\n");
+        git(&["commit", "--quiet", "--all", "--message=schema"]);
+        let error = check_in(dir.path(), None).unwrap_err();
+        let unchanged = format!(
+            "Contract files changed since {base} (merge-base with main), but the `## \
+             [Unreleased]` section of CHANGELOG.md has not changed:\n\n  lablet/schema.json\n"
+        );
+        assert!(error.starts_with(&unchanged), "{error}");
+
+        let recorded = BEFORE.replace("- The scaffold.", "- The scaffold.\n- A schema type.");
+        dir.write(CHANGELOG, &recorded);
+        assert_eq!(
+            check_in(dir.path(), None),
+            Ok(Some(format!(
+                "1 contract file(s) changed since {base} (merge-base with main), with an \
+                 Unreleased entry"
+            )))
+        );
+
+        // The variable names a base that isn't HEAD.
+        let named = git(&["rev-parse", "HEAD"]);
+        git(&["commit", "--quiet", "--all", "--message=entry"]);
+        assert_eq!(
+            check_in(dir.path(), Some(&named)),
+            Ok(Some(format!(
+                "no contract file changed since {} (LABLET_CHANGELOG_BASE)",
+                &named[..12]
+            )))
+        );
     }
 }

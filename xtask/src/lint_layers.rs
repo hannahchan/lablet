@@ -277,13 +277,28 @@ mod tests {
     const FAKE: &str = "crates/adapters/secondary/provider-fake";
     const OTEL: &str = "crates/adapters/secondary/telemetry-otel";
     const REGISTRY: &str = "crates/adapters/secondary/shared/telemetry-registry";
-    const ALL_RINGS: [Ring; 5] = [
-        Ring::Domain,
-        Ring::Application,
-        Ring::SecondaryAdapter,
-        Ring::CompositionRoot,
-        Ring::TestSupport,
-    ];
+
+    /// Declares `ALL_RINGS` beside a match with an arm for each ring it
+    /// names and for nothing else, so a ring the enum gains doesn't compile
+    /// here until the list has it, and neither does a ring named twice.
+    macro_rules! every_ring {
+        ($($ring:ident),+) => {
+            const ALL_RINGS: [Ring; [$(stringify!($ring)),+].len()] = [$(Ring::$ring),+];
+
+            #[deny(unreachable_patterns)]
+            const _: () = match ALL_RINGS[0] {
+                $(Ring::$ring)|+ => (),
+            };
+        };
+    }
+
+    every_ring!(
+        Domain,
+        Application,
+        SecondaryAdapter,
+        CompositionRoot,
+        TestSupport
+    );
 
     #[test]
     fn a_member_path_classifies_by_its_leading_directories() {
@@ -336,6 +351,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn an_edge_breaks_the_sibling_rule_only_between_two_adapters() {
+        assert_eq!(
+            edge_rule(Ring::Application, Ring::Application),
+            "Application may depend only on Domain"
+        );
+        assert_eq!(
+            edge_rule(Ring::SecondaryAdapter, Ring::CompositionRoot),
+            "Secondary Adapter may depend only on Application, Domain, and shared kernels of \
+             its own ring"
+        );
+        assert!(
+            edge_rule(Ring::SecondaryAdapter, Ring::SecondaryAdapter)
+                .starts_with("an adapter may not depend on a sibling adapter"),
+        );
     }
 
     #[test]

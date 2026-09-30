@@ -260,7 +260,11 @@ fn is_shell_shebang(line: &str) -> bool {
 
 /// Vale over the project's prose: errors only, or with `all` every alert.
 pub fn lint_prose_steps(all: bool) -> Vec<Step> {
-    let root = repo_root();
+    lint_prose_steps_in(&repo_root(), all)
+}
+
+/// [`lint_prose_steps`], for the repository at `root`.
+fn lint_prose_steps_in(root: &Path, all: bool) -> Vec<Step> {
     if !root.join(VALE_CONFIG).is_file() {
         return vec![Step::check("lint-prose", || {
             Err(format!(
@@ -268,7 +272,7 @@ pub fn lint_prose_steps(all: bool) -> Vec<Step> {
             ))
         })];
     }
-    let args = vale_args(&root, all);
+    let args = vale_args(root, all);
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     prose_steps(root.join(VALE_STYLE).is_dir(), &args)
 }
@@ -688,6 +692,79 @@ mod tests {
         assert!(!is_shell_shebang("# not a shebang"));
     }
 
+    /// A step's command as typed, or `None` for a check.
+    fn command_line(step: &Step) -> Option<String> {
+        match &step.action {
+            Action::Command { program, args, .. } => Some(format!("{program} {}", args.join(" "))),
+            Action::Check(_) => None,
+        }
+    }
+
+    #[test]
+    fn prose_is_linted_under_the_repository_config_and_refused_without_one() {
+        let steps = lint_prose_steps(false);
+        let vale = steps.last().and_then(command_line).unwrap_or_default();
+        assert!(
+            vale.starts_with("vale --no-global --config .vale.ini --minAlertLevel error "),
+            "{vale}"
+        );
+
+        let bare = crate::workspace::fixture::TempDir::new("no-vale-config");
+        let steps = lint_prose_steps_in(bare.path(), false);
+        let [step] = steps.as_slice() else {
+            panic!("{}", labels(&steps));
+        };
+        let Action::Check(check) = step.action else {
+            panic!("`{}` runs vale with no config to run it under", step.label);
+        };
+        assert_eq!(step.label, "lint-prose");
+        assert_eq!(
+            check(),
+            Err(
+                ".vale.ini is missing from the repository root, so vale has no style to apply"
+                    .to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn check_type_checks_every_target_of_both_workspaces_and_setup_runs_the_script() {
+        let lines: Vec<Option<String>> = check_steps().iter().map(command_line).collect();
+        let manifest = xtask_manifest().display().to_string();
+        assert_eq!(
+            lines,
+            [
+                Some("cargo check --locked --workspace --all-targets".to_owned()),
+                Some(format!(
+                    "cargo check --locked --manifest-path {manifest} --all-targets"
+                )),
+            ]
+        );
+        let lines: Vec<Option<String>> = setup_steps().iter().map(command_line).collect();
+        assert_eq!(lines, [Some("bash scripts/setup.sh".to_owned())]);
+        assert!(repo_root().join("scripts/setup.sh").is_file());
+    }
+
+    /// `sh` is on every host the gates run on and pinned by nothing, so it
+    /// runs from PATH.
+    #[test]
+    fn a_failed_step_of_a_gate_carries_what_it_printed_and_one_of_a_command_only_the_command() {
+        let script = ["-c", "echo held for the report; exit 3"];
+        let failed = "error: command failed (in the repository root): sh -c echo held for the \
+                      report; exit 3";
+        assert_eq!(
+            run_command("sh", &script, &[], true),
+            Err(format!("held for the report\n{failed}"))
+        );
+        let silent = ["-c", "exit 3"];
+        assert_eq!(
+            run_command("sh", &silent, &[], false),
+            Err("error: command failed (in the repository root): sh -c exit 3".to_owned())
+        );
+        assert_eq!(run_command("sh", &["-c", "true"], &[], true), Ok(None));
+        assert_eq!(run_command("sh", &["-c", "true"], &[], false), Ok(None));
+    }
+
     #[test]
     fn prose_styles_are_synced_first_only_when_they_are_missing() {
         assert_eq!(labels(&prose_steps(true, &[])), "lint-prose");
@@ -788,6 +865,10 @@ mod tests {
             let template = format!("{WEAVER_DIAGNOSTICS}/{format}/weaver.yaml");
             assert!(root.join(&template).is_file(), "{template}");
         }
+
+        // Every other weaver command reports as `weaver check` does here.
+        let here = weaver_check_args(in_ci());
+        assert_eq!(weaver_diagnostic_args(), here[here.len() - 4..]);
     }
 
     #[test]

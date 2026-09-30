@@ -2,10 +2,10 @@
 //! it finds. Nothing here exits the process, because a gate keeps going after
 //! a failure.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitStatus, Output};
 use std::sync::OnceLock;
 
 use crate::workspace::{repo_root, workspace_root};
@@ -80,12 +80,17 @@ pub fn command(program: &str, args: &[&str]) -> Result<Command, String> {
 
 /// [`command`], in a directory the caller names.
 fn command_in(directory: &Path, program: &str, args: &[&str]) -> Result<Command, String> {
-    let bin = if program == "cargo" {
+    command_running(directory, program, args, runs(program, args).as_deref())
+}
+
+/// The binary `program` ends up running, which is `program` itself for all
+/// but cargo.
+fn runs(program: &str, args: &[&str]) -> Option<String> {
+    if program == "cargo" {
         cargo_plugin(args)
     } else {
         Some(program.to_owned())
-    };
-    command_running(directory, program, args, bin)
+    }
 }
 
 /// `cargo deny ...` runs the binary `cargo-deny`.
@@ -98,7 +103,7 @@ fn command_running(
     directory: &Path,
     program: &str,
     args: &[&str],
-    bin: Option<String>,
+    bin: Option<&str>,
 ) -> Result<Command, String> {
     if !directory.is_dir() {
         return Err(format!(
@@ -107,15 +112,8 @@ fn command_running(
         ));
     }
     let tools = tools();
-    if let Some(bin) = bin
-        && TOOLS.iter().any(|tool| tool.bin == bin)
-        && !tools.provides(&bin)
-    {
-        let why = tools
-            .failure
-            .as_deref()
-            .unwrap_or("it is not installed; run scripts/setup.sh (or `mise install`)");
-        return Err(format!("{bin} is pinned in mise.toml, but {why}"));
+    if let Some(refused) = refusal(bin, tools) {
+        return Err(refused);
     }
     let mut command = Command::new(program);
     command
@@ -174,7 +172,8 @@ pub fn stream_on(
     env: &[(&str, &str)],
 ) -> Result<ExitStatus, String> {
     let rustup = on_toolchain(toolchain, args);
-    let mut command = command_running(&workspace_root(), "rustup", &rustup, cargo_plugin(args))?;
+    let plugin = cargo_plugin(args);
+    let mut command = command_running(&workspace_root(), "rustup", &rustup, plugin.as_deref())?;
     command.envs(env.iter().copied());
     command.status().map_err(|e| could_not_run("rustup", &e))
 }
@@ -187,11 +186,6 @@ pub fn command_failed_on(toolchain: &str, args: &[&str]) -> String {
 }
 
 /// A subprocess's stdout, or on failure its stderr or why it could not start.
-pub fn capture(program: &str, args: &[&str]) -> Result<String, String> {
-    capture_in(&working_directory(program).0, program, args)
-}
-
-/// [`capture`], in a directory the caller names.
 pub fn capture_in(directory: &Path, program: &str, args: &[&str]) -> Result<String, String> {
     let output = command_in(directory, program, args)?
         .output()
@@ -203,6 +197,21 @@ pub fn capture_in(directory: &Path, program: &str, args: &[&str]) -> Result<Stri
             .trim_end()
             .to_owned())
     }
+}
+
+/// Why a command that ends up running `bin` may not start, or `None` when it
+/// may: a pinned tool runs only from a directory mise named for it, never as
+/// whatever copy PATH holds.
+fn refusal(bin: Option<&str>, tools: &Tools) -> Option<String> {
+    let bin = bin.filter(|bin| TOOLS.iter().any(|tool| tool.bin == *bin))?;
+    if tools.provides(bin) {
+        return None;
+    }
+    let why = tools
+        .failure
+        .as_deref()
+        .unwrap_or("it is not installed; run scripts/setup.sh (or `mise install`)");
+    Some(format!("{bin} is pinned in mise.toml, but {why}"))
 }
 
 /// `failure` is why `directories` may be empty: mise could not be run, or
@@ -219,22 +228,21 @@ impl Tools {
             .iter()
             .any(|dir| is_executable(&dir.join(bin)))
     }
-}
 
-/// `mise bin-paths` is asked for [`TOOLS`] by name, so a developer's global
-/// mise config does not leak onto PATH. A failure is kept for the first pinned
-/// tool that needs it; a command that needs none still runs. `$CARGO_HOME/bin`
-/// goes last if absent: cargo would otherwise search it ahead of PATH and
-/// shadow the pinned cargo plugins.
-fn tools() -> &'static Tools {
-    static RESOLVED: OnceLock<Tools> = OnceLock::new();
-    RESOLVED.get_or_init(|| {
+    /// The tools as `mise bin-paths` listed them, `mise` being the program
+    /// that was run. A failure is kept for the first pinned tool that needs
+    /// it; a command that needs none still runs. `cargo_bin` goes last if
+    /// `inherited` lacks it: cargo would otherwise search it ahead of PATH
+    /// and shadow the pinned cargo plugins.
+    fn from_mise(
+        listed: std::io::Result<Output>,
+        mise: &str,
+        inherited: Option<&OsStr>,
+        cargo_bin: Option<PathBuf>,
+    ) -> Self {
         let mut directories = Vec::new();
         let mut failure = None;
-        let mut mise = mise();
-        mise.arg("bin-paths")
-            .args(TOOLS.iter().map(|tool| tool.mise_name));
-        match mise.output() {
+        match listed {
             Ok(output) if output.status.success() => directories.extend(
                 String::from_utf8_lossy(&output.stdout)
                     .lines()
@@ -249,20 +257,15 @@ fn tools() -> &'static Tools {
             }
             Err(e) => {
                 failure = Some(format!(
-                    "`{}` could not be run ({e}); install mise from \
-                     https://mise.jdx.dev/installing-mise.html, then run scripts/setup.sh",
-                    mise.get_program().to_string_lossy()
+                    "`{mise}` could not be run ({e}); install mise from \
+                     https://mise.jdx.dev/installing-mise.html, then run scripts/setup.sh"
                 ));
             }
         }
         let mut path = directories.clone();
-        if let Some(inherited) = std::env::var_os("PATH") {
-            path.extend(std::env::split_paths(&inherited));
+        if let Some(inherited) = inherited {
+            path.extend(std::env::split_paths(inherited));
         }
-        let cargo_bin = std::env::var_os("CARGO_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".cargo")))
-            .map(|cargo_home| cargo_home.join("bin"));
         if let Some(cargo_bin) = cargo_bin
             && !path.contains(&cargo_bin)
         {
@@ -270,13 +273,31 @@ fn tools() -> &'static Tools {
         }
         let path = std::env::join_paths(&path).unwrap_or_else(|e| {
             failure.get_or_insert(format!("could not build PATH: {e}"));
-            std::env::var_os("PATH").unwrap_or_default()
+            inherited.map(OsStr::to_os_string).unwrap_or_default()
         });
-        Tools {
+        Self {
             directories,
             path,
             failure,
         }
+    }
+}
+
+/// `mise bin-paths` is asked for [`TOOLS`] by name, so a developer's global
+/// mise config does not leak onto PATH.
+fn tools() -> &'static Tools {
+    static RESOLVED: OnceLock<Tools> = OnceLock::new();
+    RESOLVED.get_or_init(|| {
+        let mut mise = mise();
+        mise.arg("bin-paths")
+            .args(TOOLS.iter().map(|tool| tool.mise_name));
+        let program = mise.get_program().to_string_lossy().into_owned();
+        let cargo_bin = std::env::var_os("CARGO_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".cargo")))
+            .map(|cargo_home| cargo_home.join("bin"));
+        let inherited = std::env::var_os("PATH");
+        Tools::from_mise(mise.output(), &program, inherited.as_deref(), cargo_bin)
     })
 }
 
@@ -295,7 +316,7 @@ const MISE_FROM_A_PACKAGE_MANAGER: [&str; 3] = [
 /// stays, so the caller's error names mise.
 fn mise() -> Command {
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let installed = if on_path("mise") {
+    let installed = if on_path("mise", std::env::var_os("PATH").as_deref()) {
         None
     } else {
         home.map(|home| home.join(MISE_UNDER_HOME))
@@ -314,9 +335,9 @@ fn mise() -> Command {
     command
 }
 
-fn on_path(bin: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|dir| is_executable(&dir.join(bin))))
+/// Whether a directory of `path`, a PATH value, holds `bin` as an executable.
+fn on_path(bin: &str, path: Option<&OsStr>) -> bool {
+    path.is_some_and(|path| std::env::split_paths(path).any(|dir| is_executable(&dir.join(bin))))
 }
 
 fn is_executable(path: &Path) -> bool {
@@ -326,7 +347,168 @@ fn is_executable(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace::fixture::TempDir;
     use std::collections::BTreeSet;
+    use std::fs::Permissions;
+    use std::os::unix::process::ExitStatusExt as _;
+
+    /// A directory holding `weaver` as a file anyone may run, `dprint` as a
+    /// file no one may, and `vale` as a directory anyone may enter.
+    fn tool_directory() -> TempDir {
+        let dir = TempDir::new("tools");
+        dir.write("weaver", "#!/bin/sh\n");
+        dir.write("dprint", "#!/bin/sh\n");
+        std::fs::create_dir(dir.path().join("vale")).unwrap();
+        for (name, mode) in [("weaver", 0o755), ("dprint", 0o644), ("vale", 0o755)] {
+            std::fs::set_permissions(dir.path().join(name), Permissions::from_mode(mode)).unwrap();
+        }
+        dir
+    }
+
+    /// What `mise bin-paths` leaves when it ends with `code`.
+    fn mise_output(code: i32, stdout: &str, stderr: &str) -> Output {
+        Output {
+            status: ExitStatus::from_raw(code << 8),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    fn not_installed(bin: &str) -> String {
+        let why = "it is not installed; run scripts/setup.sh (or `mise install`)";
+        format!("{bin} is pinned in mise.toml, but {why}")
+    }
+
+    #[test]
+    fn a_pinned_tool_runs_only_as_an_executable_file_in_a_directory_mise_listed() {
+        let dir = tool_directory();
+        let listed = mise_output(0, &format!("{}\n", dir.path().display()), "");
+        let tools = Tools::from_mise(Ok(listed), "mise", None, None);
+        assert_eq!(tools.failure, None);
+        assert_eq!(refusal(Some("weaver"), &tools), None);
+        assert_eq!(
+            refusal(Some("dprint"), &tools),
+            Some(not_installed("dprint"))
+        );
+        assert_eq!(refusal(Some("vale"), &tools), Some(not_installed("vale")));
+        assert_eq!(
+            refusal(Some("shellcheck"), &tools),
+            Some(not_installed("shellcheck"))
+        );
+        // What no pin names runs from PATH.
+        assert_eq!(refusal(Some("git"), &tools), None);
+        assert_eq!(refusal(None, &tools), None);
+
+        // A cargo subcommand is its plugin, and any other program itself.
+        let refused =
+            |program: &str, args: &[&str]| refusal(runs(program, args).as_deref(), &tools);
+        assert_eq!(
+            refused("cargo", &["deny", "check"]),
+            Some(not_installed("cargo-deny"))
+        );
+        assert_eq!(refused("cargo", &["check"]), None);
+        assert_eq!(refused("cargo", &[]), None);
+        assert_eq!(refused("dprint", &["check"]), Some(not_installed("dprint")));
+        assert_eq!(refused("weaver", &["mutants"]), None);
+    }
+
+    #[test]
+    fn a_pinned_tool_refused_because_mise_failed_says_how_it_failed() {
+        let failed = mise_output(1, "", "mise ERROR mise.toml is not trusted\n");
+        let tools = Tools::from_mise(Ok(failed), "mise", None, None);
+        assert_eq!(tools.directories, Vec::<PathBuf>::new());
+        assert_eq!(
+            refusal(Some("weaver"), &tools).as_deref(),
+            Some(
+                "weaver is pinned in mise.toml, but `mise bin-paths` failed; run scripts/setup.sh, \
+                 which trusts mise.toml and installs the pins:\nmise ERROR mise.toml is not trusted"
+            )
+        );
+        let absent = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let tools = Tools::from_mise(Err(absent), "/opt/homebrew/bin/mise", None, None);
+        assert_eq!(
+            refusal(Some("vale"), &tools).as_deref(),
+            Some(
+                "vale is pinned in mise.toml, but `/opt/homebrew/bin/mise` could not be run \
+                 (entity not found); install mise from https://mise.jdx.dev/installing-mise.html, \
+                 then run scripts/setup.sh"
+            )
+        );
+        // A command that needs no pinned tool still runs.
+        assert_eq!(refusal(Some("git"), &tools), None);
+    }
+
+    #[test]
+    fn the_directories_mise_lists_come_first_on_path_and_cargo_bin_comes_last_once() {
+        let listed = || mise_output(0, "/pins/weaver\n/pins/vale\n", "");
+        let cargo_bin = || Some(PathBuf::from("/home/x/.cargo/bin"));
+        let inherited = OsString::from("/usr/bin:/bin");
+        let tools = Tools::from_mise(Ok(listed()), "mise", Some(&inherited), cargo_bin());
+        assert_eq!(
+            tools.directories,
+            [Path::new("/pins/weaver"), Path::new("/pins/vale")]
+        );
+        assert_eq!(
+            tools.path,
+            "/pins/weaver:/pins/vale:/usr/bin:/bin:/home/x/.cargo/bin"
+        );
+        let inherited = OsString::from("/home/x/.cargo/bin:/usr/bin");
+        let tools = Tools::from_mise(Ok(listed()), "mise", Some(&inherited), cargo_bin());
+        assert_eq!(
+            tools.path,
+            "/pins/weaver:/pins/vale:/home/x/.cargo/bin:/usr/bin"
+        );
+    }
+
+    #[test]
+    fn a_program_is_on_path_when_a_directory_there_holds_it_as_an_executable_file() {
+        let (tools, empty) = (tool_directory(), TempDir::new("empty"));
+        let path = std::env::join_paths([empty.path(), tools.path()]).unwrap();
+        assert!(on_path("weaver", Some(&path)));
+        assert!(!on_path("dprint", Some(&path)));
+        assert!(!on_path("vale", Some(&path)));
+        assert!(!on_path("mise", Some(&path)));
+        assert!(!on_path("weaver", None));
+    }
+
+    /// `sh` is pinned by nothing, so it runs from PATH.
+    #[test]
+    fn a_command_reports_how_it_ended_and_one_that_cannot_start_is_named() {
+        assert_eq!(
+            stream("sh", &["-c", "exit 3"], &[]).unwrap().code(),
+            Some(3)
+        );
+        let probe = ["-c", "test \"$XTASK_PROBE\" = given"];
+        assert_eq!(
+            stream("sh", &probe, &[("XTASK_PROBE", "given")])
+                .unwrap()
+                .code(),
+            Some(0)
+        );
+        let capture = |program: &str, args: &[&str]| capture_in(&repo_root(), program, args);
+        assert_eq!(
+            capture("sh", &["-c", "echo out; echo err >&2"]),
+            Ok("out\n".to_owned())
+        );
+        assert_eq!(
+            capture("sh", &["-c", "echo out; echo err >&2; exit 1"]),
+            Err("err".to_owned())
+        );
+
+        let missing = "lablet-xtask-no-such-program";
+        let why = std::io::Error::from_raw_os_error(2);
+        let could_not = format!("could not run `{missing}`: {why}");
+        assert_eq!(capture(missing, &[]), Err(could_not.clone()));
+        assert_eq!(stream(missing, &[], &[]).err(), Some(could_not));
+    }
+
+    /// rustup prints its own error for the toolchain, which names it.
+    #[test]
+    fn cargo_on_a_toolchain_that_is_not_installed_is_a_failed_run() {
+        let absent = "xtask-test-toolchain-that-is-not-installed";
+        let status = stream_on(absent, &["--version"], &[]).unwrap();
+        assert_eq!(status.code(), Some(1));
+    }
 
     /// Every name the git on this machine lists, so a newer git's addition
     /// fails here rather than reaching a test that runs under a hook.

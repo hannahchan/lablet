@@ -210,10 +210,18 @@ pub fn nothing_measured(package: &str, none_of: &str, floor: &str) -> String {
 
 /// A floor report as a step result: every line is shown either way, and any
 /// floor not met, or unmeasured though the crate defines a function, fails.
+/// So does a report of no floor at all, which applied none.
 ///
 /// The count is of floors rather than crates, because a crate can be held to
 /// more than one: coverage judges its lines and its regions apart.
 pub fn conclude(what: &str, lines: &[Line]) -> crate::gates::CheckResult {
+    if lines.is_empty() {
+        return Err(format!(
+            "{what}: no floor crate was judged, so no floor was applied; xtask/src/floors.rs \
+             names {} crate(s)",
+            FLOORS.len()
+        ));
+    }
     let report = report(lines);
     let count = |standings: &[Standing]| {
         lines
@@ -507,6 +515,36 @@ mod tests {
         for phrase in ["NOTHING MEASURED", "hides the crate", "without a body"] {
             assert!(error.contains(phrase), "{error}");
         }
+    }
+
+    #[test]
+    fn a_report_that_judged_no_floor_fails() {
+        assert_eq!(
+            conclude("coverage", &[]),
+            Err(
+                "coverage: no floor crate was judged, so no floor was applied; \
+                 xtask/src/floors.rs names 3 crate(s)"
+                    .to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn the_reports_go_under_target_xtask_which_is_made_when_missing() {
+        let workspace = crate::workspace::fixture::TempDir::new("output");
+        let directory = output_directory(workspace.path()).unwrap();
+        assert_eq!(directory, workspace.path().join("target/xtask"));
+        assert!(directory.is_dir());
+        assert_eq!(output_directory(workspace.path()), Ok(directory));
+
+        let blocked = crate::workspace::fixture::TempDir::new("output-blocked");
+        blocked.write("target", "a file, where the directory goes\n");
+        let error = output_directory(blocked.path()).unwrap_err();
+        let expected = format!(
+            "could not create {}: ",
+            blocked.path().join("target/xtask").display()
+        );
+        assert!(error.starts_with(&expected), "{error}");
     }
 
     #[test]

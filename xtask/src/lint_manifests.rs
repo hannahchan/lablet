@@ -522,8 +522,10 @@ mod tests {
             "dependencies.a = \"=1.0.0\"\n",
             "[dependencies]\n# Why\n\"a\" = \"=1.0.0\"\n",
             "[ dependencies ]\n# Why\na = \"=1.0.0\"\n",
-            // The scan stops where the table does.
+            // The scan stops where the table does, wherever the table starts.
             "[dependencies]\n\"a\" = \"=1.0.0\"\n\n[dev-dependencies]\n# Why\na = \"=1.0.0\"\n",
+            "[package]\nname = \"m\"\n\n[dependencies]\n\"a\" = \"=1.0.0\"\n# Note\n\n\
+             [dev-dependencies]\n# Why\na = \"=1.0.0\"\n",
         ] {
             let parsed: toml::Value = toml::from_str(text).unwrap();
             let keys = parsed["dependencies"].as_table().unwrap().keys();

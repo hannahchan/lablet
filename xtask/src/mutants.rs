@@ -1423,6 +1423,67 @@ mod tests {
     }
 
     #[test]
+    fn a_last_report_that_cannot_be_removed_stops_the_run_before_it_starts() {
+        let dir = TempDir::new("mutants-stuck");
+        // A directory can't be removed as a file, and isn't missing either.
+        let report = dir.path().join("mutants.out/outcomes.json");
+        std::fs::create_dir_all(&report).unwrap();
+        let args = RefCell::new(Vec::new());
+        let run = cargo_mutants(&args, None, exited(0));
+        let error = test_mutants(dir.path(), None, run).unwrap_err();
+        let expected = format!("could not remove {}: ", report.display());
+        assert!(error.starts_with(&expected), "{error}");
+        assert_eq!(*args.borrow(), Vec::<String>::new(), "cargo-mutants ran");
+    }
+
+    /// cargo prints its own error for the manifest, which names it.
+    #[test]
+    fn the_cargo_a_run_goes_through_reports_how_cargo_exited() {
+        let dir = TempDir::new("mutants-cargo");
+        let absent = dir
+            .path()
+            .join("xtask-test-manifest-that-is-not-there/Cargo.toml");
+        let absent = absent.display().to_string();
+        let status = cargo(&["locate-project", "--manifest-path", &absent]).unwrap();
+        assert_eq!(status.code(), Some(101));
+    }
+
+    #[test]
+    fn the_scoped_run_starts_from_the_merge_base_with_origin_main_else_with_main() {
+        let dir = TempDir::new("mutants-base");
+        let git = |args: &[&str]| scratch_git(dir.path(), args).trim().to_owned();
+        git(&["init", "--quiet", "--initial-branch=main"]);
+        assert_eq!(
+            std::fs::canonicalize(git(&["rev-parse", "--show-toplevel"])).unwrap(),
+            std::fs::canonicalize(dir.path()).unwrap(),
+            "git resolved outside the scratch repository"
+        );
+        git(&["commit", "--quiet", "--allow-empty", "--message=base"]);
+        let base = git(&["rev-parse", "HEAD"]);
+        git(&["switch", "--quiet", "--create", "topic"]);
+        git(&["commit", "--quiet", "--allow-empty", "--message=topic"]);
+        let topic = git(&["rev-parse", "HEAD"]);
+        let found = |revision: &str, branch: &str| {
+            Ok((revision.to_owned(), format!("merge-base with {branch}")))
+        };
+        assert_eq!(merge_base(dir.path()), found(&base, "main"));
+
+        git(&["update-ref", "refs/remotes/origin/main", &topic]);
+        assert_eq!(merge_base(dir.path()), found(&topic, "origin/main"));
+
+        git(&["update-ref", "-d", "refs/remotes/origin/main"]);
+        git(&["branch", "--quiet", "--delete", "--force", "main"]);
+        assert_eq!(
+            merge_base(dir.path()),
+            Err(
+                "no merge-base with origin/main or main, so there is nothing to scope the run to. \
+                 Fetch origin, or run the full `cargo xtask mutants`"
+                    .to_owned()
+            )
+        );
+    }
+
+    #[test]
     fn a_commit_id_is_shortened_for_the_note() {
         assert_eq!(short(&"a1".repeat(20)), "a1a1a1a1a1a1");
         assert_eq!(short("a1a1"), "a1a1");

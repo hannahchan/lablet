@@ -368,6 +368,54 @@ mod tests {
             .collect()
     }
 
+    /// Reached through a link, as a checkout under a linked directory is,
+    /// where llvm-cov names every file by its resolved path.
+    #[test]
+    fn every_floor_crate_is_judged_at_the_path_llvm_cov_reports_it_under() {
+        let dir = crate::workspace::fixture::TempDir::new("coverage-crates");
+        let members = [
+            "crates/domain/model",
+            "crates/domain/policy",
+            "crates/application/run",
+        ];
+        let listed: Vec<String> = members.iter().map(|path| format!("\"{path}\"")).collect();
+        dir.write(
+            "real/Cargo.toml",
+            &format!("[workspace]\nmembers = [{}]\n", listed.join(", ")),
+        );
+        for (path, floor) in members.iter().zip(floors::FLOORS) {
+            let manifest = format!("[package]\nname = \"{}\"\n", floor.package);
+            dir.write(&format!("real/{path}/Cargo.toml"), &manifest);
+            dir.write(&format!("real/{path}/src/lib.rs"), "//! Empty.\n");
+        }
+        std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("link")).unwrap();
+
+        let workspace = Workspace::load(&dir.path().join("link")).unwrap();
+        let judged: Vec<PathBuf> = floor_crates(&workspace)
+            .unwrap()
+            .into_iter()
+            .map(|krate| krate.directory)
+            .collect();
+        let real = std::fs::canonicalize(dir.path().join("real")).unwrap();
+        let expected: Vec<PathBuf> = members.iter().map(|path| real.join(path)).collect();
+        assert_eq!(judged, expected);
+    }
+
+    #[test]
+    fn a_run_that_judged_no_floor_crate_fails() {
+        let export: Export = serde_json::from_str(REPORT).unwrap();
+        let error = conclude_lines(&export, &[]).unwrap_err();
+        assert!(
+            error.starts_with("coverage: no floor crate was judged"),
+            "{error}"
+        );
+        let error = conclude_branches(&export, &[]).unwrap_err();
+        assert!(
+            error.starts_with("coverage: no floor crate has a branch"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn a_crate_is_judged_on_the_files_under_its_own_directory_once_per_measure() {
         let export: Export = serde_json::from_str(REPORT).unwrap();
