@@ -753,7 +753,9 @@ mod tests {
             seen(&verdict)[1],
             ("lablet-policy", 99, 100, 0, Standing::Below)
         );
-        assert!(conclude(&verdict).is_err());
+        let error = conclude(&verdict).unwrap_err();
+        let listed = format!("  {POLICY}:100:5: delete ! (missed)\n");
+        assert!(error.contains(&listed), "{error}");
     }
 
     #[test]
@@ -794,7 +796,8 @@ mod tests {
         // A scoped run whose one mutant ended so has something to test.
         let verdict = scoped(&[mutant(MODEL, "90:5", WHOLE_MS, "Failure")]);
         assert_eq!(verdict.tallies[0].viable, 1);
-        assert!(conclude(&verdict).is_err());
+        let error = conclude(&verdict).unwrap_err();
+        assert!(error.contains(&listed), "{error}");
     }
 
     #[test]

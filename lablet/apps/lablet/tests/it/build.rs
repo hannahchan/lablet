@@ -73,11 +73,9 @@ async fn a_name_in_a_list_that_no_tool_has_is_refused_with_the_list_it_is_in() {
         },
         "a built-in tool that isn't enabled is a tool the run doesn't have"
     );
-    assert!(
-        lablet::build(with(json!({ "allow": ["bash"], "deny": ["read_file"] })))
-            .await
-            .is_ok()
-    );
+    lablet::build(with(json!({ "allow": ["bash"], "deny": ["read_file"] })))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -205,11 +203,9 @@ async fn a_root_that_holds_a_file_of_lablets_own_is_refused_with_the_file_it_hol
     );
     let beside = scratch.at("lablet.json");
     std::fs::write(&beside, scratch.tree(ENDS, tools.clone()).to_string()).unwrap();
-    assert!(
-        lablet::build(Config::from_path(&beside).unwrap())
-            .await
-            .is_ok()
-    );
+    lablet::build(Config::from_path(&beside).unwrap())
+        .await
+        .unwrap();
 
     // The system prompt's file.
     let prompt = scratch.write("work/system.md", "You fix tests.");
@@ -244,10 +240,10 @@ async fn a_root_that_holds_a_file_of_lablets_own_is_refused_with_the_file_it_hol
     // nothing the model can reach.
     let mut tree = scratch.tree(ENDS, tools);
     tree["telemetry"]["file"]["path"] = json!("-");
-    assert!(lablet::build(read(&tree)).await.is_ok());
+    lablet::build(read(&tree)).await.unwrap();
     let mut tree = scratch.tree(ENDS, json!({ "tools": { "builtin": { "root": root } } }));
     tree["run"] = json!({ "transcript_path": transcript });
-    assert!(lablet::build(read(&tree)).await.is_ok());
+    lablet::build(read(&tree)).await.unwrap();
 }
 
 #[tokio::test]
@@ -582,7 +578,7 @@ async fn a_script_that_cannot_be_played_is_refused_by_its_key_and_its_path() {
         "script.json",
         r#"[{ "response": { "content": [{ "text": "Done." }], "finish": "end_turn" } }]"#,
     );
-    assert!(lablet::build(with(&json)).await.is_ok());
+    lablet::build(with(&json)).await.unwrap();
 }
 
 #[tokio::test]

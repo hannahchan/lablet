@@ -182,7 +182,7 @@ fn a_blank_prompt_is_refused_when_the_request_is_made() {
     for prompt in ["", " ", "\n\t "] {
         assert_eq!(RunRequest::new(prompt), Err(BlankTask), "{prompt:?}");
     }
-    assert!(RunRequest::new(PROMPT).is_ok());
+    RunRequest::new(PROMPT).unwrap();
 }
 
 #[tokio::test]

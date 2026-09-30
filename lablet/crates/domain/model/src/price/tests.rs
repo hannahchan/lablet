@@ -32,7 +32,7 @@ fn the_first_rate_that_is_not_a_price_is_the_one_reported() {
 /// A locally served model costs nothing, so zero is a price like any other.
 #[test]
 fn a_rate_of_zero_is_a_price() {
-    assert!(Rates::new(0.0, 0.0, 0.0, 0.0).is_ok());
+    Rates::new(0.0, 0.0, 0.0, 0.0).unwrap();
 }
 
 fn usd(usd: f64) -> Cost {

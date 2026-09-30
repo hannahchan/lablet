@@ -624,7 +624,7 @@ fn a_write_that_fails_part_way_is_an_error_wherever_it_fails() {
 
         assert!(failed.to_string().contains("no space left"), "{failed}");
     }
-    assert!(render(&document, Full { room: whole }).is_ok());
+    render(&document, Full { room: whole }).unwrap();
     assert_eq!(
         render(&document, NeverFlushes).unwrap_err().to_string(),
         "the device went away"

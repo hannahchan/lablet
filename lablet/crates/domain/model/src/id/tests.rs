@@ -92,8 +92,8 @@ fn a_tool_name_with_surrounding_whitespace_is_reported_as_that_not_as_a_bad_char
 
 #[test]
 fn whitespace_inside_a_run_id_or_call_id_is_the_providers_business() {
-    assert!(RunId::new("run 1").is_ok());
-    assert!(ToolCallId::new("call 1").is_ok());
+    RunId::new("run 1").unwrap();
+    ToolCallId::new("call 1").unwrap();
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn a_tool_name_may_be_as_long_as_the_limit_and_no_longer() {
     let too_long = "a".repeat(ToolName::MAX_LEN + 1);
 
     assert_eq!(ToolName::MAX_LEN, 64);
-    assert!(ToolName::new(longest).is_ok());
+    ToolName::new(longest).unwrap();
     assert_eq!(
         ToolName::new(too_long.clone()),
         Err(IdError::ToolNameTooLong { value: too_long })

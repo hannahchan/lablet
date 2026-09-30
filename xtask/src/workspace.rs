@@ -440,13 +440,11 @@ mod tests {
                 "{error}"
             );
         }
-        assert!(
-            load(
-                "[workspace]\nmembers = [\"crates/domain/x\"]\n",
-                &["crates/domain/x"]
-            )
-            .is_ok()
-        );
+        load(
+            "[workspace]\nmembers = [\"crates/domain/x\"]\n",
+            &["crates/domain/x"],
+        )
+        .unwrap();
     }
 
     #[test]

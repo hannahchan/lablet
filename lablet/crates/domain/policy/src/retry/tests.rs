@@ -437,8 +437,8 @@ fn a_base_longer_than_the_cap_is_refused_and_one_equal_to_it_is_not() {
             max: ms(10_000),
         })
     );
-    assert!(with_base(ms(10_000)).is_ok());
-    assert!(with_base(ms(9_999)).is_ok());
+    with_base(ms(10_000)).unwrap();
+    with_base(ms(9_999)).unwrap();
 }
 
 fn with_factor(factor: f64) -> Result<RetryPolicy, RetryPolicyError> {
@@ -457,8 +457,8 @@ fn a_factor_below_one_is_refused_and_one_itself_is_not() {
             "{factor}"
         );
     }
-    assert!(with_factor(1.0).is_ok());
-    assert!(with_factor(1.001).is_ok());
+    with_factor(1.0).unwrap();
+    with_factor(1.001).unwrap();
 }
 
 #[test]

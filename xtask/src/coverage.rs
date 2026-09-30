@@ -389,7 +389,11 @@ mod tests {
                 ("lablet-run", "regions", 8, 10, Standing::Below),
             ]
         );
-        assert!(floors::conclude("coverage", &lines).is_err());
+        let error = floors::conclude("coverage", &lines).unwrap_err();
+        assert!(
+            error.contains("lablet-run: 80.0% (8 of 10 production regions covered), BELOW"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -403,7 +407,11 @@ mod tests {
                 ("lablet-policy", "regions", 0, 0, Standing::NothingMeasured),
             ]
         );
-        assert!(floors::conclude("coverage", &lines).is_err());
+        let error = floors::conclude("coverage", &lines).unwrap_err();
+        for none_of in ["coverable lines", "coverable regions"] {
+            let named = format!("lablet-policy: NOTHING MEASURED (no {none_of})");
+            assert!(error.contains(&named), "{error}");
+        }
     }
 
     #[test]

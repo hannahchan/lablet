@@ -294,7 +294,7 @@ fn a_backoff_that_starts_above_its_cap_and_a_jitter_that_is_no_share_are_refused
             "a backoff starts no longer than `run.retry_backoff_max`, which is 32s"
         ))
     );
-    assert!(with("run: { retry_backoff_base: 32s, retry_backoff_max: 32s }").is_ok());
+    with("run: { retry_backoff_base: 32s, retry_backoff_max: 32s }").unwrap();
 
     for (written, shown) in [("1.5", "1.5"), ("-0.1", "-0.1"), (".nan", "NaN")] {
         assert_eq!(
@@ -306,7 +306,7 @@ fn a_backoff_that_starts_above_its_cap_and_a_jitter_that_is_no_share_are_refused
             ))
         );
     }
-    assert!(with("run: { retry_jitter: 1 }").is_ok());
+    with("run: { retry_jitter: 1 }").unwrap();
 }
 
 fn not_applied(key: &'static str, value: &str, reached: &str) -> ConfigError {
@@ -522,10 +522,7 @@ fn a_temperature_is_a_number_and_a_thinking_budget_is_below_the_cap_on_output() 
             "a budget is fewer tokens than `model.max_tokens`, which is 4096"
         ))
     );
-    assert!(
-        of("model: { thinking: { budget: 4095 }, max_tokens: 4096 }\nprompt: { system: Hi. }")
-            .is_ok()
-    );
+    of("model: { thinking: { budget: 4095 }, max_tokens: 4096 }\nprompt: { system: Hi. }").unwrap();
 }
 
 #[test]
@@ -587,8 +584,8 @@ fn a_preview_longer_than_the_cap_is_refused_and_one_as_long_is_taken() {
         )),
         "the default preview is a preview like any other"
     );
-    assert!(with("tools: { max_output_bytes: 1000, output_preview_bytes: 1000 }").is_ok());
-    assert!(with("tools: { max_output_bytes: 1000, output_cut: head }").is_ok());
+    with("tools: { max_output_bytes: 1000, output_preview_bytes: 1000 }").unwrap();
+    with("tools: { max_output_bytes: 1000, output_cut: head }").unwrap();
 }
 
 #[test]
