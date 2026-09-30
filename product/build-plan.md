@@ -25,7 +25,7 @@ Sequencing rationale: the loop is proven against fakes before any real adapter e
 | 11    | Hardening and release                               | Not started      |
 | 12    | After the release                                   | Not started      |
 
-A date is the date of the `decisions.md` entry that closed the phase. Spec §6 and §7 describe what phases 4 to 10 build, so they're ahead of the code.
+A date is the date of the `decisions.md` entry that closed the phase. Spec §6 and §7 describe what phases 4 to 10 build: phase 4's part is built, and the rest is ahead of the code.
 
 ## Phase 0: Scaffold
 
@@ -116,6 +116,15 @@ Acceptance: a doctest builds a `Lablet` from a config string, runs twice, and as
 
 - `main.rs` and the `clap` derive CLI: `init`, `run`, `check` (including `--resolved`), `schema`, `--set`, `${VAR}` substitution, prompt sources, diagnostic logging on stderr, the end-of-run summary line and `--quiet`, Ctrl-C and `SIGTERM` into the `Cancellation` port, exit codes, and the error message contract from spec §7. `check` refuses a setting the config states and the selected provider can't apply, as `build` has since phase 4, `--run-id`, `--task`, `--experiment` and `--trial` fill the run request, a message shows a config value as it was written, and a telemetry file path of `-` implies `--quiet`.
 - `lablet/schema.json` checked in and covered by the changelog gate.
+- A way for a library caller to cancel a run, which the CLI's Ctrl-C and `SIGTERM` handling goes through (quality-bar item 6; the open items of "Phase 4, closed"). Cancellation stops the provider call or the tool calls in flight within a bound that a container's stop grace period allows, 10 seconds by default, so the outcome, the transcript and the wide event are still written (C14; spec §10; "Six decisions before phase 5" in `decisions.md`).
+- A raw config tree, the `serde_json::Value` that `--set` edits and `${VAR}` is substituted into, so a message shows a value as it was written and the digest is taken after `--set` and before substitution (spec §7; C3, C5, C16; M20 in "What the builder took from the design review" in `decisions.md`).
+- A public check path that stops before adapter selection and can list a `Lablet`'s tools, so what `lablet check` does the library does too (C4, C13, C17; quality-bar item 6).
+- With a telemetry file path of `-`, the summary line is off and so is the diagnostic log, unless `RUST_LOG` is set (C15; "Six decisions before phase 5" in `decisions.md`).
+- The root check covers the file `--prompt-file` names, as it covers `prompt.system_file` (spec §6, `tools-builtin`).
+- A `--run-id` that isn't one component of a path is refused before the run, with exit 1, and the library refuses such an id too (C18; quality-bar item 6; "Six decisions before phase 5" in `decisions.md`).
+- `ConfigDigest` as a newtype, in the change that moves the digest ("The small calls, and what phase 3 inherits" and "Six decisions before phase 5" in `decisions.md`).
+- A run with no response writes a transcript that holds the task prompt, under a key that's added, so `schema_version` stays 1 (the known limit in "The transcript is made of turns"; "Six decisions before phase 5" in `decisions.md`).
+- On Linux, `main.rs` clears the process's `PR_SET_DUMPABLE` flag before anything else, so a command can't read lablet's environment through `/proc`. It's the one thing only `main.rs` does, and `apps/lablet` takes a Linux-only `nix` dependency naming `process` for it (the `signal` feature the workspace pins already turns it on) (spec §6 and §7; quality-bar item 6; "Six decisions before phase 5" in `decisions.md`).
 
 Acceptance: `lablet init --provider fake && lablet run --config lablet.yaml --prompt "..."` completes with no edits, writes an OTLP/JSON file, and prints a `RunOutcome`. The CLI and the phase 4 doctest produce identical outcomes for the same config. Scenarios C1 to C7 and C10 to C18 pass, with the exit codes of L9 and E15.
 

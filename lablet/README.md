@@ -2,7 +2,7 @@
 
 The Cargo workspace that builds lablet: a lightweight, instrumented agent loop, as a library and a `lablet` binary. What it does and why is in [../product/](../product/); how to work on the code is in [../contributing/README.md](../contributing/README.md). User-facing docs will live in [docs/](docs/).
 
-The loop, the library, and every adapter a run needs without a network are built: the scripted provider, the built-in tools, the telemetry observer with its OTLP/JSON file exporter, and the transcript writer. `provider-anthropic`, `provider-openai`, and `tools-mcp` are still empty shells from the phase 0 scaffold, and each one's doc comment names the [build-plan](../product/build-plan.md) phase that fills it. The `lablet` binary is phase 5's. The sources of `telemetry-registry` are written by `cargo xtask weaver generate` from the registry in `telemetry/`.
+The loop, the library, and every adapter a run needs without a network are built: the scripted provider, the built-in tools, the telemetry observer with its OTLP/JSON file exporter, and the transcript writer. `provider-anthropic`, `provider-openai`, and `tools-mcp` are still empty shells from the phase 0 scaffold, and the [build plan](../product/build-plan.md) says which phase fills each. The `lablet` binary is phase 5's. The sources of `telemetry-registry` are written by `cargo xtask weaver generate` from the registry in `telemetry/`.
 
 ## Layout
 
@@ -39,7 +39,7 @@ The gates are `cargo xtask` commands. `xtask/` is a separate crate at the reposi
 
 ```bash
 cargo xtask pre-commit    # fmt, clippy, lint-layers, lint-manifests, weaver check, weaver generate --check, lint-shell, lint-prose
-cargo xtask pre-push      # pre-commit plus cargo deny, changelog, rustdoc, tests
+cargo xtask pre-push      # pre-commit plus cargo deny, changelog, rustdoc, tests, and the mutants of what changed
 ```
 
 Run them from the repository root. The alias is also defined in `.cargo/config.toml` here, so the same commands work from `lablet/` itself, but not from a crate directory below it.

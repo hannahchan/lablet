@@ -19,3 +19,5 @@ mod smoke;
 mod tools;
 #[cfg(test)]
 mod transcript;
+#[cfg(test)]
+mod wide;

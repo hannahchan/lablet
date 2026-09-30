@@ -94,7 +94,8 @@ impl From<Unsupported> for BuildError {
 
 /// Why a `Lablet` couldn't be built. Each refusal of a setting names its
 /// key and the value that was refused, but for `model.api_key_env`, whose
-/// value no refusal shows.
+/// value a refusal shows only when it's written in capitals, digits and
+/// `_`, as environment variables are and few key formats are.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BuildError {
     /// The config states something a config may not.
@@ -110,8 +111,8 @@ pub enum BuildError {
     },
     /// The provider needs a key, and the variable that `model.api_key_env`
     /// names holds none where lablet runs. What the config holds there may
-    /// be a key that was written in the name's place, so the refusal holds
-    /// nothing of it.
+    /// be a key that was written in the name's place, so the refusal names
+    /// the variable only when it's written in capitals, digits and `_`.
     #[error("model.api_key_env is refused: {reason}")]
     KeyVariable {
         /// What's wrong with the variable.
@@ -315,11 +316,10 @@ fn key_is_set(model: &Model, held: impl Fn(&str) -> Option<OsString>) -> Result<
         Some(_) => "is empty",
         None => "isn't set",
     };
-    // A name the config states isn't shown, and the one that's lablet's own
-    // is: a config that names none has nothing else to be corrected by.
-    let variable = match model.api_key_env {
-        Some(_) => "the variable it names".to_owned(),
-        None => format!("`{variable}`, the variable that's read when the config names none,"),
+    let variable = match (&model.api_key_env, model.shown_key_variable()) {
+        (None, _) => format!("`{variable}`, the variable that's read when the config names none,"),
+        (Some(_), Some(shown)) => format!("`{shown}`, the variable it names,"),
+        (Some(_), None) => "the variable it names".to_owned(),
     };
     Err(BuildError::KeyVariable {
         reason: format!("{variable} {fault}, and the provider `anthropic` needs a key"),

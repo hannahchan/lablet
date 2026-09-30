@@ -142,6 +142,20 @@ impl Model {
         }
     }
 
+    /// The name the config gives the key's variable, when a message may
+    /// show it: one written in capitals, digits and `_`, as environment
+    /// variables conventionally are and few key formats are. Any other
+    /// value may be a key written where its variable's name belongs.
+    /// Validation has already held the value to a variable's name, so only
+    /// its case and its characters are asked about here.
+    pub(crate) fn shown_key_variable(&self) -> Option<&str> {
+        self.api_key_env.as_deref().filter(|named| {
+            named
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+        })
+    }
+
     /// Whether the provider can apply `setting`.
     pub(crate) fn applies(&self, setting: Setting) -> bool {
         let api = self.openai_api();

@@ -39,7 +39,7 @@ lablet-policy = { path = "crates/domain/policy", version = "0.1.0" }
 lablet-run = { path = "crates/application/run", version = "0.1.0" }
 # Adapter: ModelProvider over the Anthropic Messages API
 lablet-provider-anthropic = { path = "crates/adapters/secondary/provider-anthropic", version = "0.1.0" }
-# Adapter: ModelProvider over OpenAI-compatible chat completions
+# Adapter: ModelProvider over the OpenAI Responses API and OpenAI-compatible chat completions
 lablet-provider-openai = { path = "crates/adapters/secondary/provider-openai", version = "0.1.0" }
 # Adapter: ModelProvider that plays scripted responses
 lablet-provider-fake = { path = "crates/adapters/secondary/provider-fake", version = "0.1.0" }

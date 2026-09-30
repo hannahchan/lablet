@@ -47,24 +47,51 @@ fn a_variable_that_holds_a_key_is_taken() {
 }
 
 #[test]
-fn a_variable_that_is_not_set_is_refused_and_the_name_the_config_states_is_not_shown() {
-    let named = model(&format!("model: {{ api_key_env: {PASTED} }}"));
+fn a_variable_that_is_not_set_is_refused_and_a_name_not_written_in_capitals_is_not_shown() {
+    for named in [PASTED, "work_key", "Work_Key", "ANTHROPIC_API_KEy"] {
+        let config = model(&format!("model: {{ api_key_env: {named} }}"));
 
-    assert_eq!(
-        refusal(&named, holding("ANTHROPIC_API_KEY", "a key")),
-        "model.api_key_env is refused: the variable it names isn't set, and the provider \
-         `anthropic` needs a key"
-    );
+        let shown = refusal(&config, holding("ANTHROPIC_API_KEY", "a key"));
+
+        assert_eq!(
+            shown,
+            "model.api_key_env is refused: the variable it names isn't set, and the provider \
+             `anthropic` needs a key",
+            "{named}"
+        );
+        assert!(!shown.contains(named), "{named}: {shown}");
+    }
 }
 
 #[test]
-fn a_variable_that_is_empty_is_refused_and_the_name_the_config_states_is_not_shown() {
+fn a_variable_that_is_empty_is_refused_and_a_name_not_written_in_capitals_is_not_shown() {
     let named = model(&format!("model: {{ api_key_env: {PASTED} }}"));
 
     assert_eq!(
         refusal(&named, holding(PASTED, "")),
         "model.api_key_env is refused: the variable it names is empty, and the provider \
          `anthropic` needs a key"
+    );
+}
+
+#[test]
+fn a_variable_the_config_names_in_capitals_is_named_when_it_is_not_set_or_empty() {
+    for named in ["ANTHROPIC_API_KEY", "WORK_KEY_2", "_K"] {
+        let config = model(&format!("model: {{ api_key_env: {named} }}"));
+
+        assert_eq!(
+            refusal(&config, nothing),
+            format!(
+                "model.api_key_env is refused: `{named}`, the variable it names, isn't set, \
+                 and the provider `anthropic` needs a key"
+            )
+        );
+    }
+    let empty = model("model: { api_key_env: WORK_KEY }");
+    assert_eq!(
+        refusal(&empty, holding("WORK_KEY", "")),
+        "model.api_key_env is refused: `WORK_KEY`, the variable it names, is empty, and the \
+         provider `anthropic` needs a key"
     );
 }
 

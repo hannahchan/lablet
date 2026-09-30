@@ -9,6 +9,7 @@ Lablet: a lightweight, instrumented agent loop in Rust, built with explicit arch
 ## Delivery
 
 - Work on a branch. When a logical piece is complete and `cargo xtask pre-push` passes, fast-forward `main` and push. No pull requests for now. After pushing, check the Actions run; a red `main` is fixed before anything else lands.
+- Read the latest `Floors` run (`gh run list --workflow floors.yml`) before starting work and before closing a phase. It should be from the last day or two; if it's older, the schedule may have been disabled (see `contributing/README.md`, Gates). A red one is fixed before anything else lands, as a red `main` is.
 - One build-plan phase per explicit human go-ahead. Go as far as possible within the phase, stop where a human is needed (API keys, manual sign-off items), and stop at the end of the phase for review.
 - Before stopping at a phase end, review the phase's diff, scaled to risk and within a stated budget (see `contributing/README.md`, Reviews), fix what survives triage and verification, then write the phase report: what landed with commit ids, scenarios green, gate results, review cost against budget, architectural decisions made, spec clarifications, human sign-off items, open risks, one demo command.
 - Architectural decisions may be made without asking. Record each in `product/decisions.md` when it's made and list it in the phase report.

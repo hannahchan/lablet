@@ -50,6 +50,7 @@ Known differences, outside the line and not built:
 - Codex's code mode, where the model calls tools by writing JavaScript
 - switching models after a refusal
 - moving a timed-out command to the background
+- the primary's working directory carrying from one `bash` command to the next
 - a tool list that changes during a run
 - keys in a tool's `_meta` that belong to one vendor
 

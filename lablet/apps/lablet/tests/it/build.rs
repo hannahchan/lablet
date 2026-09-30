@@ -462,11 +462,20 @@ async fn a_provider_that_needs_a_key_needs_the_variable_that_holds_it_to_be_set(
     let error = refusal(anthropic(NO_VARIABLE)).await;
     assert_eq!(
         error.to_string(),
+        format!(
+            "model.api_key_env is refused: `{NO_VARIABLE}`, the variable it names, isn't set, \
+             and the provider `anthropic` needs a key"
+        )
+    );
+    assert!(matches!(error, BuildError::KeyVariable { .. }), "{error:?}");
+    let lower = NO_VARIABLE.to_lowercase();
+    let error = refusal(anthropic(&lower)).await;
+    assert_eq!(
+        error.to_string(),
         "model.api_key_env is refused: the variable it names isn't set, and the provider \
          `anthropic` needs a key"
     );
-    assert!(matches!(error, BuildError::KeyVariable { .. }), "{error:?}");
-    assert!(!format!("{error:?}").contains(NO_VARIABLE), "{error:?}");
+    assert!(!format!("{error:?}").contains(&lower), "{error:?}");
     assert_eq!(
         refusal(anthropic(KEY_VARIABLE)).await,
         BuildError::from(Unsupported::Anthropic),

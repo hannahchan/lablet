@@ -1635,6 +1635,46 @@ async fn the_summary_is_the_sum_of_the_transcript_beside_it() {
     );
 }
 
+/// Each tool has an executor of its own, so the two calls take different
+/// times; both are exclusive, so the second starts when the first ends. A
+/// loop that stamped every call of a turn with one start, or one latency,
+/// fails here.
+#[tokio::test]
+async fn each_call_of_a_turn_holds_its_own_start_and_latency() {
+    let mut harness = Harness::new(vec![
+        Answer::Responds(
+            Box::new(says(
+                "On it.",
+                &["bash", "read_file"],
+                FinishReason::ToolUse,
+            )),
+            ms(80),
+        ),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.tools = vec![
+        Arc::new(FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")]).taking(ms(250))),
+        Arc::new(
+            FakeTools::new(Arc::clone(&harness.clock), vec![spec("read_file")]).taking(ms(70)),
+        ),
+    ];
+
+    let run = harness.run().await;
+    let calls = run.finished.transcript.turns()[0].tool_calls();
+
+    let timings: Vec<(&str, u64, u64)> = calls
+        .iter()
+        .map(|call| (call.call_id.as_str(), call.started_ms, call.latency_ms))
+        .collect();
+    assert_eq!(
+        timings,
+        [("call_0", 80, 250), ("call_1", 330, 70)],
+        "the first call starts when the response arrives, the second when the first ends"
+    );
+    assert_eq!(tool_timings(&run), [(80, 250), (330, 70)]);
+    assert_eq!(run.finished.summary.tool_calls.latency_ms, 320);
+}
+
 // E2, E3: what the retry budget counts, and what it belongs to.
 
 #[tokio::test]
@@ -2948,12 +2988,29 @@ async fn consecutive_reads_run_together_and_a_write_runs_alone() {
     assert_eq!(ids, ["call_0", "call_1", "call_2", "call_3"]);
 }
 
+/// Every event a run emitted, each named, with the call id of a tool call's.
+fn stream(run: &Run) -> Vec<String> {
+    run.observer
+        .events()
+        .iter()
+        .map(|event| match &event.kind {
+            EventKind::ToolCallStarted { call_id, .. }
+            | EventKind::ToolCallFinished { call_id, .. } => {
+                format!("{} {}", event.kind.name(), call_id.as_str())
+            }
+            kind => kind.name().to_owned(),
+        })
+        .collect()
+}
+
 /// A cap of 1 is the loop before calls could run together, which is what a
-/// test that asserts events exactly relies on. The outcomes are compared
-/// rather than the whole transcript: the fakes share one clock, so calls that
-/// overlap can't be given timings of their own.
+/// test that asserts events exactly relies on. Each run has a clock of its
+/// own, and nothing in either run takes any time, so every offset and
+/// latency is 0 in both and the transcripts can be equal whole. Calls that
+/// took time couldn't be: two that overlap don't start and end when the
+/// same calls run one after the other do.
 #[tokio::test]
-async fn a_cap_of_one_runs_every_call_alone_and_records_the_same_outcomes() {
+async fn a_cap_of_one_gives_the_sequential_event_stream_and_the_same_transcript() {
     let (alone, spans) = grouped(1).await;
     let (together, _) = grouped(10).await;
 
@@ -2963,31 +3020,55 @@ async fn a_cap_of_one_runs_every_call_alone_and_records_the_same_outcomes() {
             "+call_0", "-call_0", "+call_1", "-call_1", "+call_2", "-call_2", "+call_3", "-call_3"
         ]
     );
-    let tool_events: Vec<&str> = alone
-        .observer
-        .names()
-        .into_iter()
-        .filter(|name| name.starts_with("ToolCall"))
-        .collect();
     assert_eq!(
-        tool_events,
-        ["ToolCallStarted", "ToolCallFinished"].repeat(4),
+        stream(&alone),
+        [
+            "RunStarted",
+            "TurnStarted",
+            "ProviderCallStarted",
+            "ProviderCallFinished",
+            "ToolCallStarted call_0",
+            "ToolCallFinished call_0",
+            "ToolCallStarted call_1",
+            "ToolCallFinished call_1",
+            "ToolCallStarted call_2",
+            "ToolCallFinished call_2",
+            "ToolCallStarted call_3",
+            "ToolCallFinished call_3",
+            "TurnStarted",
+            "ProviderCallStarted",
+            "ProviderCallFinished",
+            "RunFinished",
+        ],
         "each call's events close before the next call's open"
     );
-    let outcomes = |run: &Run| {
-        run.finished.transcript.turns()[0]
-            .tool_calls()
+    let held = |run: &Run| {
+        let mut events: Vec<String> = run
+            .observer
+            .events()
             .iter()
-            .map(|outcome| {
-                (
-                    outcome.call_id.clone(),
-                    outcome.status.clone(),
-                    outcome.content.clone(),
-                )
-            })
-            .collect::<Vec<_>>()
+            .map(|event| format!("{event:?}"))
+            .collect();
+        events.sort();
+        events
     };
-    assert_eq!(outcomes(&alone), outcomes(&together));
+    assert_eq!(
+        held(&alone),
+        held(&together),
+        "a cap changes the order of the events and nothing that they hold"
+    );
+    assert_ne!(
+        stream(&alone),
+        stream(&together),
+        "with 10 the first two reads overlap"
+    );
+    assert_eq!(alone.finished.transcript, together.finished.transcript);
+    let ids: Vec<&str> = alone.finished.transcript.turns()[0]
+        .tool_calls()
+        .iter()
+        .map(|outcome| outcome.call_id.as_str())
+        .collect();
+    assert_eq!(ids, ["call_0", "call_1", "call_2", "call_3"]);
 }
 
 // E11: a retry is a provider call, so it's polled for cancellation.
