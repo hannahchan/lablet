@@ -2,7 +2,7 @@
 
 What to look for when reviewing a diff here. [README.md](README.md) holds the rules a gate enforces; this page holds the judgements a gate can't make.
 
-Every item comes from a defect that reached `main` in the two domain crates and was caught by a later review. The commit that fixed each one is cited, so the reasoning stays one `git show` away. An item that becomes mechanical moves to `README.md` and becomes a gate.
+Every item comes from a defect that reached `main` and was caught by a later review, in the two domain crates unless it names the test audit of `b56d30d`, which read the whole tree. The commit that fixed each one is cited, so the reasoning stays one `git show` away; the audit's items cite the commit it read, where the defect can still be seen. An item that becomes mechanical moves to `README.md` and becomes a gate.
 
 A reviewer with five findings to spend reads the sections that match the diff. The first is the lens for the rest, not a list of its own.
 
@@ -78,57 +78,61 @@ The most repeated defect in the domain layer's history. Twelve of the fifteen do
 26. **Does a doc claim a mechanical property that isn't mechanical?** `spellings.rs` claimed each match is exhaustive; it held for two of the four, and the others were array literals, so a new `ToolSource` variant would have compiled, passed conformance, and emitted a value the registry has no member for.
 27. **For arithmetic and aggregation, is there a law rather than an example?** Additivity, monotonicity, associativity and commutativity, idempotence, round-trip. An example says what one value does; a law says what every value does (`ad28c75`). The property pass found `cost(a) + cost(b)` differing from `cost(a + b)`, which is why a run reports the rates it was priced at.
 28. **Saturating arithmetic doesn't void a law, but check rather than assume.** Saturating addition stays associative because both groupings reach the same ceiling.
+29. **For each clause of a test's name, doc or comment, which assertion fails without it?** Item 20 asks it of a name's two halves, and the test audit of `b56d30d` found about 26 tests, in every area, with a clause nothing checked. `ci_runs_the_pre_push_steps_as_a_gate` threw the steps away, so `ci` could have run the pre-commit steps alone and CI would have stopped running deny, doc and the tests with every test green. A comment that counts polls or calls is a clause too: one said a cancellation fake was answered twice before the first call, and `FakeCancel::after(1)` answers once.
+30. **Can the fake refuse what the port refuses, and reach every state the port allows?** A name it doesn't serve, a deadline reached, a cancellation raised mid-call. With nothing scripted, the loop's `FakeTools` answered every name, though the port has `ToolErrorKind::Unknown` for one it doesn't serve, so the tool-set routing test passed a set that sent every name to its last executor. `FakeCancel` could cancel only on a counted poll, so no run met cancellation with another stop in the same turn, and moving the loop's poll after the turn cap passed.
+31. **Does a real-time budget bound only work that must not finish?** A budget on work that has to succeed fails on a loaded runner, not on a defect. Two runs gave the executor 50 ms so that `sleep 60` timed out, and the call after it, an `echo`, then had to start bash and exit inside the same 50 ms.
+32. **Does a property's generator reach every arm, and would a weak implementation fail it?** The finish-reason generator drew from `.{0,24}`, which almost never spells one of the 11 recognised reasons, so the idempotence law ran on the `Other` arm, where it holds trivially. The cut properties checked that what's sent fits the cap and not that it's all the cap allows, so a cut that sent only the truncation line passed.
 
 ## External contracts
 
-29. **Open the documentation.** The domain modelled a provider API from memory, no adapter existed to contradict it, and no gate could (`b1eff3d`). One page read found three defects, including a request shape that returns 400 on every current model.
-30. **Check the vendored conventions before inventing a `lablet.*` attribute.** `gen_ai.usage.reasoning.output_tokens` was already there while lablet discarded the count.
-31. **When a claim can't be verified yet, record it against the phase where it can be** (`b1eff3d`, `227f07b`).
+33. **Open the documentation.** The domain modelled a provider API from memory, no adapter existed to contradict it, and no gate could (`b1eff3d`). One page read found three defects, including a request shape that returns 400 on every current model.
+34. **Check the vendored conventions before inventing a `lablet.*` attribute.** `gen_ai.usage.reasoning.output_tokens` was already there while lablet discarded the count.
+35. **When a claim can't be verified yet, record it against the phase where it can be** (`b1eff3d`, `227f07b`).
 
 ## Measurement
 
 Specific to a product whose output is measurement.
 
-32. **Does the classification blame the component that can act on it?** Tool arguments that aren't JSON were classified as a malformed response and retried, which re-rolls the same prompt against the same schema, burns the retry budget, ends the run `retries_exhausted`, and reports a tool problem as provider flakiness (`372ca9c`).
-33. **Report rather than withhold.** `Pricing::cost` prices a self-contradicting usage low rather than refusing: refusing is the worse failure for a tool whose job is to report what happened, and the raw counts reach the wide event beside it.
-34. **Never publish a derived number without the inputs to re-derive it.** That was the rates finding, and it was against lablet's own raw-data rule.
+36. **Does the classification blame the component that can act on it?** Tool arguments that aren't JSON were classified as a malformed response and retried, which re-rolls the same prompt against the same schema, burns the retry budget, ends the run `retries_exhausted`, and reports a tool problem as provider flakiness (`372ca9c`).
+37. **Report rather than withhold.** `Pricing::cost` prices a self-contradicting usage low rather than refusing: refusing is the worse failure for a tool whose job is to report what happened, and the raw counts reach the wide event beside it.
+38. **Never publish a derived number without the inputs to re-derive it.** That was the rates finding, and it was against lablet's own raw-data rule.
 
 ## Names and timing
 
-35. **Rank names by whether the name asserts something false**, not by whether a better one exists. `6ea164d` ranked nine that way, changed four, and declined `StopClass` and `ModelRef` because neither lies and vocabulary churn has its own cost.
-36. **Structural change is priced by the number of dependants.** Zero is the moment. Five commits carry the argument, in the form "before the loop is written against them."
-37. **The counter-rule: don't rush a change whose real risk lives at a boundary that doesn't exist yet.** The `RunSummary` totals grouping moved to phase 4 deliberately, to land with the wide-event mapping that shows which groups it wants (`928dd0b`).
+39. **Rank names by whether the name asserts something false**, not by whether a better one exists. `6ea164d` ranked nine that way, changed four, and declined `StopClass` and `ModelRef` because neither lies and vocabulary churn has its own cost.
+40. **Structural change is priced by the number of dependants.** Zero is the moment. Five commits carry the argument, in the form "before the loop is written against them."
+41. **The counter-rule: don't rush a change whose real risk lives at a boundary that doesn't exist yet.** The `RunSummary` totals grouping moved to phase 4 deliberately, to land with the wide-event mapping that shows which groups it wants (`928dd0b`).
 
 ## Comments
 
 `a72ab5f` swept both crates: 48 cuts proposed, 27 approved by a guard told to refuse anything stating a reason, a trade-off, a contract, an invariant, or an error condition.
 
-38. **What goes:** restatement of the line below, signpost sentences announcing an argument the next two sentences make, glosses on self-naming parameters, and explanations of what Rust does rather than what lablet does.
-39. **What stays:** those five, and anything that's the only record of a fact.
-40. **The test:** would a reader lose a fact if the line went?
+42. **What goes:** restatement of the line below, signpost sentences announcing an argument the next two sentences make, glosses on self-naming parameters, and explanations of what Rust does rather than what lablet does.
+43. **What stays:** those five, and anything that's the only record of a fact.
+44. **The test:** would a reader lose a fact if the line went?
 
 ## Module organisation
 
 From the two independent reviews behind `d59dfd1`.
 
-41. **One module per idea, not one per stage of a run.** Name modules on one axis. `lablet-model` used two, so anything fitting neither landed in the nearest stage-module and `provider.rs` and `outcome.rs` became catch-alls.
-42. **Read the file's doc comment, then its declaration order.** If the doc says "X and Y" and the declarations run X, Z, Y, then Z is the intruder. `Cost` and `Rates` sat between the two halves of `provider.rs`, pushing the request parameters below them.
-43. **A module doc that needs "and" twice is two modules.**
-44. **Put a `pub(crate)` helper where its only caller is.** The output cap moved to `tool.rs` because a cap is a property of a tool call and its only caller was there. A helper with callers in several modules belongs to the crate root, which is where `whole_ms` went.
-45. **Read the `use` block as a claim about dependencies.** `use crate::outcome::whole_ms` in `tool.rs` implied that tools depend on outcomes.
-46. **Import cycles between sibling modules are legal and are the usual sign of a boundary in the wrong place.** The fix is usually to move the shared type down into a leaf module rather than to merge the two: `ProviderKind` left `provider.rs` because `message` needed it and `provider` needs `ContentBlock` either way.
-47. **A delegating wrapper duplicates the tests, not just the signature.** `Pricing::new` re-declared `Rates::new`'s signature and its `# Errors` section only to call it, and its four rate-validation tests were duplicates of the model's. Also ask whether the wrapper has a caller outside its own tests.
+45. **One module per idea, not one per stage of a run.** Name modules on one axis. `lablet-model` used two, so anything fitting neither landed in the nearest stage-module and `provider.rs` and `outcome.rs` became catch-alls.
+46. **Read the file's doc comment, then its declaration order.** If the doc says "X and Y" and the declarations run X, Z, Y, then Z is the intruder. `Cost` and `Rates` sat between the two halves of `provider.rs`, pushing the request parameters below them.
+47. **A module doc that needs "and" twice is two modules.**
+48. **Put a `pub(crate)` helper where its only caller is.** The output cap moved to `tool.rs` because a cap is a property of a tool call and its only caller was there. A helper with callers in several modules belongs to the crate root, which is where `whole_ms` went.
+49. **Read the `use` block as a claim about dependencies.** `use crate::outcome::whole_ms` in `tool.rs` implied that tools depend on outcomes.
+50. **Import cycles between sibling modules are legal and are the usual sign of a boundary in the wrong place.** The fix is usually to move the shared type down into a leaf module rather than to merge the two: `ProviderKind` left `provider.rs` because `message` needed it and `provider` needs `ContentBlock` either way.
+51. **A delegating wrapper duplicates the tests, not just the signature.** `Pricing::new` re-declared `Rates::new`'s signature and its `# Errors` section only to call it, and its four rate-validation tests were duplicates of the model's. Also ask whether the wrapper has a caller outside its own tests.
 
 ## Reviewing the review
 
-48. **Does the finding name a cause or only a symptom?** Two module reviews ran without contact and reached the same shortlist; the second named the cause the first only described, and the cause became the rule that prevents recurrence (`d59dfd1`). A symptom gets fixed once.
-49. **Expect a low survival rate.** 21 findings to 4 in `c75290c`, 12 to 7 in `2a575f8`, 9 names to 4 in `6ea164d`, 48 comment cuts to 27 in `a72ab5f`. A review that lands most of what it proposes probably wasn't adversarial.
-50. **Give a sweep explicit refusal criteria**, not a general instruction to be careful. The comment sweep's five criteria are reusable as written.
-51. **Record refutations, not just fixes.** A rejected finding recorded with its reasoning pays for itself within days.
-52. **Record a deferral against the phase where it bites**, not as a vague "later" (`227f07b`, `b970009`).
-53. **Record a decline with a reason that stays valid.** Splitting `message.rs` was declined because `Message<'a>` borrows from the owned types, so a module line would make the lifetime harder to follow. Splitting the large test files was declined as navigability alone, which sets the bar.
-54. **Re-measure the floors after pure movement.** A move that drops a test file, or leaves a `mod tests;` pointing at nothing, shows up there and nowhere else.
-55. **Does the headline match the riskiest hunk?** `d59dfd1` is labelled pure movement and contains an API change and four deleted tests. The body says so; the summary line is what a reader trusts later.
+52. **Does the finding name a cause or only a symptom?** Two module reviews ran without contact and reached the same shortlist; the second named the cause the first only described, and the cause became the rule that prevents recurrence (`d59dfd1`). A symptom gets fixed once.
+53. **Expect a low survival rate.** 21 findings to 4 in `c75290c`, 12 to 7 in `2a575f8`, 9 names to 4 in `6ea164d`, 48 comment cuts to 27 in `a72ab5f`. A review that lands most of what it proposes probably wasn't adversarial.
+54. **Give a sweep explicit refusal criteria**, not a general instruction to be careful. The comment sweep's five criteria are reusable as written.
+55. **Record refutations, not just fixes.** A rejected finding recorded with its reasoning pays for itself within days.
+56. **Record a deferral against the phase where it bites**, not as a vague "later" (`227f07b`, `b970009`).
+57. **Record a decline with a reason that stays valid.** Splitting `message.rs` was declined because `Message<'a>` borrows from the owned types, so a module line would make the lifetime harder to follow. Splitting the large test files was declined as navigability alone, which sets the bar.
+58. **Re-measure the floors after pure movement.** A move that drops a test file, or leaves a `mod tests;` pointing at nothing, shows up there and nowhere else.
+59. **Does the headline match the riskiest hunk?** `d59dfd1` is labelled pure movement and contains an API change and four deleted tests. The body says so; the summary line is what a reader trusts later.
 
 ## What the gates can't see
 

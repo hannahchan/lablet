@@ -18,6 +18,7 @@
 use serde::Deserialize;
 use std::fmt::{self, Write as _};
 use std::path::Path;
+use std::process::ExitStatus;
 
 use crate::floors::{self, EQUIVALENT_MUTANTS, Equivalent, FLOORS, FloorCrate, Standing};
 use crate::gates::CheckResult;
@@ -366,15 +367,19 @@ fn mutants_args<'a>(output: &'a str, in_diff: Option<&'a str>) -> Vec<&'a str> {
     args
 }
 
-/// Runs cargo-mutants and reads what it found. `output` is the directory it
-/// writes `mutants.out` under.
-fn test_mutants(output: &Path, in_diff: Option<&Path>) -> Result<Outcomes, String> {
+/// Runs cargo-mutants through `run`, which takes cargo's arguments, and reads
+/// what it found. `output` is the directory it writes `mutants.out` under.
+fn test_mutants(
+    output: &Path,
+    in_diff: Option<&Path>,
+    run: impl FnOnce(&[&str]) -> Result<ExitStatus, String>,
+) -> Result<Outcomes, String> {
     let output_arg = output.display().to_string();
     let diff_arg = in_diff.map(|diff| diff.display().to_string());
     let args = mutants_args(&output_arg, diff_arg.as_deref());
     let report = output.join("mutants.out").join("outcomes.json");
     forget_last_report(&report)?;
-    let status = process::stream("cargo", &args, &[])?;
+    let status = run(&args)?;
     if !status
         .code()
         .is_some_and(|code| EXITS_WITH_OUTCOMES.contains(&code))
@@ -387,12 +392,18 @@ fn test_mutants(output: &Path, in_diff: Option<&Path>) -> Result<Outcomes, Strin
     read_outcomes(&report)
 }
 
+/// How [`check`] and [`check_changed`] run cargo-mutants: through cargo
+/// itself, its output streamed.
+fn cargo(args: &[&str]) -> Result<ExitStatus, String> {
+    process::stream("cargo", args, &[])
+}
+
 /// Runs cargo-mutants over the floor crates and judges the exact floor.
 pub fn check() -> CheckResult {
     let workspace = Workspace::load(&workspace_root())?;
     let crates = floors::crates(&workspace)?;
     let output = floors::output_directory(&workspace.root)?;
-    let outcomes = test_mutants(&output, None)?;
+    let outcomes = test_mutants(&output, None, cargo)?;
     conclude(&judge(&outcomes, &crates, EQUIVALENT_MUTANTS, Scope::Full))
 }
 
@@ -408,12 +419,24 @@ pub fn check_changed() -> CheckResult {
     let since = format!("{} ({source})", short(&base));
 
     let diff = changed_diff(&workspace.root, &base, &pathspecs(&workspace.root, &crates))?;
+    let output = floors::output_directory(&workspace.root)?;
+    test_changed(&diff, &since, &crates, &output, cargo)
+}
+
+/// [`check_changed`], from the diff it found and with `run` in place of
+/// cargo. `output` is where a full run writes; an empty diff runs nothing.
+fn test_changed(
+    diff: &str,
+    since: &str,
+    crates: &[FloorCrate],
+    output: &Path,
+    run: impl FnOnce(&[&str]) -> Result<ExitStatus, String>,
+) -> CheckResult {
     if diff.is_empty() {
         return Ok(Some(format!(
             "nothing to test: no Rust file of a floor crate changed since {since}"
         )));
     }
-    let output = floors::output_directory(&workspace.root)?;
     let diff_path = output.join("changed.diff");
     std::fs::write(&diff_path, diff)
         .map_err(|e| format!("could not write {}: {e}", diff_path.display()))?;
@@ -423,8 +446,8 @@ pub fn check_changed() -> CheckResult {
     std::fs::create_dir_all(&output)
         .map_err(|e| format!("could not create {}: {e}", output.display()))?;
 
-    let outcomes = test_mutants(&output, Some(&diff_path))?;
-    let verdict = judge(&outcomes, &crates, EQUIVALENT_MUTANTS, Scope::Changed);
+    let outcomes = test_mutants(&output, Some(&diff_path), run)?;
+    let verdict = judge(&outcomes, crates, EQUIVALENT_MUTANTS, Scope::Changed);
     if verdict.tallies.iter().all(|tally| tally.viable == 0) {
         return Ok(Some(format!(
             "nothing to test: what changed since {since} holds no viable mutant"
@@ -477,13 +500,16 @@ fn pathspecs(workspace_root: &Path, crates: &[FloorCrate]) -> Vec<String> {
 }
 
 /// Git options that leave the repository as it was and the diff as
-/// cargo-mutants reads it, whatever the developer has configured: `git diff`
-/// would otherwise rewrite the index to refresh it, and a colour, an external
-/// diff tool, or other prefixes would not parse. Nor would git's default
-/// quoting, which writes a name that isn't ASCII in octal escapes that
-/// cargo-mutants' diff parser rejects; `-c` sets it for this command alone.
-const GIT_DIFF: [&str; 11] = [
-    "--no-optional-locks",
+/// cargo-mutants reads it, whatever the developer has configured. `git diff`
+/// would otherwise rewrite the index to refresh a file whose timestamp moved
+/// and whose text didn't, which `--no-optional-locks` doesn't stop. A colour,
+/// an external diff tool, or other prefixes would not parse, and a text
+/// conversion would show other text than the source. Nor would git's default
+/// quoting parse, which writes a name that isn't ASCII in octal escapes that
+/// cargo-mutants' diff parser rejects. `-c` sets each for this command alone.
+const GIT_DIFF: [&str; 12] = [
+    "-c",
+    "diff.autoRefreshIndex=false",
     "-c",
     "core.quotePath=false",
     "diff",
@@ -589,7 +615,9 @@ fn read_outcomes(path: &Path) -> Result<Outcomes, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::fixture::{TempDir, scratch_git};
+    use crate::workspace::fixture::{TempDir, defy_git_defaults, scratch_git};
+    use std::cell::RefCell;
+    use std::os::unix::process::ExitStatusExt as _;
 
     const MODEL: &str = "crates/domain/model/src/lib.rs";
     const POLICY: &str = "crates/domain/policy/src/lib.rs";
@@ -1020,23 +1048,143 @@ mod tests {
         }
     }
 
+    /// An exit with `code`, as the wait status a child leaves.
+    fn exited(code: i32) -> ExitStatus {
+        ExitStatus::from_raw(code << 8)
+    }
+
+    /// A stand-in for cargo-mutants that ends with `status`. It refuses to
+    /// start while the last run's report is still there, keeps the arguments
+    /// it was given in `args`, and writes `found` as its report when given.
+    fn cargo_mutants<'a>(
+        args: &'a RefCell<Vec<String>>,
+        found: Option<&'a [String]>,
+        status: ExitStatus,
+    ) -> impl FnOnce(&[&str]) -> Result<ExitStatus, String> + 'a {
+        move |given: &[&str]| {
+            *args.borrow_mut() = given.iter().map(|arg| (*arg).to_owned()).collect();
+            let output = given.iter().position(|arg| *arg == "--output").unwrap() + 1;
+            let report = Path::new(given[output]).join("mutants.out/outcomes.json");
+            assert!(
+                !report.exists(),
+                "cargo-mutants started with the last run's report still at {}",
+                report.display()
+            );
+            if let Some(found) = found {
+                let text = format!(r#"{{"outcomes": [{}]}}"#, found.join(","));
+                std::fs::create_dir_all(report.parent().unwrap()).unwrap();
+                std::fs::write(&report, text).unwrap();
+            }
+            Ok(status)
+        }
+    }
+
     /// With `--in-diff` and no mutant in the diff, cargo-mutants exits 0 and
     /// leaves the last run's report where it was.
     #[test]
     fn a_report_a_previous_run_left_is_gone_before_the_next_run_reads_one() {
         let dir = TempDir::new("mutants-outcomes");
-        let report = format!(r#"{{"outcomes": [{}]}}"#, green().join(","));
-        dir.write("mutants.out/outcomes.json", &report);
         let path = dir.path().join("mutants.out/outcomes.json");
+        let last = format!(r#"{{"outcomes": [{}]}}"#, green().join(","));
+        dir.write("mutants.out/outcomes.json", &last);
         assert_eq!(read_outcomes(&path).unwrap().outcomes.len(), 7);
 
-        forget_last_report(&path).unwrap();
-        assert_eq!(read_outcomes(&path).unwrap().outcomes.len(), 0);
-        forget_last_report(&path).unwrap();
+        let args = RefCell::new(Vec::new());
+        let outcomes = test_mutants(dir.path(), None, cargo_mutants(&args, None, exited(0)));
+        assert_eq!(outcomes.unwrap().outcomes.len(), 0);
+        assert_eq!(
+            args.borrow()[3..5],
+            ["--output".to_owned(), dir.path().display().to_string()]
+        );
 
         dir.write("mutants.out/outcomes.json", "not JSON");
         let error = read_outcomes(&path).unwrap_err();
         assert!(error.starts_with("could not parse "), "{error}");
+    }
+
+    /// cargo-mutants exits 1 on bad arguments, 4 when the tests fail
+    /// unmutated, and 70 on an internal error, and a signal leaves no code.
+    #[test]
+    fn only_exit_codes_0_2_and_3_are_a_run_with_outcomes_to_judge() {
+        let args = RefCell::new(Vec::new());
+        let found = green();
+        for code in [0, 2, 3] {
+            let dir = TempDir::new("mutants-exit");
+            let run = cargo_mutants(&args, Some(&found), exited(code));
+            let outcomes = test_mutants(dir.path(), None, run).unwrap();
+            assert_eq!(outcomes.outcomes.len(), 7, "{code}");
+        }
+        for status in [exited(1), exited(4), exited(70), ExitStatus::from_raw(9)] {
+            let dir = TempDir::new("mutants-exit");
+            let run = cargo_mutants(&args, Some(&found), status);
+            let error = test_mutants(dir.path(), None, run).unwrap_err();
+            assert_eq!(
+                error,
+                format!(
+                    "command failed (in lablet/): cargo mutants --no-config --cargo-arg=--locked \
+                     --output {} --package lablet-model --package lablet-policy --package \
+                     lablet-run; no mutants were tested (the tests must pass unmutated first)",
+                    dir.path().display()
+                ),
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scoped_run_tests_nothing_on_an_empty_diff_and_otherwise_says_it_judged_only_the_diff() {
+        let since = "a1a1a1a1a1a1 (merge-base with origin/main)";
+        let dir = TempDir::new("mutants-changed");
+        let untested = |_: &[&str]| -> Result<ExitStatus, String> {
+            unreachable!("cargo-mutants ran on an empty diff")
+        };
+        assert_eq!(
+            test_changed("", since, &crates(true), dir.path(), untested),
+            Ok(Some(format!(
+                "nothing to test: no Rust file of a floor crate changed since {since}"
+            )))
+        );
+        assert!(!dir.path().join("changed.diff").exists());
+
+        let diff = "diff --git a/crates/domain/model/src/lib.rs b/crates/domain/model/src/lib.rs\n";
+        let args = RefCell::new(Vec::new());
+        let scoped = |found: Option<&[String]>, status: ExitStatus| {
+            let run = cargo_mutants(&args, found, status);
+            test_changed(diff, since, &crates(true), dir.path(), run)
+        };
+        // No mutant in what changed, so cargo-mutants wrote no report.
+        assert_eq!(
+            scoped(None, exited(0)),
+            Ok(Some(format!(
+                "nothing to test: what changed since {since} holds no viable mutant"
+            )))
+        );
+        let changed = dir.path().join("changed");
+        let diff_path = dir.path().join("changed.diff");
+        assert_eq!(
+            args.borrow()[3..7],
+            [
+                "--output".to_owned(),
+                changed.display().to_string(),
+                "--in-diff".to_owned(),
+                diff_path.display().to_string(),
+            ]
+        );
+        assert_eq!(std::fs::read_to_string(&diff_path).unwrap(), diff);
+
+        let caught = [mutant(MODEL, "69:5", WHOLE_MS, "CaughtMutant")];
+        assert_eq!(
+            scoped(Some(&caught), exited(0)),
+            Ok(Some(format!(
+                "only the mutants in what changed since {since}; the full run judges the floor"
+            )))
+        );
+        let missed = [mutant(OBSERVER, "201:9", ON_TURN, "MissedMutant")];
+        let error = scoped(Some(&missed), exited(2)).unwrap_err();
+        assert!(
+            error.starts_with("mutants: 1 floor(s) below or unmeasured\n"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -1127,9 +1275,10 @@ mod tests {
     }
 
     /// A builder never commits, so what it wrote is staged, unstaged, or not
-    /// tracked at all, and a new module is the last of these.
+    /// tracked at all, and a new module is the last of these. A file whose
+    /// timestamp moved and whose text didn't is none of them.
     #[test]
-    fn the_scoped_diff_holds_what_is_committed_staged_unstaged_and_untracked() {
+    fn the_scoped_diff_holds_what_is_committed_staged_unstaged_moved_and_untracked() {
         let dir = TempDir::new("mutants-git");
         let git = |args: &[&str]| scratch_git(dir.path(), args);
         let body = |value: u8| format!("pub fn value() -> u8 {{\n    {value}\n}}\n");
@@ -1138,10 +1287,12 @@ mod tests {
         for file in ["committed", "staged", "unstaged", "untouched"] {
             dir.write(&format!("{model}/src/{file}.rs"), &body(1));
         }
+        dir.write(&format!("{model}/src/moved.rs"), &body(9));
         dir.write(&format!("{model}/Cargo.toml"), "[package]\n");
         dir.write(&format!("{other}/src/lib.rs"), &body(1));
         dir.write(".gitignore", "ignored.rs\n");
         git(&["init", "--quiet", "--initial-branch=main"]);
+        defy_git_defaults(dir.path(), "diff.noprefix");
         let resolved = git(&["rev-parse", "--show-toplevel"]);
         assert_eq!(
             std::fs::canonicalize(resolved.trim()).unwrap(),
@@ -1164,6 +1315,18 @@ mod tests {
         dir.write(&format!("{model}/notes.md"), "Notes.\n");
         dir.write(&format!("{other}/src/lib.rs"), &body(7));
         dir.write(&format!("{other}/src/new.rs"), &body(8));
+        let moved = [
+            format!("{model}/src/moved.rs"),
+            format!("{model}/src/renamed.rs"),
+        ];
+        git(&["mv", &moved[0], &moved[1]]);
+        let untouched = dir.path().join(format!("{model}/src/untouched.rs"));
+        let untouched = std::fs::File::options()
+            .write(true)
+            .open(untouched)
+            .unwrap();
+        let long_ago = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        untouched.set_modified(long_ago).unwrap();
 
         let index = || std::fs::read(dir.path().join(".git/index")).unwrap();
         let status = || git(&["--no-optional-locks", "status", "--porcelain"]);
@@ -1173,26 +1336,38 @@ mod tests {
         let pathspecs = [":(glob)crates/domain/model/**/*.rs".to_owned()];
         let diff = changed_diff(&workspace, base.trim(), &pathspecs).unwrap();
 
-        // Relative to the workspace root, as cargo-mutants names a file.
-        let changed: Vec<&str> = diff
+        // Relative to the workspace root, as cargo-mutants names a file, and
+        // the moved file gone from where it was and whole where it is.
+        let files: Vec<&str> = diff
             .lines()
-            .filter_map(|line| line.strip_prefix("+++ "))
+            .filter(|line| line.starts_with("--- ") || line.starts_with("+++ "))
             .collect();
         assert_eq!(
-            changed,
+            files,
             [
-                "b/crates/domain/model/src/committed.rs",
-                "b/crates/domain/model/src/staged.rs",
-                "b/crates/domain/model/src/unstaged.rs",
-                "b/crates/domain/model/src/untracked/new.rs",
+                "--- a/crates/domain/model/src/committed.rs",
+                "+++ b/crates/domain/model/src/committed.rs",
+                "--- a/crates/domain/model/src/moved.rs",
+                "+++ /dev/null",
+                "--- /dev/null",
+                "+++ b/crates/domain/model/src/renamed.rs",
+                "--- a/crates/domain/model/src/staged.rs",
+                "+++ b/crates/domain/model/src/staged.rs",
+                "--- a/crates/domain/model/src/unstaged.rs",
+                "+++ b/crates/domain/model/src/unstaged.rs",
+                "--- /dev/null",
+                "+++ b/crates/domain/model/src/untracked/new.rs",
             ]
         );
         let values: Vec<&str> = diff
             .lines()
             .filter(|line| line.starts_with("+    "))
             .collect();
-        assert_eq!(values, ["+    2", "+    3", "+    4", "+    5"]);
-        assert!(diff.contains("@@ -0,0 +1,3 @@\n+pub fn value() -> u8 {\n+    5\n+}\n"));
+        assert_eq!(values, ["+    2", "+    9", "+    3", "+    4", "+    5"]);
+        for value in [9, 5] {
+            let whole = format!("@@ -0,0 +1,3 @@\n+pub fn value() -> u8 {{\n+    {value}\n+}}\n");
+            assert!(diff.contains(&whole), "{diff}");
+        }
 
         assert!(index() == index_before, "the index was rewritten");
         assert_eq!(status(), status_before);
@@ -1214,6 +1389,7 @@ mod tests {
         let model = "lablet/crates/domain/model";
         dir.write(&format!("{model}/src/café.rs"), &body(1));
         git(&["init", "--quiet", "--initial-branch=main"]);
+        defy_git_defaults(dir.path(), "diff.mnemonicPrefix");
         let resolved = git(&["rev-parse", "--show-toplevel"]);
         assert_eq!(
             std::fs::canonicalize(resolved.trim()).unwrap(),
@@ -1231,15 +1407,17 @@ mod tests {
         let workspace = dir.path().join("lablet");
         let pathspecs = [":(glob)crates/domain/model/**/*.rs".to_owned()];
         let diff = changed_diff(&workspace, base.trim(), &pathspecs).unwrap();
-        let changed: Vec<&str> = diff
+        let files: Vec<&str> = diff
             .lines()
-            .filter_map(|line| line.strip_prefix("+++ "))
+            .filter(|line| line.starts_with("--- ") || line.starts_with("+++ "))
             .collect();
         assert_eq!(
-            changed,
+            files,
             [
-                "b/crates/domain/model/src/café.rs",
-                "b/crates/domain/model/src/new one.rs\t",
+                "--- a/crates/domain/model/src/café.rs",
+                "+++ b/crates/domain/model/src/café.rs",
+                "--- /dev/null",
+                "+++ b/crates/domain/model/src/new one.rs\t",
             ]
         );
     }

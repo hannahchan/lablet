@@ -326,24 +326,21 @@ fn is_executable(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
+    /// Every name the git on this machine lists, so a newer git's addition
+    /// fails here rather than reaching a test that runs under a hook.
     #[test]
     fn a_subprocess_never_inherits_the_repository_git_names_for_a_hook() {
         let command = command_in(&repo_root(), "git", &["status"]).unwrap();
-        let removed: Vec<_> = command
+        let removed: BTreeSet<String> = command
             .get_envs()
             .filter(|(_, value)| value.is_none())
             .map(|(key, _)| key.to_string_lossy().into_owned())
             .collect();
-        for variable in [
-            "GIT_DIR",
-            "GIT_WORK_TREE",
-            "GIT_INDEX_FILE",
-            "GIT_COMMON_DIR",
-        ] {
-            assert!(removed.iter().any(|key| key == variable), "{variable}");
-        }
-        assert_eq!(removed.len(), GIT_REPOSITORY_ENV.len());
+        let listed = capture_in(&repo_root(), "git", &["rev-parse", "--local-env-vars"]).unwrap();
+        let listed: BTreeSet<String> = listed.lines().map(str::to_owned).collect();
+        assert_eq!(removed, listed);
     }
 
     #[test]

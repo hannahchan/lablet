@@ -1003,3 +1003,27 @@ Phase 5's plan gains what the audit found it has to design for, each item with t
 - **A `--run-id` that isn't one component of a path is refused before the run, with exit 1,** and the library refuses such an id in a run request too, so the two agree. An id that holds a `/` or a NUL loses the run's telemetry file and its `{run_id}` transcript with only a warning, and `--run-id` makes the id user input.
 - **A run with no response writes a transcript that holds its task prompt.** The 2026-09-20 known limit waited for the ATIF export, and phase 5 shows the gap sooner: a CLI run whose key is rejected would leave a transcript that doesn't say what was asked. The prompt goes under a key that's added, so `schema_version` stays 1.
 - **`ConfigDigest` becomes a newtype in the change that moves the digest.** The 2026-09-20 entry waited for the digest's producer, which phase 4 wrote, and phase 5 changes how the digest is taken, so the type changes with it.
+
+## 2026-09-30 What the audit of the tests changed
+
+An audit of the suite at `b56d30d` read about 1,050 of its 1,240 tests. It found them good, and very good in the three floor crates, whose floors had already removed what a mutant can find. What was left was what no mutant proposes: names that promised a clause nothing checked, contracts the spec states that no test put the code in a position to break, fakes more forgiving than their ports, and gate decisions in xtask that no test reached. Four of its six recommendations were taken.
+
+Decided by the human:
+
+- **An assertion that a call succeeded or failed, and nothing more, is refused.** clippy's `assertions_on_result_states` is on in both workspaces. It found 25 sites, all in tests; the four that expected an error now say which.
+- **The gaps where a defect passed are closed.** Among them: cancellation meeting the turn cap, the token budget and a zero timeout in one turn, where moving or deleting the loop's poll after the tool phase passed every test; a tool's source reaching the record, which every helper had fixed to `Builtin`; the first bad rate being the one reported; and tool spans exported in the order their calls ended.
+- **Every gate's decision is a function a test calls.** The seven xtask entry points that run a tool and decide pass or fail had their decisions moved out beside `changelog::resolve_base`, so a verdict mapped the wrong way, or an exit code accepted that shouldn't be, fails a test. xtask isn't a floor crate, and a one-off mutation run over it caught 463 of 539 viable mutants; the survivors that matter are left open below.
+- **Four questions join `contributing/reviews.md`,** as items 29 to 32, and the items after them are renumbered. This lifts, for these four, the deferral of feeding review findings into that page, which the entry "Phase 4, signed off" records.
+- **No test reads `product/spec.md`.** The audit proposed reading spec §7's config block from the spec, so the defaults test couldn't drift from it. The spec is prose and can drift, so a test's fixture is its source, the spec quotes the fixture, and a quote that drifted is a documentation defect for a review to find.
+
+What the builders decided on the way:
+
+- **A call that reaches its deadline has timed out.** The port's documents said a call past its limit times out, and the loop's fake timed a call out only past it, while the built-in executor kills a command at its deadline. Every limit is met when it's reached, as the entry of 2026-09-19 says, so the fake and the documents say that now.
+- **The observer's shutdown has one bound in all.** It waited five seconds for each of its three queues in turn, so a stuck exporter held it for fifteen. Shutdown runs on a thread of its own and the caller waits the bound, five seconds by default and set with `shutdown_timeout`. What's still being exported when the bound is reached is left to finish, since nothing can take it back.
+- **A diff a gate runs never writes the index.** `git diff` against a commit refreshes the index's stat data, which `--no-optional-locks` doesn't stop, so the scoped mutation run and the changelog gate rewrote the index of the repository they only read. Both pass `-c diff.autoRefreshIndex=false`, and a test that changes one file's timestamp holds them to it.
+- **An executor's shared calls each get their own answer, and needn't overlap.** The conformance case was named for shared calls answered together, and it passed an executor that answered one at a time. The loop decides what runs together, so the case is named for what an executor owes it.
+
+Left open:
+
+- **Mutants xtask's tests don't catch.** Among them: the exit code of a failed gate (`main.rs`), a failure to remove the last report being ignored, a coverage run that judges no crate, and the refusal of a tool that isn't pinned. Each has a test that would catch it, named in the one-off run's report; none is a floor.
+- **Every-variant lists written by hand, and helpers copied between crates,** the audit's other two recommendations, wait.

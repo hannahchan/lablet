@@ -99,7 +99,12 @@ fn edition(workspace: &Workspace) -> Result<String, String> {
 /// Replaces the generated directories of the tree.
 pub fn write() -> CheckResult {
     let stage = Stage::render()?;
-    let root = repo_root();
+    install(&stage.0, &repo_root())
+}
+
+/// Moves each rendering in `stage` over the directory it replaces under
+/// `root`, which need not exist yet.
+fn install(stage: &Path, root: &Path) -> CheckResult {
     for output in &OUTPUTS {
         let tree = root.join(output.tree);
         let failed = |e: std::io::Error| format!("could not replace {}: {e}", tree.display());
@@ -107,7 +112,7 @@ pub fn write() -> CheckResult {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(failed(e)),
             _ => {}
         }
-        std::fs::rename(stage.0.join(output.staged), &tree).map_err(failed)?;
+        std::fs::rename(stage.join(output.staged), &tree).map_err(failed)?;
     }
     Ok(None)
 }
@@ -116,10 +121,14 @@ pub fn write() -> CheckResult {
 /// only under `lablet/target`.
 pub fn check() -> CheckResult {
     let stage = Stage::render()?;
-    let root = repo_root();
+    compare(&stage.0, &repo_root())
+}
+
+/// Fails when a directory under `root` differs from its rendering in `stage`.
+fn compare(stage: &Path, root: &Path) -> CheckResult {
     let mut found = Vec::new();
     for output in &OUTPUTS {
-        let rendered = stage.0.join(output.staged);
+        let rendered = stage.join(output.staged);
         found.extend(differences(
             &rendered,
             &root.join(output.tree),
@@ -222,6 +231,65 @@ mod tests {
         let nowhere = rendered.path().join("absent");
         let found = differences(rendered.path(), &nowhere, "src").unwrap();
         assert_eq!(found, ["src/lib.rs is missing"]);
+    }
+
+    /// Where each output's directory is in the tree, spelt out, so that a
+    /// rendering compared with or moved to the wrong one fails.
+    const REGISTRY_SOURCES: &str = "lablet/crates/adapters/secondary/shared/telemetry-registry/src";
+    const REFERENCE: &str = "lablet/docs/telemetry";
+
+    /// A stage holding both renderings: the crate's sources and the pages.
+    fn staged() -> TempDir {
+        let stage = TempDir::new("stage");
+        stage.write("src/lib.rs", "pub mod attributes;\n");
+        stage.write("docs/README.md", "# Telemetry\n");
+        stage
+    }
+
+    #[test]
+    fn a_check_fails_when_either_output_differs_from_its_rendering_and_says_how_to_fix_it() {
+        let (stage, root) = (staged(), TempDir::new("root"));
+        root.write(
+            &format!("{REGISTRY_SOURCES}/lib.rs"),
+            "pub mod attributes;\n",
+        );
+        root.write(&format!("{REFERENCE}/README.md"), "# Telemetry\n");
+        assert_eq!(compare(stage.path(), root.path()), Ok(None));
+
+        root.write(&format!("{REGISTRY_SOURCES}/lib.rs"), "pub mod old;\n");
+        root.write(&format!("{REFERENCE}/spans.md"), "spans\n");
+        assert_eq!(
+            compare(stage.path(), root.path()),
+            Err(format!(
+                "the generated files differ from what the registry renders to:\n  \
+                 {REGISTRY_SOURCES}/lib.rs is out of date\n  {REFERENCE}/spans.md is no longer \
+                 generated\nfix with: cargo xtask weaver generate"
+            ))
+        );
+    }
+
+    #[test]
+    fn installing_replaces_each_generated_directory_whole_and_makes_one_that_is_missing() {
+        let (stage, root) = (staged(), TempDir::new("root"));
+        root.write(&format!("{REGISTRY_SOURCES}/lib.rs"), "pub mod old;\n");
+        root.write(&format!("{REGISTRY_SOURCES}/old.rs"), "\n");
+        // The pages have never been rendered here.
+        std::fs::create_dir_all(root.path().join("lablet/docs")).unwrap();
+        assert_eq!(install(stage.path(), root.path()), Ok(None));
+
+        let tree = |relative: &str| {
+            let directory = root.path().join(relative);
+            files(&directory, &directory).unwrap()
+        };
+        let file = |path: &str, text: &str| (path.to_owned(), text.as_bytes().to_vec());
+        assert_eq!(
+            tree(REGISTRY_SOURCES),
+            BTreeMap::from([file("lib.rs", "pub mod attributes;\n")])
+        );
+        assert_eq!(
+            tree(REFERENCE),
+            BTreeMap::from([file("README.md", "# Telemetry\n")])
+        );
     }
 
     #[test]

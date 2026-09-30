@@ -23,6 +23,7 @@
 
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
+use std::process::ExitStatus;
 
 use crate::floors::{self, FloorCrate, Line};
 use crate::gates::{CheckResult, LOCKED};
@@ -195,14 +196,8 @@ pub fn check() -> CheckResult {
     let report_arg = report.display().to_string();
     let args = llvm_cov_args(&report_arg, false);
     let status = process::stream("cargo", &args, &[])?;
-    if !status.success() {
-        return Err(format!(
-            "{}; {NOT_MEASURED}",
-            process::command_failed("cargo", &args)
-        ));
-    }
-    let export = read_report(&report)?;
-    floors::conclude("coverage", &lines_by_crate(&export, &crates, &MEASURES))
+    measured(status, || process::command_failed("cargo", &args))?;
+    conclude_lines(&read_report(&report)?, &crates)
 }
 
 /// Runs the workspace's tests under cargo-llvm-cov on the pinned nightly and
@@ -211,13 +206,9 @@ pub fn check() -> CheckResult {
 pub fn check_branches() -> CheckResult {
     let rustup = |args: &[&str]| process::capture_in(&repo_root(), "rustup", args);
     let toolchains = rustup(&["toolchain", "list"])?;
-    if !lists_toolchain(&toolchains, NIGHTLY) {
-        return Err(not_installed("isn't installed"));
-    }
-    let components = rustup(&["component", "list", "--toolchain", NIGHTLY, "--installed"])?;
-    if !lists_llvm_tools(&components) {
-        return Err(not_installed(&format!("is installed without {LLVM_TOOLS}")));
-    }
+    nightly_ready(&toolchains, || {
+        rustup(&["component", "list", "--toolchain", NIGHTLY, "--installed"])
+    })?;
 
     let workspace = Workspace::load(&workspace_root())?;
     let crates = floor_crates(&workspace)?;
@@ -228,29 +219,58 @@ pub fn check_branches() -> CheckResult {
     let args = llvm_cov_args(&report_arg, true);
     let env = [("CARGO_TARGET_DIR", target_arg.as_str())];
     let status = process::stream_on(NIGHTLY, &args, &env)?;
-    if !status.success() {
-        return Err(format!(
-            "{}; {NOT_MEASURED}",
-            process::command_failed_on(NIGHTLY, &args)
-        ));
-    }
-    let export = read_report(&report)?;
-    conclude_branches(&lines_by_crate(&export, &crates, &BRANCHES))
+    measured(status, || process::command_failed_on(NIGHTLY, &args))?;
+    conclude_branches(&read_report(&report)?, &crates)
 }
 
-/// One crate without a branch has no condition in it. All of them without one
-/// is a run that did not measure branches at all, whatever was asked of it.
-fn conclude_branches(lines: &[Line]) -> CheckResult {
+/// A run that failed wrote no report, so the one on disk, if any, is the last
+/// run's. `command` names the run.
+fn measured(status: ExitStatus, command: impl FnOnce() -> String) -> Result<(), String> {
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{}; {NOT_MEASURED}", command()))
+    }
+}
+
+/// The line and region floors, judged on a report of a run without
+/// `--branch`.
+fn conclude_lines(export: &Export, crates: &[FloorCrate]) -> CheckResult {
+    floors::conclude("coverage", &lines_by_crate(export, crates, &MEASURES))
+}
+
+/// The branch floors. One crate without a branch has no condition in it. All
+/// of them without one is a run that did not measure branches at all,
+/// whatever was asked of it.
+fn conclude_branches(export: &Export, crates: &[FloorCrate]) -> CheckResult {
+    let lines = lines_by_crate(export, crates, &BRANCHES);
     if lines.iter().all(|line| line.total == 0) {
         return Err(format!(
             "coverage: no floor crate has a branch in the report, so branches were not \
              measured and no floor was applied. cargo-llvm-cov was run with `--branch` on \
              {NIGHTLY}; either the flag no longer takes there, or something hides the crates \
              from the report\n\n{}",
-            floors::report(lines)
+            floors::report(&lines)
         ));
     }
-    floors::conclude("coverage", lines)
+    floors::conclude("coverage", &lines)
+}
+
+/// Whether the pinned nightly can measure branches, from what rustup lists.
+/// Its components are asked for only once the toolchain is listed, so a
+/// missing toolchain fails with the command that installs it and not with
+/// rustup's own error.
+fn nightly_ready(
+    toolchains: &str,
+    components: impl FnOnce() -> Result<String, String>,
+) -> Result<(), String> {
+    if !lists_toolchain(toolchains, NIGHTLY) {
+        return Err(not_installed("isn't installed"));
+    }
+    if !lists_llvm_tools(&components()?) {
+        return Err(not_installed(&format!("is installed without {LLVM_TOOLS}")));
+    }
+    Ok(())
 }
 
 /// Whether `rustup toolchain list` names the toolchain: by itself, or with
@@ -294,6 +314,7 @@ fn not_installed(what: &str) -> String {
 mod tests {
     use super::*;
     use crate::floors::Standing;
+    use std::os::unix::process::ExitStatusExt as _;
 
     /// Two files in one crate, one in a crate whose name shares a prefix, one
     /// in another floor crate. Every file's regions differ from its lines, so
@@ -389,7 +410,7 @@ mod tests {
                 ("lablet-run", "regions", 8, 10, Standing::Below),
             ]
         );
-        let error = floors::conclude("coverage", &lines).unwrap_err();
+        let error = conclude_lines(&export, &crates(true)).unwrap_err();
         assert!(
             error.contains("lablet-run: 80.0% (8 of 10 production regions covered), BELOW"),
             "{error}"
@@ -407,7 +428,7 @@ mod tests {
                 ("lablet-policy", "regions", 0, 0, Standing::NothingMeasured),
             ]
         );
-        let error = floors::conclude("coverage", &lines).unwrap_err();
+        let error = conclude_lines(&export, &crates(true)).unwrap_err();
         for none_of in ["coverable lines", "coverable regions"] {
             let named = format!("lablet-policy: NOTHING MEASURED (no {none_of})");
             assert!(error.contains(&named), "{error}");
@@ -480,7 +501,7 @@ mod tests {
             lines[0].to_string(),
             "lablet-model: 100.0% (6 of 6 production branches taken), meets the 100% floor"
         );
-        let error = conclude_branches(&lines).unwrap_err();
+        let error = conclude_branches(&export, &crates(true)).unwrap_err();
         assert!(
             error.starts_with("coverage: 1 floor(s) below or unmeasured"),
             "{error}"
@@ -494,10 +515,11 @@ mod tests {
     #[test]
     fn a_crate_without_a_branch_passes_but_a_run_without_any_did_not_measure_them() {
         let export: Export = serde_json::from_str(BRANCH_REPORT).unwrap();
-        let mut lines = lines_by_crate(&export, &crates(true), &BRANCHES);
-        lines.pop();
+        // `model`, whose branches were all taken, and `policy`, with none.
         assert_eq!(
-            conclude_branches(&lines).unwrap().as_deref(),
+            conclude_branches(&export, &crates(true)[..2])
+                .unwrap()
+                .as_deref(),
             Some("1 of 2 floor(s) had nothing to measure yet")
         );
 
@@ -505,7 +527,7 @@ mod tests {
         let export: Export = serde_json::from_str(REPORT).unwrap();
         let lines = lines_by_crate(&export, &crates(true), &BRANCHES);
         assert!(lines.iter().all(|line| line.total == 0));
-        let error = conclude_branches(&lines).unwrap_err();
+        let error = conclude_branches(&export, &crates(true)).unwrap_err();
         for phrase in [
             "no floor crate has a branch in the report",
             "`--branch` on nightly-",
@@ -537,10 +559,58 @@ mod tests {
                 ("lablet-run", "branches", 0, 0, Standing::NothingMeasured),
             ]
         );
-        let error = conclude_branches(&lines).unwrap_err();
+        let error = conclude_branches(&export, &crates(true)).unwrap_err();
         assert!(
             error.contains("lablet-run: NOTHING MEASURED (no branches)"),
             "{error}"
+        );
+    }
+
+    /// An exit with `code`, as the wait status a child leaves.
+    fn exited(code: i32) -> ExitStatus {
+        ExitStatus::from_raw(code << 8)
+    }
+
+    #[test]
+    fn a_coverage_run_that_did_not_succeed_measured_nothing() {
+        let named = || "command failed (in lablet/): cargo llvm-cov".to_owned();
+        assert_eq!(
+            measured(exited(0), || unreachable!(
+                "a run that succeeded is not named"
+            )),
+            Ok(())
+        );
+        let killed = ExitStatus::from_raw(9);
+        for status in [exited(1), exited(101), killed] {
+            assert_eq!(
+                measured(status, named).unwrap_err(),
+                "command failed (in lablet/): cargo llvm-cov; no coverage was measured (a failing \
+                 test fails coverage too)",
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_nightly_measures_branches_only_with_its_llvm_tools_asked_for_once_installed() {
+        let without = "stable-aarch64-apple-darwin (default)\nnightly-aarch64-apple-darwin\n";
+        let with = "stable-aarch64-apple-darwin (default)\n\
+                    nightly-2026-08-25-aarch64-apple-darwin\n";
+        assert_eq!(
+            nightly_ready(without, || unreachable!("rustup lists no component of it")),
+            Err(not_installed("isn't installed"))
+        );
+        assert_eq!(
+            nightly_ready(with, || Ok("rustc-aarch64-apple-darwin\n".to_owned())),
+            Err(not_installed("is installed without llvm-tools-preview"))
+        );
+        assert_eq!(
+            nightly_ready(with, || Err("error: rustup could not list".to_owned())),
+            Err("error: rustup could not list".to_owned())
+        );
+        assert_eq!(
+            nightly_ready(with, || Ok("llvm-tools-aarch64-apple-darwin\n".to_owned())),
+            Ok(())
         );
     }
 

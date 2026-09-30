@@ -142,7 +142,11 @@ pub fn resolve_base(
 /// no longer start with a contract path.
 fn changed_paths(directory: &Path, base: &str) -> Result<Vec<String>, String> {
     let git = |args: &[&str]| process::capture_in(directory, "git", args);
+    // A diff against a commit refreshes the index's stat data unless told
+    // not to, which writes to the repository a gate only reads.
     let mut changed = nul_separated(&git(&[
+        "-c",
+        "diff.autoRefreshIndex=false",
         "diff",
         "--name-only",
         "--no-renames",
@@ -186,12 +190,18 @@ pub fn check() -> CheckResult {
     let changed = changed_paths(&repo_root(), &base.revision)?;
     let at_base = git(&["show", &format!("{}:{CHANGELOG}", base.revision)]).ok();
     let now = std::fs::read_to_string(repo_root().join(CHANGELOG)).ok();
+    let verdict = decide(&changed, at_base.as_deref(), now.as_deref());
+    conclude(verdict, &base, commit(&base.revision) == commit("HEAD"))
+}
 
+/// The step's result for a verdict against `base`. `base_is_head` is whether
+/// the base is the commit being judged.
+fn conclude(verdict: Verdict, base: &Base, base_is_head: bool) -> CheckResult {
     let since = format!("{} ({})", short(&base.revision), base.source);
-    match decide(&changed, at_base.as_deref(), now.as_deref()) {
+    match verdict {
         // On `main` without LABLET_CHANGELOG_BASE the base is the commit being
         // judged: only the working tree was compared, and the note says so.
-        Verdict::NoContractChange if commit(&base.revision) == commit("HEAD") => Ok(Some(format!(
+        Verdict::NoContractChange if base_is_head => Ok(Some(format!(
             "no contract file changed in the working tree; the base {since} is HEAD, so no \
              commit was compared"
         ))),
@@ -251,7 +261,7 @@ fn short(revision: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::fixture::scratch_git;
+    use crate::workspace::fixture::{defy_git_defaults, scratch_git};
 
     const BEFORE: &str = "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- The scaffold.\n\n## [0.1.0] - 2026-01-01\n\n- First.\n";
 
@@ -388,6 +398,68 @@ mod tests {
         );
     }
 
+    /// A base the merge-base chose, as a full commit id.
+    fn merge_base() -> Base {
+        Base {
+            revision: "a1".repeat(20),
+            source: "merge-base with origin/main".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_contract_change_the_changelog_does_not_record_fails_the_step() {
+        let schema = || paths(&["lablet/schema.json"]);
+        let why = "\n\n  lablet/schema.json\n\nThe config schema, the telemetry registry, and the \
+                   outcome and transcript JSON are what lablet's users parse (spec §8).\nAdd an \
+                   entry under `## [Unreleased]` in CHANGELOG.md that says what changed for users.";
+        // Whether the base is HEAD changes only the note of a pass.
+        for base_is_head in [false, true] {
+            assert_eq!(
+                conclude(Verdict::Unchanged(schema()), &merge_base(), base_is_head),
+                Err(format!(
+                    "Contract files changed since a1a1a1a1a1a1 (merge-base with origin/main), but \
+                     the `## [Unreleased]` section of CHANGELOG.md has not changed:{why}"
+                ))
+            );
+            assert_eq!(
+                conclude(Verdict::Empty(schema()), &merge_base(), base_is_head),
+                Err(format!(
+                    "Contract files changed since a1a1a1a1a1a1 (merge-base with origin/main), but \
+                     CHANGELOG.md has no entry under `## [Unreleased]`:{why}"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn a_recorded_change_or_none_passes_with_a_note_naming_the_base() {
+        let recorded = paths(&["lablet/schema.json", "lablet/tests/fixtures/outcome.json"]);
+        assert_eq!(
+            conclude(Verdict::Recorded(recorded), &merge_base(), false),
+            Ok(Some(
+                "2 contract file(s) changed since a1a1a1a1a1a1 (merge-base with origin/main), \
+                 with an Unreleased entry"
+                    .to_owned()
+            ))
+        );
+        assert_eq!(
+            conclude(Verdict::NoContractChange, &merge_base(), false),
+            Ok(Some(
+                "no contract file changed since a1a1a1a1a1a1 (merge-base with origin/main)"
+                    .to_owned()
+            ))
+        );
+        // On `main`, whose merge-base with origin/main is the commit itself.
+        assert_eq!(
+            conclude(Verdict::NoContractChange, &merge_base(), true),
+            Ok(Some(
+                "no contract file changed in the working tree; the base a1a1a1a1a1a1 (merge-base \
+                 with origin/main) is HEAD, so no commit was compared"
+                    .to_owned()
+            ))
+        );
+    }
+
     fn base(
         environment: Option<&str>,
         known: &[&str],
@@ -439,6 +511,7 @@ mod tests {
         let chat = format!("{registry}/chat.yaml");
         dir.write(&chat, "groups: []\n");
         git(&["init", "--quiet", "--initial-branch=main"]);
+        defy_git_defaults(dir.path(), "diff.noprefix");
         let resolved = git(&["rev-parse", "--show-toplevel"]);
         assert_eq!(
             std::fs::canonicalize(resolved.trim()).unwrap(),

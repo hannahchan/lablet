@@ -265,6 +265,12 @@ pub mod fixture {
     /// under a hook, a command that missed that step would reach the real
     /// repository, so the repository is named outright.
     pub fn scratch_git(root: &Path, args: &[&str]) -> String {
+        scratch_git_with(root, args, &[])
+    }
+
+    /// [`scratch_git`], with `env` set too for git and what it runs, such as
+    /// a hook.
+    pub fn scratch_git_with(root: &Path, args: &[&str], env: &[(&str, &Path)]) -> String {
         let mut command = std::process::Command::new("git");
         command
             .args([
@@ -283,6 +289,7 @@ pub mod fixture {
             .env("GIT_WORK_TREE", root)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
+            .envs(env.iter().copied())
             .output()
             .unwrap();
         assert!(
@@ -291,6 +298,28 @@ pub mod fixture {
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    /// Writes settings into a scratch repository's own config that change
+    /// what git writes by default, so that each command there has to say what
+    /// it relies on: copy and rename detection, colour, and an external diff
+    /// tool and a text conversion that both fail. `prefixes` is
+    /// `diff.noprefix` or `diff.mnemonicPrefix`, one at a time because the
+    /// first overrides the second.
+    pub fn defy_git_defaults(root: &Path, prefixes: &str) {
+        for setting in [
+            ["diff.renames", "copies"],
+            ["color.diff", "always"],
+            ["diff.external", "false"],
+            ["diff.defiant.textconv", "false"],
+            [prefixes, "true"],
+        ] {
+            scratch_git(root, &[&["config"], &setting[..]].concat());
+        }
+        // The text conversion applies to a file its attributes name.
+        let info = root.join(".git/info");
+        std::fs::create_dir_all(&info).unwrap();
+        std::fs::write(info.join("attributes"), "* diff=defiant\n").unwrap();
     }
 
     /// A directory under the system temporary directory, removed on drop.
