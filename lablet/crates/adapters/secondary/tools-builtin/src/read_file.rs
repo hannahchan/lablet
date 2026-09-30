@@ -91,7 +91,7 @@ fn end_of_line(bytes: &[u8]) -> Option<usize> {
 impl ReadFile {
     /// The text of the lines asked for, or what the tool says of a file it
     /// can't return.
-    async fn read(&self, arguments: &Arguments, terms: Terms) -> Result<Text, String> {
+    async fn read(&self, arguments: &Arguments, terms: Terms<'_>) -> Result<Text, String> {
         let path = &arguments.path;
         let resolved = self
             .root
@@ -113,7 +113,7 @@ impl ReadFile {
             skip: arguments.offset,
             take: arguments.limit.map(NonZeroU64::get),
         };
-        let mut text = Text::new(terms.keep);
+        let mut text = Text::new(terms.keep, terms.secrets);
         let mut piece = vec![0; PIECE_BYTES];
         while !lines.are_read() {
             let read = file.read(&mut piece).await.map_err(unread)?;
@@ -162,7 +162,7 @@ impl BuiltIn for ReadFile {
         }
     }
 
-    async fn run(&self, input: Value, terms: Terms) -> Result<ToolOutput, ToolError> {
+    async fn run(&self, input: Value, terms: Terms<'_>) -> Result<ToolOutput, ToolError> {
         let arguments: Arguments = match terms.arguments(Tool::ReadFile, input) {
             Ok(arguments) => arguments,
             Err(refusal) => return Ok(*refusal),

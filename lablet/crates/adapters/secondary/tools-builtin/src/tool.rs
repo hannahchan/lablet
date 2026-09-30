@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use lablet_model::{KeptOutput, OutputKeep, ToolConcurrency};
+use lablet_model::{OutputKeep, RedactedOutput, Secrets, ToolConcurrency};
 use lablet_run::{ToolError, ToolErrorKind, ToolOutput};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -21,11 +21,13 @@ pub(crate) struct Offer {
 
 /// What one call is run under.
 #[derive(Clone, Copy)]
-pub(crate) struct Terms {
+pub(crate) struct Terms<'a> {
     /// What's kept of the tool's text.
     pub(crate) keep: Option<OutputKeep>,
     /// The longest the call may take, which is more than no time.
     pub(crate) limit: Duration,
+    /// What's cut out of the tool's text before any of it is kept.
+    pub(crate) secrets: &'a Secrets,
 }
 
 /// One built-in tool.
@@ -39,10 +41,10 @@ pub(crate) trait BuiltIn: Send + Sync {
 
     /// Runs one call, whose arguments are `input`. A failure the tool
     /// reports of its own is `Ok`, as an error result.
-    async fn run(&self, input: Value, terms: Terms) -> Result<ToolOutput, ToolError>;
+    async fn run(&self, input: Value, terms: Terms<'_>) -> Result<ToolOutput, ToolError>;
 }
 
-impl Terms {
+impl Terms<'_> {
     /// `input` read as the arguments `T`, or the error result that tells the
     /// model what's wrong with them: it can call again with arguments that
     /// fit, which makes this the tool's own report and no failure to run it.
@@ -67,10 +69,10 @@ impl Terms {
     }
 
     fn result(self, text: &str, is_error: bool) -> ToolOutput {
-        let mut output = KeptOutput::new(self.keep);
+        let mut output = RedactedOutput::new(self.secrets.clone(), self.keep);
         output.push(text);
         ToolOutput {
-            output,
+            output: output.kept(),
             is_error,
             mcp: None,
         }

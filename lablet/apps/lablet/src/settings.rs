@@ -14,7 +14,7 @@ use lablet_model::{
 };
 use lablet_policy::{Pricing, RetryPolicy, RetryPolicyError, RetrySettings, StopPolicy};
 use lablet_run::{CallLimits, ToolFilter};
-use lablet_tools_builtin::Tool;
+use lablet_tools_builtin::{Tool, Withheld};
 
 use crate::config::{
     self, BuiltinTool, Completion, Config, ConfigError, Provider, ResolvedModel, Setting,
@@ -348,6 +348,9 @@ fn builtin(
         enabled: builtin.enabled.iter().copied().map(Tool::from).collect(),
         timeout: builtin.timeout,
         env: builtin.env.clone(),
+        // lablet's secrets are read from where it runs, which `build` reads
+        // and this doesn't.
+        withheld: Withheld::default(),
     }))
 }
 

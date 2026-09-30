@@ -102,6 +102,7 @@ ULID
 vLLM
 [Vv]endored
 [Vv]endoring
+[Vv]irtualenv
 [Ww]eaver
 [Ww]iremock
 [Xx]task

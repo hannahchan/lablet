@@ -9,7 +9,7 @@ use lablet_model::{
     ToolResultContent, ToolSource,
 };
 use lablet_run::{ToolCall, ToolError, ToolExecutor, ToolOutput};
-use lablet_tools_builtin::{BuiltinTools, Settings, Tool};
+use lablet_tools_builtin::{BuiltinTools, Settings, Tool, Withheld};
 use nix::errno::Errno;
 use nix::sys::signal::kill;
 use nix::unistd::Pid;
@@ -70,6 +70,7 @@ impl Scratch {
             enabled: Tool::ALL.into(),
             timeout: TIMEOUT,
             env: BTreeMap::new(),
+            withheld: Withheld::default(),
         }
     }
 

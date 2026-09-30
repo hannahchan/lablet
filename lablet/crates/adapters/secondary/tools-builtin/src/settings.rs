@@ -6,15 +6,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// The variables a command starts with when lablet's own environment holds
-/// them. Nothing else of lablet's environment is in a command's own, so
-/// `env` shows no key that lablet was started with. A command can still read
-/// lablet's environment through the process table, as `ps eww -p $PPID` and
-/// `/proc/<pid>/environ` do, which only the environment lablet runs in can
-/// keep it from.
-pub const ENVIRONMENT: [&str; 8] = [
-    "HOME", "PATH", "SHELL", "USER", "LANG", "TERM", "TMPDIR", "TZ",
-];
+use lablet_model::Secrets;
 
 /// One of the built-in tools.
 ///
@@ -70,9 +62,30 @@ pub struct Settings {
     /// The longest a call may take. A call's own deadline can only shorten
     /// it.
     pub timeout: Duration,
-    /// Variables a command starts with beside the ones of [`ENVIRONMENT`].
-    /// One that has the name of a variable of that list replaces it.
+    /// Variables a command starts with on top of the ones it inherits. One
+    /// that has the name of an inherited variable replaces it, and one that
+    /// has the name of a withheld variable passes it on.
     pub env: BTreeMap<String, String>,
+    /// lablet's own secrets, which no command inherits and no result shows.
+    pub withheld: Withheld,
+}
+
+/// lablet's own secrets: the variables lablet reads them from, which no
+/// command inherits, and their values, which are cut out of every result.
+///
+/// A command can find a value some other way than its environment, in a
+/// file or in lablet's own environment through the process table, as
+/// `ps eww -p $PPID` and `/proc/<pid>/environ` read it. So a value is cut
+/// out of every result however the command came by it, as long as it's
+/// written as lablet holds it.
+///
+/// Its `Debug` form names the variables and says nothing of the values.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Withheld {
+    /// Variables of lablet's environment that no command inherits.
+    pub variables: BTreeSet<String>,
+    /// Values that no result shows.
+    pub values: Secrets,
 }
 
 impl core::fmt::Debug for Settings {
@@ -82,12 +95,14 @@ impl core::fmt::Debug for Settings {
             enabled,
             timeout,
             env,
+            withheld,
         } = self;
         f.debug_struct("Settings")
             .field("root", root)
             .field("enabled", enabled)
             .field("timeout", timeout)
             .field("env", &env.keys().collect::<Vec<_>>())
+            .field("withheld", withheld)
             .finish()
     }
 }
@@ -119,18 +134,20 @@ pub enum SettingsError {
     },
 }
 
-/// The environment a command starts with: what `held` answers for each name
-/// of [`ENVIRONMENT`], then `added`, which wins where both name a variable.
+/// The environment a command starts with: `inherited` less the variables
+/// that `withheld` names, then `added`, which wins where it names a variable
+/// of either.
 ///
-/// `held` is lablet's environment, asked for as a function so that a test
+/// `inherited` is lablet's environment, asked for as a list so that a test
 /// can say what it holds.
 pub(crate) fn environment(
-    held: impl Fn(&str) -> Option<OsString>,
+    inherited: impl IntoIterator<Item = (OsString, OsString)>,
+    withheld: &BTreeSet<String>,
     added: BTreeMap<String, String>,
 ) -> Result<BTreeMap<OsString, OsString>, SettingsError> {
-    let mut environment: BTreeMap<OsString, OsString> = ENVIRONMENT
+    let mut environment: BTreeMap<OsString, OsString> = inherited
         .into_iter()
-        .filter_map(|name| Some((name.into(), held(name)?)))
+        .filter(|(name, _)| !name.to_str().is_some_and(|name| withheld.contains(name)))
         .collect();
     for (name, value) in added {
         let refused = if name.is_empty() {

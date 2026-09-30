@@ -152,6 +152,7 @@ tools:
             enabled: BTreeSet::from([Tool::Bash, Tool::WriteFile]),
             timeout: Duration::from_secs(5),
             env: BTreeMap::from([("CI".to_owned(), "1".to_owned())]),
+            withheld: lablet_tools_builtin::Withheld::default(),
         })
     );
 }

@@ -7,14 +7,14 @@ use std::time::{Duration, Instant};
 
 use lablet_model::{
     CacheScope, CompletionMode, FinishedRun, Prompts, RequestParams, RunContext, RunId, RunLabels,
-    StopReason, Thinking, ToolCallOutcome, ToolResultContent,
+    Secrets, StopReason, Thinking, ToolCallOutcome, ToolResultContent,
 };
 use lablet_policy::{RetryPolicy, RetrySettings, StopPolicy};
 use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
 use lablet_run::{
     CallLimits, Cancellation, Clock, RunEvent, RunObserver, RunService, ToolFilter, ToolSet,
 };
-use lablet_tools_builtin::{BuiltinTools, Settings};
+use lablet_tools_builtin::{BuiltinTools, Settings, Withheld};
 
 use crate::harness::{Scratch, link};
 
@@ -22,7 +22,8 @@ const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 
 const SECRET: &str = "what the model is not to read";
 
-/// A variable cargo sets for every test, as a key is set for lablet.
+/// A variable cargo sets for every test, as a key is set for lablet, and
+/// withheld as lablet's key is.
 const NOT_FOR_A_COMMAND: &str = "CARGO_MANIFEST_DIR";
 
 struct TokioClock;
@@ -195,6 +196,14 @@ async fn a_run_is_refused_what_is_outside_the_root_and_kept_from_lablet_s_enviro
         &scratch.root().join("notes.txt"),
     );
     let held = std::env::var(NOT_FOR_A_COMMAND).expect("cargo sets it for a test");
+    let tools = BuiltinTools::new(Settings {
+        withheld: Withheld {
+            variables: [NOT_FOR_A_COMMAND.to_owned()].into(),
+            values: Secrets::new([held.clone()]),
+        },
+        ..scratch.settings()
+    })
+    .unwrap();
 
     let finished = run(
         r"
@@ -210,7 +219,7 @@ async fn a_run_is_refused_what_is_outside_the_root_and_kept_from_lablet_s_enviro
       - text: Done.
     finish: end_turn
 ",
-        scratch.tools(),
+        tools,
     )
     .await;
 

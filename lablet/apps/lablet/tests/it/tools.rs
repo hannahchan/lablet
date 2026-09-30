@@ -11,8 +11,12 @@ use crate::harness::{Scratch, Traced, observed, request};
 
 const SECRET: &str = "what the model is not to read";
 
-/// A variable cargo sets for every test, as a key is set for lablet.
+/// A variable cargo sets for every test, as a key is set for lablet. Its
+/// value is a long path, as long as a key.
 const KEY_VARIABLE: &str = "CARGO_MANIFEST_DIR";
+
+/// A variable cargo sets for every test, which holds no secret of lablet's.
+const NOT_A_SECRET: &str = "CARGO_PKG_NAME";
 
 /// What the model was sent of a call: its status, and its text.
 fn sent(outcome: &ToolCallOutcome) -> (&'static str, String) {
@@ -43,6 +47,14 @@ fn calling(calls: &[(&str, Value)]) -> String {
         .collect();
     script.push(json!({ "response": { "content": [{ "text": "Done." }], "finish": "end_turn" } }));
     Value::Array(script).to_string()
+}
+
+/// One run of the config `tree`.
+async fn run_tree(tree: &Value) -> FinishedRun {
+    let mut lablet = lablet::build(crate::harness::read(tree)).await.unwrap();
+    let finished = lablet.run(request()).await;
+    lablet.shutdown().await;
+    finished
 }
 
 /// One run of `script`, with `tools` stated, and what it exported.
@@ -278,18 +290,18 @@ async fn a_command_past_the_timeout_is_an_error_result_of_kind_timeout_and_the_r
 }
 
 #[tokio::test]
-async fn the_key_variable_is_not_in_a_commands_environment_and_what_the_config_adds_is() {
-    assert!(
-        std::env::var_os(KEY_VARIABLE).is_some(),
-        "cargo sets the variable for a test, so lablet's environment holds it"
-    );
+async fn a_command_has_lablet_s_environment_less_the_key_and_no_result_shows_the_key() {
+    let key = std::env::var(KEY_VARIABLE)
+        .expect("cargo sets the variable for a test, so lablet's environment holds it");
     let scratch = Scratch::new("environment");
     scratch.write("secret.txt", SECRET);
+    scratch.write("work/key.txt", &key);
     symlink(scratch.at("secret.txt"), scratch.at("work/link.txt")).unwrap();
     let script = calling(&[
         ("bash", json!({ "command": "env" })),
         ("read_file", json!({ "path": "link.txt" })),
         ("bash", json!({ "command": "echo leaving; exit 3" })),
+        ("bash", json!({ "command": "cat key.txt" })),
     ]);
     let mut tree = scratch.tree(
         &script,
@@ -297,6 +309,7 @@ async fn the_key_variable_is_not_in_a_commands_environment_and_what_the_config_a
     );
     tree["model"]["api_key_env"] = json!(KEY_VARIABLE);
     tree["tools"]["builtin"]["env"] = json!({ "LABLET_TEST_ADDED": "added by the config" });
+    tree["telemetry"]["capture_content"] = json!(true);
     let mut lablet = lablet::build(crate::harness::read(&tree)).await.unwrap();
 
     let finished = lablet.run(request()).await;
@@ -310,6 +323,12 @@ async fn the_key_variable_is_not_in_a_commands_environment_and_what_the_config_a
     assert_eq!(status, "ok");
     assert!(environment.ends_with("exit code: 0"), "{environment}");
     assert!(!environment.contains(KEY_VARIABLE), "{environment}");
+    assert!(!environment.contains(&key), "{environment}");
+    let not_a_secret = std::env::var(NOT_A_SECRET).unwrap();
+    assert!(
+        environment.contains(&format!("{NOT_A_SECRET}={not_a_secret}\n")),
+        "{environment}"
+    );
     assert!(
         environment.contains("LABLET_TEST_ADDED=added by the config"),
         "{environment}"
@@ -324,4 +343,36 @@ async fn the_key_variable_is_not_in_a_commands_environment_and_what_the_config_a
     let left = &turns[2].tool_calls()[0];
     assert!(!left.status.is_error());
     assert_eq!(sent(left), ("ok", "leaving\nexit code: 3".to_owned()));
+
+    let printed = &turns[3].tool_calls()[0];
+    assert_eq!(
+        sent(printed),
+        ("ok", "[secret withheld]\nexit code: 0".to_owned())
+    );
+    let telemetry = std::fs::read_to_string(scratch.telemetry()).unwrap();
+    assert!(telemetry.contains("[secret withheld]"), "{telemetry}");
+    assert!(!telemetry.contains(&key), "telemetry holds the key");
+}
+
+#[tokio::test]
+async fn the_key_variable_that_tools_builtin_env_names_is_passed_on() {
+    let scratch = Scratch::new("environment-passed-on");
+    let script = calling(&[(
+        "bash",
+        json!({ "command": format!("echo \"${KEY_VARIABLE}\"") }),
+    )]);
+    let mut tree = scratch.tree(
+        &script,
+        json!({ "tools": { "builtin": scratch.builtin(&["bash"]) } }),
+    );
+    tree["model"]["api_key_env"] = json!(KEY_VARIABLE);
+    tree["tools"]["builtin"]["env"] = json!({ KEY_VARIABLE: "passed on by the config" });
+
+    let finished = run_tree(&tree).await;
+
+    let turns = finished.transcript.turns();
+    assert_eq!(
+        sent(&turns[0].tool_calls()[0]),
+        ("ok", "passed on by the config\nexit code: 0".to_owned())
+    );
 }

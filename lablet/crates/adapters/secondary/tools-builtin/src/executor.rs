@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use lablet_model::{ToolName, ToolSource, ToolSpec};
+use lablet_model::{Secrets, ToolName, ToolSource, ToolSpec};
 use lablet_run::{ToolCall, ToolError, ToolErrorKind, ToolExecutor, ToolOutput};
 
 use crate::bash::Bash;
@@ -22,6 +22,7 @@ use crate::{Settings, SettingsError, Tool};
 pub struct BuiltinTools {
     tools: Vec<Box<dyn BuiltIn>>,
     timeout: Duration,
+    secrets: Secrets,
 }
 
 impl core::fmt::Debug for BuiltinTools {
@@ -30,6 +31,7 @@ impl core::fmt::Debug for BuiltinTools {
         f.debug_struct("BuiltinTools")
             .field("tools", &tools)
             .field("timeout", &self.timeout)
+            .field("secrets", &self.secrets)
             .finish()
     }
 }
@@ -37,9 +39,8 @@ impl core::fmt::Debug for BuiltinTools {
 impl BuiltinTools {
     /// An executor that serves the tools `settings` enables, under its root.
     ///
-    /// The variables of [`ENVIRONMENT`](crate::ENVIRONMENT) are read from
-    /// lablet's environment here, once, so every command of every run starts
-    /// with the same ones.
+    /// lablet's environment is read here, once, so every command of every
+    /// run starts with the same variables.
     ///
     /// # Errors
     ///
@@ -51,9 +52,10 @@ impl BuiltinTools {
             enabled,
             timeout,
             env,
+            withheld,
         } = settings;
         let root = Root::open(&root)?;
-        let environment = environment(|name| std::env::var_os(name), env)?;
+        let environment = environment(std::env::vars_os(), &withheld.variables, env)?;
         let tools = enabled
             .into_iter()
             .map(|tool| -> Box<dyn BuiltIn> {
@@ -68,7 +70,11 @@ impl BuiltinTools {
                 }
             })
             .collect();
-        Ok(Self { tools, timeout })
+        Ok(Self {
+            tools,
+            timeout,
+            secrets: withheld.values,
+        })
     }
 }
 
@@ -115,6 +121,7 @@ impl ToolExecutor for BuiltinTools {
         let terms = Terms {
             keep: call.keep,
             limit,
+            secrets: &self.secrets,
         };
         held.run(call.input, terms).await
     }

@@ -5,6 +5,7 @@
 use std::cell::Cell;
 use std::os::unix::process::ExitStatusExt as _;
 
+use lablet_model::Secrets;
 use lablet_run::ToolErrorKind;
 use tokio::time::Instant;
 
@@ -12,10 +13,14 @@ use super::*;
 
 const LIMIT: Duration = Duration::from_millis(40);
 
-fn terms() -> Terms {
+/// No secrets, which is what these tests need of a call's terms.
+static NO_SECRETS: std::sync::LazyLock<Secrets> = std::sync::LazyLock::new(Secrets::default);
+
+fn terms() -> Terms<'static> {
     Terms {
         keep: None,
         limit: LIMIT,
+        secrets: &NO_SECRETS,
     }
 }
 

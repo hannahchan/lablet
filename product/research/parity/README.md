@@ -74,12 +74,13 @@ A capture stays out of the repository. It can hold text that isn't lablet's to p
 
 ## Documents
 
-| Document                               | Covers                                                                                                                          |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| [matrix.md](matrix.md)                 | Every behaviour that affects a measurement: what each reference does, lablet at the survey, and what was decided or is proposed |
-| [claude-code.md](claude-code.md)       | The primary reference in detail, with its reference configuration                                                               |
-| [codex.md](codex.md)                   | The secondary reference in detail, with its reference configuration                                                             |
-| [mini-swe-agent.md](mini-swe-agent.md) | Evidence: the bash-only harness the SWE-bench leaderboard runs                                                                  |
-| [field.md](field.md)                   | The five other evidence loops and the screen of thirteen others                                                                 |
+| Document                                     | Covers                                                                                                                          |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| [matrix.md](matrix.md)                       | Every behaviour that affects a measurement: what each reference does, lablet at the survey, and what was decided or is proposed |
+| [claude-code.md](claude-code.md)             | The primary reference in detail, with its reference configuration                                                               |
+| [codex.md](codex.md)                         | The secondary reference in detail, with its reference configuration                                                             |
+| [mini-swe-agent.md](mini-swe-agent.md)       | Evidence: the bash-only harness the SWE-bench leaderboard runs                                                                  |
+| [field.md](field.md)                         | The five other evidence loops and the screen of thirteen others                                                                 |
+| [shell-environment.md](shell-environment.md) | What the eight loops give the commands and stdio servers they start, and what lablet decided for its own                        |
 
 Research agents compiled the reference documents from the sources they cite. A second pass checked every matrix cell against those documents, and checked the claims the proposals depend on against the primary sources. Each reference document ends with the corrections that pass found. Other claims in the reference documents weren't checked again. Everything in the matrix except its last column is inventory. The last column is opinion.

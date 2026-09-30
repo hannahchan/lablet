@@ -44,11 +44,10 @@ output and standard error together, in the order they were written, then one lin
 exit code, as `exit code: 0`. A command that exits with another code is a result like any \
 other. Every command is a new process that starts in the run's root directory, so a working \
 directory, a variable or a function that one command set isn't there for the next: write \
-`cd dir && command` as one command. The environment holds a short list of variables. The \
-call returns when the command has exited and nothing it started holds its output open, so \
-send the output of a process that's to stay in the background somewhere else, as in \
-`server > server.log 2>&1 &`. A command that runs for as long as a call may take is killed, \
-with every process it started.";
+`cd dir && command` as one command. The call returns when the command has exited and nothing \
+it started holds its output open, so send the output of a process that's to stay in the \
+background somewhere else, as in `server > server.log 2>&1 &`. A command that runs for as \
+long as a call may take is killed, with every process it started.";
 
 /// Runs commands in the root, with the environment it's given and nothing
 /// else of lablet's.
@@ -120,7 +119,7 @@ async fn went(is_there: impl Fn() -> bool) -> bool {
 /// It's a timeout only when everything the command started `went`, because
 /// a timeout says that the work has stopped.
 async fn ended_by_the_kill(
-    terms: Terms,
+    terms: Terms<'_>,
     waited: std::io::Result<ExitStatus>,
     went: impl Future<Output = bool>,
 ) -> ToolError {
@@ -228,7 +227,7 @@ impl BuiltIn for Bash {
         }
     }
 
-    async fn run(&self, input: Value, terms: Terms) -> Result<ToolOutput, ToolError> {
+    async fn run(&self, input: Value, terms: Terms<'_>) -> Result<ToolOutput, ToolError> {
         let Arguments { command } = match terms.arguments(Tool::Bash, input) {
             Ok(arguments) => arguments,
             Err(refusal) => return Ok(*refusal),
@@ -240,7 +239,7 @@ impl BuiltIn for Bash {
         } = self
             .start(&command)
             .map_err(|error| failed(format!("{SHELL} couldn't be started: {error}")))?;
-        let mut text = Text::new(terms.keep);
+        let mut text = Text::new(terms.keep, terms.secrets);
 
         let reading = read_to_the_end(&mut wrote, &mut shell, &mut text);
         let Ok(read) = tokio::time::timeout(terms.limit, reading).await else {

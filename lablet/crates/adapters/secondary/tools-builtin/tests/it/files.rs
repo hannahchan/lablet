@@ -1,8 +1,8 @@
 use std::time::{Duration, Instant};
 
-use lablet_model::OutputKeep;
+use lablet_model::{OutputKeep, Secrets};
 use lablet_run::{ToolErrorKind, ToolExecutor};
-use lablet_tools_builtin::BuiltinTools;
+use lablet_tools_builtin::{BuiltinTools, Settings, Withheld};
 use serde_json::{Value, json};
 
 use crate::harness::{Scratch, TIMEOUT, call, keeping, link, refused, said, within};
@@ -207,6 +207,43 @@ async fn what_cannot_be_read_is_an_error_result_that_says_why() {
 
         assert_eq!(text, format!("{path} wasn't read: {why}"));
     }
+}
+
+#[tokio::test]
+async fn a_secret_of_lablet_s_is_cut_from_every_result_of_the_file_tools() {
+    let scratch = Scratch::new("files-secret");
+    let key = "a-key-long-enough-to-cut";
+    let tools = BuiltinTools::new(Settings {
+        withheld: Withheld {
+            variables: [].into(),
+            values: Secrets::new([key.to_owned()]),
+        },
+        ..scratch.settings()
+    })
+    .unwrap();
+    scratch.holds("notes.txt", format!("the key is {key}\n"));
+
+    let read = said(&tools, "read_file", json!({ "path": "notes.txt" })).await;
+    let missing = refused(
+        &tools,
+        "read_file",
+        json!({ "path": format!("{key}/missing.txt") }),
+    )
+    .await;
+    let wrote = said(
+        &tools,
+        "write_file",
+        json!({ "path": format!("{key}/made.txt"), "content": "abc" }),
+    )
+    .await;
+
+    assert_eq!(read, "the key is [secret withheld]\n");
+    assert_eq!(
+        missing,
+        "[secret withheld]/missing.txt wasn't read: no such file or directory"
+    );
+    assert_eq!(wrote, "wrote 3 bytes to [secret withheld]/made.txt");
+    assert_eq!(scratch.read(&format!("{key}/made.txt")), "abc");
 }
 
 #[tokio::test]

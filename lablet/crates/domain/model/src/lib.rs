@@ -1,5 +1,6 @@
 //! The domain model: the transcript and its turns, tools, usage, stop reasons,
-//! run identity, and the run summary, as plain types and pure functions.
+//! run identity, the run summary, and the secrets no tool result shows, as
+//! plain types and pure functions.
 //!
 //! These are values in memory, and none of them is a published shape: the
 //! documents lablet writes and the scripts it reads have shapes of their
@@ -30,6 +31,7 @@ mod price;
 mod provider;
 mod provider_kind;
 mod run;
+mod secret;
 mod stop;
 mod summary;
 mod tool;
@@ -54,6 +56,7 @@ pub use provider_kind::ProviderKind;
 pub use run::{
     BlankTask, FailedAttempt, Final, Pending, Progress, Prompts, Responded, Run, RunSetup, Schedule,
 };
+pub use secret::{RedactedOutput, Secrets};
 pub use stop::{Calls, CompletionMode, StopClass, StopReason};
 pub use summary::{FinishedRun, PromptSizes, RunContext, RunSummary};
 pub use tool::{

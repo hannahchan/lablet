@@ -1,15 +1,17 @@
 //! `build`: a config in, a `Lablet` out. The one place that knows every
 //! adapter, and that selects among them.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use lablet_model::Secrets;
 use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
 use lablet_run::{FilterList, RunObserver, RunService, ToolExecutor, ToolSet, ToolSetError};
 use lablet_telemetry_otel::{FileTarget, OtelObserver};
-use lablet_tools_builtin::{BuiltinTools, SettingsError};
+use lablet_tools_builtin::{BuiltinTools, SettingsError, Withheld};
 
 use crate::clock::{NeverCancelled, TokioClock};
 use crate::config::{
@@ -233,6 +235,10 @@ pub async fn build_observed(
     let executors = match settings.builtin {
         Some(builtin) => {
             outside_root(&builtin.root, &config, &target)?;
+            let builtin = lablet_tools_builtin::Settings {
+                withheld: withheld(&config, |variable| std::env::var_os(variable)),
+                ..builtin
+            };
             let tools = BuiltinTools::new(builtin).map_err(|error| match error {
                 SettingsError::Root { ref root, .. }
                 | SettingsError::RootIsNoDirectory { ref root } => {
@@ -318,6 +324,30 @@ fn key_is_set(model: &Model, held: impl Fn(&str) -> Option<OsString>) -> Result<
     Err(BuildError::KeyVariable {
         reason: format!("{variable} {fault}, and the provider `anthropic` needs a key"),
     })
+}
+
+/// lablet's own secrets: the variables it reads them from, which no
+/// command inherits, and what they hold, which no tool result shows. Every
+/// variable lablet reads a secret from is named here, so withholding another
+/// is one more entry in the list.
+///
+/// It's read only when a built-in tool is enabled, since that executor is
+/// the one place that holds a value beside lablet's environment. `held` is
+/// lablet's environment, asked for as a function so that a test can say
+/// what it holds.
+fn withheld(config: &Config, held: impl Fn(&str) -> Option<OsString>) -> Withheld {
+    let variables: BTreeSet<String> = [config.model.key_variable()]
+        .into_iter()
+        .flatten()
+        .map(str::to_owned)
+        .collect();
+    let values = variables
+        .iter()
+        .filter_map(|variable| Some(held(variable)?.to_string_lossy().into_owned()));
+    Withheld {
+        values: Secrets::new(values),
+        variables,
+    }
 }
 
 /// Refuses what the config selects, beside its provider, that this lablet

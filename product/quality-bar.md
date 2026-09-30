@@ -12,7 +12,7 @@ What lablet commits to as a product for developers and AI engineers, and what th
 6. **Library parity.** Anything the CLI does, `build` and `run` do. Nothing lives only in `main.rs`. Doc examples compile and run as doctests.
 7. **A fake provider is part of the product.** `provider-fake` plays scripted responses so users can test their own frameworks without spending tokens. It's what lablet's own smoke tests and doc examples run on.
 8. **Runs where the loop runs.** Static Linux binary for containers, macOS and Linux release artifacts, no runtime dependencies beyond the MCP servers you configure.
-9. **Unsurprising security defaults.** Secrets only via environment, and never in the environment of a process lablet starts. Built-in tools off unless asked for, the file tools confined to a root that holds none of lablet's own files, and `bash` no more confined than the environment lablet runs in. Content capture off by default and documented as the one flag that puts prompts into telemetry.
+9. **Unsurprising security defaults.** Secrets only via environment. lablet's own are never in the environment of a process it starts unless the config passes one on, and each of their values of 16 bytes or more is cut from every tool result wherever it appears as lablet holds it; an encoded copy isn't. Built-in tools off unless asked for, the file tools confined to a root that holds none of lablet's own files, and `bash` no more confined than the environment lablet runs in. Content capture off by default and documented as the one flag that puts prompts into telemetry.
 
 ## Commitments in the repository
 

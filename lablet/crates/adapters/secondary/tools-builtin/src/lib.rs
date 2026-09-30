@@ -30,12 +30,19 @@
 //! carries from one command to the next. `bash` is found on the `PATH` the
 //! command starts with.
 //!
-//! A command starts with the variables of [`ENVIRONMENT`] that lablet's own
-//! environment holds and with what [`Settings::env`] adds, and with nothing
-//! else of lablet's, so the model can't read an API key with `env`. That
-//! holds of the command's environment and of nothing else: a command can
-//! read lablet's own through the process table, as `ps eww -p $PPID` and
-//! `/proc/<pid>/environ` do.
+//! A command starts with lablet's own environment, less the variables that
+//! [`Withheld::variables`] names, and with what [`Settings::env`] adds on
+//! top. So what the environment lablet runs in prepared for its commands
+//! reaches them, and the model can't read lablet's key with `env`. A
+//! variable that `env` names is passed on even when it's withheld, which is
+//! how a command that needs the key is given it.
+//!
+//! Withholding a variable keeps it out of the command's environment and
+//! nowhere else: a command can read lablet's own through the process table,
+//! as `ps eww -p $PPID` and `/proc/<pid>/environ` do, or find a key in a
+//! file. So every value of [`Withheld::values`] is cut out of every result,
+//! as `[secret withheld]`, before any of it is kept (see
+//! [`lablet_model::RedactedOutput`]).
 //!
 //! The result is what the command wrote, standard output and standard error
 //! in the order they were written, then one line with the exit code, as
@@ -98,4 +105,4 @@ mod tool;
 mod write_file;
 
 pub use executor::BuiltinTools;
-pub use settings::{ENVIRONMENT, Settings, SettingsError, Tool};
+pub use settings::{Settings, SettingsError, Tool, Withheld};

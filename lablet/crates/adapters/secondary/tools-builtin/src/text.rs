@@ -1,6 +1,6 @@
 //! What a tool wrote, read as text while it arrives.
 
-use lablet_model::{KeptOutput, OutputKeep};
+use lablet_model::{KeptOutput, OutputKeep, RedactedOutput, Secrets};
 
 /// What stands for bytes that are no character.
 const NO_CHARACTER: &str = "\u{FFFD}";
@@ -10,10 +10,11 @@ const NO_CHARACTER: &str = "\u{FFFD}";
 /// Bytes that aren't UTF-8 are read as U+FFFD, as a lossy conversion of the
 /// whole output would read them, and a character that one piece begins and
 /// the next ends is read whole. Nothing is held but the bytes of such a
-/// character, so the output is never here in full: what's read goes to the
+/// character, and the end that may begin a secret, so the output is never
+/// here in full: what's read has the secrets cut out and goes to the
 /// [`KeptOutput`], which keeps what the call's cut can use.
 pub(crate) struct Text {
-    kept: KeptOutput,
+    kept: RedactedOutput,
     /// The bytes of a character the last piece began and didn't end.
     begun: Vec<u8>,
     /// Whether the text so far ends where a line would begin.
@@ -21,10 +22,11 @@ pub(crate) struct Text {
 }
 
 impl Text {
-    /// No text yet, of an output that `keep` is kept of.
-    pub(crate) fn new(keep: Option<OutputKeep>) -> Self {
+    /// No text yet, of an output that `keep` is kept of and that `secrets`
+    /// are cut from.
+    pub(crate) fn new(keep: Option<OutputKeep>, secrets: &Secrets) -> Self {
         Self {
-            kept: KeptOutput::new(keep),
+            kept: RedactedOutput::new(secrets.clone(), keep),
             begun: Vec::new(),
             at_a_line: true,
         }
@@ -55,7 +57,7 @@ impl Text {
     /// What was kept of the text, and the size of all of it.
     pub(crate) fn kept(mut self) -> KeptOutput {
         self.end_the_character();
-        self.kept
+        self.kept.kept()
     }
 
     fn read(&mut self, bytes: &[u8]) {

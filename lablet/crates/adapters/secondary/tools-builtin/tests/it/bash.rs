@@ -2,9 +2,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use lablet_model::{OutputCap, OutputCut, OutputKeep};
+use lablet_model::{OutputCap, OutputCut, OutputKeep, Secrets};
 use lablet_run::{ToolErrorKind, ToolExecutor};
-use lablet_tools_builtin::{BuiltinTools, ENVIRONMENT, Settings};
+use lablet_tools_builtin::{BuiltinTools, Settings, Withheld};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde_json::json;
@@ -14,13 +14,25 @@ use crate::harness::{
     within,
 };
 
-/// A variable cargo sets for every test, which is neither on the short
-/// list nor added by any settings here: what a key in lablet's environment
-/// is to a command.
-const NOT_FOR_A_COMMAND: &str = "CARGO_MANIFEST_DIR";
+/// A variable cargo sets for every test, which stands for the one lablet
+/// reads its key from. Its value is a long path, as long as a key.
+const KEY_VARIABLE: &str = "CARGO_MANIFEST_DIR";
 
-/// Variables bash sets for itself, whatever it was started with.
-const SET_BY_BASH: [&str; 4] = ["PWD", "OLDPWD", "SHLVL", "_"];
+/// A variable cargo sets for every test, which holds no secret of lablet's.
+const NOT_A_SECRET: &str = "CARGO_PKG_NAME";
+
+/// Settings that withhold [`KEY_VARIABLE`] and cut its value, and the value.
+fn withholding_the_key(scratch: &Scratch) -> (Settings, String) {
+    let key = std::env::var(KEY_VARIABLE).expect("cargo sets it for a test");
+    let settings = Settings {
+        withheld: Withheld {
+            variables: [KEY_VARIABLE.to_owned()].into(),
+            values: Secrets::new([key.clone()]),
+        },
+        ..scratch.settings()
+    };
+    (settings, key)
+}
 
 const MIB: u64 = 1024 * 1024;
 
@@ -116,32 +128,73 @@ async fn nothing_carries_from_one_command_to_the_next() {
 }
 
 #[tokio::test]
-async fn a_command_has_the_short_list_and_what_the_settings_add_and_nothing_else_of_lablet_s() {
+async fn a_command_inherits_lablet_s_environment_less_what_is_withheld_and_what_is_added() {
     let scratch = Scratch::new("bash-env");
+    let (settings, key) = withholding_the_key(&scratch);
     let tools = BuiltinTools::new(Settings {
         env: [("LABLET_ADDED".to_owned(), "by the settings".to_owned())].into(),
-        ..scratch.settings()
+        ..settings
     })
     .unwrap();
-    let held = std::env::var(NOT_FOR_A_COMMAND).expect("cargo sets it for a test");
+    let not_a_secret = std::env::var(NOT_A_SECRET).expect("cargo sets it for a test");
     let path = std::env::var("PATH").expect("a test has a PATH");
 
     let text = said(&tools, "bash", json!({ "command": "env" })).await;
 
-    assert!(!text.contains(NOT_FOR_A_COMMAND), "{text}");
-    assert!(!text.contains(&held), "{text}");
     let lines: BTreeSet<&str> = text.lines().collect();
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.starts_with(&format!("{KEY_VARIABLE}="))),
+        "{text}"
+    );
+    assert!(!text.contains(&key), "{text}");
+    assert!(
+        lines.contains(format!("{NOT_A_SECRET}={not_a_secret}").as_str()),
+        "{text}"
+    );
     assert!(lines.contains(format!("PATH={path}").as_str()), "{text}");
     assert!(lines.contains("LABLET_ADDED=by the settings"), "{text}");
-    let unexpected: Vec<&str> = lines
-        .iter()
-        .filter_map(|line| line.split_once('='))
-        .map(|(name, _)| name)
-        .filter(|name| {
-            !ENVIRONMENT.contains(name) && !SET_BY_BASH.contains(name) && *name != "LABLET_ADDED"
+}
+
+#[tokio::test]
+async fn a_withheld_variable_the_settings_name_is_passed_on_and_its_value_is_still_cut() {
+    let scratch = Scratch::new("bash-env-passed-on");
+    let (settings, key) = withholding_the_key(&scratch);
+    let given = |value: &str| {
+        BuiltinTools::new(Settings {
+            env: [(KEY_VARIABLE.to_owned(), value.to_owned())].into(),
+            ..settings.clone()
         })
-        .collect();
-    assert_eq!(unexpected, [""; 0], "{text}");
+        .unwrap()
+    };
+    let command = json!({ "command": format!("echo \"${{#{KEY_VARIABLE}}} ${KEY_VARIABLE}\"") });
+
+    let named = said(&given("the task's own"), "bash", command.clone()).await;
+    let the_key = said(&given(&key), "bash", command).await;
+
+    assert_eq!(named, "14 the task's own\nexit code: 0");
+    assert_eq!(
+        the_key,
+        format!("{} [secret withheld]\nexit code: 0", key.len())
+    );
+}
+
+#[tokio::test]
+async fn a_secret_a_command_finds_is_cut_from_what_it_wrote_however_it_arrives() {
+    let scratch = Scratch::new("bash-secret");
+    let (settings, key) = withholding_the_key(&scratch);
+    let tools = BuiltinTools::new(settings).unwrap();
+    scratch.holds("key.txt", &key);
+    let command = "head -c 5 key.txt; sleep 0.05; tail -c +6 key.txt; echo; cat key.txt";
+
+    let output = ask(&tools, "bash", json!({ "command": command }))
+        .await
+        .unwrap();
+
+    let expected = "[secret withheld]\n[secret withheld]\nexit code: 0";
+    assert_eq!(output.output.total_bytes(), expected.len() as u64);
+    assert_eq!(sent(output.output, None), [expected]);
 }
 
 #[tokio::test]

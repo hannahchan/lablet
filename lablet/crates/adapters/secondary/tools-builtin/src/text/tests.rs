@@ -2,11 +2,14 @@ use std::time::Duration;
 
 use lablet_model::{Answer, OutputCap, OutputCut, ToolCallEnd, ToolCallStatus, ToolSource};
 
+/// A secret of lablet's, with a character of three bytes in it.
+const KEY: &str = "sk-€0123456789abcdef";
+
 use super::*;
 
 /// The text `pieces` are read as, fed one after another.
 fn read(pieces: &[&[u8]]) -> String {
-    let mut text = Text::new(None);
+    let mut text = Text::new(None, &Secrets::default());
     for piece in pieces {
         text.feed(piece);
     }
@@ -77,7 +80,7 @@ fn the_closing_line_is_a_line_of_its_own_after_text_that_ends_a_line_and_text_th
         ("done", "done\nexit code: 0"),
         ("done\n\n", "done\n\nexit code: 0"),
     ] {
-        let mut text = Text::new(None);
+        let mut text = Text::new(None, &Secrets::default());
         text.feed(wrote.as_bytes());
         text.close("exit code: 0");
         let kept = text.kept();
@@ -89,7 +92,7 @@ fn the_closing_line_is_a_line_of_its_own_after_text_that_ends_a_line_and_text_th
 
 #[test]
 fn the_closing_line_follows_a_character_that_was_never_ended() {
-    let mut text = Text::new(None);
+    let mut text = Text::new(None, &Secrets::default());
     text.feed(b"a\xE2");
     text.close("exit code: 0");
 
@@ -99,7 +102,7 @@ fn the_closing_line_follows_a_character_that_was_never_ended() {
 #[test]
 fn the_closing_line_is_sent_of_a_text_that_a_cut_sends_only_the_start_of() {
     let cap = OutputCap::new(8, OutputCut::Head).unwrap();
-    let mut text = Text::new(Some(cap.keeps()));
+    let mut text = Text::new(Some(cap.keeps()), &Secrets::default());
     text.feed(b"one\ntwo\nthree");
     text.close("exit code: 3");
 
@@ -115,7 +118,7 @@ fn the_closing_line_is_sent_of_a_text_that_a_cut_sends_only_the_start_of() {
 
 #[test]
 fn no_more_is_kept_than_the_call_keeps_and_all_of_it_is_counted() {
-    let mut text = Text::new(Some(OutputKeep { head: 4, tail: 4 }));
+    let mut text = Text::new(Some(OutputKeep { head: 4, tail: 4 }), &Secrets::default());
     for _ in 0..1_000 {
         text.feed("€uro ".as_bytes());
     }
@@ -128,4 +131,35 @@ fn no_more_is_kept_than_the_call_keeps_and_all_of_it_is_counted() {
         sent(kept, Some(cap)),
         ["€u", "[truncated: 6992 of 7000 bytes left out]", "uro "]
     );
+}
+
+#[test]
+fn a_secret_is_cut_out_however_the_bytes_of_it_arrive() {
+    let secrets = Secrets::new([KEY.to_owned()]);
+    let wrote = format!("key={KEY}\n");
+    let bytes = wrote.as_bytes();
+
+    for size in 1..bytes.len() {
+        let mut text = Text::new(None, &secrets);
+        for piece in bytes.chunks(size) {
+            text.feed(piece);
+        }
+        text.close("exit code: 0");
+
+        assert_eq!(
+            whole(text.kept()),
+            "key=[secret withheld]\nexit code: 0",
+            "in pieces of {size}"
+        );
+    }
+}
+
+#[test]
+fn a_secret_the_text_ends_with_is_cut_and_the_closing_line_is_a_line_of_its_own() {
+    let secrets = Secrets::new([KEY.to_owned()]);
+    let mut text = Text::new(None, &secrets);
+    text.feed(KEY.as_bytes());
+    text.close("exit code: 0");
+
+    assert_eq!(whole(text.kept()), "[secret withheld]\nexit code: 0");
 }

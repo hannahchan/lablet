@@ -87,7 +87,7 @@ impl BuiltIn for WriteFile {
     /// A write isn't given up at the call's limit: it's one write of text
     /// the model produced, to a file, and a call that returned while it went
     /// on would have the next call read a file that's still being written.
-    async fn run(&self, input: Value, terms: Terms) -> Result<ToolOutput, ToolError> {
+    async fn run(&self, input: Value, terms: Terms<'_>) -> Result<ToolOutput, ToolError> {
         let arguments: Arguments = match terms.arguments(Tool::WriteFile, input) {
             Ok(arguments) => arguments,
             Err(refusal) => return Ok(*refusal),
