@@ -125,6 +125,28 @@ fn with_the_telemetry_on_standard_error_it_holds_nothing_but_otlp_lines() {
 }
 
 #[test]
+fn with_the_telemetry_on_standard_error_a_closed_standard_output_leaves_it_nothing_but_otlp() {
+    let lab = Lab::new("summary-stderr-closed");
+    lab.write_config(ENDS, json!({ "telemetry": { "file": { "path": "-" } } }));
+    // The read end is gone before lablet starts, so writing the outcome fails.
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let mut command = lab.lablet(&["run", "--config", CONFIG, "--prompt", "Say hello."]);
+    command.stdout(writer).stderr(std::process::Stdio::piped());
+
+    let finished = command.output().unwrap();
+
+    let stderr = String::from_utf8(finished.stderr).unwrap();
+    assert_eq!(finished.status.code(), Some(0), "{stderr}");
+    let exported = Exported::parse(&stderr).unwrap();
+    assert_eq!(exported.records_of("lablet.run").len(), 1, "{stderr}");
+    assert!(
+        stderr.lines().all(|line| line.starts_with('{')),
+        "a line that isn't OTLP: {stderr}"
+    );
+}
+
+#[test]
 fn rust_log_brings_the_diagnostic_log_back_beside_the_otlp_lines() {
     let lab = Lab::new("summary-stderr-log");
     on_stderr_with_a_warning(&lab);

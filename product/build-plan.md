@@ -135,6 +135,8 @@ Acceptance: `lablet init --provider fake && lablet run --config lablet.yaml --pr
 - `cargo xtask weaver live-check`: starts `weaver registry live-check` without `--v2` on a random free port pair, runs the fake-provider config with `--set telemetry.otlp.endpoint=<port>` over OTLP gRPC, stops it through the admin endpoint, saves the report, fails on violations. Its CI job runs on Linux against the vendored registry.
 - `lablet/examples/docker-compose.yaml` with a collector (debug exporter, plus the `otlpjsonfile` receiver with `start_at: beginning` and the same `include` path wired into both a traces and a logs pipeline, since the receiver is instantiated per signal and defaults to tailing from the end) and Jaeger, for the manual checks.
 
+- The per-run flush is bounded as the shutdown is, and each destination is flushed on its own, so the file's wide event doesn't wait on the network; `telemetry.file.path: null` with an endpoint set writes no file, as spec §7 says. A scenario beside O3 whose receiver accepts a connection and never answers holds both ("What the assessment after phase 5 settled" in `decisions.md`).
+
 Acceptance: a fake-provider run against the in-process receiver yields the same spans and log records as the file exporter wrote for the same run. `cargo xtask weaver live-check` passes with zero undeclared attributes. Scenarios O3, O5, O6, O7, O9, and O13 pass. Manual: a reviewer runs the docker compose example, finds turn 2's spans in Jaeger with one filter, and replays a lablet file through the collector's OTLP JSON file receiver into Jaeger.
 
 ## Phase 7: Anthropic and built-in tools
@@ -142,6 +144,8 @@ Acceptance: a fake-provider run against the in-process receiver yields the same 
 - `provider-anthropic` with wiremock tests for happy path, tool use, thinking and redacted thinking round trip, cache breakpoints on the system prompt, the tool specs and the latest messages, `model.cache_scope`, cache token mapping to `cache_write`, the server's retry hint, per-call timeout, error classification including `auth` and context exhaustion, and error messages held to the port's bound.
 - The capture of the primary reference. The builder prepares the commands from `product/research/parity/claude-code.md`, and the human runs them, since they need an API key. The builder compares what the reference sent with what lablet sends for the same conversation, records each row the capture settles in `product/research/parity/matrix.md`, and changes a default the capture contradicts.
 - `lablet/examples/anthropic.yaml`.
+
+- Each provider adapter maps its own API's finish reasons onto `FinishReason`'s known variants in a closed match, so the domain's table stops holding two vendors' spellings. `Usage`'s cache addition, which its doc says can't be forgotten while its fields are public, is held by a constructor before the Anthropic adapter, the first to report input tokens without the cached ones, depends on it ("What the assessment after phase 5 settled").
 
 Acceptance: scenarios P1, P2, P6, P8, and P11 pass in CI against wiremock. Manual: `lablet run --config examples/anthropic.yaml --prompt "..."` completes a real task against the Anthropic API and its trace passes live-check with no attribute added for it; the capture is recorded.
 
@@ -154,6 +158,8 @@ Decided on 2026-09-24 and 2026-09-28 as a phase before phase 4, and moved here o
 - Request size. In `lablet-run`: `request_bytes` is measured from what each call sends, so a call after a masking step reports the smaller request.
 - Room for compaction. The transcript document's rules say where a compaction entry goes, so that phase 12 adds to the document and changes nothing in it.
 
+- Before the design commit: `lablet-run`'s `service.rs` split along its seams in a move-only commit, since phases 7a, 10 and 12 all add to it and parallel streams would collide on one file. In the design: the request size is measured whole once masking can change a settled message (`RequestBytes` measures each message once); `Progress` carries the latest request's input tokens, which `trigger_tokens` reads; `ToolCallOutcome` gets a constructor before it gains a field; closing a run takes a `Closing` and a `Priced` rather than six arguments through five signatures ("What the assessment after phase 5 settled").
+
 Acceptance: scenarios K1 to K3 pass, the floors hold, and every earlier scenario still passes.
 
 ## Phase 8: MCP
@@ -165,6 +171,8 @@ Acceptance: scenarios K1 to K3 pass, the floors hold, and every earlier scenario
 - The first transfer check. One comparison of two tool surfaces, such as a server with one of its tools and without it, is run in lablet and in the primary reference as it ships, with its tool search on. The human runs the reference. When the two disagree on which surface did better and tool search is why, tool search leaves phase 12 for a phase of its own before phase 9, and `decisions.md` records the move.
 - `tools-mcp` added to the `ToolExecutor` conformance matrix.
 - A refused setting inside an entry of `tools.mcp` names its own key, its line and its value, as every other refusal does. Today serde reads a server's fields through the buffer its internally tagged enum uses, so a refusal names the server, at its first key's line, and shows the whole server (the phase 5 review; "Phase 5, closed" in `decisions.md`).
+
+- Questions for the owner in the design commit, from the assessment after phase 5: when a server started again for a run fails to start, does the run end with a stop reason and an outcome, or does `Lablet::run` fail with no outcome? The likely shape either way: a `RunService` built for each run, which decisions.md allows and which removes `RunCancellation`; typed MCP handles in the composition root with an async close; servers started concurrently and under the build's cancellation; a `BuildError` of class `mcp` that names the server. `tools-mcp` maps a server's "no such tool" for a name it offered to `failed`, since `unknown` means a name that was never offered. A fixture of the tool specs' serde form, which sets `lablet.tools.digest` and `lablet.prompt.tools_bytes`, and whether the changelog gate watches it, is the owner's call before `ToolSpec` changes.
 
 Acceptance: scenarios T1, T3, T5 to T9, T12, and T18 to T20 pass in CI against the test server. Manual: a run using a public MCP server over stdio completes, its tool spans carry the `mcp.*` attributes, and removing a tool via `tools.deny` changes the `RunStarted` tool list and nothing else; the capture and the transfer check are recorded.
 
@@ -182,6 +190,8 @@ Acceptance: the same config with only the `model` section changed completes the 
 - Skills loaded through the loop's `skill` tool, with inlining as `prompt.skills_mode: inline`, the skills that were loaded on the wide event, and `lablet.skills.digest`. The phase opens with the design commit that settles the wording of the list and its size. Pricing and cost on the root span and wide event, counting what failed attempts reported. The `task_complete` schema from config, with the argument checked against it.
 - `run.transcript_format: atif` exporting the transcript as an ATIF v1.8 trajectory for Harbor and Terminal-bench, available to the library and the CLI alike.
 
+- In the design commit: the tools the loop answers itself, `task_complete` and `skill`, designed together, and where the JSON Schema check for `run.completion_schema` is made, since the domain takes no such dependency and the verdict is passed in; whether a `task_complete` whose arguments parse but break the schema is `rejected` or `malformed_input` (S5 says `rejected`); `Pending` reading the completion mode from its own setup, so the stop policy's unreachable arm goes; and, if the run id's file-name rule is shared rather than checked by each writer, a shared adapter crate holds it, not `lablet-model` ("What the assessment after phase 5 settled").
+
 Acceptance: scenarios S1 to S5 pass. An ATIF export of a fake run validates against Harbor's Pydantic models.
 
 ## Phase 11: Hardening and release
@@ -189,6 +199,8 @@ Acceptance: scenarios S1 to S5 pass. An ATIF export of a fake run validates agai
 - User docs in `lablet/docs/`: getting started, config reference generated from the schema, telemetry reference generated from the registry, a page on using `provider-fake` to test a framework, example configs for each provider and for the MCP optimisation use case, and a page of lablet's known differences from its references that says when to run the real harness instead and how.
 - `cargo xtask bench`: criterion benchmarks for loop overhead per turn and per tool call with the regression threshold in CI.
 - Release workflow publishing static Linux (musl, rustls) and macOS binaries; `cargo install` works from the repo. First `CHANGELOG.md` release section.
+
+- Before the release: whether `RunObserver::on` stays async and takes its event by value. Every observer is synchronous inside and the loop awaits `on` unbounded; a new signature doesn't bound it, a queue or a timeout would, and either is a breaking change after the release ("What the assessment after phase 5 settled").
 
 Acceptance: a new user can follow `lablet/docs/getting-started.md` from clone to a traced run in under five minutes without reading the spec, verified and timed by someone who didn't write it. The release checklist in `acceptance.md` is signed off once.
 

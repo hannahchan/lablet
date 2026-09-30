@@ -1061,7 +1061,7 @@ What the review changed. Four reviewers read the phase, one for the loop's cance
 
 - **Nothing substituted from the environment reaches what a run shows.** The fake provider's script was named by its substituted path, which a script that ran out put in the outcome's error, the `provider:` line and telemetry; it's named as the config writes it.
 - **Whether telemetry goes to standard error is decided once.** The CLI read it from the config as written and the library after substitution, so `path: ${T}` with T=`-` put the summary among the OTLP lines. The library decides, and the CLI asks it before it installs the log.
-- **The root check can't be passed with `..` or a link.** A `..` after a directory that doesn't exist yet leads back where the file is made, and a link at the transcript's path is replaced by the writer rather than followed, so the check resolves its directory.
+- **The root check follows `..` and a link at the transcript's path.** A `..` after a directory that doesn't exist yet leads back where the file is made, and a link at the transcript's path is replaced by the writer rather than followed, so the check resolves its directory. **Partly superseded on 2026-09-30 by "What the assessment after phase 5 settled":** the check keeps a config from pointing lablet's own files into the root and keeps the confined file tools off them; it isn't a boundary against `bash`.
 - **A run id over 128 bytes is refused,** by the library, the CLI and both writers, since a longer one can't name a file and the run's transcript and telemetry were lost.
 - **The changelog gate lists content changes only.** The phase's index fix made it fail on a contract file whose timestamp moved and whose content didn't, until a `git status` refreshed the index. A failed read of the changelog at the base is an error, not an absent file, and the warning that no base resolved is printed off a terminal too.
 - **`cargo xtask run` is lablet itself.** xtask replaces its process with cargo's, so lablet's exit code and its signals reach the caller; it had turned exit 2 into 1 and died on Ctrl-C before lablet finished cancelling.
@@ -1073,3 +1073,23 @@ Decided by the human at the end of the phase: **a closed standard output isn't a
 Left open: a telemetry file's path that's a link inside the root pointing outside it, and a dangling link, still pass the root check. `write_file` finishes its write on a blocking thread after a call is dropped, for about a millisecond, which the port's "a dropped call stops its work" doesn't quite hold. And `lablet run` with no prompt flag reads standard input, as the spec asks, even when that's a terminal.
 
 The build took about 2.77 million tokens and the fix pass 0.5 million. The review took 1.87 million against a budget of 0.55 million, more than three times over: most of its sixteen agents built and ran the binary to confirm what they found. Phase 6's review has three reviewers, and its sceptics read the code before they build anything.
+
+## 2026-09-30 What the assessment after phase 5 settled
+
+Before phase 6, four readers read the three commits that closed phase 5, which no independent reviewer had read, the seams the later phases build on, the domain and the application, and a critic read their assessment. They built nothing. The domain and the application are sound: rules are held by types, the loop reads as spec §5 describes it, and no reader found a wrong answer in either. What they found is shape to improve, each in the phase that uses it, and a few sentences that promise more than the code does.
+
+Decided by the human:
+
+- **The one-writer rule for standard output is a review convention.** Since `main.rs` writes with `writeln!`, clippy's `print_stdout` no longer marks the one place, and a `disallowed-methods` lint for one call site isn't worth its upkeep.
+- **The contributing guide names what the mutation floor can't see.** cargo-mutants mutates neither a function named `new` nor code a `macro_rules!` generates, so "every viable mutant caught" doesn't cover a checked constructor's own rules, which live in a function of another name or are held by unit tests.
+- **What the later phases will meet is written into their plans, as questions where the owner decides.** Phase 6 bounds the per-run flush and flushes each destination on its own. Phase 7 maps finish reasons in each adapter and holds `Usage`'s cache addition by a constructor. Phase 7a splits `service.rs` in a move-only commit first, then measures the request whole after masking. Phase 8 asks how a run ends when its servers can't be started again, and builds a `RunService` for each run. Phase 10 designs the tools the loop answers itself together, with the schema check made outside the domain. Phase 11 decides the observer's signature before the release.
+
+What changed now:
+
+- **The root check's promise is stated as it is.** It keeps a config from pointing lablet's own files into the root and keeps the confined file tools off them. It isn't a boundary against `bash`, which isn't confined, and a dangling link, or a link made after `build`, passes it. The entry "Phase 5, closed" said it can't be passed.
+- **A failed write to standard output goes unsaid when the telemetry is standard error's,** so no line but OTLP's lands there.
+- **Stale documentation corrected:** `RunId`'s doc, which still said a run id is always a ULID, the `ToolExecutor` doc, which gave a tool announced mid-run to the next run where the spec gives it to the next `Lablet`, and `tools.builtin.env`'s description in the config's schema, which still described the short list `bash` started with.
+
+What the critic corrected in the assessment, and why it's worth saying: it had put five items before phase 6 that phase 6 doesn't touch, rated the root check a security boundary it isn't, proposed a synchronous observer signature that bounds nothing, and proposed reshaping domain constructors around a tool's blind spot that unit tests already cover. Each is recorded where it belongs instead.
+
+The pass took 1.31 million tokens, for reading alone.

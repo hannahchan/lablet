@@ -118,7 +118,7 @@ fn run_command(args: RunArgs) -> u8 {
         let code = report::exit_code(finished.summary.outcome.stop_reason());
         let summary = report::summary(&finished, budget);
         let failure = refusal::of_run(&finished.summary.outcome);
-        print_outcome(finished.summary.outcome);
+        print_outcome(finished.summary.outcome, on_stderr);
         lablet.shutdown().await;
         // What's said about the run, apart from the telemetry, which is
         // standard error's alone when it's there.
@@ -154,7 +154,7 @@ fn check_command(args: &CheckArgs) -> u8 {
     match check::answer(&checked, args.resolved) {
         Ok(answer) => {
             if !answer.is_empty() {
-                print(&answer);
+                print(&answer, false);
             }
             say(&check::summary(&checked));
             0
@@ -171,7 +171,7 @@ fn check_command(args: &CheckArgs) -> u8 {
 fn schema_command() -> u8 {
     match serde_json::to_string_pretty(&lablet::schema()) {
         Ok(schema) => {
-            print(&schema);
+            print(&schema, false);
             0
         }
         Err(error) => {
@@ -190,9 +190,9 @@ fn runtime() -> Option<tokio::runtime::Runtime> {
 }
 
 /// Prints the outcome document on standard output, as one line.
-fn print_outcome(outcome: lablet::RunOutcome) {
+fn print_outcome(outcome: lablet::RunOutcome, telemetry_on_stderr: bool) {
     match serde_json::to_string(&lablet::OutcomeDocument::from(outcome)) {
-        Ok(document) => print(&document),
+        Ok(document) => print(&document, telemetry_on_stderr),
         Err(error) => say(&format!("lablet: the outcome couldn't be written: {error}")),
     }
 }
@@ -201,10 +201,13 @@ fn print_outcome(outcome: lablet::RunOutcome) {
 /// lablet writes there. A reader that closed its end, as `head` does, isn't
 /// a failure of the command, so a write that fails is said on standard error
 /// and the exit code stays what the command's work says, where `println!`
-/// would panic and exit 101.
-fn print(document: &str) {
+/// would panic and exit 101. When the telemetry is standard error's, it's
+/// standard error's alone, and the failure goes unsaid.
+fn print(document: &str, telemetry_on_stderr: bool) {
     let mut out = io::stdout().lock();
-    if let Err(error) = writeln!(out, "{document}").and_then(|()| out.flush()) {
+    if let Err(error) = writeln!(out, "{document}").and_then(|()| out.flush())
+        && !telemetry_on_stderr
+    {
         say(&format!(
             "lablet: standard output couldn't be written: {error}"
         ));

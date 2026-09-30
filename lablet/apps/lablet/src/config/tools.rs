@@ -76,7 +76,8 @@ pub struct Builtin {
     #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub timeout: Duration,
-    /// Variables a command starts with beside the short list `bash` has.
+    /// Variables a command starts with on top of lablet's own environment,
+    /// which a command inherits less the variables lablet reads its secrets from.
     pub env: BTreeMap<String, String>,
 }
 

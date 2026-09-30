@@ -33,7 +33,7 @@
             "type": "string"
           },
           "default": {},
-          "description": "Variables a command starts with beside the short list `bash` has.",
+          "description": "Variables a command starts with on top of lablet's own environment,\nwhich a command inherits less the variables lablet reads its secrets from.",
           "type": "object"
         },
         "root": {

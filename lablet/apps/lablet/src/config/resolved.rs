@@ -239,7 +239,8 @@ pub struct ResolvedBuiltin {
         serialize_with = "applied_duration"
     )]
     pub timeout: Applied<Duration>,
-    /// Variables a command starts with beside the short list `bash` has.
+    /// Variables a command starts with on top of lablet's own environment,
+    /// which a command inherits less the variables lablet reads its secrets from.
     #[serde(skip_serializing_if = "Applied::is_no")]
     pub env: Applied<BTreeMap<String, String>>,
 }

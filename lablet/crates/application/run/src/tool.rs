@@ -167,7 +167,8 @@ impl NetworkTransport {
 /// [`lablet_model::ToolCallStatus::Ran`] carries the source the executor
 /// resolved, and the run believes it, which is what keeps the per-tool
 /// telemetry keys bounded. A server that announces new tools mid-run offers
-/// them to the next run, not this one.
+/// them to the next `Lablet`, since the tool set is fixed when a `Lablet` is
+/// built, and not to this run or the runs after it.
 #[async_trait::async_trait]
 pub trait ToolExecutor: Send + Sync {
     /// Every tool this executor offers, asked for once when the run starts.
