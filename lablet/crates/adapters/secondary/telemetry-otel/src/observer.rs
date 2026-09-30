@@ -1,6 +1,8 @@
 //! The observer: a run's events in, spans and log records out.
 
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::thread;
 use std::time::Duration;
 
 use lablet_model::{RunId, ToolCallId};
@@ -24,8 +26,8 @@ use crate::wide::wide_event;
 /// The name of the service and of the instrumentation scope.
 const LABLET: &str = "lablet";
 
-/// How long each queue is given to export what it holds when the observer
-/// shuts down, so a destination that doesn't answer costs seconds.
+/// How long a shutdown is given unless the builder says otherwise, so a
+/// destination that doesn't answer costs seconds.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What a flush or a shutdown couldn't export. Nothing about a run changes
@@ -59,6 +61,7 @@ pub struct OtelObserverBuilder {
     version: String,
     resource: Vec<(String, String)>,
     file: Option<FileTarget>,
+    shutdown_timeout: Duration,
     destinations: Vec<MakeQueues>,
 }
 
@@ -68,6 +71,7 @@ impl std::fmt::Debug for OtelObserverBuilder {
             .field("version", &self.version)
             .field("resource", &self.resource)
             .field("file", &self.file)
+            .field("shutdown_timeout", &self.shutdown_timeout)
             .finish_non_exhaustive()
     }
 }
@@ -86,6 +90,13 @@ impl OtelObserverBuilder {
     #[must_use]
     pub fn file(mut self, target: FileTarget) -> Self {
         self.file = Some(target);
+        self
+    }
+
+    /// How long [`OtelObserver::shutdown`] waits, in place of five seconds.
+    #[must_use]
+    pub const fn shutdown_timeout(mut self, timeout: Duration) -> Self {
+        self.shutdown_timeout = timeout;
         self
     }
 
@@ -108,6 +119,7 @@ impl OtelObserverBuilder {
             version,
             resource,
             file,
+            shutdown_timeout,
             mut destinations,
         } = self;
         let scope = InstrumentationScope::builder(LABLET)
@@ -158,6 +170,7 @@ impl OtelObserverBuilder {
                 wide,
                 sink,
                 lost,
+                shutdown_timeout,
                 state: Mutex::new(State::default()),
             }),
         }
@@ -199,6 +212,7 @@ struct Inner {
     wide_logger: SdkLogger,
     sink: Option<Sink>,
     lost: Arc<Lost>,
+    shutdown_timeout: Duration,
     state: Mutex<State>,
 }
 
@@ -222,6 +236,7 @@ impl OtelObserver {
             version: version.into(),
             resource: Vec::new(),
             file: None,
+            shutdown_timeout: SHUTDOWN_TIMEOUT,
             destinations: Vec::new(),
         }
     }
@@ -243,18 +258,20 @@ impl OtelObserver {
     /// Returns a [`FlushError`] that names each queue whose export failed
     /// or didn't end in time.
     pub async fn flush(&self) -> Result<(), FlushError> {
-        self.blocking(Inner::flush).await
+        self.blocking(|inner| inner.flush()).await
     }
 
     /// Flushes as [`OtelObserver::flush`] does, and then stops every
-    /// queue's thread. Each queue is given five seconds, so a destination
-    /// that doesn't answer can't hold a process that's ready to exit.
-    /// Events that come after are dropped.
+    /// queue's thread, and waits for that no longer than the builder's
+    /// shutdown timeout, five seconds unless it says otherwise. So a
+    /// destination that doesn't answer can't hold a process that's ready
+    /// to exit: what it still holds then is left to a thread that nothing
+    /// waits for. Events that come after a shutdown that ended are dropped.
     ///
     /// # Errors
     ///
     /// Returns a [`FlushError`] that names each queue whose export failed,
-    /// or that didn't stop in time.
+    /// or that didn't stop in time, or that says the shutdown didn't end.
     pub async fn shutdown(&self) -> Result<(), FlushError> {
         self.blocking(Inner::shutdown).await
     }
@@ -262,7 +279,7 @@ impl OtelObserver {
     /// Runs `work` where it may wait: a queue answers a flush from its own
     /// thread, and waiting for it on the runtime's would hold up whatever
     /// else runs there.
-    async fn blocking(&self, work: fn(&Inner) -> Vec<String>) -> Result<(), FlushError> {
+    async fn blocking(&self, work: fn(&Arc<Inner>) -> Vec<String>) -> Result<(), FlushError> {
         let inner = Arc::clone(&self.inner);
         let failures = tokio::task::spawn_blocking(move || work(&inner))
             .await
@@ -328,20 +345,47 @@ impl Inner {
         failures
     }
 
-    fn shutdown(&self) -> Vec<String> {
+    /// Stops the queues from a thread of its own, and waits for that for
+    /// as long as a shutdown is given. The SDK waits five seconds for a
+    /// queue's flush whatever it's told, so a destination that doesn't
+    /// answer holds that thread for longer, and never the caller.
+    fn shutdown(self: &Arc<Self>) -> Vec<String> {
+        let timeout = self.shutdown_timeout;
+        let (stopped, answer) = mpsc::sync_channel(1);
+        let inner = Arc::clone(self);
+        let stopping = thread::Builder::new()
+            .name("lablet-telemetry-shutdown".to_owned())
+            .spawn(move || {
+                // Once the caller has stopped waiting there's no one to
+                // answer, and nothing to do about it.
+                let _ = stopped.send(inner.stop());
+            });
+        if let Err(error) = stopping {
+            return vec![format!("the shutdown couldn't start: {error}")];
+        }
+        answer.recv_timeout(timeout).unwrap_or_else(|error| {
+            vec![match error {
+                RecvTimeoutError::Timeout => format!("the shutdown didn't end within {timeout:?}"),
+                RecvTimeoutError::Disconnected => "the shutdown didn't run to its end".to_owned(),
+            }]
+        })
+    }
+
+    fn stop(&self) -> Vec<String> {
+        let timeout = self.shutdown_timeout;
         let mut failures = self.flush();
         for queue in &self.spans {
-            note(&mut failures, "spans", queue.shutdown(SHUTDOWN_TIMEOUT));
+            note(&mut failures, "spans", queue.shutdown(timeout));
         }
         note(
             &mut failures,
             "log records",
-            self.records.shutdown_with_timeout(SHUTDOWN_TIMEOUT),
+            self.records.shutdown_with_timeout(timeout),
         );
         note(
             &mut failures,
             "the wide event",
-            self.wide.shutdown_with_timeout(SHUTDOWN_TIMEOUT),
+            self.wide.shutdown_with_timeout(timeout),
         );
         failures
     }

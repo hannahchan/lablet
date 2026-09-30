@@ -126,19 +126,27 @@ pub const BASH_DOES: &str = "Runs a command.";
 /// every time, after the same wait, and keeps what each call carried.
 pub struct Tools {
     bash_does: String,
+    bash_concurrency: ToolConcurrency,
+    read_file_source: ToolSource,
     propagated: Mutex<Vec<(ToolCallId, Option<TraceContext>)>>,
 }
 
 impl Default for Tools {
     fn default() -> Self {
-        Self::described(BASH_DOES)
+        Self::new(BASH_DOES, ToolConcurrency::Exclusive, ToolSource::Builtin)
     }
 }
 
 impl Tools {
-    fn described(bash_does: &str) -> Self {
+    fn new(
+        bash_does: &str,
+        bash_concurrency: ToolConcurrency,
+        read_file_source: ToolSource,
+    ) -> Self {
         Self {
             bash_does: bash_does.to_owned(),
+            bash_concurrency,
+            read_file_source,
             propagated: Mutex::default(),
         }
     }
@@ -150,12 +158,17 @@ impl Tools {
     }
 }
 
-fn spec(name: &str, description: &str, concurrency: ToolConcurrency) -> ToolSpec {
+fn spec(
+    name: &str,
+    description: &str,
+    source: ToolSource,
+    concurrency: ToolConcurrency,
+) -> ToolSpec {
     ToolSpec {
         name: ToolName::new(name).unwrap(),
         description: description.to_owned(),
         input_schema: json!({ "type": "object" }),
-        source: ToolSource::Builtin,
+        source,
         concurrency,
     }
 }
@@ -164,8 +177,18 @@ fn spec(name: &str, description: &str, concurrency: ToolConcurrency) -> ToolSpec
 impl ToolExecutor for Tools {
     async fn specs(&self) -> Result<Vec<ToolSpec>, ToolError> {
         Ok(vec![
-            spec("bash", &self.bash_does, ToolConcurrency::Exclusive),
-            spec("read_file", "Reads a file.", ToolConcurrency::Shared),
+            spec(
+                "bash",
+                &self.bash_does,
+                ToolSource::Builtin,
+                self.bash_concurrency,
+            ),
+            spec(
+                "read_file",
+                "Reads a file.",
+                self.read_file_source.clone(),
+                ToolConcurrency::Shared,
+            ),
         ])
     }
 
@@ -209,6 +232,7 @@ impl ToolExecutor for Writer {
         Ok(vec![spec(
             "write",
             "Writes bytes.",
+            ToolSource::Builtin,
             ToolConcurrency::Exclusive,
         )])
     }
@@ -234,6 +258,12 @@ pub struct Settings {
     pub system: String,
     /// What the model is told `bash` does.
     pub bash_does: String,
+    /// Whether `bash` may run beside other calls.
+    pub bash_concurrency: ToolConcurrency,
+    /// Where `read_file` comes from.
+    pub read_file_source: ToolSource,
+    /// How many tool calls may run at once.
+    pub max_concurrent_tool_calls: NonZeroU32,
     /// The cap on turns, when the runs have one.
     pub max_turns: Option<NonZeroU32>,
     /// What the runs are priced at, when they're priced.
@@ -247,10 +277,11 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Runs that capture nothing, have no labels, retry three times, and
-    /// each have a file of their own in `scratch`. They have nothing a run
-    /// may be without: no cap on turns, no pricing, no transcript, no
-    /// skills and no MCP servers.
+    /// Runs that capture nothing, have no labels, retry three times, run
+    /// one tool call at a time, and each have a file of their own in
+    /// `scratch`. Their tools are all built in and `bash` runs alone. They
+    /// have nothing a run may be without: no cap on turns, no pricing, no
+    /// transcript, no skills and no MCP servers.
     pub fn in_scratch(scratch: &Scratch) -> Self {
         Self {
             target: FileTarget::EachRun {
@@ -269,6 +300,9 @@ impl Settings {
             },
             system: SYSTEM.to_owned(),
             bash_does: BASH_DOES.to_owned(),
+            bash_concurrency: ToolConcurrency::Exclusive,
+            read_file_source: ToolSource::Builtin,
+            max_concurrent_tool_calls: NonZeroU32::MIN,
             max_turns: None,
             pricing: None,
             transcript_path: None,
@@ -303,6 +337,9 @@ impl Harness {
             request,
             system,
             bash_does,
+            bash_concurrency,
+            read_file_source,
+            max_concurrent_tool_calls,
             max_turns,
             pricing,
             transcript_path,
@@ -316,7 +353,7 @@ impl Harness {
         })
         .unwrap();
         let provider = Arc::new(FakeProvider::new(MODEL, script));
-        let tools = Arc::new(Tools::described(&bash_does));
+        let tools = Arc::new(Tools::new(&bash_does, bash_concurrency, read_file_source));
         let observer = OtelObserver::builder(VERSION)
             .resource(vec![
                 ("team".to_owned(), "evals".to_owned()),
@@ -358,7 +395,7 @@ impl Harness {
             CallLimits {
                 provider_timeout: Duration::from_secs(60),
                 output_cap: None,
-                max_concurrent_tool_calls: NonZeroU32::MIN,
+                max_concurrent_tool_calls,
             },
         );
         Self {
@@ -439,7 +476,9 @@ impl Traced {
         self.exported.spans_of("chat")
     }
 
-    /// The spans of the run's tool calls, in the order the calls ended.
+    /// The spans of the run's tool calls, in the order the calls ended,
+    /// which is the order they were made in only while calls run one at a
+    /// time.
     pub fn tools(&self) -> Vec<&Span> {
         self.exported.spans_of("execute_tool")
     }

@@ -1,4 +1,4 @@
-use std::time::UNIX_EPOCH;
+use std::time::{Instant, UNIX_EPOCH};
 
 use lablet_model::{
     ContentBlock, ProviderErrorKind, RunContext, RunSummary, StopReason, ToolCallEnd,
@@ -601,6 +601,40 @@ async fn a_queue_that_cannot_export_fails_the_shutdown_and_stops_all_the_same() 
     assert_eq!(dropped(&memory.exported_wide()[0]), AnyValue::Int(4));
 }
 
+/// A destination that doesn't answer holds a shutdown for no longer than
+/// the timeout it's given, which is far less than the five seconds the SDK
+/// waits for a flush. What it bounds is the export that never ends.
+#[tokio::test]
+async fn a_destination_that_does_not_answer_holds_a_shutdown_only_for_its_timeout() {
+    let brief = Duration::from_millis(100);
+    let memory = Memory::default();
+    let observer = OtelObserver::builder("0.1.0")
+        .exporting_to(memory.spans(), memory.records(), memory.wide())
+        .shutdown_timeout(brief)
+        .build();
+    memory.hold();
+    told(&observer, a_run(false)).await;
+
+    let began = Instant::now();
+    let shut = observer.shutdown().await;
+    let waited = began.elapsed();
+    memory.release();
+
+    assert_eq!(
+        shut.unwrap_err().failures(),
+        ["the shutdown didn't end within 100ms"],
+        "the shutdown stopped waiting at its timeout, and at nothing before it"
+    );
+    assert!(waited >= brief, "the shutdown gave up after {waited:?}");
+    // A shutdown that waits for the stuck exporter, or for the default bound
+    // in place of the one it was given, can't return before the SDK's own
+    // five seconds.
+    assert!(
+        waited < SHUTDOWN_TIMEOUT,
+        "the shutdown waited {waited:?}, past the bound it was given"
+    );
+}
+
 // Events the observer makes nothing of
 
 #[tokio::test]
@@ -846,7 +880,7 @@ async fn an_event_is_taken_while_an_export_waits_for_its_destination() {
 }
 
 #[test]
-fn a_builder_prints_what_it_was_given() {
+fn a_builder_prints_what_it_was_given_and_gives_a_shutdown_five_seconds_by_default() {
     let builder = OtelObserver::builder("0.1.0")
         .resource(vec![("team".to_owned(), "evals".to_owned())])
         .file(FileTarget::Stderr);
@@ -854,6 +888,6 @@ fn a_builder_prints_what_it_was_given() {
     assert_eq!(
         format!("{builder:?}"),
         "OtelObserverBuilder { version: \"0.1.0\", resource: [(\"team\", \"evals\")], \
-         file: Some(Stderr), .. }"
+         file: Some(Stderr), shutdown_timeout: 5s, .. }"
     );
 }

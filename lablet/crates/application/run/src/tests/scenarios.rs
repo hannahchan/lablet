@@ -7,8 +7,8 @@ use lablet_model::{
     CacheScope, CompletionMode, ContentBlock, Endpoint, FinishReason, ModelRef, OutputCap,
     OutputCut, OutputKeep, Prompts, ProviderApi, ProviderErrorKind, ProviderResponse, Rates,
     RequestParams, RunContext, RunId, RunLabels, RunSummary, StopReason, Thinking, TokenCounts,
-    ToolCallEnd, ToolCallId, ToolCallStatus, ToolConcurrency, ToolInput, ToolName, ToolSource,
-    ToolSpec, ToolUse, Usage,
+    ToolCallEnd, ToolCallId, ToolCallStatus, ToolConcurrency, ToolInput, ToolName,
+    ToolResultContent, ToolSource, ToolSpec, ToolUse, Usage,
 };
 use lablet_policy::{Pricing, RetryPolicy, RetrySettings, StopPolicy};
 
@@ -27,13 +27,19 @@ fn name(value: &str) -> ToolName {
     ToolName::new(value).expect("a test's tool name is valid")
 }
 
-fn spec(value: &str) -> ToolSpec {
+fn spec(value: &str, source: ToolSource) -> ToolSpec {
     ToolSpec {
         name: name(value),
         description: format!("The {value} tool."),
         input_schema: serde_json::json!({ "type": "object" }),
-        source: ToolSource::Builtin,
+        source,
         concurrency: ToolConcurrency::Exclusive,
+    }
+}
+
+fn mcp(server: &str) -> ToolSource {
+    ToolSource::Mcp {
+        server: server.to_owned(),
     }
 }
 
@@ -176,7 +182,10 @@ impl Harness {
         Self {
             tools: vec![Arc::new(FakeTools::new(
                 Arc::clone(&clock),
-                vec![spec("bash"), spec("read_file")],
+                vec![
+                    spec("bash", ToolSource::Builtin),
+                    spec("read_file", ToolSource::Builtin),
+                ],
             ))],
             clock,
             provider,
@@ -569,7 +578,10 @@ async fn calling_a_tool_that_always(failure: impl Fn() -> Answers) -> Run {
     let mut harness = Harness::new(script);
     harness.stop.max_consecutive_invalid_turns = Some(nz(3));
     let tools = (0..5).fold(
-        FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")]),
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![spec("bash", ToolSource::Builtin)],
+        ),
         |tools, _| tools.answers("bash", failure()),
     );
     harness.tools = vec![Arc::new(tools)];
@@ -628,7 +640,11 @@ async fn an_executor_that_fails_sends_the_model_an_error_result_rather_than_endi
         Answer::now(says("Done.", &[], FinishReason::EndTurn)),
     ]);
     harness.tools = vec![Arc::new(
-        FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")]).answers(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![spec("bash", ToolSource::Builtin)],
+        )
+        .answers(
             "bash",
             Answers::Fails(crate::ToolErrorKind::Timeout, "took too long".to_owned()),
         ),
@@ -676,7 +692,7 @@ async fn a_cancelled_run_stops_at_the_next_point_it_is_polled() {
         Answer::now(says("One.", &["bash"], FinishReason::ToolUse)),
         Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
     ]);
-    // Answered twice before the first call, then true at the point after the
+    // Answered once, before the first call, then true at the point after the
     // first tool phase.
     harness.cancel = Arc::new(FakeCancel::after(1));
 
@@ -713,6 +729,91 @@ async fn a_cancelled_run_stops_at_the_next_point_it_is_polled() {
     );
 }
 
+// Cancellation leads the order at points A and B, and the stop policy never
+// sees it, so only the loop can keep it first.
+
+/// A run whose one response calls `bash`, which cancels the run while it
+/// runs, as a Ctrl-C during the tool phase would.
+fn cancelled_while_bash_runs() -> Harness {
+    let mut harness = Harness::new(vec![Answer::now(says(
+        "On it.",
+        &["bash"],
+        FinishReason::ToolUse,
+    ))]);
+    let cancel = Arc::new(FakeCancel::never());
+    harness.tools = vec![Arc::new(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![spec("bash", ToolSource::Builtin)],
+        )
+        .answers(
+            "bash",
+            Answers::Cancelling(Arc::clone(&cancel), "bash ran".to_owned()),
+        ),
+    )];
+    harness.cancel = cancel;
+    harness
+}
+
+#[tokio::test]
+async fn a_run_cancelled_during_the_tool_phase_of_its_last_allowed_turn_is_cancelled() {
+    let mut harness = cancelled_while_bash_runs();
+    harness.stop.max_turns = Some(nz(1));
+
+    let run = harness.run().await;
+
+    assert_eq!(
+        run.stop_reason(),
+        StopReason::Cancelled,
+        "cancellation comes before the turn cap at point B"
+    );
+    assert_eq!(run.turns(), 1, "the turn was the last the cap allowed");
+    assert_eq!(run.provider.calls(), 1);
+    assert_eq!(statuses(&run), [vec!["ok"]], "the call ran to its end");
+}
+
+#[tokio::test]
+async fn a_run_cancelled_in_the_turn_that_reached_its_token_budget_is_cancelled() {
+    let mut harness = cancelled_while_bash_runs();
+    harness.stop.max_total_tokens = Some(120);
+
+    let run = harness.run().await;
+
+    assert_eq!(
+        run.stop_reason(),
+        StopReason::Cancelled,
+        "cancellation comes before the token budget at point B"
+    );
+    assert_eq!(
+        run.finished.summary.outcome.usage.total(),
+        120,
+        "the turn's response reached the budget"
+    );
+    assert_eq!(run.provider.calls(), 1);
+    assert_eq!(statuses(&run), [vec!["ok"]]);
+}
+
+#[tokio::test]
+async fn a_run_cancelled_before_it_starts_with_no_time_to_run_is_cancelled() {
+    let mut harness = Harness::new(vec![Answer::now(says(
+        "Never reached.",
+        &[],
+        FinishReason::EndTurn,
+    ))]);
+    harness.cancel = Arc::new(FakeCancel::after(0));
+    harness.stop.timeout = Duration::ZERO;
+
+    let run = harness.run().await;
+
+    assert_eq!(
+        run.stop_reason(),
+        StopReason::Cancelled,
+        "cancellation comes before the timeout at point A"
+    );
+    assert_eq!(run.provider.calls(), 0);
+    assert_eq!(run.error(), None);
+}
+
 // T10: the output cap, cutting to the start.
 
 const SIXTEEN_BYTES: &str = "0123456789abcdef";
@@ -729,7 +830,10 @@ async fn writing(cap: Option<OutputCap>, hoarding: bool) -> (Run, Arc<FakeTools>
     harness.calls.output_cap = cap;
     let tools = FakeTools::new(
         Arc::clone(&harness.clock),
-        vec![spec("bash"), spec("read_file")],
+        vec![
+            spec("bash", ToolSource::Builtin),
+            spec("read_file", ToolSource::Builtin),
+        ],
     )
     .answers("bash", Answers::Text(SIXTEEN_BYTES.to_owned()))
     .answers("read_file", Answers::Text(TEN_BYTES.to_owned()));
@@ -802,7 +906,10 @@ async fn an_observer_is_told_what_was_sent_of_each_output_and_how_large_a_cut_on
     harness.tools = vec![Arc::new(
         FakeTools::new(
             Arc::clone(&harness.clock),
-            vec![spec("bash"), spec("read_file")],
+            vec![
+                spec("bash", ToolSource::Builtin),
+                spec("read_file", ToolSource::Builtin),
+            ],
         )
         .answers("bash", Answers::Text(SIXTEEN_BYTES.to_owned()))
         .answers("read_file", Answers::Text(TEN_BYTES.to_owned())),
@@ -880,7 +987,10 @@ async fn an_error_result_is_cut_as_any_other_output_is() {
     harness.tools = vec![Arc::new(
         FakeTools::new(
             Arc::clone(&harness.clock),
-            vec![spec("bash"), spec("read_file")],
+            vec![
+                spec("bash", ToolSource::Builtin),
+                spec("read_file", ToolSource::Builtin),
+            ],
         )
         .answers("bash", Answers::ToolError(SIXTEEN_BYTES.to_owned()))
         .answers(
@@ -1062,45 +1172,59 @@ async fn content_reaches_an_observer_only_when_the_run_captures_it() {
         else {
             panic!("the first event is RunStarted");
         };
-        assert_eq!(system_prompt.is_some(), captured, "the system prompt");
-        assert_eq!(prompt.is_some(), captured, "the task prompt");
+        assert_eq!(
+            system_prompt,
+            captured.then(|| "You fix tests.".to_owned()),
+            "the system prompt, with capture {captured}"
+        );
+        assert_eq!(
+            prompt,
+            captured.then(|| "Fix the failing test.".to_owned()),
+            "the task prompt, with capture {captured}"
+        );
 
-        let present = |carried: Vec<bool>, what: &str| {
-            assert!(!carried.is_empty(), "no event carried {what}");
-            assert!(
-                carried.iter().all(|had| *had == captured),
-                "{what}: {carried:?} with capture {captured}"
-            );
-        };
-        present(
-            events
-                .iter()
-                .filter_map(|event| match &event.kind {
-                    EventKind::ProviderCallFinished { response, .. } => Some(response.is_some()),
-                    _ => None,
-                })
-                .collect(),
-            "the response",
+        let responses: Vec<Option<Vec<ContentBlock>>> = events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                EventKind::ProviderCallFinished { response, .. } => Some(response.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            responses,
+            [
+                captured.then(|| {
+                    says("On it.", &["bash"], FinishReason::ToolUse)
+                        .content()
+                        .to_vec()
+                }),
+                captured.then(|| says("Done.", &[], FinishReason::EndTurn).content().to_vec()),
+            ],
+            "the responses, with capture {captured}"
         );
-        present(
-            events
-                .iter()
-                .filter_map(|event| match &event.kind {
-                    EventKind::ToolCallStarted { input, .. } => Some(input.is_some()),
-                    _ => None,
-                })
-                .collect(),
-            "the call's arguments",
+        let inputs: Vec<Option<serde_json::Value>> = events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                EventKind::ToolCallStarted { input, .. } => Some(input.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            inputs,
+            [captured.then(|| serde_json::json!({ "n": 0 }))],
+            "the call's arguments, with capture {captured}"
         );
-        present(
-            events
-                .iter()
-                .filter_map(|event| match &event.kind {
-                    EventKind::ToolCallFinished { output, .. } => Some(output.is_some()),
-                    _ => None,
-                })
-                .collect(),
-            "what the model was sent back",
+        let outputs: Vec<Option<Vec<ToolResultContent>>> = events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                EventKind::ToolCallFinished { output, .. } => Some(output.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            outputs,
+            [captured.then(|| vec![ToolResultContent::Text("bash ran".to_owned())])],
+            "what the model was sent back, with capture {captured}"
         );
     }
 }
@@ -1322,14 +1446,17 @@ async fn request_bytes_are_the_system_prompt_the_specs_and_the_messages() {
     .run()
     .await;
 
-    let specs: u64 = [spec("bash"), spec("read_file")]
-        .iter()
-        .map(|spec| {
-            serde_json::to_string(spec)
-                .expect("a spec serialises")
-                .len() as u64
-        })
-        .sum();
+    let specs: u64 = [
+        spec("bash", ToolSource::Builtin),
+        spec("read_file", ToolSource::Builtin),
+    ]
+    .iter()
+    .map(|spec| {
+        serde_json::to_string(spec)
+            .expect("a spec serialises")
+            .len() as u64
+    })
+    .sum();
     let prompt = serde_json::json!({
         "user": { "tool_results": [], "input": [{ "text": "Fix the failing test." }] }
     });
@@ -1387,7 +1514,7 @@ async fn the_span_an_observer_opens_reaches_the_executor() {
     ]);
     let tools = Arc::new(FakeTools::new(
         Arc::clone(&harness.clock),
-        vec![spec("bash")],
+        vec![spec("bash", ToolSource::Builtin)],
     ));
     harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
     let tracing: Arc<dyn crate::RunObserver> = Arc::new(super::fakes::Tracer);
@@ -1429,7 +1556,11 @@ async fn a_tool_that_takes_time_is_reported_as_taking_it() {
         Answer::now(says("Done.", &[], FinishReason::EndTurn)),
     ]);
     harness.tools = vec![Arc::new(
-        FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")]).taking(ms(250)),
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![spec("bash", ToolSource::Builtin)],
+        )
+        .taking(ms(250)),
     )];
 
     let run = harness.run().await;
@@ -1449,7 +1580,7 @@ async fn an_observer_that_keeps_no_spans_hands_the_executor_nothing() {
     ]);
     let tools = Arc::new(FakeTools::new(
         Arc::clone(&harness.clock),
-        vec![spec("bash")],
+        vec![spec("bash", ToolSource::Builtin)],
     ));
     harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
 
@@ -1571,7 +1702,10 @@ async fn the_summary_is_the_sum_of_the_transcript_beside_it() {
     harness.tools = vec![Arc::new(
         FakeTools::new(
             Arc::clone(&harness.clock),
-            vec![spec("bash"), spec("read_file")],
+            vec![
+                spec("bash", ToolSource::Builtin),
+                spec("read_file", ToolSource::Builtin),
+            ],
         )
         .answers("bash", Answers::Text("ok".to_owned()))
         .answers("read_file", Answers::ToolError("no such file".to_owned())),
@@ -1653,9 +1787,19 @@ async fn each_call_of_a_turn_holds_its_own_start_and_latency() {
         Answer::now(says("Done.", &[], FinishReason::EndTurn)),
     ]);
     harness.tools = vec![
-        Arc::new(FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")]).taking(ms(250))),
         Arc::new(
-            FakeTools::new(Arc::clone(&harness.clock), vec![spec("read_file")]).taking(ms(70)),
+            FakeTools::new(
+                Arc::clone(&harness.clock),
+                vec![spec("bash", ToolSource::Builtin)],
+            )
+            .taking(ms(250)),
+        ),
+        Arc::new(
+            FakeTools::new(
+                Arc::clone(&harness.clock),
+                vec![spec("read_file", ToolSource::Builtin)],
+            )
+            .taking(ms(70)),
         ),
     ];
 
@@ -1957,7 +2101,10 @@ async fn a_turn_in_which_a_call_reached_a_tool_ends_the_count_whatever_the_tool_
         harness.tools = vec![Arc::new(
             FakeTools::new(
                 Arc::clone(&harness.clock),
-                vec![spec("bash"), spec("read_file")],
+                vec![
+                    spec("bash", ToolSource::Builtin),
+                    spec("read_file", ToolSource::Builtin),
+                ],
             )
             .answers("read_file", returned()),
         )];
@@ -2282,19 +2429,7 @@ async fn what_a_tool_carried_back_over_mcp_reaches_the_observer() {
         Answer::now(says("Done.", &[], FinishReason::EndTurn)),
     ]);
     harness.tools = vec![Arc::new(
-        FakeTools::new(
-            Arc::clone(&clock),
-            vec![ToolSpec {
-                name: ToolName::new("search").expect("a test's tool name is valid"),
-                description: "The search tool.".to_owned(),
-                input_schema: serde_json::json!({ "type": "object" }),
-                source: ToolSource::Mcp {
-                    server: "docs".to_owned(),
-                },
-                concurrency: ToolConcurrency::Exclusive,
-            }],
-        )
-        .answers(
+        FakeTools::new(Arc::clone(&clock), vec![spec("search", mcp("docs"))]).answers(
             "search",
             Answers::OverMcp("found it".to_owned(), meta.clone()),
         ),
@@ -2332,19 +2467,7 @@ async fn a_tool_that_failed_over_mcp_still_reports_how_it_was_reached() {
         Answer::now(says("Done.", &[], FinishReason::EndTurn)),
     ]);
     harness.tools = vec![Arc::new(
-        FakeTools::new(
-            Arc::clone(&clock),
-            vec![ToolSpec {
-                name: ToolName::new("search").expect("a test's tool name is valid"),
-                description: "The search tool.".to_owned(),
-                input_schema: serde_json::json!({ "type": "object" }),
-                source: ToolSource::Mcp {
-                    server: "docs".to_owned(),
-                },
-                concurrency: ToolConcurrency::Exclusive,
-            }],
-        )
-        .answers(
+        FakeTools::new(Arc::clone(&clock), vec![spec("search", mcp("docs"))]).answers(
             "search",
             Answers::FailsOverMcp(
                 crate::ToolErrorKind::Failed,
@@ -2367,6 +2490,68 @@ async fn a_tool_that_failed_over_mcp_still_reports_how_it_was_reached() {
         .collect();
 
     assert_eq!(carried, [Some(meta)]);
+}
+
+/// The tool set is the one place a call's source comes from, and the loop
+/// carries it to the call's record and to the event that opens the call's
+/// span, whether the call succeeded or failed.
+#[tokio::test]
+async fn a_call_to_a_tool_served_over_mcp_is_recorded_and_announced_with_its_server() {
+    let mut harness = Harness::new(vec![
+        Answer::now(says(
+            "On it.",
+            &["bash", "search", "search"],
+            FinishReason::ToolUse,
+        )),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.tools.push(Arc::new(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![spec("search", mcp("docs"))],
+        )
+        .answers("search", Answers::Text("found it".to_owned()))
+        .answers(
+            "search",
+            Answers::Fails(
+                crate::ToolErrorKind::Failed,
+                "the server gave up".to_owned(),
+            ),
+        ),
+    ));
+
+    let run = harness.run().await;
+
+    let recorded: Vec<&ToolCallStatus> = run.finished.transcript.turns()[0]
+        .tool_calls()
+        .iter()
+        .map(|outcome| &outcome.status)
+        .collect();
+    assert_eq!(
+        recorded,
+        [
+            &ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok),
+            &ToolCallStatus::ran(mcp("docs"), ToolCallEnd::Ok),
+            &ToolCallStatus::ran(mcp("docs"), ToolCallEnd::Failed),
+        ]
+    );
+    let announced: Vec<Option<ToolSource>> = run
+        .observer
+        .events()
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            EventKind::ToolCallStarted { source, .. } => Some(source),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        announced,
+        [
+            Some(ToolSource::Builtin),
+            Some(mcp("docs")),
+            Some(mcp("docs")),
+        ]
+    );
 }
 
 /// The loop answers an unknown name itself, so no executor was reached and
@@ -2445,7 +2630,10 @@ async fn a_call_whose_arguments_did_not_parse_is_malformed_input_and_never_runs(
         Answer::now(calls_with_unparsed_input("bash", "{\"cmd\": ")),
         Answer::now(says("Done.", &[], FinishReason::EndTurn)),
     ]);
-    let tools = Arc::new(FakeTools::new(Arc::clone(&clock), vec![spec("bash")]));
+    let tools = Arc::new(FakeTools::new(
+        Arc::clone(&clock),
+        vec![spec("bash", ToolSource::Builtin)],
+    ));
     harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
 
     let run = harness.run().await;
@@ -2567,7 +2755,7 @@ fn explicit_with_write_file(script: Vec<Answer>) -> (Harness, Arc<FakeTools>) {
     harness.completion = CompletionMode::Explicit;
     let tools = Arc::new(FakeTools::new(
         Arc::clone(&harness.clock),
-        vec![spec("write_file")],
+        vec![spec("write_file", ToolSource::Builtin)],
     ));
     harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
     (harness, tools)
@@ -2842,7 +3030,10 @@ fn natural_serving_task_complete(script: Vec<Answer>) -> (Harness, Arc<FakeTools
     let tools = Arc::new(
         FakeTools::new(
             Arc::clone(&harness.clock),
-            vec![spec("bash"), spec(CompletionMode::TASK_COMPLETE)],
+            vec![
+                spec("bash", ToolSource::Builtin),
+                spec(CompletionMode::TASK_COMPLETE, ToolSource::Builtin),
+            ],
         )
         .answers(
             CompletionMode::TASK_COMPLETE,
@@ -2942,9 +3133,9 @@ async fn grouped(max_concurrent: u32) -> (Run, Vec<String>) {
             vec![
                 ToolSpec {
                     concurrency: ToolConcurrency::Shared,
-                    ..spec("read_file")
+                    ..spec("read_file", ToolSource::Builtin)
                 },
-                spec("write_file"),
+                spec("write_file", ToolSource::Builtin),
             ],
         )
         .yielding(),
@@ -3505,7 +3696,7 @@ async fn two_calls_nine_seconds_in(
             Arc::clone(&harness.clock),
             vec![ToolSpec {
                 concurrency,
-                ..spec(tool)
+                ..spec(tool, ToolSource::Builtin)
             }],
         )
         .taking(each),
@@ -3553,7 +3744,8 @@ async fn a_call_whose_turn_comes_when_the_run_s_time_has_gone_is_never_run() {
     let outcomes = run.finished.transcript.turns()[0].tool_calls();
     assert_eq!(
         outcomes[0].status,
-        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok)
+        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Timeout),
+        "the first call took all of its second, so it reached its deadline and timed out"
     );
     assert_eq!(
         (outcomes[0].started_ms, outcomes[0].latency_ms),
@@ -3604,11 +3796,14 @@ async fn a_call_that_was_never_run_reaches_no_observer_and_no_total() {
     );
     let summary = &run.finished.summary;
     assert_eq!(summary.outcome.tool_calls, 1);
-    assert_eq!(summary.tool_calls.errors, 0);
+    assert_eq!(
+        summary.tool_calls.errors, 1,
+        "the first call timed out at the run's deadline"
+    );
     assert_eq!(summary.tool_calls.unknown, 0);
     assert_eq!(
         summary.tool_calls.truncated, 1,
-        "`bash ran` is over the cap"
+        "`bash was stopped at its deadline` is over the cap"
     );
     assert_eq!(summary.tool_calls.latency_ms, 1_000);
     assert_eq!(
@@ -3617,8 +3812,8 @@ async fn a_call_that_was_never_run_reaches_no_observer_and_no_total() {
     );
     assert_eq!(
         summary.tool_calls.output_bytes,
-        4 + 35,
-        "`bash` and `[truncated: the first 4 of 8 bytes]`"
+        4 + 36,
+        "`bash` and `[truncated: the first 4 of 32 bytes]`"
     );
     assert_eq!(
         summary.per_tool,
@@ -3626,7 +3821,7 @@ async fn a_call_that_was_never_run_reaches_no_observer_and_no_total() {
             name("bash"),
             lablet_model::ToolStats {
                 calls: 1,
-                errors: 0,
+                errors: 1,
                 latency_ms: 1_000,
             }
         )])
@@ -3641,7 +3836,7 @@ async fn a_call_still_waiting_for_a_place_in_its_group_when_the_time_goes_is_nev
         two_calls_nine_seconds_in("read_file", ToolConcurrency::Shared, secs(1)).await;
 
     assert_eq!(deadlines(&tools), [("call_0".to_owned(), secs(1))]);
-    assert_eq!(statuses(&run), [vec!["ok", "not_run"]]);
+    assert_eq!(statuses(&run), [vec!["timeout", "not_run"]]);
     assert_eq!(run.stop_reason(), StopReason::Timeout);
 }
 
@@ -3674,8 +3869,13 @@ async fn a_tool_call_is_given_the_time_the_run_has_left_when_its_turn_comes() {
         ),
         Answer::now(says("Done.", &[], FinishReason::EndTurn)),
     ]);
-    let tools =
-        Arc::new(FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")]).taking(secs(2)));
+    let tools = Arc::new(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![spec("bash", ToolSource::Builtin)],
+        )
+        .taking(secs(2)),
+    );
     harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
     harness.stop.timeout = secs(10);
 
@@ -3703,7 +3903,7 @@ async fn no_tool_starts_in_a_run_whose_response_used_up_its_time() {
     )]);
     let tools = Arc::new(FakeTools::new(
         Arc::clone(&harness.clock),
-        vec![spec("bash")],
+        vec![spec("bash", ToolSource::Builtin)],
     ));
     harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
     harness.stop.timeout = secs(10);
@@ -3743,7 +3943,7 @@ async fn a_turn_the_timeout_cut_short_is_not_an_invalid_turn_so_the_run_stops_fo
     ));
     let tools = Arc::new(FakeTools::new(
         Arc::clone(&harness.clock),
-        vec![spec("bash")],
+        vec![spec("bash", ToolSource::Builtin)],
     ));
     harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
     harness.stop.timeout = secs(10);
@@ -3921,8 +4121,13 @@ async fn told_of_a_call_s_start_over(taking: Duration) -> (Run, Arc<FakeTools>) 
         "ToolCallStarted",
         taking,
     ));
-    let tools =
-        Arc::new(FakeTools::new(Arc::clone(&harness.clock), vec![spec("bash")]).taking(secs(1)));
+    let tools = Arc::new(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![spec("bash", ToolSource::Builtin)],
+        )
+        .taking(secs(1)),
+    );
     harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
     harness.stop.timeout = secs(10);
     (harness.run().await, tools)
@@ -4124,7 +4329,14 @@ async fn a_run_shown_no_tools_and_no_system_prompt_reports_the_digest_of_nothing
 
 #[tokio::test]
 async fn the_order_the_specs_are_offered_in_is_part_of_their_digest() {
-    let run = shown(vec![spec("read_file"), spec("bash")], "You fix tests.").await;
+    let run = shown(
+        vec![
+            spec("read_file", ToolSource::Builtin),
+            spec("bash", ToolSource::Builtin),
+        ],
+        "You fix tests.",
+    )
+    .await;
 
     assert_eq!(specs_sent(&run), format!("{READ_FILE_SPEC}{BASH_SPEC}"));
     assert_eq!(summary(&run).tools_digest, DIGEST_OF_READ_FILE_THEN_BASH);
@@ -4141,10 +4353,10 @@ async fn the_order_the_specs_are_offered_in_is_part_of_their_digest() {
 async fn one_tool_set_run_twice_has_one_digest_and_one_changed_description_gives_another() {
     let described = |description: &str| {
         vec![
-            spec("bash"),
+            spec("bash", ToolSource::Builtin),
             ToolSpec {
                 description: description.to_owned(),
-                ..spec("read_file")
+                ..spec("read_file", ToolSource::Builtin)
             },
         ]
     };
@@ -4165,7 +4377,12 @@ async fn one_tool_set_run_twice_has_one_digest_and_one_changed_description_gives
 
 #[tokio::test]
 async fn one_system_prompt_run_twice_has_one_digest_and_one_changed_word_gives_another() {
-    let specs = || vec![spec("bash"), spec("read_file")];
+    let specs = || {
+        vec![
+            spec("bash", ToolSource::Builtin),
+            spec("read_file", ToolSource::Builtin),
+        ]
+    };
     let first = shown(specs(), "You fix tests.").await;
     let again = shown(specs(), "You fix tests.").await;
     let changed = shown(specs(), "You fix tasks.").await;

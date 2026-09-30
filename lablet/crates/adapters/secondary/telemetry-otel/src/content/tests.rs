@@ -268,7 +268,21 @@ fn a_result_for_a_call_the_last_response_did_not_make_joins_no_message() {
     let second = conversation.responded(&[call("call_9", "bash", ToolInput::Json(json!({})))]);
     let third = conversation.unanswered();
 
-    assert_eq!(parsed(&second.input)[2]["parts"][0]["id"], "call_1");
+    assert_eq!(
+        parsed(&second.input)[2],
+        json!({
+            "role": "tool",
+            "parts": [{
+                "type": "tool_call_response",
+                "id": "call_1",
+                "response": {
+                    "content": [{ "type": "text", "text": "ok" }],
+                    "isError": false,
+                },
+            }],
+        }),
+        "the message holds the one call the response made, and not the stray result"
+    );
     assert_eq!(
         parsed(&third.input).as_array().unwrap().len(),
         4,

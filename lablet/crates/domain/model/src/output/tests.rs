@@ -950,7 +950,9 @@ proptest::proptest! {
     /// An output is cut exactly when its text is longer than the cap, which
     /// the closing line isn't counted against. What's sent of one that's cut
     /// is the output's own start and its own end, within the cap between
-    /// them, the line, and the closing line whole.
+    /// them, the line, and the closing line whole. The start and the end are
+    /// each as long as the cut allows, in whole characters, so a cut that
+    /// sends less than the cap allows fails as one that sends more does.
     #[test]
     fn what_is_sent_is_the_start_and_the_end_of_the_output_within_the_cap(
         items in any_items(), closing in any_closing(), cap in any_cap(), step in 1_usize..6
@@ -985,6 +987,19 @@ proptest::proptest! {
             proptest::prop_assert!(text.ends_with(&end), "{end:?} of {text:?}");
             proptest::prop_assert!(after.len() <= 1);
             proptest::prop_assert!((start.len() + end.len()) as u64 <= cap.max_bytes);
+            // What spec section 1 says each cut sends, and not what the cap
+            // says it sends, which is the code under test.
+            let (head, tail) = match cap.cut {
+                OutputCut::Head => (cap.max_bytes, 0),
+                OutputCut::HeadTail => (cap.max_bytes / 2, cap.max_bytes / 2),
+                OutputCut::Preview { bytes } => (bytes, 0),
+            };
+            let (head, tail) = (usize::try_from(head).unwrap(), usize::try_from(tail).unwrap());
+            proptest::prop_assert_eq!(start.len(), text.floor_char_boundary(head));
+            proptest::prop_assert_eq!(
+                end.len(),
+                text.len() - text.ceil_char_boundary(text.len().saturating_sub(tail))
+            );
             let ToolResultContent::Text(worded) =
                 cap.line(start.len() as u64, (end.len() + closing.len()) as u64, total);
             proptest::prop_assert_eq!(sent[line], worded);

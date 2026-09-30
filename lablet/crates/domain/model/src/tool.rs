@@ -136,7 +136,7 @@ pub enum ToolCallEnd {
     /// The tool reported an error in its own result, as an MCP tool does with
     /// `isError`.
     ToolError,
-    /// The call ran past its deadline, which is the shorter of its
+    /// The call reached its deadline, which is the shorter of its
     /// executor's own limit and the time the run had left.
     Timeout,
     /// The executor failed before the tool could answer.

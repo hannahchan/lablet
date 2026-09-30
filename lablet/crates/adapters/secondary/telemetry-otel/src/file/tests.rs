@@ -58,7 +58,7 @@ fn span(name: &str) -> SpanData {
             .with("lablet.test.reasons", vec!["end_turn".to_owned()]),
         events: vec![Happened {
             name: "lablet.retry",
-            at: after(255),
+            at: after(250),
             attributes: Attributes::default().with("lablet.test.attempt", 1_u32),
         }],
         ended: Ended::Badly("529 overloaded".to_owned()),
@@ -126,7 +126,8 @@ async fn each_run_has_a_file_of_its_own_named_for_the_run() {
     let first = Exported::read(&scratch.path(&format!("lablet-{FIRST}.otlp.jsonl"))).unwrap();
     let second = Exported::read(&scratch.path(&format!("lablet-{SECOND}.otlp.jsonl"))).unwrap();
     assert_eq!(first.lines, 2);
-    assert!(first.spans.iter().all(|span| span.name == "chat first"));
+    let names: Vec<_> = first.spans.iter().map(|span| span.name.as_str()).collect();
+    assert_eq!(names, ["chat first", "chat first"]);
     assert_eq!(second.lines, 1);
     assert_eq!(second.spans[0].name, "chat second");
     assert_eq!(std::fs::read_dir(scratch.directory()).unwrap().count(), 2);
@@ -519,12 +520,16 @@ fn a_line_put_after_part_of_another_begins_a_line_of_its_own() {
     );
 }
 
+/// What reaches standard error can't be read back here, so this holds only
+/// what the sink says of it.
 #[tokio::test]
-async fn standard_error_takes_a_line_as_a_file_does() {
+async fn standard_error_stays_the_destination_when_a_run_starts_and_is_left_whole() {
     let sink = Sink::new(FileTarget::Stderr);
     sink.start(&id(FIRST));
 
     spans_to(&sink).export(Vec::new()).await.unwrap();
+
+    assert!(!stderr_is_torn(&sink));
 }
 
 fn stderr_is_torn(sink: &Sink) -> bool {
@@ -629,7 +634,8 @@ async fn a_span_is_read_back_as_it_was_exported_with_its_resource_and_its_scope(
     assert_eq!(read.events[0].name, "lablet.retry");
     assert_eq!(
         read.events[0].time_unix_nano,
-        (STARTED_UNIX_MS + 255) * 1_000_000
+        (STARTED_UNIX_MS + 250) * 1_000_000,
+        "the event is timed as it happened, not as the span ended"
     );
     assert_eq!(
         serde_json::to_value(&read.events[0].attributes).unwrap(),

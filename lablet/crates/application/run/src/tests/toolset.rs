@@ -257,6 +257,8 @@ async fn the_completion_tool_survives_an_allow_list_that_does_not_name_it() {
     assert_eq!(offered(&set), [&name("bash"), &ToolName::task_complete()]);
 }
 
+/// Each executor refuses a name it doesn't serve, so a set that sent both
+/// calls to either one would fail the other.
 #[tokio::test]
 async fn a_call_is_routed_to_whichever_executor_serves_its_name() {
     let clock = Arc::new(FakeClock::new());
@@ -278,13 +280,21 @@ async fn a_call_is_routed_to_whichever_executor_serves_its_name() {
     .await
     .expect("distinct names");
 
-    let output = set
+    let first = set
+        .execute(call("bash"))
+        .await
+        .expect("the first executor answers");
+    let second = set
         .execute(call("search"))
         .await
         .expect("the second executor answers");
 
     assert_eq!(
-        output.output,
+        first.output,
+        lablet_model::KeptOutput::whole("from the first")
+    );
+    assert_eq!(
+        second.output,
         lablet_model::KeptOutput::whole("from the second")
     );
 }

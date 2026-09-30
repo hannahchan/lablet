@@ -236,12 +236,13 @@ async fn a_path_outside_the_root_is_an_error_result_and_the_file_is_not_read() {
 #[tokio::test]
 async fn a_command_past_the_timeout_is_an_error_result_of_kind_timeout_and_the_run_goes_on() {
     let scratch = Scratch::new("timeout");
+    scratch.write("work/notes.md", "on it goes");
     let script = calling(&[
         ("bash", json!({ "command": "sleep 60" })),
-        ("bash", json!({ "command": "echo on it goes" })),
+        ("read_file", json!({ "path": "notes.md" })),
     ]);
-    let mut tools = scratch.builtin_tools(&["bash"]);
-    tools["builtin"]["timeout"] = json!("50ms");
+    let mut tools = scratch.builtin_tools(&["bash", "read_file"]);
+    tools["builtin"]["timeout"] = json!("1s");
 
     let finished = run(&scratch, &script, tools).await;
 
@@ -256,17 +257,19 @@ async fn a_command_past_the_timeout_is_an_error_result_of_kind_timeout_and_the_r
         sent(timed_out),
         (
             "timeout",
-            "bash was stopped after 50ms, the longest the call could take".to_owned()
+            "bash was stopped after 1s, the longest the call could take".to_owned()
         )
     );
     assert!(
-        (50..10_000).contains(&timed_out.latency_ms),
+        (1_000..10_000).contains(&timed_out.latency_ms),
         "{}",
         timed_out.latency_ms
     );
+    // The call after the timeout starts no process, so no real-time limit
+    // bounds work that has to finish.
     assert_eq!(
         sent(&turns[1].tool_calls()[0]),
-        ("ok", "on it goes\nexit code: 0".to_owned())
+        ("ok", "on it goes".to_owned())
     );
 
     let exported = scratch.exported();

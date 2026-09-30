@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use lablet_conformance::executor::{
     Asked, Outlasting, Subject, Work, a_call_past_its_deadline_has_stopped_when_execute_returns,
     a_name_the_executor_does_not_offer_is_unknown, an_executor_keeps_no_more_output_than_its_limit,
-    calls_to_a_shared_tool_are_answered_together,
+    calls_made_at_once_to_a_shared_tool_each_get_their_own_answer,
 };
 use lablet_run::ToolExecutor;
 use lablet_tools_builtin::BuiltinTools;
@@ -132,7 +132,7 @@ async fn no_more_is_kept_of_what_a_file_holds_than_the_call_keeps() {
 async fn reads_that_are_made_together_are_each_answered_with_their_own_file() {
     let subject = Builtin::under("conformance-shared", Writer::ReadFile);
 
-    calls_to_a_shared_tool_are_answered_together(&subject).await;
+    calls_made_at_once_to_a_shared_tool_each_get_their_own_answer(&subject).await;
 }
 
 #[tokio::test]

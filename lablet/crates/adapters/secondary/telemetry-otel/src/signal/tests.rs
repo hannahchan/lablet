@@ -34,7 +34,7 @@ fn span(parent: Option<SpanId>, ended: Ended) -> Span {
         attributes: Attributes::default().with("lablet.test.turn", 2_u32),
         events: vec![Happened {
             name: "lablet.retry",
-            at: after(255),
+            at: after(250),
             attributes: Attributes::default().with("lablet.test.will_retry", true),
         }],
         ended,
@@ -77,7 +77,11 @@ fn a_span_is_handed_to_the_sdk_as_it_was_made() {
     assert_eq!(data.dropped_attributes_count, 0);
     assert_eq!(data.events.len(), 1);
     assert_eq!(data.events[0].name, "lablet.retry");
-    assert_eq!(data.events[0].timestamp, after(255));
+    assert_eq!(
+        data.events[0].timestamp,
+        after(250),
+        "the event is timed as it happened, not as the span ended"
+    );
     assert_eq!(
         data.events[0].attributes,
         [KeyValue::new("lablet.test.will_retry", Value::Bool(true))]

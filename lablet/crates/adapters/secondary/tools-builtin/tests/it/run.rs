@@ -135,8 +135,9 @@ fn sent(outcome: &ToolCallOutcome) -> (&'static str, String) {
 #[tokio::test]
 async fn a_command_past_the_timeout_is_an_error_result_of_kind_timeout_and_the_run_goes_on() {
     let scratch = Scratch::new("run-timeout");
+    scratch.holds("notes.md", "on it goes");
     let tools = BuiltinTools::new(Settings {
-        timeout: Duration::from_millis(50),
+        timeout: Duration::from_secs(1),
         ..scratch.settings()
     })
     .unwrap();
@@ -149,7 +150,7 @@ async fn a_command_past_the_timeout_is_an_error_result_of_kind_timeout_and_the_r
     finish: tool_use
 - response:
     content:
-      - tool_use: { id: call_2, name: bash, input: { json: { command: echo on it goes } } }
+      - tool_use: { id: call_2, name: read_file, input: { json: { path: notes.md } } }
     finish: tool_use
 - response:
     content:
@@ -173,17 +174,19 @@ async fn a_command_past_the_timeout_is_an_error_result_of_kind_timeout_and_the_r
         sent(timed_out),
         (
             "timeout",
-            "bash was stopped after 50ms, the longest the call could take".to_owned()
+            "bash was stopped after 1s, the longest the call could take".to_owned()
         )
     );
     assert!(
-        (50..10_000).contains(&timed_out.latency_ms),
+        (1_000..10_000).contains(&timed_out.latency_ms),
         "the call took {} ms",
         timed_out.latency_ms
     );
+    // The call after the timeout starts no process, so no real-time limit
+    // bounds work that has to finish.
     assert_eq!(
         sent(&turns[1].tool_calls()[0]),
-        ("ok", "on it goes\nexit code: 0".to_owned())
+        ("ok", "on it goes".to_owned())
     );
 }
 

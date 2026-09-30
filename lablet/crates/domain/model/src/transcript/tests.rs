@@ -6,9 +6,9 @@ use crate::{
     ToolInput, ToolName, ToolResultContent, ToolSource,
 };
 
-/// A call to a tool the run offered, which ended `ended`.
-fn ran(ended: ToolCallEnd) -> ToolCallStatus {
-    ToolCallStatus::ran(ToolSource::Builtin, ended)
+/// A call to a tool the run offered from `source`, which ended `ended`.
+fn ran(source: ToolSource, ended: ToolCallEnd) -> ToolCallStatus {
+    ToolCallStatus::ran(source, ended)
 }
 
 const fn ms(millis: u64) -> Duration {
@@ -68,7 +68,7 @@ fn outcome(call_id: &str, status: ToolCallStatus, output: &str) -> ToolCallOutco
 }
 
 fn ok(call_id: &str, output: &str) -> ToolCallOutcome {
-    outcome(call_id, ran(ToolCallEnd::Ok), output)
+    outcome(call_id, ran(ToolSource::Builtin, ToolCallEnd::Ok), output)
 }
 
 fn transcript() -> Transcript {
@@ -113,7 +113,11 @@ fn two_calls_in_one_turn() -> Transcript {
         &mut transcript,
         vec![
             ok("call_a", "fn main() {}"),
-            outcome("call_b", ran(ToolCallEnd::ToolError), "1 failed"),
+            outcome(
+                "call_b",
+                ran(ToolSource::Builtin, ToolCallEnd::ToolError),
+                "1 failed",
+            ),
         ],
     );
     turn(
@@ -335,7 +339,10 @@ fn outcomes_that_answer_the_calls_each_once_and_in_order_become_the_turns_tool_c
         .collect();
 
     assert_eq!(pairs, [("read_file", "call_a"), ("bash", "call_b")]);
-    assert_eq!(turn.tool_calls()[1].status, ran(ToolCallEnd::ToolError));
+    assert_eq!(
+        turn.tool_calls()[1].status,
+        ran(ToolSource::Builtin, ToolCallEnd::ToolError)
+    );
 }
 
 #[test]
@@ -435,7 +442,11 @@ fn a_transcript_and_its_turns_come_apart_into_every_part_they_hold() {
             record: first.record().clone(),
             tool_calls: vec![
                 ok("call_a", "fn main() {}"),
-                outcome("call_b", ran(ToolCallEnd::ToolError), "1 failed"),
+                outcome(
+                    "call_b",
+                    ran(ToolSource::Builtin, ToolCallEnd::ToolError),
+                    "1 failed"
+                ),
             ],
         }
     );

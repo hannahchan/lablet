@@ -34,9 +34,9 @@ fn a_finish_reason_prints_as_it_is_written_down_and_reads_back_as_itself() {
     }
 }
 
-#[test]
-fn every_provider_spelling_of_a_known_reason_gives_that_reason() {
-    for (spelling, reason) in [
+/// Every spelling lablet reads as a known reason, with the reason it reads.
+fn provider_spellings() -> [(&'static str, FinishReason); 11] {
+    [
         ("end_turn", FinishReason::EndTurn),
         ("stop", FinishReason::EndTurn),
         ("stop_sequence", FinishReason::EndTurn),
@@ -48,7 +48,12 @@ fn every_provider_spelling_of_a_known_reason_gives_that_reason() {
         ("model_context_window_exceeded", FinishReason::ContextWindow),
         ("refusal", FinishReason::Refusal),
         ("content_filter", FinishReason::Refusal),
-    ] {
+    ]
+}
+
+#[test]
+fn every_provider_spelling_of_a_known_reason_gives_that_reason() {
+    for (spelling, reason) in provider_spellings() {
         assert_eq!(
             FinishReason::from(spelling.to_owned()),
             reason,
@@ -208,6 +213,22 @@ fn a_completion_whose_tool_calls_have_distinct_ids_holds_its_content_in_order() 
     assert_eq!(completion.response_model.as_deref(), Some("model-2026"));
 }
 
+/// A provider's word for a finish reason: as often one of the spellings of a
+/// known reason as any other text, which almost never spells one, so the law
+/// below is held on every arm and not only on `Other`.
+fn any_reason() -> impl proptest::strategy::Strategy<Value = String> {
+    use proptest::strategy::Strategy;
+
+    let spellings: Vec<&'static str> = provider_spellings()
+        .iter()
+        .map(|(spelling, _)| *spelling)
+        .collect();
+    proptest::prop_oneof![
+        proptest::sample::select(spellings).prop_map(str::to_owned),
+        ".{0,24}",
+    ]
+}
+
 proptest::proptest! {
     #![proptest_config(proptest::prelude::ProptestConfig::with_cases(2_000))]
 
@@ -215,7 +236,7 @@ proptest::proptest! {
     /// thing as reading it once, so a reason that round-trips through a
     /// document can't drift.
     #[test]
-    fn normalising_a_finish_reason_is_idempotent(reason in ".{0,24}") {
+    fn normalising_a_finish_reason_is_idempotent(reason in any_reason()) {
         let once = FinishReason::from(reason);
         let twice = FinishReason::from(once.as_str().to_owned());
 

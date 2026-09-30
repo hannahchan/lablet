@@ -46,8 +46,8 @@ fn outcome(status: ToolCallStatus, truncated_from_bytes: Option<u64>) -> ToolCal
     }
 }
 
-fn ran(ended: ToolCallEnd) -> ToolCallStatus {
-    ToolCallStatus::ran(ToolSource::Builtin, ended)
+fn ran(source: ToolSource, ended: ToolCallEnd) -> ToolCallStatus {
+    ToolCallStatus::ran(source, ended)
 }
 
 #[test]
@@ -152,7 +152,10 @@ fn provider_totals_add_field_by_field() {
 #[test]
 fn a_call_that_ran_well_adds_its_latency_and_its_sizes_and_no_count() {
     assert_eq!(
-        ToolCallTotals::of(&call(), &outcome(ran(ToolCallEnd::Ok), None)),
+        ToolCallTotals::of(
+            &call(),
+            &outcome(ran(ToolSource::Builtin, ToolCallEnd::Ok), None)
+        ),
         ToolCallTotals {
             errors: 0,
             unknown: 0,
@@ -166,10 +169,16 @@ fn a_call_that_ran_well_adds_its_latency_and_its_sizes_and_no_count() {
 
 #[test]
 fn a_call_adds_to_the_count_of_what_became_of_it() {
-    let base = ToolCallTotals::of(&call(), &outcome(ran(ToolCallEnd::Ok), None));
+    let base = ToolCallTotals::of(
+        &call(),
+        &outcome(ran(ToolSource::Builtin, ToolCallEnd::Ok), None),
+    );
 
     assert_eq!(
-        ToolCallTotals::of(&call(), &outcome(ran(ToolCallEnd::ToolError), None)),
+        ToolCallTotals::of(
+            &call(),
+            &outcome(ran(ToolSource::Builtin, ToolCallEnd::ToolError), None)
+        ),
         ToolCallTotals { errors: 1, ..base }
     );
     assert_eq!(
@@ -186,7 +195,10 @@ fn a_call_adds_to_the_count_of_what_became_of_it() {
         "a call whose arguments didn't parse named a tool the run offered"
     );
     assert_eq!(
-        ToolCallTotals::of(&call(), &outcome(ran(ToolCallEnd::Ok), Some(5_000))),
+        ToolCallTotals::of(
+            &call(),
+            &outcome(ran(ToolSource::Builtin, ToolCallEnd::Ok), Some(5_000))
+        ),
         ToolCallTotals {
             truncated: 1,
             ..base
@@ -229,7 +241,7 @@ fn tool_call_totals_add_field_by_field() {
 #[test]
 fn a_call_adds_one_call_to_its_tool_s_share_with_its_latency_and_whether_it_failed() {
     assert_eq!(
-        ToolStats::of(&outcome(ran(ToolCallEnd::Ok), None)),
+        ToolStats::of(&outcome(ran(ToolSource::Builtin, ToolCallEnd::Ok), None)),
         ToolStats {
             calls: 1,
             errors: 0,
@@ -237,7 +249,10 @@ fn a_call_adds_one_call_to_its_tool_s_share_with_its_latency_and_whether_it_fail
         }
     );
     assert_eq!(
-        ToolStats::of(&outcome(ran(ToolCallEnd::Timeout), None)),
+        ToolStats::of(&outcome(
+            ran(ToolSource::Builtin, ToolCallEnd::Timeout),
+            None
+        )),
         ToolStats {
             calls: 1,
             errors: 1,

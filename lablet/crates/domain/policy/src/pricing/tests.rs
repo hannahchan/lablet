@@ -220,6 +220,41 @@ proptest::prop_compose! {
     }
 }
 
+/// Tokens of one kind a run is billed for, as a provider reports them: a
+/// cached token is part of the input too, and a reasoning token part of the
+/// output.
+fn tokens_of_one_kind() -> impl proptest::strategy::Strategy<Value = Usage> {
+    use proptest::strategy::{Just, Strategy};
+
+    (0u64..1_000_000).prop_flat_map(|extra| {
+        let none = TokenCounts::default();
+        proptest::prop_oneof![
+            Just(TokenCounts {
+                input: extra,
+                ..none
+            }),
+            Just(TokenCounts {
+                output: extra,
+                ..none
+            }),
+            Just(TokenCounts {
+                output: extra,
+                reasoning: Some(extra),
+                ..none
+            }),
+            Just(TokenCounts {
+                cache_read: Some(extra),
+                ..none
+            }),
+            Just(TokenCounts {
+                cache_write: Some(extra),
+                ..none
+            }),
+        ]
+        .prop_map(Usage::from_uncached)
+    })
+}
+
 proptest::proptest! {
     #![proptest_config(proptest::prelude::ProptestConfig::with_cases(2_000))]
 
@@ -257,8 +292,8 @@ proptest::proptest! {
 
     /// More tokens never cost less, whichever kind they are.
     #[test]
-    fn cost_never_falls_as_tokens_rise(usage in consistent_usage(), extra in 0u64..1_000_000) {
-        let more = Usage { output_tokens: usage.output_tokens.saturating_add(extra), ..usage };
+    fn cost_never_falls_as_tokens_rise(usage in consistent_usage(), extra in tokens_of_one_kind()) {
+        let more = usage + extra;
 
         proptest::prop_assert!(pricing().cost(&more).unwrap() >= pricing().cost(&usage).unwrap());
     }

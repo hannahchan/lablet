@@ -16,19 +16,15 @@ fn nz(count: u32) -> NonZeroU32 {
     NonZeroU32::new(count).expect("the caps in these tests are all above zero")
 }
 
-/// A call to a built-in tool the run offered, which ended `ended`.
-fn ran(ended: ToolCallEnd) -> ToolCallStatus {
-    ToolCallStatus::ran(ToolSource::Builtin, ended)
+/// A call to a tool the run offered from `source`, which ended `ended`.
+fn ran(source: ToolSource, ended: ToolCallEnd) -> ToolCallStatus {
+    ToolCallStatus::ran(source, ended)
 }
 
-/// The same, for a tool served over MCP.
-fn ran_over_mcp(ended: ToolCallEnd) -> ToolCallStatus {
-    ToolCallStatus::ran(
-        ToolSource::Mcp {
-            server: "docs".to_owned(),
-        },
-        ended,
-    )
+fn docs_server() -> ToolSource {
+    ToolSource::Mcp {
+        server: "docs".to_owned(),
+    }
 }
 
 fn rates() -> Rates {
@@ -204,40 +200,48 @@ fn finish(run: Run, stop: StopReason) -> RunSummary {
 #[test]
 fn a_run_that_did_nothing_has_a_summary_of_its_setup_and_zeros() {
     let finished = start().finish(StopReason::Cancelled, ms(0), None, None, None, None);
-    let summary = finished.summary;
+    let setup = setup();
 
-    assert_eq!(summary.model, setup().model);
-    assert_eq!(summary.endpoint, setup().endpoint);
-    assert_eq!(summary.tools, setup().tools);
-    assert_eq!(summary.completion, CompletionMode::Explicit);
-    assert_eq!(summary.max_turns, Some(nz(30)));
-    assert_eq!(summary.timeout_ms, 600_000);
-    assert_eq!(summary.request, setup().request);
-    assert_eq!(summary.prompt.system_bytes, 14);
-    assert_eq!(summary.prompt.user_bytes, 21);
-    assert_eq!(summary.prompt.tools_bytes, 312);
-    assert_eq!(summary.tools_digest, "the digest of the tool specs");
     assert_eq!(
-        summary.system_prompt_digest,
-        "the digest of the system prompt"
+        finished.summary,
+        RunSummary {
+            model: setup.model,
+            endpoint: setup.endpoint,
+            tools: setup.tools,
+            completion: CompletionMode::Explicit,
+            max_turns: Some(nz(30)),
+            timeout_ms: 600_000,
+            request: setup.request,
+            prompt: PromptSizes {
+                system_bytes: 14,
+                user_bytes: 21,
+                tools_bytes: 312,
+            },
+            tools_digest: "the digest of the tool specs".to_owned(),
+            system_prompt_digest: "the digest of the system prompt".to_owned(),
+            failed_usage: None,
+            provider: ProviderTotals::default(),
+            finish_reasons: Vec::new(),
+            tool_calls: ToolCallTotals::default(),
+            per_tool: BTreeMap::new(),
+            rates: None,
+            cost: None,
+            outcome: RunOutcome::closing(OutcomeParts {
+                run_id: setup.run_id,
+                labels: labels(),
+                stop_reason: StopReason::Cancelled,
+                turns: 0,
+                usage: Usage::default(),
+                tool_calls: 0,
+                duration_ms: 0,
+                result: TaskResult {
+                    text: String::new(),
+                    structured: None,
+                },
+                error: None,
+            }),
+        }
     );
-    assert_eq!(summary.failed_usage, None);
-    assert_eq!(summary.provider.retries, 0);
-    assert_eq!(summary.provider.latency.total_ms(), 0);
-    assert_eq!(summary.provider.latency.max_ms(), 0);
-    assert!(summary.finish_reasons.is_empty());
-    assert_eq!(summary.tool_calls.errors, 0);
-    assert_eq!(summary.tool_calls.unknown, 0);
-    assert_eq!(summary.tool_calls.latency_ms, 0);
-    assert_eq!(summary.tool_calls.input_bytes, 0);
-    assert_eq!(summary.tool_calls.output_bytes, 0);
-    assert_eq!(summary.tool_calls.truncated, 0);
-    assert!(summary.per_tool.is_empty());
-    assert_eq!(summary.cost, None);
-    assert_eq!(summary.outcome.turns, 0);
-    assert_eq!(summary.outcome.usage, Usage::default());
-    assert_eq!(summary.outcome.tool_calls, 0);
-    assert_eq!(summary.outcome.result().text, "");
     assert_eq!(finished.transcript.system(), "You fix tests.");
     assert!(finished.transcript.turns().is_empty());
 }
@@ -270,14 +274,18 @@ fn the_conversation_so_far_can_be_read_while_the_run_goes_on() {
     assert_eq!(run.transcript().system(), "You fix tests.");
     assert!(run.transcript().turns().is_empty());
 
-    let run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::Ok)]);
+    let run = tool_turn(run, &["bash"], &[ran(ToolSource::Builtin, ToolCallEnd::Ok)]);
     assert_eq!(run.transcript().turns().len(), 1);
 }
 
 #[test]
 fn the_prompt_is_the_input_of_the_first_turn_and_of_no_other() {
-    let run = tool_turn(start(), &["bash"], &[ran(ToolCallEnd::Ok)]);
-    let run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::Ok)]);
+    let run = tool_turn(
+        start(),
+        &["bash"],
+        &[ran(ToolSource::Builtin, ToolCallEnd::Ok)],
+    );
+    let run = tool_turn(run, &["bash"], &[ran(ToolSource::Builtin, ToolCallEnd::Ok)]);
 
     let turns = run.transcript.turns();
     assert_eq!(
@@ -299,7 +307,11 @@ fn the_messages_are_the_prompt_and_then_each_response_with_the_results_that_answ
         }]
     );
 
-    let run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::Timeout)]);
+    let run = tool_turn(
+        run,
+        &["bash"],
+        &[ran(ToolSource::Builtin, ToolCallEnd::Timeout)],
+    );
 
     let turn = &run.transcript.turns()[0];
     let outcome = &turn.tool_calls()[0];
@@ -443,7 +455,11 @@ fn a_run_stopped_at_the_context_window_by_its_finish_reason_says_so() {
 
 #[test]
 fn each_completion_is_a_turn_with_its_usage_and_finish_reason() {
-    let run = tool_turn(start(), &["bash"], &[ran(ToolCallEnd::Ok)]);
+    let run = tool_turn(
+        start(),
+        &["bash"],
+        &[ran(ToolSource::Builtin, ToolCallEnd::Ok)],
+    );
     assert_eq!(run.progress(ms(1_500)).turns, 1);
     let run = done(run, 180, ms(1));
 
@@ -488,7 +504,14 @@ fn after(first: TokenCounts, last: TokenCounts) -> Final {
         ms(0),
         ms(1),
     ));
-    let run = answered(calling, &[answer(ran(ToolCallEnd::Ok), "out", ms(1))]);
+    let run = answered(
+        calling,
+        &[answer(
+            ran(ToolSource::Builtin, ToolCallEnd::Ok),
+            "out",
+            ms(1),
+        )],
+    );
     final_run(run.responded(reporting(&[], FinishReason::EndTurn, last), ms(2), ms(1)))
 }
 
@@ -590,7 +613,11 @@ fn a_response_that_calls_no_tool_is_final_and_one_that_calls_a_tool_is_pending()
 
 #[test]
 fn a_run_that_has_just_responded_counts_the_new_turns_usage() {
-    let run = tool_turn(start(), &["bash"], &[ran(ToolCallEnd::Ok)]);
+    let run = tool_turn(
+        start(),
+        &["bash"],
+        &[ran(ToolSource::Builtin, ToolCallEnd::Ok)],
+    );
     let before = run.usage();
 
     let calling = calling(run.clone(), &["bash"]);
@@ -621,7 +648,7 @@ fn what_a_failed_attempt_reported_is_spent_and_is_in_no_turn() {
     assert_eq!(run.spent(), billed(70, 5));
     assert_eq!(run.progress(ms(10)).usage, billed(70, 5));
 
-    let run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::Ok)]);
+    let run = tool_turn(run, &["bash"], &[ran(ToolSource::Builtin, ToolCallEnd::Ok)]);
 
     assert_eq!(run.usage(), billed(100, 20));
     assert_eq!(run.spent(), billed(170, 25));
@@ -645,7 +672,7 @@ fn what_failed_attempts_reported_is_summed_over_every_call_of_the_run() {
     let mut run = start();
     run.failed_attempt(Duration::ZERO, ms(10), Some(billed(70, 5)));
     run.failed_attempt(Duration::ZERO, ms(10), None);
-    let mut run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::Ok)]);
+    let mut run = tool_turn(run, &["bash"], &[ran(ToolSource::Builtin, ToolCallEnd::Ok)]);
     run.failed_attempt(Duration::ZERO, ms(10), Some(billed(30, 0)));
 
     assert_eq!(run.spent(), billed(200, 25));
@@ -720,7 +747,11 @@ fn a_count_is_missing_from_the_failed_usage_only_when_no_failed_attempt_reported
 /// the failed attempts beside the turn it's holding.
 #[test]
 fn a_run_that_has_just_responded_has_spent_what_its_failed_attempts_reported_too() {
-    let mut run = tool_turn(start(), &["bash"], &[ran(ToolCallEnd::Ok)]);
+    let mut run = tool_turn(
+        start(),
+        &["bash"],
+        &[ran(ToolSource::Builtin, ToolCallEnd::Ok)],
+    );
     run.failed_attempt(Duration::ZERO, ms(10), Some(billed(70, 5)));
 
     let calling = calling(run.clone(), &["bash"]);
@@ -779,7 +810,14 @@ fn provider_latency_is_summed_and_its_maximum_kept_over_every_attempt() {
     let mut run = start();
     run.failed_attempt(Duration::ZERO, ms(900), None);
     let calling = pending(run.responded(calls, ms(0), ms(400)));
-    let mut run = answered(calling, &[answer(ran(ToolCallEnd::Ok), "out", ms(0))]);
+    let mut run = answered(
+        calling,
+        &[answer(
+            ran(ToolSource::Builtin, ToolCallEnd::Ok),
+            "out",
+            ms(0),
+        )],
+    );
     run.failed_attempt(Duration::ZERO, ms(200), None);
 
     let summary = finish(run.clone(), StopReason::ProviderError);
@@ -811,8 +849,8 @@ fn a_turn_counts_the_attempts_of_its_call_and_the_next_call_starts_again() {
     let mut run = start();
     run.failed_attempt(Duration::ZERO, ms(10), None);
     run.failed_attempt(Duration::ZERO, ms(10), None);
-    let run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::Ok)]);
-    let run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::Ok)]);
+    let run = tool_turn(run, &["bash"], &[ran(ToolSource::Builtin, ToolCallEnd::Ok)]);
+    let run = tool_turn(run, &["bash"], &[ran(ToolSource::Builtin, ToolCallEnd::Ok)]);
 
     let attempts: Vec<u32> = run
         .transcript
@@ -828,7 +866,7 @@ fn a_turn_counts_the_attempts_of_its_call_and_the_next_call_starts_again() {
 fn a_retry_is_an_attempt_made_beyond_the_first_of_its_call() {
     let mut run = start();
     run.failed_attempt(Duration::ZERO, ms(10), None);
-    let mut run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::Ok)]);
+    let mut run = tool_turn(run, &["bash"], &[ran(ToolSource::Builtin, ToolCallEnd::Ok)]);
     for _ in 0..4 {
         run.failed_attempt(Duration::ZERO, ms(10), None);
     }
@@ -845,9 +883,21 @@ fn tool_calls_add_to_the_totals_and_to_the_share_of_their_tool() {
     let run = answered(
         calling(start(), &["bash", "bash", "read_file"]),
         &[
-            answer(ran(ToolCallEnd::Ok), "12345678", ms(30)),
-            answer(ran(ToolCallEnd::ToolError), "exit 1", ms(5)),
-            answer(ran(ToolCallEnd::Ok), "0123456789", ms(2)),
+            answer(
+                ran(ToolSource::Builtin, ToolCallEnd::Ok),
+                "12345678",
+                ms(30),
+            ),
+            answer(
+                ran(ToolSource::Builtin, ToolCallEnd::ToolError),
+                "exit 1",
+                ms(5),
+            ),
+            answer(
+                ran(ToolSource::Builtin, ToolCallEnd::Ok),
+                "0123456789",
+                ms(2),
+            ),
         ],
     );
 
@@ -890,7 +940,7 @@ fn a_call_to_a_name_the_run_did_not_offer_counts_in_the_totals_and_gets_no_per_t
         start(),
         &["bash", "rm_rf", "invented_again"],
         &[
-            ran(ToolCallEnd::Ok),
+            ran(ToolSource::Builtin, ToolCallEnd::Ok),
             ToolCallStatus::Unknown,
             ToolCallStatus::Unknown,
         ],
@@ -931,7 +981,10 @@ fn a_call_the_loop_rejected_counts_in_the_totals_and_against_the_tool_it_named()
     let run = tool_turn(
         start(),
         &["bash", "task_complete"],
-        &[ran(ToolCallEnd::Ok), ToolCallStatus::Rejected],
+        &[
+            ran(ToolSource::Builtin, ToolCallEnd::Ok),
+            ToolCallStatus::Rejected,
+        ],
     );
 
     let summary = finish(run, StopReason::MaxTurns);
@@ -974,7 +1027,10 @@ fn a_call_to_a_tool_served_over_mcp_earns_a_per_tool_entry_like_any_other() {
     let run = tool_turn(
         start(),
         &["bash", "read_file"],
-        &[ran_over_mcp(ToolCallEnd::Ok), ran(ToolCallEnd::ToolError)],
+        &[
+            ran(docs_server(), ToolCallEnd::Ok),
+            ran(ToolSource::Builtin, ToolCallEnd::ToolError),
+        ],
     );
 
     let summary = finish(run, StopReason::Completed);
@@ -1019,7 +1075,7 @@ fn a_call_that_was_never_run_is_in_the_transcript_and_in_no_total() {
     let run = answered(
         calling(start(), &["bash", "read_file", "no_such_tool"]),
         &[
-            answer(ran(ToolCallEnd::Ok), "done", ms(30)),
+            answer(ran(ToolSource::Builtin, ToolCallEnd::Ok), "done", ms(30)),
             answer(ToolCallStatus::NotRun, "0123456789", ms(5)),
             answer(ToolCallStatus::NotRun, "0123456789", ms(5)),
         ],
@@ -1117,7 +1173,10 @@ fn a_turn_whose_completion_call_was_rejected_beside_a_call_that_ran_is_not_an_in
     let run = tool_turn(
         run,
         &["bash", "task_complete"],
-        &[ran(ToolCallEnd::Ok), ToolCallStatus::Rejected],
+        &[
+            ran(ToolSource::Builtin, ToolCallEnd::Ok),
+            ToolCallStatus::Rejected,
+        ],
     );
     assert_eq!(invalid_turns(&run), 0);
 }
@@ -1145,7 +1204,7 @@ fn a_turn_in_which_a_call_reached_a_tool_ends_the_count_whatever_the_tool_return
         ToolCallEnd::Timeout,
         ToolCallEnd::Failed,
     ] {
-        for reached in [ran(ended), ran_over_mcp(ended)] {
+        for reached in [ran(ToolSource::Builtin, ended), ran(docs_server(), ended)] {
             let run = turn_answered(start(), ToolCallStatus::Unknown);
             let run = turn_answered(run, ToolCallStatus::MalformedInput);
             assert_eq!(invalid_turns(&run), 2);
@@ -1165,7 +1224,7 @@ fn a_turn_in_which_a_call_reached_a_tool_ends_the_count_whatever_the_tool_return
 
 #[test]
 fn where_a_valid_call_sits_among_a_turn_s_calls_does_not_decide_the_count() {
-    let reached = ran(ToolCallEnd::ToolError);
+    let reached = ran(ToolSource::Builtin, ToolCallEnd::ToolError);
     let orders = [
         [reached.clone(), ToolCallStatus::Unknown],
         [ToolCallStatus::Unknown, reached],
@@ -1205,7 +1264,7 @@ fn turns_of_error_results_are_never_invalid_turns() {
         ToolCallEnd::Timeout,
         ToolCallEnd::Failed,
     ] {
-        run = turn_answered(run, ran(ended));
+        run = turn_answered(run, ran(ToolSource::Builtin, ended));
         assert_eq!(invalid_turns(&run), 0, "{ended}");
     }
 }
@@ -1215,7 +1274,11 @@ fn progress_is_what_the_limits_are_held_against() {
     let run = start();
     assert_eq!(run.progress(ms(0)), Progress::default());
 
-    let run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::ToolError)]);
+    let run = tool_turn(
+        run,
+        &["bash"],
+        &[ran(ToolSource::Builtin, ToolCallEnd::ToolError)],
+    );
     let mut run = tool_turn(run, &["no_such_tool"], &[ToolCallStatus::Unknown]);
     run.failed_attempt(Duration::ZERO, ms(10), Some(billed(70, 5)));
 
@@ -1242,8 +1305,16 @@ fn a_latency_is_truncated_as_it_is_recorded_so_totals_are_sums_of_whole_millisec
     let run = answered(
         calling,
         &[
-            answer(ran(ToolCallEnd::Ok), "", Duration::from_micros(1_600)),
-            answer(ran(ToolCallEnd::Ok), "", Duration::from_micros(1_600)),
+            answer(
+                ran(ToolSource::Builtin, ToolCallEnd::Ok),
+                "",
+                Duration::from_micros(1_600),
+            ),
+            answer(
+                ran(ToolSource::Builtin, ToolCallEnd::Ok),
+                "",
+                Duration::from_micros(1_600),
+            ),
         ],
     );
 
@@ -1277,8 +1348,8 @@ fn sums_and_durations_saturate_rather_than_overflow() {
     let run = answered(
         calling,
         &[
-            answer(ran(ToolCallEnd::Ok), "", Duration::MAX),
-            answer(ran(ToolCallEnd::Ok), "", Duration::MAX),
+            answer(ran(ToolSource::Builtin, ToolCallEnd::Ok), "", Duration::MAX),
+            answer(ran(ToolSource::Builtin, ToolCallEnd::Ok), "", Duration::MAX),
         ],
     );
 
@@ -1295,9 +1366,12 @@ fn the_summarys_totals_are_those_of_the_transcript_it_comes_with() {
     let run = tool_turn(
         start(),
         &["bash", "read_file"],
-        &[ran(ToolCallEnd::Ok), ran(ToolCallEnd::ToolError)],
+        &[
+            ran(ToolSource::Builtin, ToolCallEnd::Ok),
+            ran(ToolSource::Builtin, ToolCallEnd::ToolError),
+        ],
     );
-    let run = tool_turn(run, &["bash"], &[ran(ToolCallEnd::Ok)]);
+    let run = tool_turn(run, &["bash"], &[ran(ToolSource::Builtin, ToolCallEnd::Ok)]);
 
     let finished = run.finish(StopReason::MaxTurns, ms(50), None, None, None, None);
 
@@ -1553,7 +1627,11 @@ fn answered_over_time(
             log.borrow_mut().push(format!("+{n}"));
             Yield(wait).await;
             log.borrow_mut().push(format!("-{n}"));
-            answer(ran(ToolCallEnd::Ok), &n.to_string(), ms(1))
+            answer(
+                ran(ToolSource::Builtin, ToolCallEnd::Ok),
+                &n.to_string(),
+                ms(1),
+            )
         }
     }));
     (run, log.into_inner())
@@ -1669,7 +1747,7 @@ fn outcomes_are_in_call_order_and_answer_their_own_calls_whichever_finishes_firs
 #[test]
 fn an_answer_reports_what_the_outcome_will_hold() {
     let answer = Answer::measured(
-        ran(ToolCallEnd::ToolError),
+        ran(ToolSource::Builtin, ToolCallEnd::ToolError),
         KeptOutput::whole("0123456789"),
         Some(OutputCap::new(4, OutputCut::Head).unwrap()),
         ms(20),

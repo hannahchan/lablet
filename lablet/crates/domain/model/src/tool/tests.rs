@@ -9,9 +9,9 @@ fn docs_server() -> ToolSource {
     }
 }
 
-/// A call to a built-in tool, which ended `ended`.
-const fn ran(ended: ToolCallEnd) -> ToolCallStatus {
-    ToolCallStatus::ran(ToolSource::Builtin, ended)
+/// A call to a tool from `source`, which ended `ended`.
+const fn ran(source: ToolSource, ended: ToolCallEnd) -> ToolCallStatus {
+    ToolCallStatus::ran(source, ended)
 }
 
 // The literal spellings are the members of `lablet.tool.source` in the
@@ -68,14 +68,17 @@ fn a_tool_spec_is_measured_as_these_exact_bytes() {
 // `execute_tool` span, which is a semantic-convention attribute with no
 // registry enum to compare with. A call that was never run has no span.
 const STATUSES: [(ToolCallStatus, &str); 8] = [
-    (ran(ToolCallEnd::Ok), "ok"),
-    (ran(ToolCallEnd::ToolError), "tool_error"),
+    (ran(ToolSource::Builtin, ToolCallEnd::Ok), "ok"),
+    (
+        ran(ToolSource::Builtin, ToolCallEnd::ToolError),
+        "tool_error",
+    ),
     (ToolCallStatus::Unknown, "unknown"),
     (ToolCallStatus::MalformedInput, "malformed_input"),
     (ToolCallStatus::Rejected, "rejected"),
     (ToolCallStatus::NotRun, "not_run"),
-    (ran(ToolCallEnd::Timeout), "timeout"),
-    (ran(ToolCallEnd::Failed), "failed"),
+    (ran(ToolSource::Builtin, ToolCallEnd::Timeout), "timeout"),
+    (ran(ToolSource::Builtin, ToolCallEnd::Failed), "failed"),
 ];
 
 #[test]
@@ -111,11 +114,8 @@ fn a_call_is_invalid_when_no_tool_was_reached_and_never_when_one_was() {
         ToolCallEnd::Timeout,
         ToolCallEnd::Failed,
     ] {
-        assert!(!ran(ended).is_invalid(), "{ended}");
-        assert!(
-            !ToolCallStatus::ran(docs_server(), ended).is_invalid(),
-            "{ended} over MCP"
-        );
+        assert!(!ran(ToolSource::Builtin, ended).is_invalid(), "{ended}");
+        assert!(!ran(docs_server(), ended).is_invalid(), "{ended} over MCP");
     }
 }
 
@@ -126,7 +126,7 @@ fn only_a_call_that_ran_has_a_source() {
     assert_eq!(ToolCallStatus::Rejected.source(), None);
     assert_eq!(ToolCallStatus::NotRun.source(), None);
     assert_eq!(
-        ToolCallStatus::ran(docs_server(), ToolCallEnd::Failed).source(),
+        ran(docs_server(), ToolCallEnd::Failed).source(),
         Some(&docs_server())
     );
 }
@@ -190,7 +190,7 @@ fn text(text: &str) -> Vec<ToolResultContent> {
 fn an_outcome_holds_what_it_was_given_with_its_times_in_whole_milliseconds() {
     let outcome = measured(
         call_1(),
-        ran(ToolCallEnd::Ok),
+        ran(ToolSource::Builtin, ToolCallEnd::Ok),
         "hello",
         Some(head(100)),
         Duration::from_micros(1_500_999),
@@ -201,7 +201,7 @@ fn an_outcome_holds_what_it_was_given_with_its_times_in_whole_milliseconds() {
         outcome,
         ToolCallOutcome {
             call_id: call_1(),
-            status: ran(ToolCallEnd::Ok),
+            status: ran(ToolSource::Builtin, ToolCallEnd::Ok),
             started_ms: 1_500,
             latency_ms: 42,
             truncated_from_bytes: None,
@@ -232,7 +232,7 @@ fn the_result_the_model_is_sent_is_an_error_exactly_when_the_status_is_not_ok() 
 fn output_over_the_cap_is_cut_and_the_outcome_holds_the_size_sent_and_the_size_before() {
     let outcome = measured(
         call_1(),
-        ran(ToolCallEnd::Ok),
+        ran(ToolSource::Builtin, ToolCallEnd::Ok),
         "0123456789",
         Some(head(4)),
         Duration::ZERO,
@@ -259,7 +259,7 @@ fn an_answer_holds_what_the_cap_s_cut_sends_of_what_an_executor_kept() {
     output.push("0123456789abcdef");
 
     let answer = Answer::measured(
-        ran(ToolCallEnd::ToolError),
+        ran(ToolSource::Builtin, ToolCallEnd::ToolError),
         output,
         Some(cap),
         Duration::ZERO,
@@ -278,7 +278,7 @@ fn an_answer_holds_what_the_cap_s_cut_sends_of_what_an_executor_kept() {
     assert_eq!(answer.output_bytes(), 5 + 35 + 5);
     assert_eq!(
         answer.status(),
-        &ran(ToolCallEnd::ToolError),
+        &ran(ToolSource::Builtin, ToolCallEnd::ToolError),
         "a cut changes nothing else about the answer"
     );
 }
@@ -287,7 +287,7 @@ fn an_answer_holds_what_the_cap_s_cut_sends_of_what_an_executor_kept() {
 fn output_that_just_fits_the_cap_is_not_cut() {
     let outcome = measured(
         call_1(),
-        ran(ToolCallEnd::Ok),
+        ran(ToolSource::Builtin, ToolCallEnd::Ok),
         "0123456789",
         Some(head(10)),
         Duration::ZERO,
@@ -302,7 +302,7 @@ fn output_that_just_fits_the_cap_is_not_cut() {
 fn without_a_cap_no_output_is_cut() {
     let outcome = measured(
         call_1(),
-        ran(ToolCallEnd::Ok),
+        ran(ToolSource::Builtin, ToolCallEnd::Ok),
         "0123456789",
         None,
         Duration::ZERO,

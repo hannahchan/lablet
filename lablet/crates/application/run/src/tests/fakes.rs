@@ -69,7 +69,8 @@ impl Clock for FakeClock {
     }
 }
 
-/// Cancellation a test turns on when it likes.
+/// Cancellation a test turns on when it likes: after a count of polls, or
+/// from inside the run, as a user's Ctrl-C would.
 pub struct FakeCancel {
     cancelled: AtomicBool,
     /// Cancels once this many polls have been answered, so a test can cancel
@@ -95,6 +96,12 @@ impl FakeCancel {
             after_polls: Some(polls),
             polls: AtomicUsize::new(0),
         }
+    }
+
+    /// Cancels the run from here on, whatever the count, so a scripted tool
+    /// can cancel it part-way through a tool phase.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
     }
 }
 
@@ -291,6 +298,9 @@ pub enum Answers {
     OverMcp(String, crate::McpCallMeta),
     /// Fails over MCP, so the metadata comes back on the error instead.
     FailsOverMcp(crate::ToolErrorKind, String, crate::McpCallMeta),
+    /// Cancels the run while the call is running, and then returns this
+    /// text, as a call does that was in flight when the user pressed Ctrl-C.
+    Cancelling(Arc<FakeCancel>, String),
 }
 
 /// An executor serving named tools with scripted answers.
@@ -394,8 +404,9 @@ impl FakeTools {
         self
     }
 
-    /// Every call takes this long, or as long as its deadline allows when
-    /// that's shorter, and then it has timed out.
+    /// Every call takes this long, unless it reaches its deadline first or
+    /// at the same moment, and then it takes until its deadline and has
+    /// timed out.
     pub const fn taking(mut self, latency: Duration) -> Self {
         self.latency = latency;
         self
@@ -421,6 +432,19 @@ impl ToolExecutor for FakeTools {
     }
 
     async fn execute(&self, call: ToolCall) -> Result<ToolOutput, ToolError> {
+        self.taken
+            .lock()
+            .expect("the fake executor isn't poisoned")
+            .push(call.clone());
+        // An executor resolves only the names it offered, so a call routed
+        // here by mistake is refused, as a real executor refuses it, rather
+        // than answered as if a tool had run.
+        if !self.specs.iter().any(|spec| spec.name == call.name) {
+            return Err(ToolError::new(
+                crate::ToolErrorKind::Unknown,
+                format!("the fake executor serves no tool named {}", call.name),
+            ));
+        }
         let id = call.id.as_str().to_owned();
         self.spans
             .lock()
@@ -433,14 +457,11 @@ impl ToolExecutor for FakeTools {
             .lock()
             .expect("the fake executor isn't poisoned")
             .push(format!("-{id}"));
-        // The port's contract: a call takes no longer than its deadline,
-        // and one that reached it has stopped by the time it returns.
+        // The port's contract: a call takes no longer than its deadline, and
+        // one that reached it has timed out and stopped by the time it
+        // returns.
         self.clock.advance(self.latency.min(call.deadline));
-        self.taken
-            .lock()
-            .expect("the fake executor isn't poisoned")
-            .push(call.clone());
-        if self.latency > call.deadline {
+        if self.latency >= call.deadline {
             return Err(ToolError::new(
                 crate::ToolErrorKind::Timeout,
                 format!("{} was stopped at its deadline", call.name),
@@ -471,6 +492,14 @@ impl ToolExecutor for FakeTools {
             }),
             Some(Answers::FailsOverMcp(kind, message, mcp)) => {
                 Err(ToolError::new(kind, message).over_mcp(mcp))
+            }
+            Some(Answers::Cancelling(cancel, text)) => {
+                cancel.cancel();
+                Ok(ToolOutput {
+                    output: self.fed(&call, &text),
+                    is_error: false,
+                    mcp: None,
+                })
             }
             // Nothing scripted: the tool ran and said so, which keeps a test
             // that only cares about the loop's shape short.

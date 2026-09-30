@@ -13,6 +13,9 @@ fn rates_hold_each_price_under_its_own_name() {
     );
 }
 
+/// Each rate is checked under its own name, and of two that aren't prices
+/// the first in argument order is reported, whichever kind of bad number
+/// each is: every pair of rates is broken both ways round.
 #[test]
 fn the_first_rate_that_is_not_a_price_is_the_one_reported() {
     for (name, rates) in [
@@ -22,6 +25,21 @@ fn the_first_rate_that_is_not_a_price_is_the_one_reported() {
         ("cache_write", Rates::new(3.0, 15.0, 0.3, -1.0)),
     ] {
         assert_eq!(rates.unwrap_err().name, name);
+    }
+    let names = ["input", "output", "cache_read", "cache_write"];
+    for (first, name) in names.into_iter().enumerate() {
+        for (second, later) in names.into_iter().enumerate().skip(first + 1) {
+            for (early, late) in [(-1.0, f64::INFINITY), (f64::INFINITY, -1.0)] {
+                let mut values = [3.0, 15.0, 0.3, 3.75];
+                values[first] = early;
+                values[second] = late;
+                assert_eq!(
+                    Rates::new(values[0], values[1], values[2], values[3]),
+                    Err(RateError { name, value: early }),
+                    "{name} {early} and {later} {late}"
+                );
+            }
+        }
     }
     assert_eq!(
         Rates::new(-3.0, 15.0, 0.3, 3.75).unwrap_err().to_string(),

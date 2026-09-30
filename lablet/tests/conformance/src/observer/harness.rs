@@ -108,15 +108,21 @@ impl RunObserver for Unobserved {
 }
 
 /// Serves four tools, each of which answers the same every time, after the
-/// same wait.
+/// same wait. One of them is an MCP server's, so an observer is handed both
+/// sources.
 struct Tools;
 
-fn spec(name: &str, description: &str, concurrency: ToolConcurrency) -> ToolSpec {
+fn spec(
+    name: &str,
+    description: &str,
+    source: ToolSource,
+    concurrency: ToolConcurrency,
+) -> ToolSpec {
     ToolSpec {
         name: tool_name(name),
         description: description.to_owned(),
         input_schema: json!({ "type": "object" }),
-        source: ToolSource::Builtin,
+        source,
         concurrency,
     }
 }
@@ -128,11 +134,29 @@ fn tool_name(name: &str) -> ToolName {
 #[async_trait::async_trait]
 impl ToolExecutor for Tools {
     async fn specs(&self) -> Result<Vec<ToolSpec>, ToolError> {
+        let docs = ToolSource::Mcp {
+            server: "docs".to_owned(),
+        };
         Ok(vec![
-            spec("bash", "Runs a command.", ToolConcurrency::Exclusive),
-            spec("read_file", "Reads a file.", ToolConcurrency::Shared),
-            spec("grep", "Searches the files.", ToolConcurrency::Shared),
-            spec("dump", "Prints a table.", ToolConcurrency::Exclusive),
+            spec(
+                "bash",
+                "Runs a command.",
+                ToolSource::Builtin,
+                ToolConcurrency::Exclusive,
+            ),
+            spec(
+                "read_file",
+                "Reads a file.",
+                ToolSource::Builtin,
+                ToolConcurrency::Shared,
+            ),
+            spec("grep", "Searches the files.", docs, ToolConcurrency::Shared),
+            spec(
+                "dump",
+                "Prints a table.",
+                ToolSource::Builtin,
+                ToolConcurrency::Exclusive,
+            ),
         ])
     }
 

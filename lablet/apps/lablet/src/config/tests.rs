@@ -6,7 +6,9 @@ use serde_json::json;
 
 use super::*;
 
-/// The config of spec §7 as the spec writes it, comments and all.
+/// The config of spec §7, comments and all. This file is the source of its
+/// defaults, and the spec's block quotes it: a test never reads
+/// `product/spec.md`, which can drift.
 const SPEC: &str = include_str!("tests/spec.yaml");
 
 fn yaml(text: &str) -> Config {

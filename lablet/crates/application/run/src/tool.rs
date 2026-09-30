@@ -100,7 +100,7 @@ impl ToolError {
 pub enum ToolErrorKind {
     /// No tool this executor serves has that name.
     Unknown,
-    /// The call ran past the shorter of its deadline and the executor's own
+    /// The call reached the shorter of its deadline and the executor's own
     /// limit, and the work has stopped.
     Timeout,
     /// The executor failed before the tool could answer.
@@ -181,12 +181,13 @@ pub trait ToolExecutor: Send + Sync {
     /// The call takes no longer than the shorter of [`ToolCall::deadline`]
     /// and the executor's own limit, which the deadline can only shorten: a
     /// run has one timeout, and a shell command and a call to a remote
-    /// server don't deserve the same one. A call that reached the limit
-    /// returns [`ToolErrorKind::Timeout`], and only once the work has
-    /// stopped: a process it started has exited, killed if need be, and a
-    /// request it sent has been cancelled. The loop starts the next call
-    /// when this one returns, so work that outlived its call would still be
-    /// writing while a call the model placed after it runs.
+    /// server don't deserve the same one. A call that reached the limit has
+    /// timed out, as a limit is met when it's reached, so it returns
+    /// [`ToolErrorKind::Timeout`], and only once the work has stopped: a
+    /// process it started has exited, killed if need be, and a request it
+    /// sent has been cancelled. The loop starts the next call when this one
+    /// returns, so work that outlived its call would still be writing while
+    /// a call the model placed after it runs.
     ///
     /// The executor feeds the tool's text to a [`KeptOutput`] made from
     /// [`ToolCall::keep`], as the text arrives, so it never holds more than

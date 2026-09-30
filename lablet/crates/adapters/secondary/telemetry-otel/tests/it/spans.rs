@@ -1,9 +1,11 @@
 //! O1 and O2, as far as they're of spans, and the clause of E15 that's of
 //! the chat span.
 
+use std::num::NonZeroU32;
+
 use lablet_conformance::observer::assert_the_wide_event_is_declared;
 use lablet_conformance::otlp::{SpanKind, Status};
-use lablet_model::{RunLabels, StopReason, Usage};
+use lablet_model::{RunLabels, StopReason, ToolConcurrency, ToolSource, Usage};
 use lablet_telemetry_registry::attribute as key;
 use lablet_telemetry_registry::signals::{
     EVENT_GEN_AI_CLIENT_OPERATION_EXCEPTION_KEYS, EVENT_GEN_AI_CLIENT_OPERATION_EXCEPTION_REQUIRED,
@@ -705,6 +707,65 @@ async fn a_tool_span_says_what_was_called_and_what_became_of_the_call() {
         assert_eq!(unknown.attributes.get(key), None, "{key}");
     }
     assert_eq!(unknown.status, Status::Error(String::new()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_tool_span_says_where_its_tool_comes_from() {
+    let traced = traced("tool-sources", FAILS_CALLS_ENDS, |settings| {
+        settings.read_file_source = ToolSource::Mcp {
+            server: "docs".to_owned(),
+        };
+    })
+    .await;
+
+    let sources: Vec<_> = traced
+        .tools()
+        .iter()
+        .map(|tool| {
+            (
+                tool.attributes[key::GEN_AI_TOOL_NAME].as_str().unwrap(),
+                tool.attributes.get(key::GEN_AI_TOOL_TYPE),
+                tool.attributes.get(key::LABLET_TOOL_SOURCE),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sources,
+        [
+            ("bash", Some(&json!("function")), Some(&json!("builtin"))),
+            ("read_file", Some(&json!("extension")), Some(&json!("mcp"))),
+            ("no_such_tool", None, None),
+        ]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_spans_of_calls_that_ran_together_are_exported_in_the_order_the_calls_ended() {
+    let traced = traced("ended-order", FAILS_CALLS_ENDS, |settings| {
+        settings.bash_concurrency = ToolConcurrency::Shared;
+        settings.max_concurrent_tool_calls = NonZeroU32::new(2).unwrap();
+    })
+    .await;
+
+    let ended: Vec<_> = traced
+        .tools()
+        .into_iter()
+        .map(|tool| {
+            (
+                tool.attributes[key::GEN_AI_TOOL_CALL_ID].as_str().unwrap(),
+                timing(tool),
+            )
+        })
+        .collect();
+    assert_eq!(
+        ended,
+        [
+            ("call_2", (2_290, 300)),
+            ("call_1", (2_290, 1_000)),
+            ("call_3", (3_390, 0)),
+        ],
+        "the two calls of the first turn began together, and the shorter ended first"
+    );
 }
 
 #[tokio::test(start_paused = true)]

@@ -551,24 +551,33 @@ fn a_path_that_names_no_file_is_an_error() {
 fn a_path_that_cannot_be_written_is_an_error_that_names_the_path_and_says_why() {
     let scratch = Scratch::new("unwritable");
     std::fs::write(scratch.path("a-file"), "not a directory").unwrap();
-    for unwritable in [
-        scratch.path("a-file/transcript.json"),
-        scratch.path("a-file/out/transcript.json"),
-        scratch.0.clone(),
+    for (unwritable, why) in [
+        (
+            scratch.path("a-file/transcript.json"),
+            "File exists (os error 17)",
+        ),
+        (
+            scratch.path("a-file/out/transcript.json"),
+            "Not a directory (os error 20)",
+        ),
+        (scratch.0.clone(), "Is a directory (os error 21)"),
     ] {
         let file = TranscriptFile::for_run(&unwritable, &id(FIRST)).unwrap();
 
         let refused = file.write(&document(FIRST, "You fix tests.")).unwrap_err();
 
-        let TranscriptWriteError::Unwritable { path, reason } = &refused else {
-            panic!("{refused:?} isn't a write that failed");
-        };
-        assert_eq!(path, &unwritable);
-        assert!(!reason.is_empty());
+        assert_eq!(
+            refused,
+            TranscriptWriteError::Unwritable {
+                path: unwritable.clone(),
+                reason: why.to_owned(),
+            },
+            "{unwritable:?}"
+        );
         assert_eq!(
             refused.to_string(),
             format!(
-                "the transcript couldn't be written to {}: {reason}",
+                "the transcript couldn't be written to {}: {why}",
                 unwritable.display()
             )
         );

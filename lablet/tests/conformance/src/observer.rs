@@ -176,7 +176,10 @@ pub async fn a_destination_that_cannot_be_written_changes_nothing_about_the_run(
     let finished = run(&mut observed, RUN).await;
     let flushed = unwritable.flush().await;
 
-    assert_eq!(finished, expected);
+    assert_eq!(
+        finished, expected,
+        "the run ended as it does when nothing observes it"
+    );
     assert_eq!(
         finished.summary.outcome.stop_reason(),
         StopReason::Completed

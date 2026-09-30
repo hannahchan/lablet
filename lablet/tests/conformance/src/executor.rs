@@ -272,13 +272,15 @@ pub async fn an_executor_keeps_no_more_output_than_its_limit(subject: &dyn Subje
     );
 }
 
-/// A tool whose spec says `Shared` answers calls that are made while
-/// earlier ones have yet to return, each with its own answer.
+/// Calls to a tool whose spec says `Shared` that are made at once, none
+/// waiting for another to return, each get their own answer. The loop is
+/// what runs calls together, and this is all it needs of an executor, so
+/// the case doesn't ask that the calls overlap.
 ///
 /// # Panics
 ///
 /// Panics when that doesn't hold of `subject`, which is how a case fails.
-pub async fn calls_to_a_shared_tool_are_answered_together(subject: &dyn Subject) {
+pub async fn calls_made_at_once_to_a_shared_tool_each_get_their_own_answer(subject: &dyn Subject) {
     let executor = subject.executor();
     let specs = must(executor.specs().await, "listing the tools");
     let answers: Vec<String> = (0..TOGETHER)

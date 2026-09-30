@@ -43,7 +43,7 @@ tools:
     root: null # required when a built-in is enabled; never a directory that holds lablet's own files
     enabled: [] # bash, read_file, write_file; task_complete is implied by run.completion: explicit
     timeout: 120s
-    env: {} # added to the short list of variables bash starts with
+    env: {} # added on top of the environment bash inherits; may name a withheld variable to pass it on
   mcp:
     - name: docs # letters, digits, - and _
       transport: stdio
@@ -60,13 +60,13 @@ tools:
       headers: {}
   mcp_lifetime: run # run | lablet; run starts the servers again for each run after the first
   mcp_result: structured # structured | content; which of the two the model is sent when a result has both
-  allow: null # list of tool names as the model sees them; null means all; a name no tool has is an error
+  allow: null # list of tool names as the model sees them; null means all; a name no tool has is an error, and so is an empty list
   deny: [] # removed after allow is applied; a name no tool has is an error
   max_concurrent_calls: 10 # calls to shared tools in one turn run together, at most this many at a time; 1 runs every call alone
   max_output_bytes: 50000 # a tool result longer than this is cut; null means no cap
   output_cut: preview # preview | head | head_tail; what's kept of a result that's cut
   output_preview_bytes: 2000 # preview only
-  max_description_chars: 2048 # a tool description or a server's instructions longer than this is cut; null means no cap
+  max_description_chars: 2048 # a tool description or a server's instructions longer than this is cut; null means no cap (phase 8; until then a value other than the default is refused)
 
 telemetry:
   capture_content: false

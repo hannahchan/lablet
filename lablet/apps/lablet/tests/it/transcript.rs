@@ -290,7 +290,13 @@ async fn a_transcript_holds_every_turn_with_its_input_its_response_its_record_an
 
     // The second run heard the same script, so it said the same.
     let other = written.of_second();
-    for (turn, of_other) in turns.iter().zip(other["turns"].as_array().unwrap()) {
+    let of_others = other["turns"].as_array().unwrap();
+    assert_eq!(
+        of_others.len(),
+        turns.len(),
+        "the second run took as many turns"
+    );
+    for (turn, of_other) in turns.iter().zip(of_others) {
         for part in ["input", "response"] {
             assert_eq!(turn[part], of_other[part]);
         }

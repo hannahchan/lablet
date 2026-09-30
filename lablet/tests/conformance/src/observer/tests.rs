@@ -1,12 +1,19 @@
 //! The checks are what a case fails by, so each is held to refusing what
-//! it's there to refuse.
+//! it's there to refuse, and each case to passing an observer that keeps
+//! the contract and to refusing one that breaks it in the one way the case
+//! is there to see.
 
+use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use serde_json::json;
 
 use super::*;
 use crate::otlp::{Scope, SpanKind, Status};
+
+mod sketch;
+
+use sketch::{Fault, Sketch};
 
 const TRACE: &str = "0af7651916cd43dd8448eb211c80319c";
 const ROOT: &str = "b7ad6b7169203331";
@@ -562,4 +569,121 @@ fn a_record_of_another_event_is_no_wide_event() {
     wide.event_name = "lablet.retry".to_owned();
 
     assert!(is_undeclared(&wide));
+}
+
+// The cases, against an observer with one fault
+
+/// What the case said as it refused the observer; `None` when it passed.
+async fn refusal<Case>(case: Case) -> Option<String>
+where
+    Case: Future<Output = ()> + Send + 'static,
+{
+    let panic = tokio::spawn(case).await.err()?.into_panic();
+    let said = panic
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| panic.downcast_ref::<&str>().map(|said| (*said).to_owned()));
+    Some(said.expect("a case refuses in words"))
+}
+
+async fn of_the_wide_events(fault: Fault) -> Option<String> {
+    let sketch = Sketch::writing(fault);
+    refusal(async move { a_run_has_exactly_one_wide_event(&sketch).await }).await
+}
+
+async fn of_the_sums(fault: Fault) -> Option<String> {
+    let sketch = Sketch::writing(fault);
+    refusal(async move { the_numbers_of_the_wide_event_are_the_sums_of_the_steps(&sketch).await })
+        .await
+}
+
+async fn of_a_destination_that_cannot_be_written(fault: Fault) -> Option<String> {
+    let sketch = Sketch::unwritable(fault);
+    refusal(async move {
+        a_destination_that_cannot_be_written_changes_nothing_about_the_run(&sketch).await;
+    })
+    .await
+}
+
+/// Holds `refusal` to being one, in words that hold `words`.
+fn assert_refused(refusal: Option<String>, words: &str) {
+    let said = refusal.unwrap_or_else(|| panic!("the case passed, and was to say: {words}"));
+    assert!(said.contains(words), "the case said: {said}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_observer_that_keeps_the_contract_passes_every_case() {
+    assert_eq!(of_the_wide_events(Fault::None).await, None);
+    assert_eq!(of_the_sums(Fault::None).await, None);
+    assert_eq!(
+        of_a_destination_that_cannot_be_written(Fault::None).await,
+        None
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_observer_with_no_wide_event_for_a_run_that_failed_is_refused() {
+    assert_refused(
+        of_the_wide_events(Fault::ForgetsARunThatFailed).await,
+        "one wide event for each run",
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_observer_whose_flush_adds_a_wide_event_when_no_run_came_before_is_refused() {
+    assert_refused(
+        of_the_wide_events(Fault::ExportsTheLastWideEventAtEveryFlush).await,
+        "one wide event for each run",
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_wide_event_outside_the_context_of_its_root_span_is_refused_by_the_case() {
+    assert_refused(
+        of_the_wide_events(Fault::PutsTheWideEventUnderAChatSpan).await,
+        "the wide event is in the context of the root span",
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_wide_event_that_is_not_the_sum_of_its_spans_is_refused_by_the_case() {
+    assert_refused(
+        of_the_sums(Fault::LeavesTheUnknownCallOutOfTheTotal).await,
+        &format!(
+            "{}\n  left: Some(6)\n right: Some(7)",
+            key::LABLET_TOOL_CALLS_TOTAL
+        ),
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn spans_and_a_wide_event_that_miscount_the_tokens_alike_are_refused() {
+    assert_refused(
+        of_the_sums(Fault::CountsATokenTooMany).await,
+        "`gen_ai.usage.input_tokens` of the wide event, and the count the run returned",
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn spans_and_a_wide_event_that_miscount_a_step_alike_are_refused() {
+    assert_refused(
+        of_the_sums(Fault::SeesNothingCut).await,
+        &format!("{}\n  left: 0\n right: 2", key::LABLET_TOOL_CALLS_TRUNCATED),
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_observer_that_slows_the_run_is_refused() {
+    assert_refused(
+        of_a_destination_that_cannot_be_written(Fault::SlowsTheRun).await,
+        "the run ended as it does when nothing observes it",
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_observer_that_says_it_wrote_to_a_destination_that_cannot_be_written_is_refused() {
+    assert_refused(
+        of_a_destination_that_cannot_be_written(Fault::SaysItWrote).await,
+        "the destination was written, so the case held nothing to the observer",
+    );
 }

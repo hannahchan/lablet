@@ -257,7 +257,10 @@ async fn of_the_output(fault: Fault) -> Option<String> {
 
 async fn of_shared_calls(fault: Fault) -> Option<String> {
     let fake = Fake::with(fault);
-    refusal(async move { calls_to_a_shared_tool_are_answered_together(&fake).await }).await
+    refusal(
+        async move { calls_made_at_once_to_a_shared_tool_each_get_their_own_answer(&fake).await },
+    )
+    .await
 }
 
 async fn of_an_unknown_name(fault: Fault) -> Option<String> {
