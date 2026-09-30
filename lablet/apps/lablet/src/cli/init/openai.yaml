@@ -1,0 +1,16 @@
+# A starter config for lablet, whose model is reached through OpenAI's
+# Responses API. The key is read from the variable that api_key_env names,
+# and is never written here. A setting that's left out has its default, and
+# a relative path starts at the directory lablet runs in.
+model:
+  provider: openai
+  name: gpt-5.5
+  api_key_env: OPENAI_API_KEY
+prompt:
+  system: You are a careful coding agent. Say what you did, and why.
+# To let the model work on files, name the directory it works in, which may
+# not hold this file, and the tools it may use there:
+# tools:
+#   builtin:
+#     root: work
+#     enabled: [bash, read_file, write_file]

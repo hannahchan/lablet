@@ -104,7 +104,8 @@ tokio = { version = "=1.53.1", features = [
 
 # Kills the process group of a `bash` command that reached its deadline, and sees that the
 # group has gone: the standard library and tokio signal one process, and only through
-# `unsafe` a group. The line rmcp's child-process transport accepts, so one copy.
+# `unsafe` a group. The line rmcp's child-process transport accepts, so one copy. On Linux the
+# binary also takes `process` for `prctl`, which clears its dumpable flag.
 nix = { version = "=0.31.3", default-features = false, features = ["signal"] }
 
 # HTTP and MCP

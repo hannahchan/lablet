@@ -1,0 +1,10 @@
+# A starter config for lablet, whose model is a script: the provider fake
+# plays lablet-script.yaml in place of a model, so a run needs no key. A
+# setting that's left out has its default, and a relative path starts at
+# the directory lablet runs in.
+model:
+  provider: fake
+  script: lablet-script.yaml
+  name: scripted
+prompt:
+  system: You are a careful coding agent. Say what you did, and why.

@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+clap.workspace = true
 humantime.workspace = true
 lablet-documents.workspace = true
 lablet-model.workspace = true
@@ -29,14 +30,22 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 ulid.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
 lablet-conformance.workspace = true
 lablet-telemetry-registry.workspace = true
 lablet-test-support.workspace = true
-tracing-subscriber.workspace = true
+nix.workspace = true
 
 [[test]]
 name = "it"
 path = "tests/it/main.rs"
+
+[[test]]
+name = "cli"
+path = "tests/cli/main.rs"
