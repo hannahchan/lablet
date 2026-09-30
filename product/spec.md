@@ -151,6 +151,7 @@ lablet/
   telemetry/                     Weaver registry (YAML), vendored upstream registries, policies, templates
   tests/conformance              package lablet-conformance: shared ToolExecutor and RunObserver cases
   tests/mcp-server               package lablet-test-mcp-server: a tiny rmcp stdio server for tests
+  tests/test-support             package lablet-test-support: the scratch directory, clock, cancellation and run builder the adapters' tests share
   xtask/                         (repo root, not a member) lint-layers, gates
 ```
 

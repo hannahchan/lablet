@@ -13,6 +13,9 @@ pub enum LabletChatPurpose {
 }
 
 impl LabletChatPurpose {
+    /// Every value, each once, in the order the registry lists them.
+    pub const ALL: [Self; 1] = [Self::Turn];
+
     /// The value as it appears on the wire.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -40,6 +43,9 @@ pub enum LabletMcpLifetime {
 }
 
 impl LabletMcpLifetime {
+    /// Every value, each once, in the order the registry lists them.
+    pub const ALL: [Self; 2] = [Self::Run, Self::Lablet];
+
     /// The value as it appears on the wire.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -72,6 +78,14 @@ pub enum LabletRequestApi {
 }
 
 impl LabletRequestApi {
+    /// Every value, each once, in the order the registry lists them.
+    pub const ALL: [Self; 4] = [
+        Self::Messages,
+        Self::Responses,
+        Self::ChatCompletions,
+        Self::Script,
+    ];
+
     /// The value as it appears on the wire.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -102,6 +116,9 @@ pub enum LabletRequestCacheScope {
 }
 
 impl LabletRequestCacheScope {
+    /// Every value, each once, in the order the registry lists them.
+    pub const ALL: [Self; 2] = [Self::Shared, Self::Run];
+
     /// The value as it appears on the wire.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -130,6 +147,9 @@ pub enum LabletRunCompletionMode {
 }
 
 impl LabletRunCompletionMode {
+    /// Every value, each once, in the order the registry lists them.
+    pub const ALL: [Self; 2] = [Self::Natural, Self::Explicit];
+
     /// The value as it appears on the wire.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -178,6 +198,22 @@ pub enum LabletRunStopReason {
 }
 
 impl LabletRunStopReason {
+    /// Every value, each once, in the order the registry lists them.
+    pub const ALL: [Self; 12] = [
+        Self::Completed,
+        Self::EndedWithoutCompletion,
+        Self::MaxTurns,
+        Self::Timeout,
+        Self::MaxTotalTokens,
+        Self::OutputTruncated,
+        Self::ContextExhausted,
+        Self::RetriesExhausted,
+        Self::InvalidCallsExhausted,
+        Self::Cancelled,
+        Self::ProviderError,
+        Self::Refused,
+    ];
+
     /// The value as it appears on the wire.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -216,6 +252,9 @@ pub enum LabletToolSource {
 }
 
 impl LabletToolSource {
+    /// Every value, each once, in the order the registry lists them.
+    pub const ALL: [Self; 2] = [Self::Builtin, Self::Mcp];
+
     /// The value as it appears on the wire.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -256,6 +295,18 @@ pub enum LabletToolStatus {
 }
 
 impl LabletToolStatus {
+    /// Every value, each once, in the order the registry lists them.
+    pub const ALL: [Self; 8] = [
+        Self::Ok,
+        Self::ToolError,
+        Self::Unknown,
+        Self::MalformedInput,
+        Self::Rejected,
+        Self::NotRun,
+        Self::Timeout,
+        Self::Failed,
+    ];
+
     /// The value as it appears on the wire.
     #[must_use]
     pub const fn as_str(self) -> &'static str {

@@ -15,9 +15,17 @@ fn docs_and_tickets() -> McpServers {
     .unwrap()
 }
 
+const fn spelling(lifetime: McpLifetime) -> &'static str {
+    match lifetime {
+        McpLifetime::Run => "run",
+        McpLifetime::Lablet => "lablet",
+    }
+}
+
 #[test]
 fn an_mcp_lifetime_prints_its_spelling() {
-    for (lifetime, spelling) in [(McpLifetime::Run, "run"), (McpLifetime::Lablet, "lablet")] {
+    for lifetime in McpLifetime::ALL {
+        let spelling = spelling(lifetime);
         assert_eq!(lifetime.as_str(), spelling);
         assert_eq!(lifetime.to_string(), spelling);
     }
@@ -39,7 +47,7 @@ fn the_names_and_the_versions_are_each_server_s_own_in_config_order() {
 
 #[test]
 fn the_servers_say_how_long_they_live() {
-    for lifetime in [McpLifetime::Run, McpLifetime::Lablet] {
+    for lifetime in McpLifetime::ALL {
         let servers = McpServers::new(lifetime, vec![server("docs", "1.4.0")]).unwrap();
 
         assert_eq!(servers.lifetime(), lifetime);

@@ -113,7 +113,7 @@ fn lines(path: &Path) -> Vec<String> {
 async fn each_run_has_a_file_of_its_own_named_for_the_run() {
     let scratch = Scratch::new("each-run");
     let sink = Sink::new(FileTarget::EachRun {
-        directory: scratch.directory(),
+        directory: scratch.path().to_owned(),
     });
     let exporter = spans_to(&sink);
 
@@ -123,20 +123,20 @@ async fn each_run_has_a_file_of_its_own_named_for_the_run() {
     sink.start(&id(SECOND));
     exporter.export(vec![span("chat second")]).await.unwrap();
 
-    let first = Exported::read(&scratch.path(&format!("lablet-{FIRST}.otlp.jsonl"))).unwrap();
-    let second = Exported::read(&scratch.path(&format!("lablet-{SECOND}.otlp.jsonl"))).unwrap();
+    let first = Exported::read(&scratch.at(&format!("lablet-{FIRST}.otlp.jsonl"))).unwrap();
+    let second = Exported::read(&scratch.at(&format!("lablet-{SECOND}.otlp.jsonl"))).unwrap();
     assert_eq!(first.lines, 2);
     let names: Vec<_> = first.spans.iter().map(|span| span.name.as_str()).collect();
     assert_eq!(names, ["chat first", "chat first"]);
     assert_eq!(second.lines, 1);
     assert_eq!(second.spans[0].name, "chat second");
-    assert_eq!(std::fs::read_dir(scratch.directory()).unwrap().count(), 2);
+    assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 2);
 }
 
 #[tokio::test]
 async fn one_path_is_appended_to_by_every_run_and_keeps_what_it_held() {
     let scratch = Scratch::new("one-path");
-    let path = scratch.path("runs.otlp.jsonl");
+    let path = scratch.at("runs.otlp.jsonl");
     std::fs::write(&path, "{\"resourceSpans\":[]}\n").unwrap();
     let sink = Sink::new(FileTarget::Path(path.clone()));
     let (spans, records) = (spans_to(&sink), records_to(&sink));
@@ -150,13 +150,13 @@ async fn one_path_is_appended_to_by_every_run_and_keeps_what_it_held() {
     assert_eq!(exported.lines, 3);
     assert_eq!(exported.spans[0].line, 2);
     assert_eq!(exported.records[0].line, 3);
-    assert_eq!(std::fs::read_dir(scratch.directory()).unwrap().count(), 1);
+    assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 1);
 }
 
 #[tokio::test]
 async fn one_path_needs_no_run_to_have_started() {
     let scratch = Scratch::new("no-run-yet");
-    let path = scratch.path("runs.otlp.jsonl");
+    let path = scratch.at("runs.otlp.jsonl");
     let exporter = spans_to(&Sink::new(FileTarget::Path(path.clone())));
 
     exporter.export(vec![span("chat first")]).await.unwrap();
@@ -168,7 +168,7 @@ async fn one_path_needs_no_run_to_have_started() {
 async fn a_file_for_each_run_has_no_name_until_a_run_starts() {
     let scratch = Scratch::new("unnamed");
     let exporter = spans_to(&Sink::new(FileTarget::EachRun {
-        directory: scratch.directory(),
+        directory: scratch.path().to_owned(),
     }));
 
     let refused = exporter.export(vec![span("chat first")]).await;
@@ -177,13 +177,13 @@ async fn a_file_for_each_run_has_no_name_until_a_run_starts() {
         refused.unwrap_err().to_string(),
         "Operation failed: no run has started, so the telemetry has no file to go to"
     );
-    assert_eq!(std::fs::read_dir(scratch.directory()).unwrap().count(), 0);
+    assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);
 }
 
 #[tokio::test]
 async fn a_run_id_that_would_be_a_path_has_no_file_and_the_run_after_it_has_its_own() {
     let scratch = Scratch::new("separator");
-    let inner = scratch.path("inner");
+    let inner = scratch.at("inner");
     std::fs::create_dir_all(&inner).unwrap();
     let sink = Sink::new(FileTarget::EachRun {
         directory: inner.clone(),
@@ -214,7 +214,7 @@ async fn a_run_id_that_would_be_a_path_has_no_file_and_the_run_after_it_has_its_
         ]
     );
     assert_eq!(
-        std::fs::read_dir(scratch.directory()).unwrap().count(),
+        std::fs::read_dir(scratch.path()).unwrap().count(),
         1,
         "nothing was written beside the directory the target names"
     );
@@ -228,7 +228,7 @@ async fn a_run_id_that_would_be_a_path_has_no_file_and_the_run_after_it_has_its_
 #[tokio::test]
 async fn a_file_that_cannot_be_written_is_an_error_that_names_it_and_is_tried_again() {
     let scratch = Scratch::new("missing-directory");
-    let directory = scratch.path("not-made-yet");
+    let directory = scratch.at("not-made-yet");
     let sink = Sink::new(FileTarget::EachRun {
         directory: directory.clone(),
     });
@@ -255,7 +255,7 @@ async fn a_file_that_cannot_be_written_is_an_error_that_names_it_and_is_tried_ag
 #[tokio::test]
 async fn a_file_that_was_moved_between_two_runs_is_not_written_to_by_the_second() {
     let scratch = Scratch::new("moved");
-    let (path, moved) = (scratch.path("runs.otlp.jsonl"), scratch.path("first.jsonl"));
+    let (path, moved) = (scratch.at("runs.otlp.jsonl"), scratch.at("first.jsonl"));
     let sink = Sink::new(FileTarget::Path(path.clone()));
     let exporter = spans_to(&sink);
 
@@ -558,7 +558,7 @@ async fn standard_error_ends_the_part_of_a_line_a_failed_write_left_whatever_run
 #[tokio::test]
 async fn an_export_of_spans_is_one_line_of_otlp_json() {
     let scratch = Scratch::new("spans-line");
-    let path = scratch.path("runs.otlp.jsonl");
+    let path = scratch.at("runs.otlp.jsonl");
     let exporter = spans_to(&Sink::new(FileTarget::Path(path.clone())));
 
     exporter
@@ -595,7 +595,7 @@ async fn an_export_of_spans_is_one_line_of_otlp_json() {
 #[tokio::test]
 async fn a_span_is_read_back_as_it_was_exported_with_its_resource_and_its_scope() {
     let scratch = Scratch::new("spans-read");
-    let path = scratch.path("runs.otlp.jsonl");
+    let path = scratch.at("runs.otlp.jsonl");
     let spans = spans_to(&Sink::new(FileTarget::Path(path.clone())));
 
     spans.export(vec![span("chat scripted-1")]).await.unwrap();
@@ -647,7 +647,7 @@ async fn a_span_is_read_back_as_it_was_exported_with_its_resource_and_its_scope(
 #[tokio::test]
 async fn an_export_of_log_records_is_one_line_and_is_read_back_as_it_was_exported() {
     let scratch = Scratch::new("records-line");
-    let path = scratch.path("runs.otlp.jsonl");
+    let path = scratch.at("runs.otlp.jsonl");
     let records = records_to(&Sink::new(FileTarget::Path(path.clone())));
 
     export_records(

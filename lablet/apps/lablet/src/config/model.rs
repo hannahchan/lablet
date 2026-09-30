@@ -90,18 +90,20 @@ pub(crate) enum Setting {
     Cache,
 }
 
-impl Setting {
-    pub(crate) const ALL: [Self; 8] = [
-        Self::Api,
-        Self::Script,
-        Self::BaseUrl,
-        Self::Thinking,
-        Self::Effort,
-        Self::Seed,
-        Self::ReasoningReplay,
-        Self::Cache,
-    ];
+lablet_model::every_variant!(
+    Setting::ALL = [
+        Api,
+        Script,
+        BaseUrl,
+        Thinking,
+        Effort,
+        Seed,
+        ReasoningReplay,
+        Cache,
+    ]
+);
 
+impl Setting {
     pub(crate) const fn key(self) -> &'static str {
         match self {
             Self::Api => "model.api",

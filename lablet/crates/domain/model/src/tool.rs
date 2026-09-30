@@ -248,6 +248,18 @@ impl ToolCallStatus {
 
 display_as_str!(ToolCallEnd);
 
+every_variant!(ToolCallEnd::ALL = [Ok, ToolError, Timeout, Failed]);
+
+every_variant!(
+    /// Every status of a call no tool ran for, each once. The rest are a
+    /// [`ToolCallStatus::Ran`], one for each of [`ToolCallEnd::ALL`] and a
+    /// tool from any source.
+    ToolCallStatus::NOTHING_RAN = [Unknown, MalformedInput, Rejected, NotRun],
+    besides ToolCallStatus::Ran { .. }
+);
+
+every_variant!(ToolConcurrency::ALL = [Exclusive, Shared]);
+
 /// For people, and for the `lablet.tool.status` value.
 impl core::fmt::Display for ToolCallStatus {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

@@ -5,6 +5,7 @@ use lablet_model::{
     CacheScope, CompletionMode, ModelRef, Prompts, ProviderApi, RequestParams, Run, RunContext,
     RunLabels, RunSetup, StopReason, Thinking,
 };
+use lablet_test_support::Scratch;
 
 use super::*;
 
@@ -78,31 +79,6 @@ fn compact(document: &TranscriptDocument) -> String {
     let mut written = serde_json::to_string(document).unwrap();
     written.push('\n');
     written
-}
-
-/// A directory of this test's own, removed when the test ends, so tests
-/// that run together never write to one file.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new(test: &str) -> Self {
-        let directory = std::env::temp_dir().join(format!(
-            "lablet-transcript-json-{}-{test}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
-        Self(directory)
-    }
-
-    fn path(&self, file: &str) -> PathBuf {
-        self.0.join(file)
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
 }
 
 // Where a run's transcript goes
@@ -245,7 +221,7 @@ fn a_path_that_is_not_utf_8_keeps_every_byte_around_the_run_id() {
 fn what_is_written_is_the_document_as_compact_json_and_a_newline() {
     let scratch = Scratch::new("compact");
     let document = document(FIRST, "You fix tests.");
-    let file = TranscriptFile::for_run(&scratch.path("transcript.json"), &id(FIRST)).unwrap();
+    let file = TranscriptFile::for_run(&scratch.at("transcript.json"), &id(FIRST)).unwrap();
 
     assert_eq!(file.write(&document), Ok(()));
 
@@ -261,7 +237,7 @@ fn what_is_written_is_the_document_as_compact_json_and_a_newline() {
 #[test]
 fn two_runs_write_two_files_when_the_path_holds_the_run_id() {
     let scratch = Scratch::new("two-runs");
-    let configured = scratch.path("transcript-{run_id}.json");
+    let configured = scratch.at("transcript-{run_id}.json");
     let (first, second) = (
         document(FIRST, "You fix tests."),
         document(SECOND, "You write docs."),
@@ -274,12 +250,11 @@ fn two_runs_write_two_files_when_the_path_holds_the_run_id() {
             .unwrap();
     }
 
-    let read = |run: &str| {
-        std::fs::read_to_string(scratch.path(&format!("transcript-{run}.json"))).unwrap()
-    };
+    let read =
+        |run: &str| std::fs::read_to_string(scratch.at(&format!("transcript-{run}.json"))).unwrap();
     assert_eq!(read(FIRST), compact(&first));
     assert_eq!(read(SECOND), compact(&second));
-    assert_eq!(std::fs::read_dir(&scratch.0).unwrap().count(), 2);
+    assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 2);
 }
 
 /// A shorter transcript written over a longer one leaves nothing of the
@@ -287,7 +262,7 @@ fn two_runs_write_two_files_when_the_path_holds_the_run_id() {
 #[test]
 fn a_write_takes_the_place_of_whatever_the_file_held() {
     let scratch = Scratch::new("replace");
-    let file = TranscriptFile::for_run(&scratch.path("transcript.json"), &id(FIRST)).unwrap();
+    let file = TranscriptFile::for_run(&scratch.at("transcript.json"), &id(FIRST)).unwrap();
     let long = document(FIRST, &"You fix tests. ".repeat(100));
     let short = document(SECOND, "Be brief.");
 
@@ -304,7 +279,7 @@ fn a_write_takes_the_place_of_whatever_the_file_held() {
 #[test]
 fn the_directories_a_path_is_missing_are_made() {
     let scratch = Scratch::new("directories");
-    let configured = scratch.path("out/{run_id}/transcript.json");
+    let configured = scratch.at("out/{run_id}/transcript.json");
     let (first, second) = (
         document(FIRST, "You fix tests."),
         document(SECOND, "You write docs."),
@@ -317,12 +292,12 @@ fn the_directories_a_path_is_missing_are_made() {
     }
 
     let read = |run: &str| {
-        std::fs::read_to_string(scratch.path(&format!("out/{run}/transcript.json"))).unwrap()
+        std::fs::read_to_string(scratch.at(&format!("out/{run}/transcript.json"))).unwrap()
     };
     assert_eq!(read(FIRST), compact(&first));
     assert_eq!(read(SECOND), compact(&second));
     for run in [FIRST, SECOND] {
-        let beside = std::fs::read_dir(scratch.path(&format!("out/{run}"))).unwrap();
+        let beside = std::fs::read_dir(scratch.at(&format!("out/{run}"))).unwrap();
         assert_eq!(beside.count(), 1, "nothing is left beside the transcript");
     }
 }
@@ -330,7 +305,7 @@ fn the_directories_a_path_is_missing_are_made() {
 #[test]
 fn a_write_that_fails_leaves_what_the_path_held_and_nothing_beside_it() {
     let scratch = Scratch::new("whole-or-not");
-    let file = TranscriptFile::for_run(&scratch.path("transcript.json"), &id(FIRST)).unwrap();
+    let file = TranscriptFile::for_run(&scratch.at("transcript.json"), &id(FIRST)).unwrap();
     let held = document(FIRST, "You fix tests.");
     file.write(&held).unwrap();
 
@@ -345,7 +320,7 @@ fn a_write_that_fails_leaves_what_the_path_held_and_nothing_beside_it() {
         std::fs::read_to_string(file.path()).unwrap(),
         compact(&held)
     );
-    let beside: Vec<_> = std::fs::read_dir(&scratch.0)
+    let beside: Vec<_> = std::fs::read_dir(scratch.path())
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
         .collect();
@@ -355,7 +330,7 @@ fn a_write_that_fails_leaves_what_the_path_held_and_nothing_beside_it() {
 #[test]
 fn a_write_that_fails_where_no_file_was_leaves_none() {
     let scratch = Scratch::new("none-or-whole");
-    let file = TranscriptFile::for_run(&scratch.path("out/transcript.json"), &id(FIRST)).unwrap();
+    let file = TranscriptFile::for_run(&scratch.at("out/transcript.json"), &id(FIRST)).unwrap();
 
     let failed = file.replace(|mut to| {
         to.write_all(b"{\"schema_version\":1,")?;
@@ -363,7 +338,7 @@ fn a_write_that_fails_where_no_file_was_leaves_none() {
     });
 
     assert!(failed.is_err());
-    assert_eq!(std::fs::read_dir(scratch.path("out")).unwrap().count(), 0);
+    assert_eq!(std::fs::read_dir(scratch.at("out")).unwrap().count(), 0);
 }
 
 /// What a link at the path led to is another file than the run's
@@ -371,19 +346,16 @@ fn a_write_that_fails_where_no_file_was_leaves_none() {
 #[test]
 fn a_write_replaces_a_link_at_the_path_and_leaves_what_it_led_to() {
     let scratch = Scratch::new("link");
-    std::fs::write(scratch.path("elsewhere.json"), "kept").unwrap();
-    std::os::unix::fs::symlink(
-        scratch.path("elsewhere.json"),
-        scratch.path("transcript.json"),
-    )
-    .unwrap();
-    let file = TranscriptFile::for_run(&scratch.path("transcript.json"), &id(FIRST)).unwrap();
+    std::fs::write(scratch.at("elsewhere.json"), "kept").unwrap();
+    std::os::unix::fs::symlink(scratch.at("elsewhere.json"), scratch.at("transcript.json"))
+        .unwrap();
+    let file = TranscriptFile::for_run(&scratch.at("transcript.json"), &id(FIRST)).unwrap();
     let document = document(FIRST, "You fix tests.");
 
     file.write(&document).unwrap();
 
     assert_eq!(
-        std::fs::read_to_string(scratch.path("elsewhere.json")).unwrap(),
+        std::fs::read_to_string(scratch.at("elsewhere.json")).unwrap(),
         "kept"
     );
     assert!(!file.path().is_symlink());
@@ -399,7 +371,7 @@ fn a_write_replaces_a_link_at_the_path_and_leaves_what_it_led_to() {
 fn a_name_as_long_as_the_file_system_allows_is_written() {
     let scratch = Scratch::new("long-name");
     let name = format!("{}.json", "t".repeat(250));
-    let file = TranscriptFile::for_run(&scratch.path(&name), &id(FIRST)).unwrap();
+    let file = TranscriptFile::for_run(&scratch.at(&name), &id(FIRST)).unwrap();
     let document = document(FIRST, "You fix tests.");
 
     assert_eq!(file.write(&document), Ok(()));
@@ -418,9 +390,9 @@ fn temporary_name(number: u64) -> String {
 fn a_temporary_file_is_made_beside_the_path_and_named_for_the_process_and_a_number() {
     let scratch = Scratch::new("temporary-name");
 
-    let (temporary, _) = temporary_beside(&scratch.path("out.json"), NEW_FILE_MODE, || 7).unwrap();
+    let (temporary, _) = temporary_beside(&scratch.at("out.json"), NEW_FILE_MODE, || 7).unwrap();
 
-    assert_eq!(temporary, scratch.path(&temporary_name(7)));
+    assert_eq!(temporary, scratch.at(&temporary_name(7)));
     assert!(temporary.is_file());
 }
 
@@ -430,35 +402,35 @@ fn a_temporary_file_is_made_beside_the_path_and_named_for_the_process_and_a_numb
 #[test]
 fn a_temporary_name_that_is_taken_is_passed_over_and_what_took_it_is_left_alone() {
     let scratch = Scratch::new("temporary-taken");
-    std::fs::write(scratch.path(&temporary_name(0)), "kept").unwrap();
+    std::fs::write(scratch.at(&temporary_name(0)), "kept").unwrap();
     std::os::unix::fs::symlink(
-        scratch.path("made-through-the-link"),
-        scratch.path(&temporary_name(1)),
+        scratch.at("made-through-the-link"),
+        scratch.at(&temporary_name(1)),
     )
     .unwrap();
     let mut numbers = 0..;
 
-    let (temporary, _) = temporary_beside(&scratch.path("out.json"), NEW_FILE_MODE, || {
+    let (temporary, _) = temporary_beside(&scratch.at("out.json"), NEW_FILE_MODE, || {
         numbers.next().unwrap()
     })
     .unwrap();
 
-    assert_eq!(temporary, scratch.path(&temporary_name(2)));
+    assert_eq!(temporary, scratch.at(&temporary_name(2)));
     assert_eq!(
-        std::fs::read_to_string(scratch.path(&temporary_name(0))).unwrap(),
+        std::fs::read_to_string(scratch.at(&temporary_name(0))).unwrap(),
         "kept"
     );
-    assert!(scratch.path(&temporary_name(1)).is_symlink());
-    assert!(!scratch.path("made-through-the-link").exists());
+    assert!(scratch.at(&temporary_name(1)).is_symlink());
+    assert!(!scratch.at("made-through-the-link").exists());
 }
 
 #[test]
 fn a_write_whose_every_temporary_name_is_taken_fails_after_a_hundred() {
     let scratch = Scratch::new("temporary-bound");
-    std::fs::write(scratch.path(&temporary_name(0)), "kept").unwrap();
+    std::fs::write(scratch.at(&temporary_name(0)), "kept").unwrap();
     let mut tried = 0;
 
-    let failed = temporary_beside(&scratch.path("out.json"), NEW_FILE_MODE, || {
+    let failed = temporary_beside(&scratch.at("out.json"), NEW_FILE_MODE, || {
         tried += 1;
         0
     })
@@ -487,14 +459,14 @@ fn set_mode(path: &Path, mode: u32) {
 #[test]
 fn a_temporary_file_is_made_no_more_open_than_the_mode_it_is_given() {
     let scratch = Scratch::new("temporary-mode");
-    let (temporary, _) = temporary_beside(&scratch.path("out.json"), 0o600, || 1).unwrap();
+    let (temporary, _) = temporary_beside(&scratch.at("out.json"), 0o600, || 1).unwrap();
     assert_eq!(mode(&temporary), 0o600);
 }
 
 #[test]
 fn a_write_keeps_the_permissions_of_the_file_it_replaces() {
     let scratch = Scratch::new("permissions");
-    let file = TranscriptFile::for_run(&scratch.path("transcript.json"), &id(FIRST)).unwrap();
+    let file = TranscriptFile::for_run(&scratch.at("transcript.json"), &id(FIRST)).unwrap();
     let document = document(FIRST, "You fix tests.");
 
     for kept in [0o600, 0o640, 0o444] {
@@ -512,14 +484,11 @@ fn a_write_keeps_the_permissions_of_the_file_it_replaces() {
 #[test]
 fn a_write_over_a_link_takes_the_permissions_of_the_file_it_led_to() {
     let scratch = Scratch::new("permissions-link");
-    std::fs::write(scratch.path("elsewhere.json"), "kept").unwrap();
-    set_mode(&scratch.path("elsewhere.json"), 0o600);
-    std::os::unix::fs::symlink(
-        scratch.path("elsewhere.json"),
-        scratch.path("transcript.json"),
-    )
-    .unwrap();
-    let file = TranscriptFile::for_run(&scratch.path("transcript.json"), &id(FIRST)).unwrap();
+    std::fs::write(scratch.at("elsewhere.json"), "kept").unwrap();
+    set_mode(&scratch.at("elsewhere.json"), 0o600);
+    std::os::unix::fs::symlink(scratch.at("elsewhere.json"), scratch.at("transcript.json"))
+        .unwrap();
+    let file = TranscriptFile::for_run(&scratch.at("transcript.json"), &id(FIRST)).unwrap();
 
     file.write(&document(FIRST, "You fix tests.")).unwrap();
 
@@ -530,7 +499,7 @@ fn a_write_over_a_link_takes_the_permissions_of_the_file_it_led_to() {
 #[test]
 fn a_path_that_names_no_file_is_an_error() {
     let scratch = Scratch::new("no-file");
-    for configured in [PathBuf::new(), "/".into(), scratch.path("out/..")] {
+    for configured in [PathBuf::new(), "/".into(), scratch.at("out/..")] {
         let file = TranscriptFile::for_run(&configured, &id(FIRST)).unwrap();
 
         let refused = file.write(&document(FIRST, "You fix tests.")).unwrap_err();
@@ -544,23 +513,23 @@ fn a_path_that_names_no_file_is_an_error() {
             "{configured:?}"
         );
     }
-    assert!(!scratch.path("out").exists(), "nothing was made on the way");
+    assert!(!scratch.at("out").exists(), "nothing was made on the way");
 }
 
 #[test]
 fn a_path_that_cannot_be_written_is_an_error_that_names_the_path_and_says_why() {
     let scratch = Scratch::new("unwritable");
-    std::fs::write(scratch.path("a-file"), "not a directory").unwrap();
+    std::fs::write(scratch.at("a-file"), "not a directory").unwrap();
     for (unwritable, why) in [
         (
-            scratch.path("a-file/transcript.json"),
+            scratch.at("a-file/transcript.json"),
             "File exists (os error 17)",
         ),
         (
-            scratch.path("a-file/out/transcript.json"),
+            scratch.at("a-file/out/transcript.json"),
             "Not a directory (os error 20)",
         ),
-        (scratch.0.clone(), "Is a directory (os error 21)"),
+        (scratch.path().to_owned(), "Is a directory (os error 21)"),
     ] {
         let file = TranscriptFile::for_run(&unwritable, &id(FIRST)).unwrap();
 
@@ -583,11 +552,11 @@ fn a_path_that_cannot_be_written_is_an_error_that_names_the_path_and_says_why() 
         );
     }
     assert_eq!(
-        std::fs::read_to_string(scratch.path("a-file")).unwrap(),
+        std::fs::read_to_string(scratch.at("a-file")).unwrap(),
         "not a directory",
         "a write that failed changed nothing"
     );
-    assert_eq!(std::fs::read_dir(&scratch.0).unwrap().count(), 1);
+    assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 1);
 }
 
 /// Takes `room` bytes and then fails, as a disk that fills up does.

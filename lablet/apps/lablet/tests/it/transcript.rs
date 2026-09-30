@@ -7,7 +7,7 @@ use lablet::{FinishedRun, RunId, RunLabels, StopReason};
 use lablet_telemetry_registry::attribute as key;
 use serde_json::{Value, json};
 
-use crate::harness::{Diagnostics, ENDS, MODEL, PROMPT, SYSTEM, Scratch, Traced, json_of, request};
+use crate::harness::{Diagnostics, ENDS, Lab, MODEL, PROMPT, SYSTEM, Traced, json_of, request};
 
 const CALLS_THEN_ENDS: &str = "
 - response:
@@ -43,7 +43,7 @@ fn keys(document: &Value) -> Vec<&str> {
 /// the first under the id `run-a` and with labels, the second under a
 /// fresh id and with none.
 struct Written {
-    scratch: Scratch,
+    scratch: Lab,
     config_digest: String,
     /// When the first run was asked for and when the second returned, in
     /// milliseconds since the Unix epoch.
@@ -54,7 +54,7 @@ struct Written {
 
 impl Written {
     async fn by_two_runs(test: &str) -> Self {
-        let scratch = Scratch::new(test);
+        let scratch = Lab::new(test);
         let config = scratch.config(
             CALLS_THEN_ENDS,
             json!({
@@ -341,7 +341,7 @@ async fn a_run_writes_its_transcript_whatever_stopped_it() {
             1,
         ),
     ] {
-        let scratch = Scratch::new(test);
+        let scratch = Lab::new(test);
         let transcript = scratch.at("transcript.json");
         let mut config = scratch.tree(
             script,
@@ -380,7 +380,7 @@ async fn a_run_writes_its_transcript_whatever_stopped_it() {
 
 #[tokio::test]
 async fn a_path_that_holds_no_run_id_is_every_runs_file() {
-    let scratch = Scratch::new("one-file");
+    let scratch = Lab::new("one-file");
     let transcript = scratch.at("transcript.json");
     let config = scratch.config(ENDS, json!({ "run": { "transcript_path": transcript } }));
     let mut lablet = lablet::build(config).await.unwrap();
@@ -395,7 +395,7 @@ async fn a_path_that_holds_no_run_id_is_every_runs_file() {
 
 #[tokio::test]
 async fn each_run_has_a_directory_of_its_own_made_for_its_transcript() {
-    let scratch = Scratch::new("directory-each");
+    let scratch = Lab::new("directory-each");
     let configured = scratch.at("out/{run_id}/transcript.json");
     let config = scratch.config(ENDS, json!({ "run": { "transcript_path": configured } }));
     let mut lablet = lablet::build(config).await.unwrap();
@@ -415,7 +415,7 @@ async fn each_run_has_a_directory_of_its_own_made_for_its_transcript() {
 
 #[tokio::test]
 async fn a_transcript_that_cannot_be_written_is_reported_and_the_outcome_is_as_it_was() {
-    let scratch = Scratch::new("no-directory");
+    let scratch = Lab::new("no-directory");
     scratch.write(
         "no-such-directory",
         "a file, where the path has a directory",
@@ -455,7 +455,7 @@ async fn a_transcript_that_cannot_be_written_is_reported_and_the_outcome_is_as_i
 
 #[tokio::test]
 async fn a_run_id_that_cannot_be_part_of_a_path_leaves_the_run_without_a_transcript() {
-    let scratch = Scratch::new("no-component");
+    let scratch = Lab::new("no-component");
     let config = scratch.config(
         ENDS,
         json!({ "run": { "transcript_path": scratch.at("{run_id}.json") } }),
@@ -491,7 +491,7 @@ async fn a_run_id_that_cannot_be_part_of_a_path_leaves_the_run_without_a_transcr
 
 #[tokio::test]
 async fn a_config_that_names_no_place_writes_no_transcript() {
-    let scratch = Scratch::new("no-transcript");
+    let scratch = Lab::new("no-transcript");
     let mut lablet = lablet::build(scratch.config(ENDS, json!({})))
         .await
         .unwrap();

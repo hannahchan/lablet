@@ -7,7 +7,7 @@ use lablet_model::{ToolCallOutcome, ToolResultContent};
 use lablet_telemetry_registry::attribute as key;
 use serde_json::{Value, json};
 
-use crate::harness::{Scratch, Traced, observed, request};
+use crate::harness::{Lab, Traced, observed, request};
 
 const SECRET: &str = "what the model is not to read";
 
@@ -58,7 +58,7 @@ async fn run_tree(tree: &Value) -> FinishedRun {
 }
 
 /// One run of `script`, with `tools` stated, and what it exported.
-async fn run(scratch: &Scratch, script: &str, tools: Value) -> FinishedRun {
+async fn run(scratch: &Lab, script: &str, tools: Value) -> FinishedRun {
     let config = scratch.config(script, json!({ "tools": tools }));
     let mut lablet = lablet::build(config).await.unwrap();
     let finished = lablet.run(request()).await;
@@ -68,7 +68,7 @@ async fn run(scratch: &Scratch, script: &str, tools: Value) -> FinishedRun {
 
 #[tokio::test]
 async fn an_allow_list_offers_the_tools_it_names_and_no_other() {
-    let scratch = Scratch::new("allow");
+    let scratch = Lab::new("allow");
     let config = scratch.config(
         &calling(&[
             ("bash", json!({ "command": "echo allowed" })),
@@ -129,7 +129,7 @@ async fn an_allow_list_offers_the_tools_it_names_and_no_other() {
 
 #[tokio::test]
 async fn a_deny_list_takes_a_tool_out_of_what_is_offered() {
-    let scratch = Scratch::new("deny");
+    let scratch = Lab::new("deny");
     let tools = json!({
         "builtin": scratch.builtin(&["bash", "read_file", "write_file"]),
         "allow": ["bash", "write_file"],
@@ -151,7 +151,7 @@ async fn a_deny_list_takes_a_tool_out_of_what_is_offered() {
 
 #[tokio::test]
 async fn explicit_completion_offers_task_complete_beside_the_tools_that_are_enabled() {
-    let scratch = Scratch::new("explicit");
+    let scratch = Lab::new("explicit");
     let config = scratch.config(
         r"
 - response:
@@ -183,7 +183,7 @@ async fn explicit_completion_offers_task_complete_beside_the_tools_that_are_enab
 
 #[tokio::test]
 async fn a_path_outside_the_root_is_an_error_result_and_the_file_is_not_read() {
-    let scratch = Scratch::new("outside");
+    let scratch = Lab::new("outside");
     let outside = scratch.write("secret.txt", SECRET);
     scratch.write("work/inside.txt", "what the model may read");
     let script = calling(&[
@@ -235,7 +235,7 @@ async fn a_path_outside_the_root_is_an_error_result_and_the_file_is_not_read() {
 
 #[tokio::test]
 async fn a_command_past_the_timeout_is_an_error_result_of_kind_timeout_and_the_run_goes_on() {
-    let scratch = Scratch::new("timeout");
+    let scratch = Lab::new("timeout");
     scratch.write("work/notes.md", "on it goes");
     let script = calling(&[
         ("bash", json!({ "command": "sleep 60" })),
@@ -296,7 +296,7 @@ async fn a_command_past_the_timeout_is_an_error_result_of_kind_timeout_and_the_r
 async fn a_command_has_lablet_s_environment_less_the_key_and_no_result_shows_the_key() {
     let key = std::env::var(KEY_VARIABLE)
         .expect("cargo sets the variable for a test, so lablet's environment holds it");
-    let scratch = Scratch::new("environment");
+    let scratch = Lab::new("environment");
     scratch.write("secret.txt", SECRET);
     scratch.write("work/key.txt", &key);
     symlink(scratch.at("secret.txt"), scratch.at("work/link.txt")).unwrap();
@@ -359,7 +359,7 @@ async fn a_command_has_lablet_s_environment_less_the_key_and_no_result_shows_the
 
 #[tokio::test]
 async fn the_key_variable_that_tools_builtin_env_names_is_passed_on() {
-    let scratch = Scratch::new("environment-passed-on");
+    let scratch = Lab::new("environment-passed-on");
     let script = calling(&[(
         "bash",
         json!({ "command": format!("echo \"${KEY_VARIABLE}\"") }),

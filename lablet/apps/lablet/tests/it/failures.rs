@@ -5,7 +5,7 @@ use lablet_conformance::otlp::Status;
 use lablet_telemetry_registry::attribute as key;
 use serde_json::json;
 
-use crate::harness::{Scratch, Traced, observed, request};
+use crate::harness::{Lab, Traced, observed, request};
 
 const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 
@@ -17,7 +17,7 @@ const REJECTS_THE_KEY: &str = "
 
 #[tokio::test]
 async fn a_rejected_key_ends_the_run_at_once_and_the_chat_span_says_auth() {
-    let scratch = Scratch::new("auth");
+    let scratch = Lab::new("auth");
     let (mut lablet, recorder) = observed(scratch.config(REJECTS_THE_KEY, json!({}))).await;
 
     let finished = lablet.run(request().run_id(RunId::new(RUN).unwrap())).await;

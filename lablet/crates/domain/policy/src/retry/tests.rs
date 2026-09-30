@@ -555,14 +555,13 @@ fn each_error_says_what_was_wrong() {
 fn a_failure_that_another_attempt_cannot_answer_is_never_retried() {
     let policy = doubling(u32::MAX);
 
-    for kind in [
-        ProviderErrorKind::ContextExhausted,
-        ProviderErrorKind::Auth,
-        ProviderErrorKind::Fatal,
-    ] {
-        assert_eq!(policy.next(1, kind, None, NONE), None, "{kind}");
-    }
-    for kind in [ProviderErrorKind::Retryable, ProviderErrorKind::Malformed] {
-        assert_eq!(policy.next(1, kind, None, NONE), Some(ms(100)), "{kind}");
+    for kind in ProviderErrorKind::ALL {
+        let expected = match kind {
+            ProviderErrorKind::ContextExhausted
+            | ProviderErrorKind::Auth
+            | ProviderErrorKind::Fatal => None,
+            ProviderErrorKind::Retryable | ProviderErrorKind::Malformed => Some(ms(100)),
+        };
+        assert_eq!(policy.next(1, kind, None, NONE), expected, "{kind}");
     }
 }

@@ -14,6 +14,13 @@ pub enum {{ attr.key | pascal_case }} {
 }
 
 impl {{ attr.key | pascal_case }} {
+    /// Every value, each once, in the order the registry lists them.
+    pub const ALL: [Self; {{ attr.type.members | length }}] = [
+{% for member in attr.type.members %}
+        Self::{{ member.id | pascal_case }},
+{% endfor %}
+    ];
+
     /// The value as it appears on the wire.
     #[must_use]
     pub const fn as_str(self) -> &'static str {

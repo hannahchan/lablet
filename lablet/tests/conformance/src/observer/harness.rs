@@ -4,21 +4,16 @@
 //! A case is called from a test that pauses tokio's clock, so what a script
 //! says a call took is what the loop measures.
 
-use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use lablet_model::{
-    CacheScope, CompletionMode, FinishedRun, KeptOutput, OutputCap, OutputCut, Prompts,
-    RequestParams, RunContext, RunId, RunLabels, Thinking, ToolConcurrency, ToolName, ToolSource,
-    ToolSpec,
+    FinishedRun, KeptOutput, OutputCap, OutputCut, ToolConcurrency, ToolName, ToolSource, ToolSpec,
 };
-use lablet_policy::{RetryPolicy, RetrySettings, StopPolicy};
-use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
 use lablet_run::{
-    CallLimits, Cancellation, Clock, RunEvent, RunObserver, RunService, ToolCall, ToolError,
-    ToolErrorKind, ToolExecutor, ToolFilter, ToolOutput, ToolSet,
+    RunObserver, RunService, ToolCall, ToolError, ToolErrorKind, ToolExecutor, ToolOutput,
 };
+use lablet_test_support::{RunBuilder, context, prompts, scripted};
 use serde_json::json;
 
 use crate::must;
@@ -76,36 +71,6 @@ pub(super) const EVERYTHING: &str = r#"
 pub(super) const FAILS: &str = r"
 - error: { kind: fatal, message: unknown model, latency: 15ms }
 ";
-
-struct TokioClock;
-
-#[async_trait::async_trait]
-impl Clock for TokioClock {
-    fn now(&self) -> Instant {
-        tokio::time::Instant::now().into_std()
-    }
-
-    async fn sleep(&self, duration: Duration) {
-        tokio::time::sleep(duration).await;
-    }
-}
-
-struct NeverCancelled;
-
-impl Cancellation for NeverCancelled {
-    fn is_cancelled(&self) -> bool {
-        false
-    }
-}
-
-/// An observer that keeps nothing, for the run another run is compared
-/// with.
-pub(super) struct Unobserved;
-
-#[async_trait::async_trait]
-impl RunObserver for Unobserved {
-    async fn on(&self, _: RunEvent) {}
-}
 
 /// Serves four tools, each of which answers the same every time, after the
 /// same wait. One of them is an MCP server's, so an observer is handed both
@@ -186,77 +151,16 @@ impl ToolExecutor for Tools {
 
 /// The loop around `script`, a YAML script, telling `observer` of its runs.
 pub(super) async fn playing(script: &str, observer: Arc<dyn RunObserver>) -> RunService {
-    let script = Script::read(ScriptSource {
-        name: "conformance.yaml",
-        text: script,
-        format: ScriptFormat::Yaml,
-    });
-    let script = must(script, "reading the script");
-    let offered = ToolSet::build(
-        vec![Arc::new(Tools) as _],
-        &ToolFilter::default(),
-        CompletionMode::Natural,
-        None,
-    )
-    .await;
-    let retry = RetryPolicy::new(RetrySettings {
-        max_retries: 3,
-        base: Duration::from_millis(100),
-        max: Duration::from_secs(10),
-        factor: 2.0,
-        hint_max: Duration::from_secs(60),
-        jitter: 0.0,
-    });
     let output_cap = OutputCap::new(OUTPUT_CAP_BYTES, OutputCut::Head);
-    RunService::new(
-        Arc::new(FakeProvider::new("scripted-1", script)),
-        Arc::new(must(offered, "settling the tools")),
-        observer,
-        Arc::new(TokioClock),
-        Arc::new(NeverCancelled),
-        StopPolicy {
-            max_turns: None,
-            timeout: Duration::from_secs(3_600),
-            max_total_tokens: None,
-            max_consecutive_invalid_turns: NonZeroU32::new(3),
-        },
-        must(retry, "making the retry policy"),
-        RequestParams {
-            max_tokens: 4_096,
-            temperature: None,
-            thinking: Thinking::ProviderDefault,
-            effort: None,
-            seed: None,
-            cache_scope: CacheScope::Shared,
-        },
-        None,
-        CallLimits {
-            provider_timeout: Duration::from_secs(60),
-            output_cap: Some(must(output_cap, "making the output cap")),
-            max_concurrent_tool_calls: NonZeroU32::MIN,
-        },
-    )
+    RunBuilder::new(scripted(script))
+        .tools(vec![Arc::new(Tools) as _])
+        .observer(observer)
+        .output_cap(must(output_cap, "making the output cap"))
+        .build()
+        .await
 }
 
 /// One run of `service` under the id `run`.
 pub(super) async fn run(service: &mut RunService, run: &str) -> FinishedRun {
-    let context = RunContext {
-        run_id: must(RunId::new(run), "naming the run"),
-        labels: RunLabels::default(),
-        started_unix_ms: 1_790_000_000_000,
-        config_digest: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
-            .to_owned(),
-        agent_version: "0.4.2".to_owned(),
-        transcript_path: None,
-        skills_count: 0,
-        mcp: None,
-        capture_content: false,
-    };
-    let prompts = Prompts::new(
-        "You fix tests, tersely.",
-        "Fix the failing test in the parser.",
-    );
-    service
-        .run(context, must(prompts, "making the prompts"))
-        .await
+    service.run(context(run), prompts()).await
 }

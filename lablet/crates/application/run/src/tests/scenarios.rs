@@ -590,26 +590,20 @@ async fn calling_a_tool_that_always(failure: impl Fn() -> Answers) -> Run {
 
 #[tokio::test]
 async fn a_tool_that_always_fails_never_stops_a_run_however_it_fails() {
-    let failures: [(Scripted, ToolCallEnd); 3] = [
-        (
-            || Answers::ToolError("1 failed".to_owned()),
-            ToolCallEnd::ToolError,
-        ),
-        (
-            || Answers::Fails(crate::ToolErrorKind::Timeout, "took too long".to_owned()),
-            ToolCallEnd::Timeout,
-        ),
-        (
-            || {
+    for ended in ToolCallEnd::ALL {
+        let failure: Scripted = match ended {
+            ToolCallEnd::Ok => continue,
+            ToolCallEnd::ToolError => || Answers::ToolError("1 failed".to_owned()),
+            ToolCallEnd::Timeout => {
+                || Answers::Fails(crate::ToolErrorKind::Timeout, "took too long".to_owned())
+            }
+            ToolCallEnd::Failed => || {
                 Answers::Fails(
                     crate::ToolErrorKind::Failed,
                     "the server is gone".to_owned(),
                 )
             },
-            ToolCallEnd::Failed,
-        ),
-    ];
-    for (failure, ended) in failures {
+        };
         let run = calling_a_tool_that_always(failure).await;
 
         assert_eq!(run.stop_reason(), StopReason::Completed, "{ended}");
@@ -2075,24 +2069,24 @@ async fn the_third_invalid_turn_in_a_row_stops_the_run_and_no_provider_call_foll
 
 #[tokio::test]
 async fn a_turn_in_which_a_call_reached_a_tool_ends_the_count_whatever_the_tool_returned() {
-    let returns: [(Scripted, &str); 4] = [
-        (|| Answers::Text("ok".to_owned()), "ok"),
-        (|| Answers::ToolError("1 failed".to_owned()), "tool_error"),
-        (
-            || Answers::Fails(crate::ToolErrorKind::Timeout, "took too long".to_owned()),
-            "timeout",
-        ),
-        (
-            || {
-                Answers::Fails(
-                    crate::ToolErrorKind::Failed,
-                    "the server is gone".to_owned(),
-                )
-            },
-            "failed",
-        ),
-    ];
-    for (returned, reached) in returns {
+    for ended in ToolCallEnd::ALL {
+        let (returned, reached): (Scripted, &str) = match ended {
+            ToolCallEnd::Ok => (|| Answers::Text("ok".to_owned()), "ok"),
+            ToolCallEnd::ToolError => (|| Answers::ToolError("1 failed".to_owned()), "tool_error"),
+            ToolCallEnd::Timeout => (
+                || Answers::Fails(crate::ToolErrorKind::Timeout, "took too long".to_owned()),
+                "timeout",
+            ),
+            ToolCallEnd::Failed => (
+                || {
+                    Answers::Fails(
+                        crate::ToolErrorKind::Failed,
+                        "the server is gone".to_owned(),
+                    )
+                },
+                "failed",
+            ),
+        };
         let mut script = three_invalid_turns(Some(("read_file", parsed())));
         script.push(Answer::now(calling(&[("invented", parsed())])));
         script.push(Answer::now(says("Done.", &[], FinishReason::EndTurn)));
@@ -3648,14 +3642,12 @@ async fn a_failed_attempt_whose_usage_reaches_the_token_budget_is_the_last_attem
 /// couldn't is why the run ended, however long the attempt took.
 #[tokio::test]
 async fn a_failure_no_attempt_could_answer_ends_the_run_as_itself_though_the_time_is_up() {
-    for (kind, reason) in [
-        (
-            ProviderErrorKind::ContextExhausted,
-            StopReason::ContextExhausted,
-        ),
-        (ProviderErrorKind::Auth, StopReason::ProviderError),
-        (ProviderErrorKind::Fatal, StopReason::ProviderError),
-    ] {
+    for kind in ProviderErrorKind::ALL {
+        let reason = match kind {
+            ProviderErrorKind::ContextExhausted => StopReason::ContextExhausted,
+            ProviderErrorKind::Auth | ProviderErrorKind::Fatal => StopReason::ProviderError,
+            ProviderErrorKind::Retryable | ProviderErrorKind::Malformed => continue,
+        };
         let mut harness = Harness::new(vec![Answer::Fails(
             ProviderError::new(kind, "the provider's own words"),
             Duration::from_secs(10),

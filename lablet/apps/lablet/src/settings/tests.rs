@@ -216,13 +216,9 @@ prompt: { system: Hi. }
         .unwrap();
         assert_eq!(settings.request.thinking, thinking);
     }
-    for (written, effort) in [
-        ("low", Effort::Low),
-        ("medium", Effort::Medium),
-        ("high", Effort::High),
-    ] {
+    for effort in Effort::ALL {
         let settings = of(&format!(
-            "model: {{ effort: {written} }}\nprompt: {{ system: Hi. }}"
+            "model: {{ effort: {effort} }}\nprompt: {{ system: Hi. }}"
         ))
         .unwrap();
         assert_eq!(settings.request.effort, Some(effort));

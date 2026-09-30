@@ -8,7 +8,9 @@ const FIRST_RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 const SECOND_RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNED";
 
 /// A failed attempt, a response that calls a tool, and a response that
-/// ends the run, each with what it used and how long it took.
+/// ends the run, each with what it used and how long it took. Its
+/// namesakes in other crates differ on purpose: this loop serves no tool,
+/// so none answers the call.
 const FAILS_CALLS_ENDS: &str = r"
 - error:
     kind: retryable

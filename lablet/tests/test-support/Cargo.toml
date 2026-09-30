@@ -1,6 +1,6 @@
 [package]
-name = "lablet-conformance"
-description = "Shared ToolExecutor and RunObserver conformance cases"
+name = "lablet-test-support"
+description = "What the tests of lablet's crates share: a scratch directory, the loop's clock, and a builder of the loop"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,20 +11,13 @@ publish = false
 [dependencies]
 async-trait.workspace = true
 lablet-model.workspace = true
+lablet-policy.workspace = true
+lablet-provider-fake.workspace = true
 lablet-run.workspace = true
-lablet-telemetry-registry.workspace = true
-lablet-test-support.workspace = true
-opentelemetry-proto.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
-
-[[test]]
-name = "it"
-path = "tests/it/main.rs"
 
 [lints]
 workspace = true

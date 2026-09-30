@@ -30,8 +30,6 @@ fn uncapped() -> StopPolicy {
     }
 }
 
-const EVERY_MODE: [CompletionMode; 2] = [CompletionMode::Natural, CompletionMode::Explicit];
-
 fn natural(finish: &FinishReason, calls: Calls) -> Option<StopReason> {
     limits().after_response(finish, CompletionMode::Natural, calls)
 }
@@ -79,7 +77,7 @@ fn everything_reached(policy: &StopPolicy) -> Progress {
 
 #[test]
 fn a_run_inside_every_limit_goes_on_at_every_point() {
-    for mode in EVERY_MODE {
+    for mode in CompletionMode::ALL {
         assert_eq!(limits().before_call(&mid_run()), None);
         assert_eq!(
             limits().after_response(&FinishReason::ToolUse, mode, Calls::Tools),
@@ -475,12 +473,10 @@ fn explicit_mode_goes_on_when_the_response_calls_other_tools() {
 
 // A response the model didn't finish
 
-const EVERY_CALLS: [Calls; 2] = [Calls::Tools, Calls::TaskComplete];
-
 #[test]
 fn a_truncated_response_is_output_truncated_whatever_it_called_so_its_tools_never_run() {
-    for mode in EVERY_MODE {
-        for calls in EVERY_CALLS {
+    for mode in CompletionMode::ALL {
+        for calls in Calls::ALL {
             assert_eq!(
                 limits().after_response(&FinishReason::MaxTokens, mode, calls),
                 Some(StopReason::OutputTruncated),
@@ -497,8 +493,8 @@ fn a_truncated_response_is_output_truncated_whatever_it_called_so_its_tools_neve
 
 #[test]
 fn a_response_cut_short_at_the_context_window_is_context_exhausted_whatever_it_called() {
-    for mode in EVERY_MODE {
-        for calls in EVERY_CALLS {
+    for mode in CompletionMode::ALL {
+        for calls in Calls::ALL {
             assert_eq!(
                 limits().after_response(&FinishReason::ContextWindow, mode, calls),
                 Some(StopReason::ContextExhausted),
@@ -515,8 +511,8 @@ fn a_response_cut_short_at_the_context_window_is_context_exhausted_whatever_it_c
 
 #[test]
 fn a_refusal_is_refused_and_never_completed_whatever_it_called() {
-    for mode in EVERY_MODE {
-        for calls in EVERY_CALLS {
+    for mode in CompletionMode::ALL {
+        for calls in Calls::ALL {
             assert_eq!(
                 limits().after_response(&FinishReason::Refusal, mode, calls),
                 Some(StopReason::Refused),

@@ -35,6 +35,13 @@ pub enum OutputCut {
     },
 }
 
+every_variant!(
+    /// Every cut the cap alone sizes, each once. The other is an
+    /// [`OutputCut::Preview`], which is as long as it says.
+    OutputCut::BY_CAP = [Head, HeadTail],
+    besides OutputCut::Preview { .. }
+);
+
 /// Why a cap was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum OutputCapError {

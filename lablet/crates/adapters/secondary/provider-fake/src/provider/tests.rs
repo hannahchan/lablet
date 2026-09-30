@@ -162,13 +162,7 @@ async fn a_usage_without_cache_or_reasoning_counts_reports_none_of_the_three() {
 
 #[tokio::test(start_paused = true)]
 async fn an_error_of_each_kind_arrives_with_the_usage_and_the_hint_the_script_gave_it() {
-    for kind in [
-        ProviderErrorKind::Retryable,
-        ProviderErrorKind::ContextExhausted,
-        ProviderErrorKind::Auth,
-        ProviderErrorKind::Fatal,
-        ProviderErrorKind::Malformed,
-    ] {
+    for kind in ProviderErrorKind::ALL {
         let provider = playing(&format!(
             "- error: {{ kind: {kind}, message: it failed, usage: {{ input_tokens: 900 }}, retry_after: 7s }}"
         ));

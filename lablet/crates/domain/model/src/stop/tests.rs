@@ -9,32 +9,34 @@ use crate::{
 // `lablet.run.completion_mode` in the generated telemetry-registry crate,
 // which the domain can't depend on. A spelling that changes on either side
 // must change on both.
-const STOP_REASONS: [(StopReason, &str); 12] = [
-    (StopReason::Completed, "completed"),
-    (
-        StopReason::EndedWithoutCompletion,
-        "ended_without_completion",
-    ),
-    (StopReason::MaxTurns, "max_turns"),
-    (StopReason::Timeout, "timeout"),
-    (StopReason::MaxTotalTokens, "max_total_tokens"),
-    (StopReason::OutputTruncated, "output_truncated"),
-    (StopReason::ContextExhausted, "context_exhausted"),
-    (StopReason::RetriesExhausted, "retries_exhausted"),
-    (StopReason::InvalidCallsExhausted, "invalid_calls_exhausted"),
-    (StopReason::Cancelled, "cancelled"),
-    (StopReason::ProviderError, "provider_error"),
-    (StopReason::Refused, "refused"),
-];
+const fn stop_reason_spelling(reason: StopReason) -> &'static str {
+    match reason {
+        StopReason::Completed => "completed",
+        StopReason::EndedWithoutCompletion => "ended_without_completion",
+        StopReason::MaxTurns => "max_turns",
+        StopReason::Timeout => "timeout",
+        StopReason::MaxTotalTokens => "max_total_tokens",
+        StopReason::OutputTruncated => "output_truncated",
+        StopReason::ContextExhausted => "context_exhausted",
+        StopReason::RetriesExhausted => "retries_exhausted",
+        StopReason::InvalidCallsExhausted => "invalid_calls_exhausted",
+        StopReason::Cancelled => "cancelled",
+        StopReason::ProviderError => "provider_error",
+        StopReason::Refused => "refused",
+    }
+}
 
-const COMPLETION_MODES: [(CompletionMode, &str); 2] = [
-    (CompletionMode::Natural, "natural"),
-    (CompletionMode::Explicit, "explicit"),
-];
+const fn completion_mode_spelling(mode: CompletionMode) -> &'static str {
+    match mode {
+        CompletionMode::Natural => "natural",
+        CompletionMode::Explicit => "explicit",
+    }
+}
 
 #[test]
 fn every_stop_reason_is_spelled_and_prints_as_its_telemetry_spelling() {
-    for (reason, spelling) in STOP_REASONS {
+    for reason in StopReason::ALL {
+        let spelling = stop_reason_spelling(reason);
         assert_eq!(reason.as_str(), spelling);
         assert_eq!(reason.to_string(), spelling);
     }
@@ -42,7 +44,8 @@ fn every_stop_reason_is_spelled_and_prints_as_its_telemetry_spelling() {
 
 #[test]
 fn every_completion_mode_is_spelled_and_prints_as_its_telemetry_spelling() {
-    for (mode, spelling) in COMPLETION_MODES {
+    for mode in CompletionMode::ALL {
+        let spelling = completion_mode_spelling(mode);
         assert_eq!(mode.as_str(), spelling);
         assert_eq!(mode.to_string(), spelling);
     }
@@ -67,34 +70,36 @@ fn only_explicit_mode_intercepts_a_call_and_only_one_to_task_complete() {
     assert!(!CompletionMode::Natural.intercepts(&bash));
 }
 
-// Each reason with its class. Paired rather than a list in the order of
-// `STOP_REASONS`, so reordering either can't silently relabel them all.
-const CLASSES: [(StopReason, StopClass); 12] = [
-    (StopReason::Completed, StopClass::Completed),
-    (StopReason::EndedWithoutCompletion, StopClass::Stopped),
-    (StopReason::MaxTurns, StopClass::Stopped),
-    (StopReason::Timeout, StopClass::Stopped),
-    (StopReason::MaxTotalTokens, StopClass::Stopped),
-    (StopReason::OutputTruncated, StopClass::Stopped),
-    (StopReason::ContextExhausted, StopClass::Failed),
-    (StopReason::RetriesExhausted, StopClass::Failed),
-    (StopReason::InvalidCallsExhausted, StopClass::Failed),
-    (StopReason::Cancelled, StopClass::Stopped),
-    (StopReason::ProviderError, StopClass::Failed),
-    (StopReason::Refused, StopClass::Stopped),
-];
+// Each reason with its class, written apart from `StopReason::class` so a
+// reason moved to another class there differs from this.
+const fn class_of(reason: StopReason) -> StopClass {
+    match reason {
+        StopReason::Completed => StopClass::Completed,
+        StopReason::EndedWithoutCompletion
+        | StopReason::MaxTurns
+        | StopReason::Timeout
+        | StopReason::MaxTotalTokens
+        | StopReason::OutputTruncated
+        | StopReason::Cancelled
+        | StopReason::Refused => StopClass::Stopped,
+        StopReason::ContextExhausted
+        | StopReason::RetriesExhausted
+        | StopReason::InvalidCallsExhausted
+        | StopReason::ProviderError => StopClass::Failed,
+    }
+}
 
 #[test]
 fn every_stop_reason_has_its_class() {
-    for (reason, class) in CLASSES {
-        assert_eq!(reason.class(), class, "{reason}");
+    for reason in StopReason::ALL {
+        assert_eq!(reason.class(), class_of(reason), "{reason}");
     }
 }
 
 #[test]
 fn closing_keeps_a_structured_result_only_for_a_completed_run() {
     let argument = json!({ "passed": true });
-    for (reason, _) in STOP_REASONS {
+    for reason in StopReason::ALL {
         let outcome = RunOutcome::closing(parts(reason, Some(argument.clone()), None));
 
         let expected = (reason == StopReason::Completed).then(|| argument.clone());
@@ -105,10 +110,10 @@ fn closing_keeps_a_structured_result_only_for_a_completed_run() {
 
 #[test]
 fn closing_keeps_an_error_only_for_a_failed_run() {
-    for (reason, class) in CLASSES {
+    for reason in StopReason::ALL {
         let outcome = RunOutcome::closing(parts(reason, None, Some("boom")));
 
-        let expected = (class == StopClass::Failed).then_some("boom");
+        let expected = (class_of(reason) == StopClass::Failed).then_some("boom");
         assert_eq!(outcome.error(), expected, "{reason}");
     }
 }

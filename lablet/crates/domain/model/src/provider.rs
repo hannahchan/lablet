@@ -361,5 +361,20 @@ display_as_str!(
     Effort
 );
 
+every_variant!(ProviderApi::ALL = [Messages, Responses, ChatCompletions, Script]);
+
+every_variant!(ProviderErrorKind::ALL = [Retryable, ContextExhausted, Auth, Fatal, Malformed]);
+
+every_variant!(
+    /// Every reason lablet has a name for, each once. Any other a provider
+    /// gives is a [`FinishReason::Other`].
+    FinishReason::KNOWN = [EndTurn, ToolUse, MaxTokens, ContextWindow, Refusal],
+    besides FinishReason::Other(_)
+);
+
+every_variant!(CacheScope::ALL = [Shared, Run]);
+
+every_variant!(Effort::ALL = [Low, Medium, High, XHigh, Max]);
+
 #[cfg(test)]
 mod tests;

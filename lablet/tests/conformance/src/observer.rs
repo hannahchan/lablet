@@ -19,6 +19,7 @@ use lablet_telemetry_registry::attribute as key;
 use lablet_telemetry_registry::signals::{
     EVENT_LABLET_RUN_NAME, EVENT_LABLET_RUN_REQUIRED, EventLabletRunKey, EventLabletRunTemplate,
 };
+use lablet_test_support::Unobserved;
 use serde_json::Value;
 
 use crate::must;
@@ -26,7 +27,7 @@ use crate::otlp::{Attributes, Exported, LogRecord, ReadError, Span};
 
 mod harness;
 
-use harness::{EVERYTHING, FAILS, OTHER_RUN, RUN, Unobserved, playing, run};
+use harness::{EVERYTHING, FAILS, OTHER_RUN, RUN, playing, run};
 
 /// How far a latency the wide event reports may be from the durations of
 /// the spans it sums, in milliseconds. An observer may time a span on a

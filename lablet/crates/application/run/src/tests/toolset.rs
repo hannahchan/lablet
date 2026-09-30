@@ -355,9 +355,14 @@ fn a_transport_prints_the_value_its_attribute_takes() {
 fn only_the_two_kinds_that_mean_a_tool_ran_have_an_ending() {
     use lablet_model::ToolCallEnd;
 
-    assert_eq!(ToolErrorKind::Unknown.ended(), None);
-    assert_eq!(ToolErrorKind::Timeout.ended(), Some(ToolCallEnd::Timeout));
-    assert_eq!(ToolErrorKind::Failed.ended(), Some(ToolCallEnd::Failed));
+    for kind in ToolErrorKind::ALL {
+        let ended = match kind {
+            ToolErrorKind::Unknown => None,
+            ToolErrorKind::Timeout => Some(ToolCallEnd::Timeout),
+            ToolErrorKind::Failed => Some(ToolCallEnd::Failed),
+        };
+        assert_eq!(kind.ended(), ended, "{kind:?}");
+    }
 }
 
 /// The loop intercepts this name rather than routing it, so an executor that

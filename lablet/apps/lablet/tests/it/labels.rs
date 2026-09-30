@@ -5,7 +5,7 @@ use lablet::{OutcomeDocument, RunId, RunLabels};
 use lablet_telemetry_registry::attribute as key;
 use serde_json::json;
 
-use crate::harness::{Scratch, Traced, request};
+use crate::harness::{Lab, Traced, request};
 
 const LABELS: [&str; 3] = [
     key::LABLET_TASK_ID,
@@ -14,7 +14,9 @@ const LABELS: [&str; 3] = [
 ];
 
 /// A failed attempt and a tool call, so the run has a record of every
-/// kind: an exception, content, and the wide event.
+/// kind: an exception, content, and the wide event. Its namesakes in other
+/// crates differ on purpose: this one states no usage or latency, which the
+/// labels don't depend on.
 const FAILS_CALLS_ENDS: &str = "
 - error: { kind: retryable, message: 529 overloaded }
 - response:
@@ -29,7 +31,7 @@ const FAILS_CALLS_ENDS: &str = "
 
 #[tokio::test]
 async fn the_labels_of_a_request_are_on_every_record_of_its_run_and_of_no_other() {
-    let scratch = Scratch::new("labels");
+    let scratch = Lab::new("labels");
     let config = scratch.config(
         FAILS_CALLS_ENDS,
         json!({
@@ -131,7 +133,7 @@ async fn the_labels_of_a_request_are_on_every_record_of_its_run_and_of_no_other(
 
 #[tokio::test]
 async fn a_request_that_names_one_label_has_that_one_on_its_records() {
-    let scratch = Scratch::new("one-label");
+    let scratch = Lab::new("one-label");
     let mut lablet = lablet::build(scratch.config(crate::harness::ENDS, json!({})))
         .await
         .unwrap();

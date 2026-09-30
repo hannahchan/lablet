@@ -10,8 +10,7 @@ use nix::unistd::Pid;
 use serde_json::json;
 
 use crate::harness::{
-    Scratch, TIMEOUT, ask, call, came_to_hold, id_in, is_there, keeping, refused, said, sent,
-    within,
+    Root, TIMEOUT, ask, call, came_to_hold, id_in, is_there, keeping, refused, said, sent, within,
 };
 
 /// A variable cargo sets for every test, which stands for the one lablet
@@ -22,7 +21,7 @@ const KEY_VARIABLE: &str = "CARGO_MANIFEST_DIR";
 const NOT_A_SECRET: &str = "CARGO_PKG_NAME";
 
 /// Settings that withhold [`KEY_VARIABLE`] and cut its value, and the value.
-fn withholding_the_key(scratch: &Scratch) -> (Settings, String) {
+fn withholding_the_key(scratch: &Root) -> (Settings, String) {
     let key = std::env::var(KEY_VARIABLE).expect("cargo sets it for a test");
     let settings = Settings {
         withheld: Withheld {
@@ -38,7 +37,7 @@ const MIB: u64 = 1024 * 1024;
 
 #[tokio::test]
 async fn the_result_is_what_the_command_wrote_in_the_order_written_then_the_exit_code() {
-    let scratch = Scratch::new("bash-order");
+    let scratch = Root::new("bash-order");
     let tools = scratch.tools();
 
     let text = said(
@@ -53,7 +52,7 @@ async fn the_result_is_what_the_command_wrote_in_the_order_written_then_the_exit
 
 #[tokio::test]
 async fn the_exit_code_has_a_line_of_its_own_whatever_the_command_wrote_last() {
-    let scratch = Scratch::new("bash-line");
+    let scratch = Root::new("bash-line");
     let tools = scratch.tools();
 
     let no_newline = said(&tools, "bash", json!({ "command": "printf done" })).await;
@@ -65,7 +64,7 @@ async fn the_exit_code_has_a_line_of_its_own_whatever_the_command_wrote_last() {
 
 #[tokio::test]
 async fn a_command_that_exits_with_another_code_is_a_result_that_shows_the_code() {
-    let scratch = Scratch::new("bash-exit-3");
+    let scratch = Root::new("bash-exit-3");
     let tools = scratch.tools();
 
     let output = ask(
@@ -83,7 +82,7 @@ async fn a_command_that_exits_with_another_code_is_a_result_that_shows_the_code(
 
 #[tokio::test]
 async fn a_command_that_a_signal_killed_is_a_result_that_names_the_signal() {
-    let scratch = Scratch::new("bash-signal");
+    let scratch = Root::new("bash-signal");
     let tools = scratch.tools();
 
     let text = said(&tools, "bash", json!({ "command": "kill -9 $$" })).await;
@@ -93,7 +92,7 @@ async fn a_command_that_a_signal_killed_is_a_result_that_names_the_signal() {
 
 #[tokio::test]
 async fn a_command_starts_in_the_root_with_nothing_to_read() {
-    let scratch = Scratch::new("bash-root");
+    let scratch = Root::new("bash-root");
     let tools = scratch.tools();
 
     let text = said(&tools, "bash", json!({ "command": "pwd; cat; echo read" })).await;
@@ -106,7 +105,7 @@ async fn a_command_starts_in_the_root_with_nothing_to_read() {
 
 #[tokio::test]
 async fn nothing_carries_from_one_command_to_the_next() {
-    let scratch = Scratch::new("bash-fresh");
+    let scratch = Root::new("bash-fresh");
     let tools = scratch.tools();
     std::fs::create_dir(scratch.root().join("sub")).unwrap();
 
@@ -129,7 +128,7 @@ async fn nothing_carries_from_one_command_to_the_next() {
 
 #[tokio::test]
 async fn a_command_inherits_lablet_s_environment_less_what_is_withheld_and_what_is_added() {
-    let scratch = Scratch::new("bash-env");
+    let scratch = Root::new("bash-env");
     let (settings, key) = withholding_the_key(&scratch);
     let tools = BuiltinTools::new(Settings {
         env: [("LABLET_ADDED".to_owned(), "by the settings".to_owned())].into(),
@@ -159,7 +158,7 @@ async fn a_command_inherits_lablet_s_environment_less_what_is_withheld_and_what_
 
 #[tokio::test]
 async fn a_withheld_variable_the_settings_name_is_passed_on_and_its_value_is_still_cut() {
-    let scratch = Scratch::new("bash-env-passed-on");
+    let scratch = Root::new("bash-env-passed-on");
     let (settings, key) = withholding_the_key(&scratch);
     let given = |value: &str| {
         BuiltinTools::new(Settings {
@@ -182,7 +181,7 @@ async fn a_withheld_variable_the_settings_name_is_passed_on_and_its_value_is_sti
 
 #[tokio::test]
 async fn a_secret_a_command_finds_is_cut_from_what_it_wrote_however_it_arrives() {
-    let scratch = Scratch::new("bash-secret");
+    let scratch = Root::new("bash-secret");
     let (settings, key) = withholding_the_key(&scratch);
     let tools = BuiltinTools::new(settings).unwrap();
     scratch.holds("key.txt", &key);
@@ -199,7 +198,7 @@ async fn a_secret_a_command_finds_is_cut_from_what_it_wrote_however_it_arrives()
 
 #[tokio::test]
 async fn a_variable_the_settings_add_replaces_the_one_of_lablet_s_environment() {
-    let scratch = Scratch::new("bash-env-replaced");
+    let scratch = Root::new("bash-env-replaced");
     let tools = BuiltinTools::new(Settings {
         env: [("HOME".to_owned(), "/nowhere".to_owned())].into(),
         ..scratch.settings()
@@ -213,7 +212,7 @@ async fn a_variable_the_settings_add_replaces_the_one_of_lablet_s_environment() 
 
 #[tokio::test]
 async fn of_a_mebibyte_a_command_wrote_four_bytes_of_each_end_are_kept_and_all_is_counted() {
-    let scratch = Scratch::new("bash-mebibyte");
+    let scratch = Root::new("bash-mebibyte");
     let tools = scratch.tools();
     let command = format!("head -c {MIB} /dev/zero | tr '\\0' x");
     let keep = OutputKeep { head: 4, tail: 4 };
@@ -243,7 +242,7 @@ async fn of_a_mebibyte_a_command_wrote_four_bytes_of_each_end_are_kept_and_all_i
 /// the command wrote.
 #[tokio::test]
 async fn the_exit_code_of_a_command_that_wrote_more_than_the_cap_is_shown_under_every_cut() {
-    let scratch = Scratch::new("bash-exit-code-cut");
+    let scratch = Root::new("bash-exit-code-cut");
     let tools = scratch.tools();
     let lines: Vec<String> = (1..=20_000).map(|line| line.to_string()).collect();
     let wrote = lines.join("\n") + "\n";
@@ -294,7 +293,7 @@ async fn the_exit_code_of_a_command_that_wrote_more_than_the_cap_is_shown_under_
 
 #[tokio::test]
 async fn bytes_that_are_no_text_are_returned_as_the_character_that_says_so() {
-    let scratch = Scratch::new("bash-bytes");
+    let scratch = Root::new("bash-bytes");
     let tools = scratch.tools();
 
     let text = said(&tools, "bash", json!({ "command": "printf 'a\\377b\\n'" })).await;
@@ -304,7 +303,7 @@ async fn bytes_that_are_no_text_are_returned_as_the_character_that_says_so() {
 
 #[tokio::test]
 async fn a_command_is_stopped_at_the_call_s_deadline_when_that_is_the_shorter() {
-    let scratch = Scratch::new("bash-deadline");
+    let scratch = Root::new("bash-deadline");
     let tools = scratch.tools();
     let deadline = Duration::from_millis(40);
 
@@ -329,7 +328,7 @@ async fn a_command_is_stopped_at_the_call_s_deadline_when_that_is_the_shorter() 
 
 #[tokio::test]
 async fn a_command_is_stopped_at_the_executor_s_timeout_when_that_is_the_shorter() {
-    let scratch = Scratch::new("bash-timeout");
+    let scratch = Root::new("bash-timeout");
     let timeout = Duration::from_millis(60);
     let tools = BuiltinTools::new(Settings {
         timeout,
@@ -353,7 +352,7 @@ async fn a_command_is_stopped_at_the_executor_s_timeout_when_that_is_the_shorter
 
 #[tokio::test]
 async fn a_command_that_lets_go_of_its_output_and_runs_on_is_stopped_at_the_deadline() {
-    let scratch = Scratch::new("bash-silent");
+    let scratch = Root::new("bash-silent");
     let tools = scratch.tools();
     let command = "echo $$ > shell.pid; exec > /dev/null 2>&1; sleep 60";
     let shell = scratch.root().join("shell.pid");
@@ -380,7 +379,7 @@ async fn a_command_that_lets_go_of_its_output_and_runs_on_is_stopped_at_the_dead
 
 #[tokio::test]
 async fn a_call_whose_deadline_has_come_starts_nothing() {
-    let scratch = Scratch::new("bash-no-time");
+    let scratch = Root::new("bash-no-time");
     let tools = scratch.tools();
     let none_left = within(
         Duration::ZERO,
@@ -423,7 +422,7 @@ async fn a_call_whose_deadline_has_come_starts_nothing() {
 
 #[tokio::test]
 async fn a_shell_that_is_not_on_the_path_is_a_failure_of_the_executor_s() {
-    let scratch = Scratch::new("bash-missing");
+    let scratch = Root::new("bash-missing");
     let empty = scratch.root().join("bin");
     std::fs::create_dir(&empty).unwrap();
     let tools = BuiltinTools::new(Settings {
@@ -445,7 +444,7 @@ async fn a_shell_that_is_not_on_the_path_is_a_failure_of_the_executor_s() {
 
 #[tokio::test]
 async fn a_process_left_in_the_background_with_its_output_elsewhere_lets_the_call_return() {
-    let scratch = Scratch::new("bash-background");
+    let scratch = Root::new("bash-background");
     let tools = scratch.tools();
 
     let began = Instant::now();
@@ -467,7 +466,7 @@ async fn a_process_left_in_the_background_with_its_output_elsewhere_lets_the_cal
 
 #[tokio::test]
 async fn a_call_that_is_given_up_leaves_no_process_of_its_command_running() {
-    let scratch = Scratch::new("bash-given-up");
+    let scratch = Root::new("bash-given-up");
     let tools = Arc::new(scratch.tools());
     let (shell, child) = (
         scratch.root().join("shell.pid"),
@@ -497,7 +496,7 @@ async fn a_call_that_is_given_up_leaves_no_process_of_its_command_running() {
 
 #[tokio::test]
 async fn arguments_that_do_not_fit_are_an_error_result_that_says_what_is_wrong() {
-    let scratch = Scratch::new("bash-arguments");
+    let scratch = Root::new("bash-arguments");
     let tools = scratch.tools();
 
     for (input, says) in [

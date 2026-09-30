@@ -33,6 +33,7 @@ ulid.workspace = true
 [dev-dependencies]
 lablet-conformance.workspace = true
 lablet-telemetry-registry.workspace = true
+lablet-test-support.workspace = true
 tracing-subscriber.workspace = true
 
 [[test]]

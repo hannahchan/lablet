@@ -21,6 +21,50 @@ macro_rules! display_as_str {
     )+};
 }
 
+/// Declares a list of an enum's variants that can't miss one.
+///
+/// `every_variant!(Name::ALL = [A, B, C])` declares `Name::ALL`, every
+/// variant of a fieldless enum, each once, in the order the list names them.
+/// An enum with variants that hold data lists the others under a name and a
+/// doc of its own, and gives a pattern for the rest after `besides`.
+///
+/// Beside the list is a match with an arm for each variant it names, and
+/// for the `besides` pattern, and for nothing else. So a variant the enum
+/// gains doesn't compile until the list or the pattern has it, and neither
+/// does a variant named twice.
+#[macro_export]
+macro_rules! every_variant {
+    ($name:ident::ALL = [$($variant:ident),+ $(,)?]) => {
+        $crate::every_variant!(@declare
+            [#[doc = "Every variant, each once."]]
+            $name::ALL = [$($variant),+] besides []
+        );
+    };
+    (
+        $(#[$doc:meta])+
+        $name:ident::$list:ident = [$($variant:ident),+ $(,)?],
+        besides $rest:pat
+    ) => {
+        $crate::every_variant!(@declare
+            [$(#[$doc])+] $name::$list = [$($variant),+] besides [$rest]
+        );
+    };
+    (@declare
+        [$(#[$doc:meta])+] $name:ident::$list:ident = [$($variant:ident),+] besides [$($rest:pat)?]
+    ) => {
+        impl $name {
+            $(#[$doc])+
+            pub const $list: [Self; [$(stringify!($variant)),+].len()] = [$(Self::$variant),+];
+        }
+
+        #[deny(unreachable_patterns)]
+        const _: () = match &$name::$list[0] {
+            $($name::$variant)|+ => (),
+            $($rest => (),)?
+        };
+    };
+}
+
 mod id;
 mod labels;
 mod mcp;

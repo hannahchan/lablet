@@ -192,11 +192,7 @@ fn arguments_are_the_value_that_parsed_or_the_text_that_did_not_and_nothing_else
 /// document holds has to be the one the domain means by it.
 #[test]
 fn a_provider_kind_is_spelled_as_the_domain_spells_it_and_reads_back_as_itself() {
-    for kind in [
-        model::ProviderKind::Anthropic,
-        model::ProviderKind::Openai,
-        model::ProviderKind::Fake,
-    ] {
+    for kind in model::ProviderKind::ALL {
         let written = serde_json::to_value(ProviderKind::from(kind)).unwrap();
 
         assert_eq!(written, json!(kind.as_str()));

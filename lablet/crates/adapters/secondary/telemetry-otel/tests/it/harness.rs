@@ -7,31 +7,28 @@ use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use lablet_conformance::otlp::{Attributes, Exported, LogRecord, Span};
 use lablet_model::{
-    CacheScope, CompletionMode, FinishedRun, KeptOutput, McpServers, Prompts, RequestParams,
-    RunContext, RunId, RunLabels, Thinking, ToolCallId, ToolConcurrency, ToolName, ToolSource,
-    ToolSpec,
+    FinishedRun, KeptOutput, McpServers, Prompts, RequestParams, RunContext, RunLabels, ToolCallId,
+    ToolConcurrency, ToolName, ToolSource, ToolSpec,
 };
-use lablet_policy::{Pricing, RetryPolicy, RetrySettings, StopPolicy};
-use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
+use lablet_policy::Pricing;
+use lablet_provider_fake::FakeProvider;
 use lablet_run::{
-    CallLimits, Cancellation, Clock, RunService, ToolCall, ToolError, ToolErrorKind, ToolExecutor,
-    ToolFilter, ToolOutput, ToolSet, TraceContext,
+    RunService, ToolCall, ToolError, ToolErrorKind, ToolExecutor, ToolOutput, TraceContext,
 };
 use lablet_telemetry_otel::{FileTarget, FlushError, OtelObserver};
+use lablet_test_support::{RunBuilder, Scratch, context, request, scripted};
 use serde_json::json;
+
+pub use lablet_test_support::{
+    AGENT_VERSION as VERSION, CONFIG_DIGEST, MODEL, PROMPT, STARTED_UNIX_MS, SYSTEM,
+};
 
 pub const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 pub const OTHER_RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNED";
-pub const STARTED_UNIX_MS: u64 = 1_790_000_000_000;
-pub const CONFIG_DIGEST: &str = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
-pub const VERSION: &str = "0.4.2";
-pub const MODEL: &str = "scripted-1";
-pub const SYSTEM: &str = "You fix tests, tersely.";
-pub const PROMPT: &str = "Fix the failing test in the parser.";
 
 /// What `bash` answers, a second after it's called.
 pub const BASH_SAYS: &str = "test result: ok. 2 passed";
@@ -39,7 +36,9 @@ pub const BASH_SAYS: &str = "test result: ok. 2 passed";
 pub const READ_FILE_SAYS: &str = "pub fn parse(input: &str) -> Ast";
 
 /// A failed attempt, a response that calls both tools, a response that
-/// calls a tool the run doesn't have, and a response that ends the run.
+/// calls a tool the run doesn't have, and a response that ends the run. Its
+/// namesakes in other crates differ on purpose: each calls the tools its
+/// own loop serves and states what its own tests count.
 pub const FAILS_CALLS_ENDS: &str = r"
 - error:
     kind: retryable
@@ -71,52 +70,9 @@ pub const FAILS_CALLS_ENDS: &str = r"
     latency: 120ms
 ";
 
-/// A directory of one test's own, removed when the test ends.
-pub struct Scratch(PathBuf);
-
-impl Scratch {
-    pub fn new(test: &str) -> Self {
-        let directory =
-            std::env::temp_dir().join(format!("lablet-otel-it-{}-{test}", std::process::id()));
-        std::fs::create_dir_all(&directory).unwrap();
-        Self(directory)
-    }
-
-    pub fn directory(&self) -> PathBuf {
-        self.0.clone()
-    }
-
-    /// The file of the run `run`, when each run has its own.
-    pub fn file_of(&self, run: &str) -> PathBuf {
-        self.0.join(format!("lablet-{run}.otlp.jsonl"))
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-struct TokioClock;
-
-#[async_trait::async_trait]
-impl Clock for TokioClock {
-    fn now(&self) -> Instant {
-        tokio::time::Instant::now().into_std()
-    }
-
-    async fn sleep(&self, duration: Duration) {
-        tokio::time::sleep(duration).await;
-    }
-}
-
-struct NeverCancelled;
-
-impl Cancellation for NeverCancelled {
-    fn is_cancelled(&self) -> bool {
-        false
-    }
+/// The file of the run `run` in `scratch`, when each run has its own.
+pub fn file_of(scratch: &Scratch, run: &str) -> PathBuf {
+    scratch.at(&format!("lablet-{run}.otlp.jsonl"))
 }
 
 /// What the model is told `bash` does, unless a test says otherwise.
@@ -285,19 +241,12 @@ impl Settings {
     pub fn in_scratch(scratch: &Scratch) -> Self {
         Self {
             target: FileTarget::EachRun {
-                directory: scratch.directory(),
+                directory: scratch.path().to_owned(),
             },
             capture_content: false,
             labels: RunLabels::default(),
             max_retries: 3,
-            request: RequestParams {
-                max_tokens: 4_096,
-                temperature: None,
-                thinking: Thinking::ProviderDefault,
-                effort: None,
-                seed: None,
-                cache_scope: CacheScope::Shared,
-            },
+            request: request(),
             system: SYSTEM.to_owned(),
             bash_does: BASH_DOES.to_owned(),
             bash_concurrency: ToolConcurrency::Exclusive,
@@ -346,13 +295,7 @@ impl Harness {
             skills_count,
             mcp,
         } = settings;
-        let script = Script::read(ScriptSource {
-            name: "scripts/run.yaml",
-            text: script,
-            format: ScriptFormat::Yaml,
-        })
-        .unwrap();
-        let provider = Arc::new(FakeProvider::new(MODEL, script));
+        let provider = scripted(script);
         let tools = Arc::new(Tools::new(&bash_does, bash_concurrency, read_file_source));
         let observer = OtelObserver::builder(VERSION)
             .resource(vec![
@@ -361,43 +304,16 @@ impl Harness {
             ])
             .file(target)
             .build();
-        let offered = ToolSet::build(
-            vec![Arc::clone(&tools) as _, Arc::new(Writer) as _],
-            &ToolFilter::default(),
-            CompletionMode::Natural,
-            None,
-        )
-        .await
-        .unwrap();
-        let service = RunService::new(
-            Arc::clone(&provider) as _,
-            Arc::new(offered),
-            Arc::new(observer.clone()),
-            Arc::new(TokioClock),
-            Arc::new(NeverCancelled),
-            StopPolicy {
-                max_turns,
-                timeout: Duration::from_secs(3_600),
-                max_total_tokens: None,
-                max_consecutive_invalid_turns: NonZeroU32::new(3),
-            },
-            RetryPolicy::new(RetrySettings {
-                max_retries,
-                base: Duration::from_millis(100),
-                max: Duration::from_secs(10),
-                factor: 2.0,
-                hint_max: Duration::from_secs(60),
-                jitter: 0.0,
-            })
-            .unwrap(),
-            request,
-            pricing,
-            CallLimits {
-                provider_timeout: Duration::from_secs(60),
-                output_cap: None,
-                max_concurrent_tool_calls,
-            },
-        );
+        let service = RunBuilder::new(Arc::clone(&provider) as _)
+            .tools(vec![Arc::clone(&tools) as _, Arc::new(Writer) as _])
+            .observer(Arc::new(observer.clone()))
+            .max_turns(max_turns)
+            .max_retries(max_retries)
+            .request(request)
+            .pricing(pricing)
+            .max_concurrent_tool_calls(max_concurrent_tool_calls)
+            .build()
+            .await;
         Self {
             observer,
             provider,
@@ -416,15 +332,12 @@ impl Harness {
     /// isn't flushed.
     pub async fn run(&mut self, run: &str) -> FinishedRun {
         let context = RunContext {
-            run_id: RunId::new(run).unwrap(),
             labels: self.labels.clone(),
-            started_unix_ms: STARTED_UNIX_MS,
-            config_digest: CONFIG_DIGEST.to_owned(),
-            agent_version: VERSION.to_owned(),
             transcript_path: self.transcript_path.clone(),
             skills_count: self.skills_count,
             mcp: self.mcp.clone(),
             capture_content: self.capture_content,
+            ..context(run)
         };
         let prompts = Prompts::new(self.system.as_str(), PROMPT).unwrap();
         self.service.run(context, prompts).await
@@ -454,7 +367,7 @@ pub async fn traced(test: &str, script: &str, settings: impl FnOnce(&mut Setting
     let flushed: Result<(), FlushError> = harness.observer.flush().await;
 
     flushed.unwrap();
-    let path = scratch.file_of(RUN);
+    let path = file_of(&scratch, RUN);
     Traced {
         finished,
         exported: Exported::read(&path).unwrap(),

@@ -5,7 +5,7 @@ use std::os::unix::fs::symlink;
 use lablet::{BuildError, Config, ConfigError, FilterList, Format, OwnFile, Unsupported};
 use serde_json::{Value, json};
 
-use crate::harness::{ENDS, Scratch, read, request};
+use crate::harness::{ENDS, Lab, read, request};
 
 /// A variable cargo sets for every test, as a key is set for lablet.
 const KEY_VARIABLE: &str = "CARGO_MANIFEST_DIR";
@@ -27,7 +27,7 @@ fn refused(key: &'static str, value: &str, reason: &str) -> BuildError {
 
 #[tokio::test]
 async fn a_name_in_a_list_that_no_tool_has_is_refused_with_the_list_it_is_in() {
-    let scratch = Scratch::new("filter-names");
+    let scratch = Lab::new("filter-names");
     let with = |tools: Value| {
         let mut tree = scratch.tree(
             ENDS,
@@ -80,7 +80,7 @@ async fn a_name_in_a_list_that_no_tool_has_is_refused_with_the_list_it_is_in() {
 
 #[tokio::test]
 async fn task_complete_is_in_neither_list_in_explicit_mode() {
-    let scratch = Scratch::new("filter-task-complete");
+    let scratch = Lab::new("filter-task-complete");
     let with = |completion: &str, tools: Value| {
         let mut tree = scratch.tree(
             ENDS,
@@ -130,7 +130,7 @@ async fn task_complete_is_in_neither_list_in_explicit_mode() {
 
 #[tokio::test]
 async fn a_built_in_tool_without_a_root_is_refused_by_the_key_of_the_root() {
-    let scratch = Scratch::new("no-root");
+    let scratch = Lab::new("no-root");
     let config = scratch.config(
         ENDS,
         json!({ "tools": { "builtin": { "enabled": ["read_file", "bash"] } } }),
@@ -156,7 +156,7 @@ async fn a_built_in_tool_without_a_root_is_refused_by_the_key_of_the_root() {
 
 #[tokio::test]
 async fn a_root_that_is_no_directory_is_refused_by_its_key_and_its_value() {
-    let scratch = Scratch::new("bad-root");
+    let scratch = Lab::new("bad-root");
     let file = scratch.write("a-file", "");
     let missing = scratch.at("no-such-directory");
 
@@ -179,7 +179,7 @@ async fn a_root_that_is_no_directory_is_refused_by_its_key_and_its_value() {
 
 #[tokio::test]
 async fn a_root_that_holds_a_file_of_lablets_own_is_refused_with_the_file_it_holds() {
-    let scratch = Scratch::new("root-holds");
+    let scratch = Lab::new("root-holds");
     let root = scratch.root();
     let holds = |holds, path: &std::path::Path| BuildError::RootHolds {
         root: root.display().to_string(),
@@ -249,7 +249,7 @@ async fn a_root_that_holds_a_file_of_lablets_own_is_refused_with_the_file_it_hol
 #[tokio::test]
 async fn a_root_that_holds_the_working_directory_holds_the_telemetry_a_run_has_there() {
     let here = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
-    let scratch = Scratch::new("root-holds-here");
+    let scratch = Lab::new("root-holds-here");
     let mut tree = scratch.tree(
         ENDS,
         json!({ "tools": { "builtin": { "root": here, "enabled": ["read_file"] } } }),
@@ -271,7 +271,7 @@ async fn a_root_that_holds_the_working_directory_holds_the_telemetry_a_run_has_t
 
 #[tokio::test]
 async fn a_variable_no_command_can_start_with_is_refused_by_its_name() {
-    let scratch = Scratch::new("bad-variable");
+    let scratch = Lab::new("bad-variable");
     let mut builtin = scratch.builtin(&["bash"]);
     builtin["env"] = json!({ "A=B": "1" });
 
@@ -282,7 +282,7 @@ async fn a_variable_no_command_can_start_with_is_refused_by_its_name() {
 }
 
 /// What each later phase adds, as a config states it.
-fn later(scratch: &Scratch) -> Vec<(Value, Unsupported, &'static str, &'static str)> {
+fn later(scratch: &Lab) -> Vec<(Value, Unsupported, &'static str, &'static str)> {
     let fake = |more: Value| scratch.tree(ENDS, more);
     let mut anthropic = fake(json!({}));
     anthropic["model"] = json!({ "api_key_env": KEY_VARIABLE });
@@ -357,7 +357,7 @@ fn later(scratch: &Scratch) -> Vec<(Value, Unsupported, &'static str, &'static s
 
 #[tokio::test]
 async fn what_a_later_phase_delivers_is_refused_with_the_phase_that_delivers_it() {
-    let scratch = Scratch::new("unsupported");
+    let scratch = Lab::new("unsupported");
 
     for (tree, kind, phase, named) in later(&scratch) {
         let error = refusal(read(&tree)).await;
@@ -372,7 +372,7 @@ async fn what_a_later_phase_delivers_is_refused_with_the_phase_that_delivers_it(
 
 #[tokio::test]
 async fn a_default_that_a_later_phase_applies_builds_stated_or_not() {
-    let scratch = Scratch::new("default-stated");
+    let scratch = Lab::new("default-stated");
     let stated = scratch.config(ENDS, json!({ "tools": { "max_description_chars": 2_048 } }));
     let plain = scratch.config(ENDS, json!({}));
     assert_eq!(stated.digest(), plain.digest());
@@ -391,7 +391,7 @@ async fn a_default_that_a_later_phase_applies_builds_stated_or_not() {
 
 #[tokio::test]
 async fn where_a_script_is_served_is_refused_since_nothing_serves_it() {
-    let scratch = Scratch::new("fake-base-url");
+    let scratch = Lab::new("fake-base-url");
     let mut tree = scratch.tree(ENDS, json!({}));
     tree["model"]["base_url"] = json!("http://localhost:4000");
 
@@ -413,7 +413,7 @@ async fn where_a_script_is_served_is_refused_since_nothing_serves_it() {
 
 #[tokio::test]
 async fn a_config_is_checked_whole_before_any_adapter_is_selected() {
-    let scratch = Scratch::new("checked-first");
+    let scratch = Lab::new("checked-first");
 
     for (mut tree, kind, _, _) in later(&scratch) {
         tree["run"]["retry_jitter"] = json!(2);
@@ -482,7 +482,7 @@ async fn a_provider_that_needs_a_key_needs_the_variable_that_holds_it_to_be_set(
 #[tokio::test]
 async fn a_key_written_where_its_variable_is_named_is_refused_and_never_shown() {
     let pasted = "sk-ant-api03-0123456789abcdef";
-    let scratch = Scratch::new("pasted-key");
+    let scratch = Lab::new("pasted-key");
     let mut fake = scratch.tree(ENDS, json!({}));
     fake["model"]["api_key_env"] = json!(pasted);
     let anthropic = json!({ "model": { "api_key_env": pasted }, "prompt": { "system": "Hi." } });
@@ -511,7 +511,7 @@ async fn a_key_written_where_its_variable_is_named_is_refused_and_never_shown() 
 
 #[tokio::test]
 async fn a_provider_that_needs_no_key_is_built_whatever_variable_the_config_names() {
-    let scratch = Scratch::new("no-key");
+    let scratch = Lab::new("no-key");
     let mut tree = scratch.tree(ENDS, json!({}));
     tree["model"]["api_key_env"] = json!(NO_VARIABLE);
 
@@ -534,7 +534,7 @@ async fn a_provider_that_needs_no_key_is_built_whatever_variable_the_config_name
 
 #[tokio::test]
 async fn a_script_that_cannot_be_played_is_refused_by_its_key_and_its_path() {
-    let scratch = Scratch::new("bad-script");
+    let scratch = Lab::new("bad-script");
     let with = |script: &std::path::Path| {
         let mut tree = scratch.tree(ENDS, json!({}));
         tree["model"]["script"] = json!(script);
@@ -583,7 +583,7 @@ async fn a_script_that_cannot_be_played_is_refused_by_its_key_and_its_path() {
 
 #[tokio::test]
 async fn the_system_prompt_is_read_from_the_file_the_config_names() {
-    let scratch = Scratch::new("system-file");
+    let scratch = Lab::new("system-file");
     let file = scratch.write("system.md", "You fix tests, from a file.\n");
     let mut tree = scratch.tree(ENDS, json!({}));
     tree["prompt"] = json!({ "system_file": file });

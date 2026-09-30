@@ -16,6 +16,7 @@ members = [
   "crates/adapters/secondary/shared/telemetry-registry",
   "tests/conformance",
   "tests/mcp-server",
+  "tests/test-support",
 ]
 
 # rust-version is the MSRV: the rust-toolchain.toml pin minus two minor versions.
@@ -59,6 +60,8 @@ lablet-telemetry-registry = { path = "crates/adapters/secondary/shared/telemetry
 lablet = { path = "apps/lablet", version = "0.1.0" }
 # Test support: shared ToolExecutor and RunObserver case sets, and the reader of OTLP/JSON lines
 lablet-conformance = { path = "tests/conformance", version = "0.1.0" }
+# Test support: one scratch directory, the loop's clock and cancellation on tokio, and a builder of the loop
+lablet-test-support = { path = "tests/test-support", version = "0.1.0" }
 
 # Ports and errors
 

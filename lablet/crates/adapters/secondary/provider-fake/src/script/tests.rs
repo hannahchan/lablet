@@ -398,13 +398,7 @@ const fn written(kind: ProviderErrorKind) -> (&'static str, Kind) {
 
 #[test]
 fn an_error_of_every_kind_is_written_as_a_runs_record_spells_the_kind() {
-    for kind in [
-        ProviderErrorKind::Retryable,
-        ProviderErrorKind::ContextExhausted,
-        ProviderErrorKind::Auth,
-        ProviderErrorKind::Fatal,
-        ProviderErrorKind::Malformed,
-    ] {
+    for kind in ProviderErrorKind::ALL {
         let (spelling, scripted) = written(kind);
         let script = yaml(&format!("- error: {{ kind: {spelling} }}")).unwrap();
 

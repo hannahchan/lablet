@@ -14,20 +14,24 @@ const fn usage(input: u64, output: u64) -> Usage {
 }
 use crate::{TokenCounts, ToolCallId, ToolInput, ToolName, ToolUse, Usage};
 
-fn finish_reasons() -> [(FinishReason, &'static str); 6] {
-    [
-        (FinishReason::EndTurn, "end_turn"),
-        (FinishReason::ToolUse, "tool_use"),
-        (FinishReason::MaxTokens, "max_tokens"),
-        (FinishReason::ContextWindow, "context_window"),
-        (FinishReason::Refusal, "refusal"),
-        (FinishReason::from("pause_turn".to_owned()), "pause_turn"),
-    ]
+/// How each reason lablet has a name for is written down. A reason it has
+/// no name for is written as the provider spelled it.
+fn finish_spelling(reason: &FinishReason) -> Option<&'static str> {
+    match reason {
+        FinishReason::EndTurn => Some("end_turn"),
+        FinishReason::ToolUse => Some("tool_use"),
+        FinishReason::MaxTokens => Some("max_tokens"),
+        FinishReason::ContextWindow => Some("context_window"),
+        FinishReason::Refusal => Some("refusal"),
+        FinishReason::Other(_) => None,
+    }
 }
 
 #[test]
 fn a_finish_reason_prints_as_it_is_written_down_and_reads_back_as_itself() {
-    for (reason, spelling) in finish_reasons() {
+    let other = FinishReason::from("pause_turn".to_owned());
+    for reason in FinishReason::KNOWN.into_iter().chain([other]) {
+        let spelling = finish_spelling(&reason).unwrap_or("pause_turn");
         assert_eq!(reason.as_str(), spelling);
         assert_eq!(reason.to_string(), spelling);
         assert_eq!(FinishReason::from(spelling.to_owned()), reason);
@@ -72,7 +76,8 @@ fn only_a_string_that_spells_no_known_reason_is_kept_as_other() {
             "{reason:?}"
         );
     }
-    for (_, spelling) in finish_reasons().into_iter().take(5) {
+    for reason in FinishReason::KNOWN {
+        let spelling = finish_spelling(&reason).unwrap();
         assert!(
             !matches!(
                 FinishReason::from(spelling.to_owned()),
@@ -83,15 +88,20 @@ fn only_a_string_that_spells_no_known_reason_is_kept_as_other() {
     }
 }
 
+const fn effort_spelling(effort: Effort) -> &'static str {
+    match effort {
+        Effort::Low => "low",
+        Effort::Medium => "medium",
+        Effort::High => "high",
+        Effort::XHigh => "xhigh",
+        Effort::Max => "max",
+    }
+}
+
 #[test]
 fn an_effort_prints_its_spelling_and_xhigh_is_one_word() {
-    for (effort, spelling) in [
-        (Effort::Low, "low"),
-        (Effort::Medium, "medium"),
-        (Effort::High, "high"),
-        (Effort::XHigh, "xhigh"),
-        (Effort::Max, "max"),
-    ] {
+    for effort in Effort::ALL {
+        let spelling = effort_spelling(effort);
         assert_eq!(effort.as_str(), spelling);
         assert_eq!(effort.to_string(), spelling);
     }
@@ -107,22 +117,35 @@ fn runs_share_a_cache_unless_a_run_is_given_one_of_its_own() {
     assert_eq!(CacheScope::default(), CacheScope::Shared);
 }
 
+const fn cache_scope_spelling(scope: CacheScope) -> &'static str {
+    match scope {
+        CacheScope::Shared => "shared",
+        CacheScope::Run => "run",
+    }
+}
+
 #[test]
 fn a_cache_scope_prints_its_spelling() {
-    for (scope, spelling) in [(CacheScope::Shared, "shared"), (CacheScope::Run, "run")] {
+    for scope in CacheScope::ALL {
+        let spelling = cache_scope_spelling(scope);
         assert_eq!(scope.as_str(), spelling);
         assert_eq!(scope.to_string(), spelling);
     }
 }
 
+const fn api_spelling(api: ProviderApi) -> &'static str {
+    match api {
+        ProviderApi::Messages => "messages",
+        ProviderApi::Responses => "responses",
+        ProviderApi::ChatCompletions => "chat_completions",
+        ProviderApi::Script => "script",
+    }
+}
+
 #[test]
 fn a_provider_api_prints_its_spelling() {
-    for (api, spelling) in [
-        (ProviderApi::Messages, "messages"),
-        (ProviderApi::Responses, "responses"),
-        (ProviderApi::ChatCompletions, "chat_completions"),
-        (ProviderApi::Script, "script"),
-    ] {
+    for api in ProviderApi::ALL {
+        let spelling = api_spelling(api);
         assert_eq!(api.as_str(), spelling);
         assert_eq!(api.to_string(), spelling);
     }
@@ -133,12 +156,12 @@ fn a_provider_api_prints_its_spelling() {
 /// reported under its family.
 #[test]
 fn an_api_is_its_provider_s_and_no_other_s() {
-    for (api, provider) in [
-        (ProviderApi::Messages, ProviderKind::Anthropic),
-        (ProviderApi::Responses, ProviderKind::Openai),
-        (ProviderApi::ChatCompletions, ProviderKind::Openai),
-        (ProviderApi::Script, ProviderKind::Fake),
-    ] {
+    for api in ProviderApi::ALL {
+        let provider = match api {
+            ProviderApi::Messages => ProviderKind::Anthropic,
+            ProviderApi::Responses | ProviderApi::ChatCompletions => ProviderKind::Openai,
+            ProviderApi::Script => ProviderKind::Fake,
+        };
         assert_eq!(api.provider(), provider, "{api}");
     }
 }
@@ -156,17 +179,14 @@ fn bash(id: &str) -> ContentBlock {
 /// does.
 #[test]
 fn every_provider_error_kind_is_spelled_as_the_chat_span_reports_it() {
-    for (kind, spelling, retryable) in [
-        (ProviderErrorKind::Retryable, "retryable", true),
-        (
-            ProviderErrorKind::ContextExhausted,
-            "context_exhausted",
-            false,
-        ),
-        (ProviderErrorKind::Auth, "auth", false),
-        (ProviderErrorKind::Fatal, "fatal", false),
-        (ProviderErrorKind::Malformed, "malformed", true),
-    ] {
+    for kind in ProviderErrorKind::ALL {
+        let (spelling, retryable) = match kind {
+            ProviderErrorKind::Retryable => ("retryable", true),
+            ProviderErrorKind::ContextExhausted => ("context_exhausted", false),
+            ProviderErrorKind::Auth => ("auth", false),
+            ProviderErrorKind::Fatal => ("fatal", false),
+            ProviderErrorKind::Malformed => ("malformed", true),
+        };
         assert_eq!(kind.as_str(), spelling);
         assert_eq!(kind.to_string(), spelling);
         assert_eq!(kind.is_retryable(), retryable, "{spelling}");

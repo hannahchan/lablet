@@ -571,13 +571,11 @@ tools: { builtin: { env: { B: '2', A: '1' }, enabled: [bash], root: work } }
 
 #[test]
 fn where_a_config_was_read_from_is_no_part_of_its_digest() {
-    let directory = std::env::temp_dir().join(format!("lablet-digest-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
-    let path = directory.join("lablet.yaml");
+    let scratch = lablet_test_support::Scratch::new("digest-path");
+    let path = scratch.at("lablet.yaml");
     std::fs::write(&path, FAKE).unwrap();
 
     let read = Config::from_path(&path).unwrap();
-    std::fs::remove_dir_all(&directory).unwrap();
 
     assert_eq!(read.digest(), digest(""));
 }

@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::time::Duration;
 
+use lablet_test_support::Scratch;
 use serde_json::json;
 
 use super::*;
@@ -423,30 +424,6 @@ fn text_that_is_not_in_the_format_is_refused_and_the_error_names_the_format() {
     );
 }
 
-/// A directory of one test's own, removed when the test ends.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new(test: &str) -> Self {
-        let directory =
-            std::env::temp_dir().join(format!("lablet-config-{}-{test}", std::process::id()));
-        std::fs::create_dir_all(&directory).unwrap();
-        Self(directory)
-    }
-
-    fn write(&self, name: &str, text: &str) -> PathBuf {
-        let path = self.0.join(name);
-        std::fs::write(&path, text).unwrap();
-        path
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
 #[test]
 fn a_file_is_read_in_the_format_its_name_says_and_the_config_keeps_where_it_was_read_from() {
     let scratch = Scratch::new("formats");
@@ -489,7 +466,7 @@ fn a_file_that_cannot_be_read_as_a_config_is_refused_and_the_error_names_it() {
         assert!(error.to_string().contains(&path.display().to_string()));
     }
 
-    let missing = scratch.0.join("missing.yaml");
+    let missing = scratch.at("missing.yaml");
     match Config::from_path(&missing).unwrap_err() {
         ConfigError::Unreadable { path, reason } => {
             assert_eq!(path, missing.display().to_string());

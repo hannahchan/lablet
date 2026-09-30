@@ -4,8 +4,9 @@
 use lablet_conformance::otlp::Exported;
 use lablet_telemetry_otel::FileTarget;
 use lablet_telemetry_registry::attribute as key;
+use lablet_test_support::Scratch;
 
-use crate::harness::{FAILS_CALLS_ENDS, Harness, OTHER_RUN, RUN, Scratch, Settings};
+use crate::harness::{FAILS_CALLS_ENDS, Harness, OTHER_RUN, RUN, Settings, file_of};
 
 fn runs_of(exported: &Exported) -> Vec<&str> {
     exported
@@ -27,7 +28,7 @@ async fn the_file_of_a_run_is_whole_when_the_flush_after_the_run_returns() {
     harness.run(RUN).await;
     harness.observer.flush().await.unwrap();
 
-    let exported = Exported::read(&scratch.file_of(RUN)).unwrap();
+    let exported = Exported::read(&file_of(&scratch, RUN)).unwrap();
     assert_eq!(exported.spans.len(), 8);
     assert_eq!(runs_of(&exported), [RUN]);
     assert_eq!(exported.records.last().unwrap().event_name, "lablet.run");
@@ -46,7 +47,7 @@ async fn two_runs_of_one_observer_have_a_file_each() {
     harness.observer.flush().await.unwrap();
 
     assert_eq!(first.summary.outcome.usage, second.summary.outcome.usage);
-    let files = [RUN, OTHER_RUN].map(|run| Exported::read(&scratch.file_of(run)).unwrap());
+    let files = [RUN, OTHER_RUN].map(|run| Exported::read(&file_of(&scratch, run)).unwrap());
     for (file, run) in files.iter().zip([RUN, OTHER_RUN]) {
         assert_eq!(file.spans.len(), 8);
         assert_eq!(runs_of(file), [run]);
@@ -55,13 +56,13 @@ async fn two_runs_of_one_observer_have_a_file_each() {
         }
     }
     assert_ne!(files[0].spans[0].trace_id, files[1].spans[0].trace_id);
-    assert_eq!(std::fs::read_dir(scratch.directory()).unwrap().count(), 2);
+    assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 2);
 }
 
 #[tokio::test(start_paused = true)]
 async fn two_runs_of_one_observer_are_appended_to_the_one_file_it_was_given() {
     let scratch = Scratch::new("one-file");
-    let path = scratch.directory().join("runs.otlp.jsonl");
+    let path = scratch.at("runs.otlp.jsonl");
     let mut harness = Harness::playing(
         FAILS_CALLS_ENDS,
         Settings {
@@ -89,8 +90,8 @@ async fn two_runs_of_one_observer_are_appended_to_the_one_file_it_was_given() {
 #[tokio::test(start_paused = true)]
 async fn a_file_that_was_moved_after_a_run_holds_that_run_and_its_path_the_run_after() {
     let scratch = Scratch::new("moved-file");
-    let path = scratch.directory().join("runs.otlp.jsonl");
-    let moved = scratch.directory().join("first.otlp.jsonl");
+    let path = scratch.at("runs.otlp.jsonl");
+    let moved = scratch.at("first.otlp.jsonl");
     let mut harness = Harness::playing(
         FAILS_CALLS_ENDS,
         Settings {
@@ -124,7 +125,7 @@ async fn a_file_that_was_moved_after_a_run_holds_that_run_and_its_path_the_run_a
 async fn a_destination_that_cannot_be_written_changes_nothing_about_the_run() {
     let scratch = Scratch::new("unwritable");
     let mut written = Harness::playing(FAILS_CALLS_ENDS, Settings::in_scratch(&scratch)).await;
-    let missing = scratch.directory().join("never-made");
+    let missing = scratch.at("never-made");
     let mut unwritable = Harness::playing(
         FAILS_CALLS_ENDS,
         Settings {

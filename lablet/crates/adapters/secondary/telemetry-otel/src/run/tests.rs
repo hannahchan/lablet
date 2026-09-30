@@ -484,13 +484,7 @@ fn nothing_comes_of_the_end_of_an_attempt_that_never_began() {
 
 #[test]
 fn the_span_of_an_attempt_that_failed_names_the_class_of_its_error() {
-    for kind in [
-        ProviderErrorKind::Retryable,
-        ProviderErrorKind::ContextExhausted,
-        ProviderErrorKind::Auth,
-        ProviderErrorKind::Fatal,
-        ProviderErrorKind::Malformed,
-    ] {
+    for kind in ProviderErrorKind::ALL {
         let mut run = open(opening());
         let attempt = attempted(&mut run, 1, 5, 40);
 
@@ -712,14 +706,24 @@ fn a_tool_span_starts_when_its_call_began_and_lasts_as_long_as_the_call_took() {
 
 #[test]
 fn the_span_of_a_call_that_did_not_end_well_names_its_status_as_its_error() {
-    let ran = |ended| ToolCallStatus::ran(ToolSource::Builtin, ended);
-    for status in [
-        ran(ToolCallEnd::ToolError),
-        ran(ToolCallEnd::Timeout),
-        ran(ToolCallEnd::Failed),
-        ToolCallStatus::MalformedInput,
-        ToolCallStatus::Rejected,
-    ] {
+    let ran = ToolCallEnd::ALL.map(|ended| ToolCallStatus::ran(ToolSource::Builtin, ended));
+    for status in ToolCallStatus::NOTHING_RAN.into_iter().chain(ran) {
+        // A call to a name no tool has and one that was never run have tests
+        // of their own, and `ok` ended well.
+        match &status {
+            ToolCallStatus::MalformedInput
+            | ToolCallStatus::Rejected
+            | ToolCallStatus::Ran {
+                ended: ToolCallEnd::ToolError | ToolCallEnd::Timeout | ToolCallEnd::Failed,
+                ..
+            } => {}
+            ToolCallStatus::Unknown
+            | ToolCallStatus::NotRun
+            | ToolCallStatus::Ran {
+                ended: ToolCallEnd::Ok,
+                ..
+            } => continue,
+        }
         let mut run = open(opening());
 
         let signals = called(&mut run, status.clone());

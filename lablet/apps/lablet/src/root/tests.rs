@@ -1,35 +1,22 @@
 use std::os::unix::fs::symlink;
 
+use lablet_test_support::Scratch;
+
 use super::*;
 
-/// A directory of one test's own, removed when the test ends. Its path is
-/// the one the system resolves it to, so a test can compare with it.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new(test: &str) -> Self {
-        let directory =
-            std::env::temp_dir().join(format!("lablet-root-{}-{test}", std::process::id()));
-        std::fs::create_dir_all(directory.join("work/nested")).unwrap();
-        std::fs::create_dir_all(directory.join("work-notes")).unwrap();
-        std::fs::create_dir_all(directory.join("out")).unwrap();
-        Self(std::fs::canonicalize(directory).unwrap())
+/// A scratch directory of one test's own, holding `work/nested`,
+/// `work-notes` and `out`.
+fn laid_out(test: &str) -> Scratch {
+    let scratch = Scratch::new(test);
+    for directory in ["work/nested", "work-notes", "out"] {
+        scratch.create_dir(directory);
     }
-
-    fn at(&self, path: &str) -> PathBuf {
-        self.0.join(path)
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
+    scratch
 }
 
 #[test]
 fn a_file_that_exists_resolves_to_where_its_links_lead() {
-    let scratch = Scratch::new("exists");
+    let scratch = laid_out("exists");
     std::fs::write(scratch.at("work/nested/config.yaml"), "").unwrap();
     symlink(scratch.at("work/nested"), scratch.at("out/linked")).unwrap();
 
@@ -49,7 +36,7 @@ fn a_file_that_exists_resolves_to_where_its_links_lead() {
 
 #[test]
 fn a_file_that_does_not_exist_yet_resolves_by_the_part_of_its_path_that_does() {
-    let scratch = Scratch::new("missing");
+    let scratch = laid_out("missing");
     symlink(scratch.at("work"), scratch.at("out/linked")).unwrap();
 
     assert_eq!(
@@ -80,7 +67,7 @@ fn a_path_that_is_not_absolute_starts_at_the_working_directory() {
 
 #[test]
 fn the_root_holds_what_leads_under_it_and_nothing_beside_it() {
-    let scratch = Scratch::new("held");
+    let scratch = laid_out("held");
     let root = scratch.at("work");
     symlink(scratch.at("work/nested"), scratch.at("out/linked")).unwrap();
     symlink(scratch.at("out"), scratch.at("work/escape")).unwrap();
@@ -112,7 +99,7 @@ fn the_root_holds_what_leads_under_it_and_nothing_beside_it() {
 
 #[test]
 fn the_first_file_the_root_holds_is_the_one_reported() {
-    let scratch = Scratch::new("first");
+    let scratch = laid_out("first");
     let root = scratch.at("work");
     let (config, prompt, transcript, telemetry) = (
         scratch.at("lablet.yaml"),

@@ -17,7 +17,7 @@ use lablet_conformance::otlp::{Exported, Span};
 use lablet_telemetry_registry::attribute as key;
 use serde_json::json;
 
-use crate::harness::{PROMPT, SYSTEM, Scratch, Traced, request};
+use crate::harness::{Lab, PROMPT, SYSTEM, Traced, request};
 
 const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 
@@ -91,7 +91,7 @@ struct Wrote {
 }
 
 async fn everything(test: &str, capture_content: bool) -> Wrote {
-    let scratch = Scratch::new(test);
+    let scratch = Lab::new(test);
     let config = scratch.config(
         EVERYTHING,
         json!({

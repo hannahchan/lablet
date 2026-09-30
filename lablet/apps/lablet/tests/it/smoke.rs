@@ -13,7 +13,7 @@ use lablet_telemetry_registry::signals::{
 };
 use serde_json::json;
 
-use crate::harness::{MODEL, Scratch, Traced, request};
+use crate::harness::{Lab, MODEL, Traced, request};
 
 const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 
@@ -73,7 +73,7 @@ fn assert_declared(
 
 /// One run of the script, and what was in its file when `run` returned.
 struct Smoke {
-    scratch: Scratch,
+    scratch: Lab,
     finished: FinishedRun,
     exported: Exported,
     config_digest: String,
@@ -81,7 +81,7 @@ struct Smoke {
 
 impl Smoke {
     async fn run(test: &str) -> Self {
-        let scratch = Scratch::new(test);
+        let scratch = Lab::new(test);
         let config = scratch.config(
             WRITES_READS_ENDS,
             json!({
@@ -340,7 +340,7 @@ async fn the_wide_event_is_the_last_line_of_the_run_and_holds_what_the_run_came_
 
 #[tokio::test]
 async fn every_export_carries_the_resource_the_config_states() {
-    let scratch = Scratch::new("resource");
+    let scratch = Lab::new("resource");
     let config = scratch.config(
         crate::harness::ENDS,
         json!({ "telemetry": { "resource": { "team": "evals", "service.name": "mine" } } }),
@@ -372,7 +372,7 @@ async fn every_export_carries_the_resource_the_config_states() {
 
 #[tokio::test]
 async fn content_reaches_telemetry_when_the_config_says_so() {
-    let scratch = Scratch::new("content");
+    let scratch = Lab::new("content");
     let config = scratch.config(
         crate::harness::ENDS,
         json!({ "telemetry": { "capture_content": true } }),

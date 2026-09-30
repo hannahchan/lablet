@@ -11,8 +11,9 @@ use lablet_conformance::observer::{
 use lablet_conformance::otlp::{Exported, ReadError};
 use lablet_run::RunObserver;
 use lablet_telemetry_otel::{FileTarget, OtelObserver};
+use lablet_test_support::Scratch;
 
-use crate::harness::{Scratch, VERSION};
+use crate::harness::VERSION;
 
 /// An observer that appends every run to the one file at `path`.
 struct Appending {
@@ -52,7 +53,7 @@ impl Subject for Appending {
 #[tokio::test(start_paused = true)]
 async fn a_run_has_exactly_one_wide_event_whatever_its_stop_reason() {
     let scratch = Scratch::new("conformance-one-wide-event");
-    let subject = Appending::to(scratch.directory().join("runs.otlp.jsonl"));
+    let subject = Appending::to(scratch.at("runs.otlp.jsonl"));
 
     a_run_has_exactly_one_wide_event(&subject).await;
 
@@ -68,7 +69,7 @@ async fn a_run_has_exactly_one_wide_event_whatever_its_stop_reason() {
 #[tokio::test(start_paused = true)]
 async fn the_numbers_of_the_wide_event_are_the_sums_of_the_spans() {
     let scratch = Scratch::new("conformance-sums");
-    let subject = Appending::to(scratch.directory().join("runs.otlp.jsonl"));
+    let subject = Appending::to(scratch.at("runs.otlp.jsonl"));
 
     the_numbers_of_the_wide_event_are_the_sums_of_the_steps(&subject).await;
 }
@@ -76,7 +77,7 @@ async fn the_numbers_of_the_wide_event_are_the_sums_of_the_spans() {
 #[tokio::test(start_paused = true)]
 async fn a_file_that_cannot_be_written_changes_nothing_about_the_run() {
     let scratch = Scratch::new("conformance-unwritable");
-    let missing = scratch.directory().join("never-made");
+    let missing = scratch.at("never-made");
     let subject = Appending::to(missing.join("runs.otlp.jsonl"));
 
     a_destination_that_cannot_be_written_changes_nothing_about_the_run(&subject).await;

@@ -70,13 +70,8 @@ fn a_preview_longer_than_the_cap_is_refused() {
 
 #[test]
 fn a_preview_no_longer_than_the_cap_is_allowed_and_so_is_every_other_cut() {
-    for cut in [
-        OutputCut::Preview { bytes: 10 },
-        OutputCut::Preview { bytes: 9 },
-        OutputCut::Preview { bytes: 0 },
-        OutputCut::Head,
-        OutputCut::HeadTail,
-    ] {
+    let previews = [10, 9, 0].map(|bytes| OutputCut::Preview { bytes });
+    for cut in previews.into_iter().chain(OutputCut::BY_CAP) {
         assert_eq!(
             OutputCap::new(10, cut),
             Ok(OutputCap { max_bytes: 10, cut }),
@@ -330,15 +325,16 @@ fn a_result_the_loop_wrote_is_held_whole_as_one_item() {
 
 // The cut.
 
-const CUTS: [OutputCut; 3] = [
-    OutputCut::Head,
-    OutputCut::HeadTail,
-    OutputCut::Preview { bytes: 4 },
-];
+/// Every cut, with a preview shorter than every cap it's tried with.
+fn every_cut() -> impl Iterator<Item = OutputCut> {
+    OutputCut::BY_CAP
+        .into_iter()
+        .chain([OutputCut::Preview { bytes: 4 }])
+}
 
 #[test]
 fn an_output_no_longer_than_the_cap_is_sent_whole_whatever_the_cut() {
-    for cut in CUTS {
+    for cut in every_cut() {
         for max_bytes in [16, 17, u64::MAX] {
             assert_eq!(
                 sent(SIXTEEN, cap(max_bytes, cut)),
@@ -351,7 +347,7 @@ fn an_output_no_longer_than_the_cap_is_sent_whole_whatever_the_cut() {
 
 #[test]
 fn an_output_one_byte_longer_than_the_cap_is_cut_whatever_the_cut() {
-    for cut in CUTS {
+    for cut in every_cut() {
         let (content, truncated_from_bytes) = sent(SIXTEEN, cap(15, cut));
 
         assert_eq!(truncated_from_bytes, Some(16), "{cut:?}");
@@ -703,7 +699,7 @@ fn every_cut_sends_the_closing_line_after_everything_else() {
 
 #[test]
 fn an_output_within_the_cap_is_sent_as_if_its_closing_line_had_been_fed_last() {
-    for cut in CUTS {
+    for cut in every_cut() {
         for max_bytes in [28, 29, u64::MAX] {
             let cap = cap(max_bytes, cut);
             let closed = closed(Some(cap.keeps()), SIXTEEN, CLOSING);
@@ -732,7 +728,7 @@ fn an_output_within_the_cap_is_sent_as_if_its_closing_line_had_been_fed_last() {
 /// was left out is, so an output that lost nothing doesn't say it did.
 #[test]
 fn an_output_whose_text_fits_the_cap_is_sent_whole_whatever_its_closing_line_adds() {
-    for cut in CUTS {
+    for cut in every_cut() {
         for max_bytes in [16, 27] {
             assert_eq!(
                 sent_closed(SIXTEEN, cap(max_bytes, cut)),
@@ -890,8 +886,7 @@ fn any_cap() -> impl proptest::strategy::Strategy<Value = OutputCap> {
 
     (0_u64..40).prop_flat_map(|max_bytes| {
         proptest::prop_oneof![
-            proptest::strategy::Just(OutputCut::Head),
-            proptest::strategy::Just(OutputCut::HeadTail),
+            proptest::sample::select(OutputCut::BY_CAP.to_vec()),
             (0..=max_bytes).prop_map(|bytes| OutputCut::Preview { bytes }),
         ]
         .prop_map(move |cut| cap(max_bytes, cut))

@@ -1198,12 +1198,7 @@ fn a_turn_counts_once_however_many_invalid_calls_it_made() {
 
 #[test]
 fn a_turn_in_which_a_call_reached_a_tool_ends_the_count_whatever_the_tool_returned() {
-    for ended in [
-        ToolCallEnd::Ok,
-        ToolCallEnd::ToolError,
-        ToolCallEnd::Timeout,
-        ToolCallEnd::Failed,
-    ] {
+    for ended in ToolCallEnd::ALL {
         for reached in [ran(ToolSource::Builtin, ended), ran(docs_server(), ended)] {
             let run = turn_answered(start(), ToolCallStatus::Unknown);
             let run = turn_answered(run, ToolCallStatus::MalformedInput);
@@ -1259,11 +1254,10 @@ fn a_turn_the_timeout_cut_short_is_never_an_invalid_turn() {
 #[test]
 fn turns_of_error_results_are_never_invalid_turns() {
     let mut run = start();
-    for ended in [
-        ToolCallEnd::ToolError,
-        ToolCallEnd::Timeout,
-        ToolCallEnd::Failed,
-    ] {
+    for ended in ToolCallEnd::ALL {
+        if ended == ToolCallEnd::Ok {
+            continue;
+        }
         run = turn_answered(run, ran(ToolSource::Builtin, ended));
         assert_eq!(invalid_turns(&run), 0, "{ended}");
     }

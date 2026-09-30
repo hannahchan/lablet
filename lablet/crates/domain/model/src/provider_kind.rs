@@ -36,5 +36,7 @@ impl ProviderKind {
 
 display_as_str!(ProviderKind);
 
+every_variant!(ProviderKind::ALL = [Anthropic, Openai, Fake]);
+
 #[cfg(test)]
 mod tests;

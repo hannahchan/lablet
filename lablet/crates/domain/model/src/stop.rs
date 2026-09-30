@@ -144,6 +144,25 @@ impl StopReason {
 
 display_as_str!(CompletionMode, StopReason);
 
+every_variant!(CompletionMode::ALL = [Natural, Explicit]);
+
+every_variant!(
+    StopReason::ALL = [
+        Completed,
+        EndedWithoutCompletion,
+        MaxTurns,
+        Timeout,
+        MaxTotalTokens,
+        OutputTruncated,
+        ContextExhausted,
+        RetriesExhausted,
+        InvalidCallsExhausted,
+        Cancelled,
+        ProviderError,
+        Refused,
+    ]
+);
+
 /// The tool calls of a response that made at least one, as far as completion
 /// reads them. A response that made none is a [`crate::Final`], which has no
 /// calls to read.
@@ -162,6 +181,8 @@ pub enum Calls {
     /// natural-mode response is never read as this.
     TaskComplete,
 }
+
+every_variant!(Calls::ALL = [Tools, TaskComplete]);
 
 #[cfg(test)]
 mod tests;

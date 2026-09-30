@@ -13,7 +13,7 @@ use lablet_run::ToolExecutor;
 use lablet_tools_builtin::BuiltinTools;
 use serde_json::json;
 
-use crate::harness::{Scratch, id_in, is_there, name};
+use crate::harness::{Root, id_in, is_there, name};
 
 /// Which tool the text of the output case comes from.
 #[derive(Clone, Copy)]
@@ -27,7 +27,7 @@ enum Writer {
 
 struct Builtin {
     tools: Arc<BuiltinTools>,
-    scratch: Scratch,
+    scratch: Root,
     writer: Writer,
     /// How many files the subject has named, so that each has a name of
     /// its own.
@@ -36,7 +36,7 @@ struct Builtin {
 
 impl Builtin {
     fn under(test: &str, writer: Writer) -> Self {
-        let scratch = Scratch::new(test);
+        let scratch = Root::new(test);
         Self {
             tools: Arc::new(scratch.tools()),
             scratch,

@@ -9,6 +9,7 @@ use lablet_model::{
     ToolResultContent, ToolSource,
 };
 use lablet_run::{ToolCall, ToolError, ToolExecutor, ToolOutput};
+use lablet_test_support::Scratch;
 use lablet_tools_builtin::{BuiltinTools, Settings, Tool, Withheld};
 use nix::errno::Errno;
 use nix::sys::signal::kill;
@@ -22,40 +23,33 @@ pub const TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a test waits for something that another process does.
 pub const PATIENCE: Duration = Duration::from_secs(10);
 
-/// A directory of one test's own, removed when the test ends, with the
-/// root in it and room beside the root for what's outside it.
-pub struct Scratch(PathBuf);
+/// A root of one test's own, in a scratch directory with room beside the
+/// root for what's outside it. The directory is the one the system
+/// resolves it to, so that a path a command prints is the path the test
+/// expects.
+pub struct Root(Scratch);
 
-impl Scratch {
+impl Root {
     pub fn new(test: &str) -> Self {
-        let directory = std::env::temp_dir().join(format!(
-            "lablet-tools-builtin-it-{}-{test}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&directory);
-        std::fs::create_dir_all(directory.join("root")).unwrap();
-        // The directory as the system resolves it, so that a path a command
-        // prints is the path the test expects.
-        Self(directory.canonicalize().unwrap())
+        let scratch = Scratch::new(test);
+        scratch.create_dir("root");
+        Self(scratch)
     }
 
     /// The root.
     pub fn root(&self) -> PathBuf {
-        self.0.join("root")
+        self.0.at("root")
     }
 
     /// A path beside the root, and so outside it.
     pub fn outside(&self, name: &str) -> PathBuf {
-        self.0.join(name)
+        self.0.at(name)
     }
 
     /// Writes `text` to `path` under the root, with the directories on the
     /// way to it.
     pub fn holds(&self, path: &str, text: impl AsRef<[u8]>) -> PathBuf {
-        let path = self.root().join(path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, text).unwrap();
-        path
+        self.0.write(&format!("root/{path}"), text)
     }
 
     /// What the file at `path` under the root holds.
@@ -77,12 +71,6 @@ impl Scratch {
     /// An executor that serves every tool under the root.
     pub fn tools(&self) -> BuiltinTools {
         BuiltinTools::new(self.settings()).unwrap()
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 

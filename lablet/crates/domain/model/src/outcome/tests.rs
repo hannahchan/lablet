@@ -84,23 +84,32 @@ fn an_outcome_taken_apart_is_every_part_it_was_made_from() {
     );
 }
 
+/// A run that didn't fail has no error to say anything with.
 #[test]
-fn a_failure_that_came_without_an_error_says_what_failed() {
-    for (reason, message) in [
-        (
-            StopReason::ContextExhausted,
-            "the response was cut short at the model's context window",
-        ),
-        (
-            StopReason::InvalidCallsExhausted,
-            "the turns in a row in which no call reached a tool reached their cap",
-        ),
-        (StopReason::RetriesExhausted, "a provider call failed"),
-        (StopReason::ProviderError, "a provider call failed"),
-    ] {
+fn a_failure_that_came_without_an_error_says_what_failed_and_any_other_ending_carries_none() {
+    for reason in StopReason::ALL {
+        let message = match reason {
+            StopReason::ContextExhausted => {
+                Some("the response was cut short at the model's context window")
+            }
+            StopReason::InvalidCallsExhausted => {
+                Some("the turns in a row in which no call reached a tool reached their cap")
+            }
+            StopReason::RetriesExhausted | StopReason::ProviderError => {
+                Some("a provider call failed")
+            }
+            StopReason::Completed
+            | StopReason::EndedWithoutCompletion
+            | StopReason::MaxTurns
+            | StopReason::Timeout
+            | StopReason::MaxTotalTokens
+            | StopReason::OutputTruncated
+            | StopReason::Cancelled
+            | StopReason::Refused => None,
+        };
         let outcome = RunOutcome::closing(parts(reason, None, None));
 
-        assert_eq!(outcome.error(), Some(message), "{reason}");
+        assert_eq!(outcome.error(), message, "{reason}");
     }
 }
 

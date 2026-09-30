@@ -120,6 +120,8 @@ impl ToolErrorKind {
     }
 }
 
+lablet_model::every_variant!(ToolErrorKind::ALL = [Unknown, Timeout, Failed]);
+
 /// What a call over MCP carries back, for the `mcp.*` attributes of its span.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpCallMeta {

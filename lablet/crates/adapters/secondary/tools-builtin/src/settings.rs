@@ -23,10 +23,9 @@ pub enum Tool {
     WriteFile,
 }
 
-impl Tool {
-    /// Every built-in tool.
-    pub const ALL: [Self; 3] = [Self::Bash, Self::ReadFile, Self::WriteFile];
+lablet_model::every_variant!(Tool::ALL = [Bash, ReadFile, WriteFile]);
 
+impl Tool {
     /// The name the model calls the tool by.
     #[must_use]
     pub const fn name(self) -> &'static str {

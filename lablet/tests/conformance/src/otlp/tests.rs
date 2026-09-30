@@ -464,15 +464,12 @@ fn a_value_that_refers_to_a_table_of_strings_is_refused() {
 
 #[test]
 fn a_file_is_read_as_its_text_is() {
-    let path = std::env::temp_dir().join(format!(
-        "lablet-conformance-{}-a-file-is-read.otlp.jsonl",
-        std::process::id()
-    ));
+    let scratch = lablet_test_support::Scratch::new("conformance-read");
+    let path = scratch.at("a-file-is-read.otlp.jsonl");
     let text = line_of_spans(&[span(&json!({}))]);
     std::fs::write(&path, &text).unwrap();
 
     let read = Exported::read(&path);
-    std::fs::remove_file(&path).unwrap();
 
     assert_eq!(read, Exported::parse(&text));
     assert_eq!(read.unwrap().spans.len(), 1);
@@ -480,10 +477,8 @@ fn a_file_is_read_as_its_text_is() {
 
 #[test]
 fn a_file_that_cannot_be_read_is_an_error_that_names_it() {
-    let path = std::env::temp_dir().join(format!(
-        "lablet-conformance-{}-never-written.otlp.jsonl",
-        std::process::id()
-    ));
+    let scratch = lablet_test_support::Scratch::new("conformance-unread");
+    let path = scratch.at("never-written.otlp.jsonl");
 
     let refused = Exported::read(&path).unwrap_err();
 

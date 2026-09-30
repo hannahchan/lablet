@@ -3,13 +3,6 @@ use serde_json::json;
 
 use super::*;
 
-const APIS: [model::ProviderApi; 4] = [
-    model::ProviderApi::Messages,
-    model::ProviderApi::Responses,
-    model::ProviderApi::ChatCompletions,
-    model::ProviderApi::Script,
-];
-
 fn reached_through(api: model::ProviderApi) -> ModelRef {
     ModelRef {
         api,
@@ -36,7 +29,7 @@ fn a_model_is_written_with_its_provider_before_how_it_was_reached() {
 /// spellings the domain has for both.
 #[test]
 fn every_api_is_written_as_the_domain_spells_it_beside_the_provider_whose_api_it_is() {
-    for api in APIS {
+    for api in model::ProviderApi::ALL {
         let written = serde_json::to_value(Model::from(reached_through(api))).unwrap();
 
         assert_eq!(written["api"], json!(api.as_str()));

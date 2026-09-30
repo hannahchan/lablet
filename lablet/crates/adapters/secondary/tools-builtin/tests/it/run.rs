@@ -1,22 +1,14 @@
 //! Runs of the loop itself, around a scripted provider and the built-in
 //! tools, on the clock as it runs.
 
-use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use lablet_model::{
-    CacheScope, CompletionMode, FinishedRun, Prompts, RequestParams, RunContext, RunId, RunLabels,
-    Secrets, StopReason, Thinking, ToolCallOutcome, ToolResultContent,
-};
-use lablet_policy::{RetryPolicy, RetrySettings, StopPolicy};
-use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
-use lablet_run::{
-    CallLimits, Cancellation, Clock, RunEvent, RunObserver, RunService, ToolFilter, ToolSet,
-};
+use lablet_model::{FinishedRun, Secrets, StopReason, ToolCallOutcome, ToolResultContent};
+use lablet_test_support::{RunBuilder, context, prompts, scripted};
 use lablet_tools_builtin::{BuiltinTools, Settings, Withheld};
 
-use crate::harness::{Scratch, link};
+use crate::harness::{Root, link};
 
 const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 
@@ -26,100 +18,13 @@ const SECRET: &str = "what the model is not to read";
 /// withheld as lablet's key is.
 const NOT_FOR_A_COMMAND: &str = "CARGO_MANIFEST_DIR";
 
-struct TokioClock;
-
-#[async_trait::async_trait]
-impl Clock for TokioClock {
-    fn now(&self) -> Instant {
-        tokio::time::Instant::now().into_std()
-    }
-
-    async fn sleep(&self, duration: Duration) {
-        tokio::time::sleep(duration).await;
-    }
-}
-
-struct NeverCancelled;
-
-impl Cancellation for NeverCancelled {
-    fn is_cancelled(&self) -> bool {
-        false
-    }
-}
-
-struct Unobserved;
-
-#[async_trait::async_trait]
-impl RunObserver for Unobserved {
-    async fn on(&self, _: RunEvent) {}
-}
-
 /// One run of the YAML script `script`, whose tools are `tools`.
 async fn run(script: &str, tools: BuiltinTools) -> FinishedRun {
-    let script = Script::read(ScriptSource {
-        name: "run.yaml",
-        text: script,
-        format: ScriptFormat::Yaml,
-    })
-    .unwrap();
-    let tools = ToolSet::build(
-        vec![Arc::new(tools) as _],
-        &ToolFilter::default(),
-        CompletionMode::Natural,
-        None,
-    )
-    .await
-    .unwrap();
-    let retry = RetryPolicy::new(RetrySettings {
-        max_retries: 0,
-        base: Duration::from_millis(100),
-        max: Duration::from_secs(10),
-        factor: 2.0,
-        hint_max: Duration::from_secs(60),
-        jitter: 0.0,
-    })
-    .unwrap();
-    let mut service = RunService::new(
-        Arc::new(FakeProvider::new("scripted-1", script)),
-        Arc::new(tools),
-        Arc::new(Unobserved),
-        Arc::new(TokioClock),
-        Arc::new(NeverCancelled),
-        StopPolicy {
-            max_turns: None,
-            timeout: Duration::from_secs(600),
-            max_total_tokens: None,
-            max_consecutive_invalid_turns: NonZeroU32::new(3),
-        },
-        retry,
-        RequestParams {
-            max_tokens: 4_096,
-            temperature: None,
-            thinking: Thinking::ProviderDefault,
-            effort: None,
-            seed: None,
-            cache_scope: CacheScope::Shared,
-        },
-        None,
-        CallLimits {
-            provider_timeout: Duration::from_secs(60),
-            output_cap: None,
-            max_concurrent_tool_calls: NonZeroU32::MIN,
-        },
-    );
-    let context = RunContext {
-        run_id: RunId::new(RUN).unwrap(),
-        labels: RunLabels::default(),
-        started_unix_ms: 1_790_000_000_000,
-        config_digest: "0".repeat(64),
-        agent_version: "0.1.0".to_owned(),
-        transcript_path: None,
-        skills_count: 0,
-        mcp: None,
-        capture_content: false,
-    };
-    let prompts = Prompts::new("You fix tests.", "Fix the failing test.").unwrap();
-    service.run(context, prompts).await
+    let mut service = RunBuilder::new(scripted(script))
+        .tools(vec![Arc::new(tools) as _])
+        .build()
+        .await;
+    service.run(context(RUN), prompts()).await
 }
 
 /// What the model was sent of a call: its status, and its text.
@@ -134,7 +39,7 @@ fn sent(outcome: &ToolCallOutcome) -> (&'static str, String) {
 
 #[tokio::test]
 async fn a_command_past_the_timeout_is_an_error_result_of_kind_timeout_and_the_run_goes_on() {
-    let scratch = Scratch::new("run-timeout");
+    let scratch = Root::new("run-timeout");
     scratch.holds("notes.md", "on it goes");
     let tools = BuiltinTools::new(Settings {
         timeout: Duration::from_secs(1),
@@ -192,7 +97,7 @@ async fn a_command_past_the_timeout_is_an_error_result_of_kind_timeout_and_the_r
 
 #[tokio::test]
 async fn a_run_is_refused_what_is_outside_the_root_and_kept_from_lablet_s_environment() {
-    let scratch = Scratch::new("run-refusals");
+    let scratch = Root::new("run-refusals");
     std::fs::write(scratch.outside("secret.txt"), SECRET).unwrap();
     link(
         &scratch.outside("secret.txt"),

@@ -5,7 +5,7 @@ use lablet_run::{ToolErrorKind, ToolExecutor};
 use lablet_tools_builtin::{BuiltinTools, Settings, Withheld};
 use serde_json::{Value, json};
 
-use crate::harness::{Scratch, TIMEOUT, call, keeping, link, refused, said, within};
+use crate::harness::{Root, TIMEOUT, call, keeping, link, refused, said, within};
 
 const FILE: &str = "one\ntwo\nthree\nfour\nfive";
 
@@ -14,21 +14,21 @@ const SECRET: &str = "what the model is not to read";
 
 /// A root beside a directory that holds a secret, and the tools under the
 /// root.
-fn beside_a_secret(test: &str) -> (Scratch, BuiltinTools) {
-    let scratch = Scratch::new(test);
+fn beside_a_secret(test: &str) -> (Root, BuiltinTools) {
+    let scratch = Root::new(test);
     std::fs::create_dir(scratch.outside("private")).unwrap();
     std::fs::write(scratch.outside("private/secret.txt"), SECRET).unwrap();
     let tools = scratch.tools();
     (scratch, tools)
 }
 
-fn secret(scratch: &Scratch) -> String {
+fn secret(scratch: &Root) -> String {
     std::fs::read_to_string(scratch.outside("private/secret.txt")).unwrap()
 }
 
 #[tokio::test]
 async fn a_file_is_read_whole_by_a_path_from_the_root_or_an_absolute_one() {
-    let scratch = Scratch::new("read-whole");
+    let scratch = Root::new("read-whole");
     let tools = scratch.tools();
     let absolute = scratch.holds("notes/plan.txt", FILE);
 
@@ -48,7 +48,7 @@ async fn a_file_is_read_whole_by_a_path_from_the_root_or_an_absolute_one() {
 
 #[tokio::test]
 async fn the_lines_after_the_offset_are_read_up_to_the_limit() {
-    let scratch = Scratch::new("read-lines");
+    let scratch = Root::new("read-lines");
     let tools = scratch.tools();
     scratch.holds("plan.txt", FILE);
 
@@ -73,7 +73,7 @@ async fn the_lines_after_the_offset_are_read_up_to_the_limit() {
 
 #[tokio::test]
 async fn a_long_file_is_read_in_parts_that_make_the_whole() {
-    let scratch = Scratch::new("read-parts");
+    let scratch = Root::new("read-parts");
     let tools = scratch.tools();
     let file = (0..40_000).fold(String::new(), |file, line| file + &format!("line {line}\n"));
     scratch.holds("long.txt", &file);
@@ -93,7 +93,7 @@ async fn a_long_file_is_read_in_parts_that_make_the_whole() {
 
 #[tokio::test]
 async fn bytes_of_a_file_that_are_no_text_are_returned_as_the_character_that_says_so() {
-    let scratch = Scratch::new("read-bytes");
+    let scratch = Root::new("read-bytes");
     let tools = scratch.tools();
     scratch.holds("data.bin", b"a\xFFb\n\xE2\x82");
 
@@ -104,7 +104,7 @@ async fn bytes_of_a_file_that_are_no_text_are_returned_as_the_character_that_say
 
 #[tokio::test]
 async fn a_read_that_takes_longer_than_the_call_may_is_given_up() {
-    let scratch = Scratch::new("read-deadline");
+    let scratch = Root::new("read-deadline");
     let tools = scratch.tools();
     // A file of nothing but a size, which takes no room and is too long to
     // be read in the millisecond the call has.
@@ -178,7 +178,7 @@ async fn a_link_under_the_root_that_leads_outside_it_is_refused_and_the_file_is_
 
 #[tokio::test]
 async fn a_link_that_stays_under_the_root_is_followed() {
-    let scratch = Scratch::new("read-link-inside");
+    let scratch = Root::new("read-link-inside");
     let tools = scratch.tools();
     let file = scratch.holds("real/plan.txt", FILE);
     link(&file, &scratch.root().join("plan.txt"));
@@ -193,7 +193,7 @@ async fn a_link_that_stays_under_the_root_is_followed() {
 
 #[tokio::test]
 async fn what_cannot_be_read_is_an_error_result_that_says_why() {
-    let scratch = Scratch::new("read-refused");
+    let scratch = Root::new("read-refused");
     let tools = scratch.tools();
     scratch.holds("sub/plan.txt", FILE);
 
@@ -211,7 +211,7 @@ async fn what_cannot_be_read_is_an_error_result_that_says_why() {
 
 #[tokio::test]
 async fn a_secret_of_lablet_s_is_cut_from_every_result_of_the_file_tools() {
-    let scratch = Scratch::new("files-secret");
+    let scratch = Root::new("files-secret");
     let key = "a-key-long-enough-to-cut";
     let tools = BuiltinTools::new(Settings {
         withheld: Withheld {
@@ -248,7 +248,7 @@ async fn a_secret_of_lablet_s_is_cut_from_every_result_of_the_file_tools() {
 
 #[tokio::test]
 async fn arguments_of_a_read_that_do_not_fit_are_an_error_result_that_says_what_is_wrong() {
-    let scratch = Scratch::new("read-arguments");
+    let scratch = Root::new("read-arguments");
     let tools = scratch.tools();
     scratch.holds("plan.txt", FILE);
 
@@ -269,7 +269,7 @@ async fn arguments_of_a_read_that_do_not_fit_are_an_error_result_that_says_what_
 
 #[tokio::test]
 async fn a_file_is_written_with_the_directories_on_the_way_to_it() {
-    let scratch = Scratch::new("write-new");
+    let scratch = Root::new("write-new");
     let tools = scratch.tools();
     let absolute = scratch.root().join("by/absolute.txt");
 
@@ -293,7 +293,7 @@ async fn a_file_is_written_with_the_directories_on_the_way_to_it() {
 
 #[tokio::test]
 async fn a_file_that_is_there_is_replaced_by_what_is_written() {
-    let scratch = Scratch::new("write-replace");
+    let scratch = Root::new("write-replace");
     let tools = scratch.tools();
     scratch.holds("plan.txt", FILE);
 
@@ -363,7 +363,7 @@ async fn a_write_that_leads_outside_the_root_is_refused_and_nothing_is_written()
 
 #[tokio::test]
 async fn a_write_through_a_link_that_stays_under_the_root_is_followed() {
-    let scratch = Scratch::new("write-link-inside");
+    let scratch = Root::new("write-link-inside");
     let tools = scratch.tools();
     scratch.holds("real/plan.txt", FILE);
     link(&scratch.root().join("real"), &scratch.root().join("linked"));
@@ -396,7 +396,7 @@ async fn a_write_through_a_link_that_stays_under_the_root_is_followed() {
 
 #[tokio::test]
 async fn what_cannot_be_written_is_an_error_result_that_says_why() {
-    let scratch = Scratch::new("write-refused");
+    let scratch = Root::new("write-refused");
     let tools = scratch.tools();
     scratch.holds("sub/plan.txt", FILE);
 
@@ -419,7 +419,7 @@ async fn what_cannot_be_written_is_an_error_result_that_says_why() {
 
 #[tokio::test]
 async fn arguments_of_a_write_that_do_not_fit_are_an_error_result_and_nothing_is_written() {
-    let scratch = Scratch::new("write-arguments");
+    let scratch = Root::new("write-arguments");
     let tools = scratch.tools();
 
     for (input, says) in [

@@ -7,10 +7,11 @@ use std::sync::{Arc, Mutex};
 
 use lablet::{Config, EventKind, Format, Lablet, RunEvent, RunObserver, RunRequest};
 use lablet_conformance::otlp::{Exported, LogRecord, Span};
+use lablet_test_support::Scratch;
 use serde_json::{Value, json};
 
-pub const SYSTEM: &str = "You fix tests, tersely.";
-pub const PROMPT: &str = "Fix the failing test in the parser.";
+pub use lablet_test_support::{PROMPT, SYSTEM};
+
 pub const MODEL: &str = "scripted-1";
 
 /// A response that ends the run, and nothing before it.
@@ -22,22 +23,20 @@ pub const ENDS: &str = "
     finish: end_turn
 ";
 
-/// A directory of one test's own, removed when the test ends. The root of
+/// A scratch directory of one test's own, laid out for lablet: the root of
 /// the built-in tools is `work` in it, and lablet's own files are beside
 /// the root.
-pub struct Scratch(PathBuf);
+pub struct Lab(Scratch);
 
-impl Scratch {
+impl Lab {
     pub fn new(test: &str) -> Self {
-        let directory =
-            std::env::temp_dir().join(format!("lablet-it-{}-{test}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&directory);
-        std::fs::create_dir_all(directory.join("work")).unwrap();
-        Self(std::fs::canonicalize(directory).unwrap())
+        let scratch = Scratch::new(test);
+        scratch.create_dir("work");
+        Self(scratch)
     }
 
     pub fn at(&self, path: &str) -> PathBuf {
-        self.0.join(path)
+        self.0.at(path)
     }
 
     pub fn root(&self) -> PathBuf {
@@ -50,9 +49,7 @@ impl Scratch {
     }
 
     pub fn write(&self, path: &str, text: &str) -> PathBuf {
-        let path = self.at(path);
-        std::fs::write(&path, text).unwrap();
-        path
+        self.0.write(path, text)
     }
 
     /// The config, as a tree, of a fake model that plays the YAML script
@@ -92,12 +89,6 @@ impl Scratch {
     /// What the runs so far exported.
     pub fn exported(&self) -> Exported {
         Exported::read(&self.telemetry()).unwrap()
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 

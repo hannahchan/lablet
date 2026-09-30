@@ -7,7 +7,7 @@ use lablet::{BlankTask, EventKind, OutcomeDocument, RunId, RunRequest, StopReaso
 use lablet_telemetry_registry::attribute as key;
 use serde_json::{Value, json};
 
-use crate::harness::{ENDS, MODEL, PROMPT, SYSTEM, Scratch, Traced, observed, request};
+use crate::harness::{ENDS, Lab, MODEL, PROMPT, SYSTEM, Traced, observed, request};
 
 const CALLS_THEN_ENDS: &str = "
 - response:
@@ -40,7 +40,7 @@ fn shared(outcome: lablet::FinishedRun) -> Value {
 
 #[tokio::test]
 async fn two_runs_on_one_lablet_are_two_runs_with_one_outcome() {
-    let scratch = Scratch::new("twice");
+    let scratch = Lab::new("twice");
     let config = scratch.config(
         CALLS_THEN_ENDS,
         json!({ "tools": { "builtin": scratch.builtin(&["bash"]) } }),
@@ -132,7 +132,7 @@ fn ulid_time(id: &str) -> u64 {
 
 #[tokio::test]
 async fn a_run_without_an_id_gets_a_fresh_ulid_that_holds_when_it_started() {
-    let scratch = Scratch::new("fresh");
+    let scratch = Lab::new("fresh");
     let (mut lablet, recorder) = observed(scratch.config(ENDS, json!({}))).await;
 
     let first = lablet.run(request()).await.summary.outcome.run_id;
@@ -160,7 +160,7 @@ async fn a_run_without_an_id_gets_a_fresh_ulid_that_holds_when_it_started() {
 
 #[tokio::test]
 async fn what_a_lablet_prints_of_itself_names_its_config_and_holds_no_prompt() {
-    let scratch = Scratch::new("debug");
+    let scratch = Lab::new("debug");
     let config = scratch.config(
         ENDS,
         json!({ "tools": { "builtin": scratch.builtin(&["bash"]) } }),
@@ -187,7 +187,7 @@ fn a_blank_prompt_is_refused_when_the_request_is_made() {
 
 #[tokio::test]
 async fn the_run_is_given_the_prompt_the_request_holds_under_the_system_prompt_of_the_config() {
-    let scratch = Scratch::new("prompts");
+    let scratch = Lab::new("prompts");
     let config = scratch.config(ENDS, json!({ "telemetry": { "capture_content": true } }));
     let (mut lablet, recorder) = observed(config).await;
 
@@ -215,7 +215,7 @@ async fn the_run_is_given_the_prompt_the_request_holds_under_the_system_prompt_o
 
 #[tokio::test]
 async fn telemetry_that_cannot_be_written_leaves_the_outcome_alone() {
-    let scratch = Scratch::new("unwritable");
+    let scratch = Lab::new("unwritable");
     let nowhere = scratch.at("no-such-directory/telemetry.otlp.jsonl");
     let config = scratch.config(
         ENDS,

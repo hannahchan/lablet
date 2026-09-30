@@ -26,6 +26,8 @@ impl McpLifetime {
 
 display_as_str!(McpLifetime);
 
+every_variant!(McpLifetime::ALL = [Run, Lablet]);
+
 /// One MCP server of a run.
 ///
 /// The name and the version are one value because they're reported as two

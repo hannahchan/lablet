@@ -41,10 +41,11 @@ fn a_source_is_written_under_the_domain_s_spelling_with_the_server_of_an_mcp_too
 
 #[test]
 fn a_tool_s_concurrency_is_written_as_one_word() {
-    for (concurrency, written) in [
-        (model::ToolConcurrency::Exclusive, "exclusive"),
-        (model::ToolConcurrency::Shared, "shared"),
-    ] {
+    for concurrency in model::ToolConcurrency::ALL {
+        let written = match concurrency {
+            model::ToolConcurrency::Exclusive => "exclusive",
+            model::ToolConcurrency::Shared => "shared",
+        };
         assert_eq!(
             serde_json::to_value(ToolConcurrency::from(concurrency)).unwrap(),
             json!(written)
@@ -54,12 +55,7 @@ fn a_tool_s_concurrency_is_written_as_one_word() {
 
 #[test]
 fn a_call_no_tool_ran_for_is_written_as_the_one_word_telemetry_has_for_it() {
-    for status in [
-        model::ToolCallStatus::Unknown,
-        model::ToolCallStatus::MalformedInput,
-        model::ToolCallStatus::Rejected,
-        model::ToolCallStatus::NotRun,
-    ] {
+    for status in model::ToolCallStatus::NOTHING_RAN {
         let written = serde_json::to_value(ToolCallStatus::from(status.clone())).unwrap();
 
         assert_eq!(written, json!(status.as_str()));
@@ -70,12 +66,7 @@ fn a_call_no_tool_ran_for_is_written_as_the_one_word_telemetry_has_for_it() {
 /// two levels, so a reader can tell a built-in failure from an MCP one.
 #[test]
 fn a_call_a_tool_ran_for_is_written_with_where_the_tool_came_from_and_how_it_ended() {
-    for ended in [
-        model::ToolCallEnd::Ok,
-        model::ToolCallEnd::ToolError,
-        model::ToolCallEnd::Timeout,
-        model::ToolCallEnd::Failed,
-    ] {
+    for ended in model::ToolCallEnd::ALL {
         for (source, written) in [
             (model::ToolSource::Builtin, json!("builtin")),
             (docs_server(), json!({ "mcp": { "server": "docs" } })),

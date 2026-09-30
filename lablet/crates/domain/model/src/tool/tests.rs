@@ -67,32 +67,39 @@ fn a_tool_spec_is_measured_as_these_exact_bytes() {
 // Every spelling but `ok` and `not_run` is a value of `error.type` on the
 // `execute_tool` span, which is a semantic-convention attribute with no
 // registry enum to compare with. A call that was never run has no span.
-const STATUSES: [(ToolCallStatus, &str); 8] = [
-    (ran(ToolSource::Builtin, ToolCallEnd::Ok), "ok"),
-    (
-        ran(ToolSource::Builtin, ToolCallEnd::ToolError),
-        "tool_error",
-    ),
-    (ToolCallStatus::Unknown, "unknown"),
-    (ToolCallStatus::MalformedInput, "malformed_input"),
-    (ToolCallStatus::Rejected, "rejected"),
-    (ToolCallStatus::NotRun, "not_run"),
-    (ran(ToolSource::Builtin, ToolCallEnd::Timeout), "timeout"),
-    (ran(ToolSource::Builtin, ToolCallEnd::Failed), "failed"),
-];
+const fn spelling(status: &ToolCallStatus) -> &'static str {
+    match status {
+        ToolCallStatus::Unknown => "unknown",
+        ToolCallStatus::MalformedInput => "malformed_input",
+        ToolCallStatus::Rejected => "rejected",
+        ToolCallStatus::NotRun => "not_run",
+        ToolCallStatus::Ran { ended, .. } => match ended {
+            ToolCallEnd::Ok => "ok",
+            ToolCallEnd::ToolError => "tool_error",
+            ToolCallEnd::Timeout => "timeout",
+            ToolCallEnd::Failed => "failed",
+        },
+    }
+}
+
+/// Every status at both levels, each tool that ran a built-in one.
+fn every_status() -> impl Iterator<Item = ToolCallStatus> {
+    let ended = ToolCallEnd::ALL.map(|ended| ran(ToolSource::Builtin, ended));
+    ToolCallStatus::NOTHING_RAN.into_iter().chain(ended)
+}
 
 #[test]
 fn every_status_prints_as_its_error_type_spelling() {
-    for (status, spelling) in STATUSES {
-        assert_eq!(status.as_str(), spelling);
-        assert_eq!(status.to_string(), spelling);
+    for status in every_status() {
+        assert_eq!(status.as_str(), spelling(&status));
+        assert_eq!(status.to_string(), spelling(&status));
     }
 }
 
 #[test]
 fn every_status_but_ok_is_an_error_result_for_the_model() {
-    for (status, spelling) in STATUSES {
-        assert_eq!(status.is_error(), spelling != "ok", "{status}");
+    for status in every_status() {
+        assert_eq!(status.is_error(), spelling(&status) != "ok", "{status}");
     }
 }
 
@@ -108,12 +115,7 @@ fn a_call_is_invalid_when_no_tool_was_reached_and_never_when_one_was() {
         !ToolCallStatus::NotRun.is_invalid(),
         "the run's time had gone, which the model didn't get wrong"
     );
-    for ended in [
-        ToolCallEnd::Ok,
-        ToolCallEnd::ToolError,
-        ToolCallEnd::Timeout,
-        ToolCallEnd::Failed,
-    ] {
+    for ended in ToolCallEnd::ALL {
         assert!(!ran(ToolSource::Builtin, ended).is_invalid(), "{ended}");
         assert!(!ran(docs_server(), ended).is_invalid(), "{ended} over MCP");
     }
@@ -137,10 +139,10 @@ fn only_a_call_that_ran_has_a_source() {
 /// name no tool, whatever it was.
 #[test]
 fn a_call_named_a_tool_the_run_offered_unless_its_name_was_unknown_or_never_looked_up() {
-    for (status, spelling) in STATUSES {
+    for status in every_status() {
         assert_eq!(
             status.names_an_offered_tool(),
-            !matches!(spelling, "unknown" | "not_run"),
+            !matches!(spelling(&status), "unknown" | "not_run"),
             "{status}"
         );
     }
@@ -150,8 +152,12 @@ fn a_call_named_a_tool_the_run_offered_unless_its_name_was_unknown_or_never_look
 /// call up and told the observer. Only `not_run` says it never did.
 #[test]
 fn something_was_started_for_every_call_but_one_that_was_never_run() {
-    for (status, spelling) in STATUSES {
-        assert_eq!(status.was_started(), spelling != "not_run", "{status}");
+    for status in every_status() {
+        assert_eq!(
+            status.was_started(),
+            spelling(&status) != "not_run",
+            "{status}"
+        );
     }
 }
 
@@ -213,7 +219,8 @@ fn an_outcome_holds_what_it_was_given_with_its_times_in_whole_milliseconds() {
 
 #[test]
 fn the_result_the_model_is_sent_is_an_error_exactly_when_the_status_is_not_ok() {
-    for (status, spelling) in STATUSES {
+    for status in every_status() {
+        let spelling = spelling(&status);
         let outcome = measured(call_1(), status, "no", None, Duration::ZERO, Duration::ZERO);
 
         assert_eq!(

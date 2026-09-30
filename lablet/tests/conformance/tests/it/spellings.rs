@@ -1,6 +1,8 @@
 //! The domain can't depend on the generated registry crate, so the two sets of
 //! closed values are compared here. Each match is exhaustive, so a variant
-//! added on either side fails to compile until the other side has it too.
+//! added on either side fails to compile until the other side has it too, and
+//! each comparison runs over the lists of every variant the two sides declare,
+//! so it reaches that variant once it compiles.
 
 use lablet_model::{
     CacheScope, CompletionMode, McpLifetime, ProviderApi, StopReason, ToolCallEnd, ToolCallStatus,
@@ -47,23 +49,13 @@ const fn model_stop_reason(reason: LabletRunStopReason) -> StopReason {
 
 #[test]
 fn every_stop_reason_is_spelled_as_the_registry_spells_it() {
-    for reason in [
-        StopReason::Completed,
-        StopReason::EndedWithoutCompletion,
-        StopReason::MaxTurns,
-        StopReason::Timeout,
-        StopReason::MaxTotalTokens,
-        StopReason::OutputTruncated,
-        StopReason::ContextExhausted,
-        StopReason::RetriesExhausted,
-        StopReason::InvalidCallsExhausted,
-        StopReason::Cancelled,
-        StopReason::ProviderError,
-        StopReason::Refused,
-    ] {
+    for reason in StopReason::ALL {
         let registry = registry_stop_reason(reason);
         assert_eq!(reason.as_str(), registry.as_str());
         assert_eq!(model_stop_reason(registry), reason);
+    }
+    for registry in LabletRunStopReason::ALL {
+        assert_eq!(registry_stop_reason(model_stop_reason(registry)), registry);
     }
 }
 
@@ -83,10 +75,16 @@ const fn model_completion_mode(registry: LabletRunCompletionMode) -> CompletionM
 
 #[test]
 fn both_completion_modes_are_spelled_as_the_registry_spells_them() {
-    for mode in [CompletionMode::Natural, CompletionMode::Explicit] {
+    for mode in CompletionMode::ALL {
         let registry = registry_completion_mode(mode);
         assert_eq!(mode.as_str(), registry.as_str());
         assert_eq!(model_completion_mode(registry), mode);
+    }
+    for registry in LabletRunCompletionMode::ALL {
+        assert_eq!(
+            registry_completion_mode(model_completion_mode(registry)),
+            registry
+        );
     }
 }
 
@@ -106,17 +104,34 @@ fn model_tool_source(registry: LabletToolSource) -> ToolSource {
     }
 }
 
+/// An MCP source holds its server's name, so the domain has no list of every
+/// source, and the registry's list reaches each kind of source through the
+/// match above.
 #[test]
 fn both_tool_sources_are_spelled_as_the_registry_spells_them() {
-    for source in [
+    for registry in LabletToolSource::ALL {
+        let source = model_tool_source(registry);
+        assert_eq!(source.as_str(), registry.as_str());
+        assert_eq!(registry_tool_source(&source), registry);
+    }
+    // The other way round, from one source of each kind the domain has, so a
+    // kind the domain gains and maps onto another's spelling fails here. A
+    // kind added to the domain doesn't compile until `registry_tool_source`
+    // matches it, beside this list.
+    let each_kind = [
         ToolSource::Builtin,
         ToolSource::Mcp {
-            server: "docs".to_owned(),
+            server: "search".to_owned(),
         },
-    ] {
+    ];
+    for source in each_kind {
         let registry = registry_tool_source(&source);
-        assert_eq!(source.as_str(), registry.as_str());
-        assert_eq!(model_tool_source(registry), source);
+        assert_eq!(registry.as_str(), source.as_str(), "{source:?}");
+        assert_eq!(
+            std::mem::discriminant(&model_tool_source(registry)),
+            std::mem::discriminant(&source),
+            "{source:?}"
+        );
     }
 }
 
@@ -152,21 +167,22 @@ const fn model_tool_status(registry: LabletToolStatus) -> ToolCallStatus {
     }
 }
 
+/// Every status at both levels. A tool that ran is a built-in one, since the
+/// flattening drops where it came from.
+fn every_tool_call_status() -> impl Iterator<Item = ToolCallStatus> {
+    let ran = ToolCallEnd::ALL.map(|ended| ToolCallStatus::ran(ToolSource::Builtin, ended));
+    ToolCallStatus::NOTHING_RAN.into_iter().chain(ran)
+}
+
 #[test]
 fn every_tool_call_status_is_spelled_as_the_registry_spells_it() {
-    for status in [
-        ToolCallStatus::Unknown,
-        ToolCallStatus::MalformedInput,
-        ToolCallStatus::Rejected,
-        ToolCallStatus::NotRun,
-        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Ok),
-        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::ToolError),
-        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Timeout),
-        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Failed),
-    ] {
+    for status in every_tool_call_status() {
         let registry = registry_tool_status(&status);
         assert_eq!(status.as_str(), registry.as_str());
         assert_eq!(model_tool_status(registry), status);
+    }
+    for registry in LabletToolStatus::ALL {
+        assert_eq!(registry_tool_status(&model_tool_status(registry)), registry);
     }
 }
 
@@ -190,15 +206,13 @@ const fn model_api(registry: LabletRequestApi) -> ProviderApi {
 
 #[test]
 fn every_api_is_spelled_as_the_registry_spells_it() {
-    for api in [
-        ProviderApi::Messages,
-        ProviderApi::Responses,
-        ProviderApi::ChatCompletions,
-        ProviderApi::Script,
-    ] {
+    for api in ProviderApi::ALL {
         let registry = registry_api(api);
         assert_eq!(api.as_str(), registry.as_str());
         assert_eq!(model_api(registry), api);
+    }
+    for registry in LabletRequestApi::ALL {
+        assert_eq!(registry_api(model_api(registry)), registry);
     }
 }
 
@@ -218,10 +232,13 @@ const fn model_cache_scope(registry: LabletRequestCacheScope) -> CacheScope {
 
 #[test]
 fn both_cache_scopes_are_spelled_as_the_registry_spells_them() {
-    for scope in [CacheScope::Shared, CacheScope::Run] {
+    for scope in CacheScope::ALL {
         let registry = registry_cache_scope(scope);
         assert_eq!(scope.as_str(), registry.as_str());
         assert_eq!(model_cache_scope(registry), scope);
+    }
+    for registry in LabletRequestCacheScope::ALL {
+        assert_eq!(registry_cache_scope(model_cache_scope(registry)), registry);
     }
 }
 
@@ -241,9 +258,12 @@ const fn model_lifetime(registry: LabletMcpLifetime) -> McpLifetime {
 
 #[test]
 fn both_lifetimes_of_an_mcp_server_are_spelled_as_the_registry_spells_them() {
-    for lifetime in [McpLifetime::Run, McpLifetime::Lablet] {
+    for lifetime in McpLifetime::ALL {
         let registry = registry_lifetime(lifetime);
         assert_eq!(lifetime.as_str(), registry.as_str());
         assert_eq!(model_lifetime(registry), lifetime);
+    }
+    for registry in LabletMcpLifetime::ALL {
+        assert_eq!(registry_lifetime(model_lifetime(registry)), registry);
     }
 }

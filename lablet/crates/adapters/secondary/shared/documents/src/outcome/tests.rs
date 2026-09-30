@@ -282,26 +282,11 @@ fn a_run_id_that_is_not_one_is_refused_with_the_rule_it_breaks() {
     );
 }
 
-const STOP_REASONS: [model::StopReason; 12] = [
-    model::StopReason::Completed,
-    model::StopReason::EndedWithoutCompletion,
-    model::StopReason::MaxTurns,
-    model::StopReason::Timeout,
-    model::StopReason::MaxTotalTokens,
-    model::StopReason::OutputTruncated,
-    model::StopReason::ContextExhausted,
-    model::StopReason::RetriesExhausted,
-    model::StopReason::InvalidCallsExhausted,
-    model::StopReason::Cancelled,
-    model::StopReason::ProviderError,
-    model::StopReason::Refused,
-];
-
 /// The outcome and the wide event name a run's ending with one word, so a
 /// consumer that joins the two never maps one spelling to another.
 #[test]
 fn every_stop_reason_is_written_as_telemetry_spells_it_and_reads_back_as_itself() {
-    for reason in STOP_REASONS {
+    for reason in model::StopReason::ALL {
         let written = serde_json::to_value(StopReason::from(reason)).unwrap();
 
         assert_eq!(written, json!(reason.as_str()));

@@ -16,13 +16,13 @@ use serde_json::json;
 use crate::attributes::{Attributes, Held};
 use crate::run::Opening;
 
+pub(crate) use lablet_test_support::{PROMPT, SYSTEM, Scratch};
+
 pub(crate) const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 pub(crate) const STARTED_UNIX_MS: u64 = 1_790_000_000_000;
 pub(crate) const CONFIG_DIGEST: &str =
     "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 pub(crate) const MODEL: &str = "scripted-1";
-pub(crate) const SYSTEM: &str = "You fix tests.";
-pub(crate) const PROMPT: &str = "Fix the failing test.";
 
 pub(crate) fn run_id() -> RunId {
     RunId::new(RUN).unwrap()
@@ -497,34 +497,5 @@ pub(crate) mod memory {
         fn set_resource(&mut self, resource: &Resource) {
             self.memory.described(resource);
         }
-    }
-}
-
-/// A directory of one test's own, removed when the test ends, so tests that
-/// run together never write to one file.
-pub(crate) struct Scratch(std::path::PathBuf);
-
-impl Scratch {
-    pub(crate) fn new(test: &str) -> Self {
-        let directory = std::env::temp_dir().join(format!(
-            "lablet-telemetry-otel-{}-{test}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
-        Self(directory)
-    }
-
-    pub(crate) fn directory(&self) -> std::path::PathBuf {
-        self.0.clone()
-    }
-
-    pub(crate) fn path(&self, file: &str) -> std::path::PathBuf {
-        self.0.join(file)
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
     }
 }

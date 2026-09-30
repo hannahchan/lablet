@@ -5,12 +5,12 @@ use lablet::{FinishedRun, RunId};
 use lablet_telemetry_registry::attribute as key;
 use serde_json::{Value, json};
 
-use crate::harness::{ENDS, Scratch, Traced, read, request};
+use crate::harness::{ENDS, Lab, Traced, read, request};
 
 /// One run under the id `run`, of a config with `more` stated, and the
 /// three digests of its wide event: the config's, the tools' and the system
 /// prompt's.
-async fn digests(scratch: &Scratch, run: &str, more: Value) -> [String; 3] {
+async fn digests(scratch: &Lab, run: &str, more: Value) -> [String; 3] {
     let tree = scratch.tree(ENDS, more);
     let config = read(&tree);
     let digest = config.digest();
@@ -44,7 +44,7 @@ async fn digests(scratch: &Scratch, run: &str, more: Value) -> [String; 3] {
 
 #[tokio::test]
 async fn two_tool_sets_that_differ_in_one_description_differ_in_the_tools_digest() {
-    let scratch = Scratch::new("tools-digest");
+    let scratch = Lab::new("tools-digest");
     // A built-in tool's description says how long a call may take.
     let tools = |timeout: &str| {
         let mut builtin = scratch.builtin(&["bash", "read_file"]);
@@ -73,7 +73,7 @@ async fn two_tool_sets_that_differ_in_one_description_differ_in_the_tools_digest
 
 #[tokio::test]
 async fn one_lablet_run_twice_has_the_same_digests_both_times() {
-    let scratch = Scratch::new("same-digests");
+    let scratch = Lab::new("same-digests");
     let config = scratch.config(
         ENDS,
         json!({ "tools": { "builtin": scratch.builtin(&["bash"]) } }),
@@ -102,7 +102,7 @@ async fn one_lablet_run_twice_has_the_same_digests_both_times() {
 
 #[tokio::test]
 async fn two_system_prompts_differ_in_the_digest_and_one_prompt_has_one_digest() {
-    let scratch = Scratch::new("system-digest");
+    let scratch = Lab::new("system-digest");
     let prompt = |system: &str| json!({ "prompt": { "system": system } });
 
     let [config, tools, first] = digests(&scratch, "first", prompt("You fix tests.")).await;
@@ -125,7 +125,7 @@ async fn two_system_prompts_differ_in_the_digest_and_one_prompt_has_one_digest()
 /// them apart.
 #[tokio::test]
 async fn two_texts_of_one_prompt_file_share_a_config_digest_and_differ_in_the_prompts() {
-    let scratch = Scratch::new("prompt-file");
+    let scratch = Lab::new("prompt-file");
     let file = scratch.at("system.md");
     let from_file = json!({ "prompt": { "system": null, "system_file": file } });
 
@@ -150,7 +150,7 @@ async fn two_texts_of_one_prompt_file_share_a_config_digest_and_differ_in_the_pr
 
 #[tokio::test]
 async fn two_configs_that_differ_only_in_where_they_write_share_the_digest_of_their_records() {
-    let scratch = Scratch::new("outputs");
+    let scratch = Lab::new("outputs");
 
     let [plain, ..] = digests(&scratch, "plain", json!({})).await;
     let [elsewhere, ..] = digests(
