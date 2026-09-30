@@ -1,3 +1,4 @@
+use lablet_model::ConfigDigest;
 use serde_json::{Value, json};
 
 use super::*;
@@ -234,7 +235,7 @@ fn a_path_that_is_not_text_is_resolved_as_it_is_shown() {
         resolved["prompt"]["skills"],
         json!(["skills/\u{fffd}/SKILL.md"])
     );
-    assert_eq!(config.digest().len(), 64);
+    assert_eq!(config.digest().as_str().len(), 64);
 }
 
 const FAKE: &str = "
@@ -242,7 +243,7 @@ model: { provider: fake, script: scripts/run.yaml, name: scripted-1 }
 prompt: { system: You fix tests. }
 ";
 
-fn digest(more: &str) -> String {
+fn digest(more: &str) -> ConfigDigest {
     yaml(&format!("{FAKE}{more}")).digest()
 }
 
@@ -270,23 +271,10 @@ fn the_digest_is_of_the_settings_that_say_what_a_run_does_with_every_default_fil
         .iter()
         .fold(String::new(), |hex, byte| format!("{hex}{byte:02x}"));
 
-    assert_eq!(digest(""), expected);
+    assert_eq!(digest("").as_str(), expected);
     assert_eq!(
         expected,
         "e6697aa9d6abe9e6e64979c8df1665a3064073b72d7ce5495685245563756eb2"
-    );
-}
-
-#[test]
-fn the_digest_is_the_sha_256_of_the_canonical_json_in_lower_case_hex() {
-    let digest = digest("");
-
-    assert_eq!(digest.len(), 64);
-    assert!(
-        digest
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
-        "{digest}"
     );
 }
 

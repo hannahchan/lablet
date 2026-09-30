@@ -7,7 +7,7 @@ use lablet_documents::{TRANSCRIPT_SCHEMA_VERSION, TranscriptDocument};
 use serde_json::{Value, json};
 
 use crate::as_checked_in;
-use crate::run::{context, model, of_two_turns, tools, without_a_turn};
+use crate::run::{TASK, context, model, of_two_turns, tools, without_a_turn};
 
 // Compiled in, so the test reads the same file whatever directory it runs from.
 const FIXTURE: &str = include_str!(concat!(
@@ -16,7 +16,7 @@ const FIXTURE: &str = include_str!(concat!(
 ));
 
 fn document() -> TranscriptDocument {
-    TranscriptDocument::new(context(), model(), tools(), of_two_turns())
+    TranscriptDocument::new(context(), model(), tools(), TASK.to_owned(), of_two_turns())
 }
 
 fn written(document: &TranscriptDocument) -> Value {
@@ -64,6 +64,7 @@ fn the_document_has_the_version_what_names_the_run_its_tools_and_its_conversatio
             "schema_version",
             "started_unix_ms",
             "system",
+            "task_prompt",
             "tools",
             "turns",
         ]
@@ -81,7 +82,10 @@ fn what_names_the_run_is_what_its_context_states() {
         document["labels"],
         json!({ "task": "fix-failing-test", "experiment": null, "trial": "3" })
     );
-    assert_eq!(document["config_digest"], json!(context.config_digest));
+    assert_eq!(
+        document["config_digest"],
+        json!(context.config_digest.as_str())
+    );
     assert_eq!(document["lablet_version"], json!(context.agent_version));
     assert_eq!(document["started_unix_ms"], json!(context.started_unix_ms));
     assert_eq!(
@@ -180,17 +184,20 @@ fn a_turn_s_outcomes_answer_its_calls_in_call_order() {
 }
 
 /// A run that received no response has no turns, so its transcript holds
-/// the system prompt alone, under everything that names the run.
+/// the system prompt and the task prompt, under everything that names the
+/// run: it still says what was asked.
 #[test]
-fn a_run_without_a_turn_publishes_its_system_prompt_and_no_turns() {
+fn a_run_without_a_turn_publishes_its_prompts_and_no_turns() {
     let document = written(&TranscriptDocument::new(
         context(),
         model(),
         tools(),
+        "Say what was asked.".to_owned(),
         without_a_turn(),
     ));
 
     assert_eq!(document["system"], json!("You fix tests."));
+    assert_eq!(document["task_prompt"], json!("Say what was asked."));
     assert_eq!(document["turns"], json!([]));
     assert_eq!(document["run_id"], json!("01K5F3Z8Q4X9T2M7B6W1R0VNEC"));
     assert_eq!(document["schema_version"], json!(1));

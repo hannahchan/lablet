@@ -4,15 +4,46 @@ use std::num::NonZeroU32;
 use lablet_model::{CacheScope, Effort, Thinking};
 
 use super::*;
-use crate::config::Format;
+use crate::config::{ConfigError, Format};
 
 const FAKE: &str = "
 model: { provider: fake, script: scripts/run.yaml, name: scripted-1 }
 prompt: { system: You fix tests. }
 ";
 
+/// The settings of `config`, and a refusal as the config shows it, less
+/// where the setting was written, which the config's own tests hold.
+fn settings_of(config: &Config) -> Result<Settings, ConfigError> {
+    Settings::of(config).map_err(|refusal| match config.refused(refusal) {
+        ConfigError::Invalid {
+            key, value, reason, ..
+        } => ConfigError::Invalid {
+            key,
+            place: None,
+            value,
+            reason,
+        },
+        ConfigError::NotApplied {
+            key,
+            value,
+            reached,
+            ..
+        } => ConfigError::NotApplied {
+            key,
+            place: None,
+            value,
+            reached,
+        },
+        ConfigError::KeyVariable { reason, .. } => ConfigError::KeyVariable {
+            place: None,
+            reason,
+        },
+        other => other,
+    })
+}
+
 fn of(text: &str) -> Result<Settings, ConfigError> {
-    Settings::of(&Config::from_str(text, Format::Yaml).unwrap())
+    settings_of(&Config::from_str(text, Format::Yaml).unwrap())
 }
 
 /// The settings of the fake model's config with `more` stated too.
@@ -23,7 +54,8 @@ fn with(more: &str) -> Result<Settings, ConfigError> {
 fn refused(key: &str, value: &str, reason: &str) -> ConfigError {
     ConfigError::Invalid {
         key: key.to_owned(),
-        value: value.to_owned(),
+        place: None,
+        value: Some(value.to_owned()),
         reason: reason.to_owned(),
     }
 }
@@ -248,17 +280,17 @@ fn a_rate_that_is_no_price_is_refused_by_its_key() {
         (
             "input: -1, output: 15, cache_read: 0.3, cache_write: 3.75",
             "input",
-            "-1",
+            "-1.0",
         ),
         (
-            "input: 3, output: .inf, cache_read: 0.3, cache_write: 3.75",
+            "input: 3, output: -2, cache_read: 0.3, cache_write: 3.75",
             "output",
-            "inf",
+            "-2.0",
         ),
         (
-            "input: 3, output: 15, cache_read: .nan, cache_write: 3.75",
+            "input: 3, output: 15, cache_read: -0.3, cache_write: 3.75",
             "cache_read",
-            "NaN",
+            "-0.3",
         ),
         (
             "input: 3, output: 15, cache_read: 0.3, cache_write: -0.5",
@@ -286,13 +318,13 @@ fn a_backoff_that_starts_above_its_cap_and_a_jitter_that_is_no_share_are_refused
         with("run: { retry_backoff_base: 1m, retry_backoff_max: 32s }"),
         Err(refused(
             "run.retry_backoff_base",
-            "1m",
+            "\"1m\"",
             "a backoff starts no longer than `run.retry_backoff_max`, which is 32s"
         ))
     );
     with("run: { retry_backoff_base: 32s, retry_backoff_max: 32s }").unwrap();
 
-    for (written, shown) in [("1.5", "1.5"), ("-0.1", "-0.1"), (".nan", "NaN")] {
+    for (written, shown) in [("1.5", "1.5"), ("-0.1", "-0.1")] {
         assert_eq!(
             with(&format!("run: {{ retry_jitter: {written} }}")),
             Err(refused(
@@ -308,22 +340,29 @@ fn a_backoff_that_starts_above_its_cap_and_a_jitter_that_is_no_share_are_refused
 fn not_applied(key: &'static str, value: &str, reached: &str) -> ConfigError {
     ConfigError::NotApplied {
         key,
-        value: value.to_owned(),
+        place: None,
+        value: Some(value.to_owned()),
         reached: reached.to_owned(),
     }
 }
 
-#[test]
-fn a_setting_the_config_states_and_the_provider_cannot_apply_is_refused_by_name() {
+/// Each setting a provider can't apply, as a config states it, with the
+/// provider and the API that can't.
+fn not_applied_by_each_provider() -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
     const ANTHROPIC: &str = "the provider `anthropic`";
     const FAKE: &str = "the provider `fake`";
     const RESPONSES: &str = "the provider `openai` over its API `responses`";
     const CHAT: &str = "the provider `openai` over its API `chat_completions`";
 
-    for (model, key, value, reached) in [
+    vec![
         ("seed: 7", "model.seed", "7", ANTHROPIC),
-        ("api: responses", "model.api", "responses", ANTHROPIC),
-        ("script: run.yaml", "model.script", "run.yaml", ANTHROPIC),
+        ("api: responses", "model.api", "\"responses\"", ANTHROPIC),
+        (
+            "script: run.yaml",
+            "model.script",
+            "\"run.yaml\"",
+            ANTHROPIC,
+        ),
         (
             "reasoning_replay: false",
             "model.reasoning_replay",
@@ -333,13 +372,13 @@ fn a_setting_the_config_states_and_the_provider_cannot_apply_is_refused_by_name(
         (
             "provider: openai, thinking: adaptive",
             "model.thinking",
-            "adaptive",
+            "\"adaptive\"",
             RESPONSES,
         ),
         (
             "provider: openai, thinking: { budget: 2048 }",
             "model.thinking",
-            "{ budget: 2048 }",
+            "{\"budget\":2048}",
             RESPONSES,
         ),
         (
@@ -351,7 +390,7 @@ fn a_setting_the_config_states_and_the_provider_cannot_apply_is_refused_by_name(
         (
             "provider: openai, script: run.yaml",
             "model.script",
-            "run.yaml",
+            "\"run.yaml\"",
             RESPONSES,
         ),
         (
@@ -363,13 +402,13 @@ fn a_setting_the_config_states_and_the_provider_cannot_apply_is_refused_by_name(
         (
             "provider: openai, api: chat_completions, effort: high",
             "model.effort",
-            "high",
+            "\"high\"",
             CHAT,
         ),
         (
             "provider: openai, base_url: 'http://localhost:11434/v1', effort: low",
             "model.effort",
-            "low",
+            "\"low\"",
             CHAT,
         ),
         (
@@ -387,28 +426,33 @@ fn a_setting_the_config_states_and_the_provider_cannot_apply_is_refused_by_name(
         (
             "provider: fake, script: run.yaml, thinking: provider_default",
             "model.thinking",
-            "provider_default",
+            "\"provider_default\"",
             FAKE,
         ),
         (
             "provider: fake, script: run.yaml, effort: max",
             "model.effort",
-            "max",
+            "\"max\"",
             FAKE,
         ),
         (
             "provider: fake, script: run.yaml, api: chat_completions",
             "model.api",
-            "chat_completions",
+            "\"chat_completions\"",
             FAKE,
         ),
         (
             "provider: fake, script: run.yaml, base_url: 'http://localhost:4000'",
             "model.base_url",
-            "http://localhost:4000",
+            "\"http://localhost:4000\"",
             FAKE,
         ),
-    ] {
+    ]
+}
+
+#[test]
+fn a_setting_the_config_states_and_the_provider_cannot_apply_is_refused_by_name() {
+    for (model, key, value, reached) in not_applied_by_each_provider() {
         assert_eq!(
             of(&format!("model: {{ {model} }}\nprompt: {{ system: Hi. }}")),
             Err(not_applied(key, value, reached)),
@@ -489,7 +533,7 @@ fn a_fake_model_needs_its_script() {
     assert_eq!(
         of("model: { provider: fake }\nprompt: { system: Hi. }"),
         Err(ConfigError::Missing {
-            key: "model.script",
+            key: "model.script".to_owned(),
             reason: "the provider `fake` plays the script it names".to_owned(),
         })
     );
@@ -497,14 +541,17 @@ fn a_fake_model_needs_its_script() {
 
 #[test]
 fn a_temperature_is_a_number_and_a_thinking_budget_is_below_the_cap_on_output() {
-    for (written, shown) in [(".nan", "NaN"), (".inf", "inf")] {
+    // YAML's `.nan` and `.inf` are refused when a config is read, since
+    // JSON has no such number, so only a config made in code holds one.
+    for temperature in [f64::NAN, f64::INFINITY] {
+        let mut config = Config::from_str("prompt: { system: Hi. }", Format::Yaml).unwrap();
+        config.model.temperature = Some(temperature);
+
         assert_eq!(
-            of(&format!(
-                "model: {{ temperature: {written} }}\nprompt: {{ system: Hi. }}"
-            )),
+            settings_of(&config),
             Err(refused(
                 "model.temperature",
-                shown,
+                "null",
                 "a temperature is a finite number"
             ))
         );
@@ -514,7 +561,7 @@ fn a_temperature_is_a_number_and_a_thinking_budget_is_below_the_cap_on_output() 
         of("model: { thinking: { budget: 4096 }, max_tokens: 4096 }\nprompt: { system: Hi. }"),
         Err(refused(
             "model.thinking",
-            "{ budget: 4096 }",
+            "{\"budget\":4096}",
             "a budget is fewer tokens than `model.max_tokens`, which is 4096"
         ))
     );
@@ -546,7 +593,7 @@ fn a_config_states_one_system_prompt() {
         )),
         Err(refused(
             "prompt.system_file",
-            "prompts/system.md",
+            "\"prompts/system.md\"",
             "`prompt.system` is stated too, and a config states one of the two"
         ))
     );
@@ -554,7 +601,7 @@ fn a_config_states_one_system_prompt() {
         assert_eq!(
             of(&format!("{MODEL}{nothing}")),
             Err(ConfigError::Missing {
-                key: "prompt.system",
+                key: "prompt.system".to_owned(),
                 reason: "a config states `prompt.system` or `prompt.system_file`".to_owned(),
             })
         );
@@ -586,29 +633,26 @@ fn a_preview_longer_than_the_cap_is_refused_and_one_as_long_is_taken() {
 
 #[test]
 fn a_list_of_tools_names_tools_and_an_allow_list_names_at_least_one() {
-    for (list, written, shown, said) in [
-        (
-            "allow",
-            "[bash, 'read file']",
-            "\"read file\"",
-            "has a character other than",
-        ),
-        ("deny", "['']", "\"\"", "tool name is empty"),
+    for (list, written, key, shown) in [
+        ("allow", "[bash, 'read file']", "allow[1]", "\"read file\""),
+        ("deny", "['']", "deny[0]", "\"\""),
+        ("deny", "[read_file, ' bash']", "deny[1]", "\" bash\""),
         (
             "deny",
-            "[' bash']",
-            "\" bash\"",
-            "leading or trailing whitespace",
+            "[bash, bash, grep\u{e9}]",
+            "deny[2]",
+            "\"grep\u{e9}\"",
         ),
     ] {
-        match with(&format!("tools: {{ {list}: {written} }}")) {
-            Err(ConfigError::Invalid { key, value, reason }) => {
-                assert_eq!(key, format!("tools.{list}"));
-                assert_eq!(value, shown);
-                assert!(reason.contains(said), "{reason}");
-            }
-            other => panic!("{other:?}"),
-        }
+        assert_eq!(
+            with(&format!("tools: {{ {list}: {written} }}")),
+            Err(refused(
+                &format!("tools.{key}"),
+                shown,
+                "a tool's name is 1 to 64 ASCII letters, digits, `_` and `-`"
+            )),
+            "{written}"
+        );
     }
 
     assert_eq!(
@@ -636,7 +680,7 @@ fn a_built_in_tool_needs_a_root_and_a_root_alone_serves_no_tool() {
         assert_eq!(
             with(&format!("tools: {{ builtin: {{ enabled: {enabled} }} }}")),
             Err(ConfigError::Missing {
-                key: "tools.builtin.root",
+                key: "tools.builtin.root".to_owned(),
                 reason: format!(
                     "`tools.builtin.enabled` holds `{first}`, and a built-in tool works under \
                      the root"
@@ -660,7 +704,8 @@ fn a_built_in_tool_needs_a_root_and_a_root_alone_serves_no_tool() {
 fn an_mcp_server_has_a_name_a_tool_name_can_carry() {
     let server = |name: &str| {
         with(&format!(
-            "tools: {{ mcp: [{{ name: {name}, transport: stdio, command: npx }}] }}"
+            "tools: {{ mcp: [{{ name: docs, transport: stdio, command: npx }}, {{ name: {name}, \
+             transport: stdio, command: npx }}] }}"
         ))
     };
 
@@ -684,7 +729,7 @@ fn an_mcp_server_has_a_name_a_tool_name_can_carry() {
     ] {
         assert_eq!(
             server(written),
-            Err(refused("tools.mcp.name", shown, said)),
+            Err(refused("tools.mcp[1].name", shown, said)),
             "{written}"
         );
     }
@@ -696,10 +741,8 @@ fn an_mcp_server_has_a_name_a_tool_name_can_carry() {
 #[test]
 fn the_first_setting_refused_is_the_first_in_the_order_of_the_sections() {
     let refusal = |text: &str| match of(text) {
-        Err(ConfigError::Invalid { key, .. }) => key,
-        Err(ConfigError::Missing { key, .. } | ConfigError::NotApplied { key, .. }) => {
-            key.to_owned()
-        }
+        Err(ConfigError::Invalid { key, .. } | ConfigError::Missing { key, .. }) => key,
+        Err(ConfigError::NotApplied { key, .. }) => key.to_owned(),
         other => panic!("{other:?}"),
     };
 
@@ -746,7 +789,7 @@ fn a_refusal_names_its_key_and_the_value_that_was_refused() {
     );
     assert_eq!(
         ConfigError::Missing {
-            key: "model.script",
+            key: "model.script".to_owned(),
             reason: "the provider `fake` plays the script it names".to_owned(),
         }
         .to_string(),

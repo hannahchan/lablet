@@ -2,7 +2,7 @@
 
 use std::os::unix::fs::symlink;
 
-use lablet::{BuildError, Config, ConfigError, FilterList, Format, OwnFile, Unsupported};
+use lablet::{BuildError, Config, ConfigError, FilterList, Format, OwnFile, Place, Unsupported};
 use serde_json::{Value, json};
 
 use crate::harness::{ENDS, Lab, read, request};
@@ -17,11 +17,35 @@ async fn refusal(config: Config) -> BuildError {
     lablet::build(config).await.unwrap_err()
 }
 
-fn refused(key: &'static str, value: &str, reason: &str) -> BuildError {
-    BuildError::Refused {
-        key,
-        value: value.to_owned(),
+/// Where every setting of a config the harness writes is: its JSON is on
+/// one line.
+const LINE: Option<Place> = Some(Place::Line(1));
+
+fn refused(key: &str, value: &str, reason: &str) -> BuildError {
+    BuildError::Config(ConfigError::Invalid {
+        key: key.to_owned(),
+        place: LINE,
+        value: Some(value.to_owned()),
         reason: reason.to_owned(),
+    })
+}
+
+/// The refusal of a setting that holds a file, by its key and the file as
+/// the config writes it, with what the system said.
+fn refused_file(error: BuildError, key: &str, file: &std::path::Path) -> String {
+    match error {
+        BuildError::Config(ConfigError::Invalid {
+            key: refused,
+            place,
+            value,
+            reason,
+        }) => {
+            assert_eq!(refused, key);
+            assert_eq!(place, LINE);
+            assert_eq!(value, Some(json!(file).to_string()));
+            reason
+        }
+        other => panic!("{other:?}"),
     }
 }
 
@@ -44,12 +68,13 @@ async fn a_name_in_a_list_that_no_tool_has_is_refused_with_the_list_it_is_in() {
         denied,
         BuildError::UnknownTool {
             list: FilterList::Deny,
+            place: LINE,
             name: "raed_file".to_owned(),
         }
     );
     assert_eq!(
         denied.to_string(),
-        "tools.deny: raed_file is refused: no tool the lists apply to has the name"
+        "tools.deny (line 1): raed_file is refused: no tool the lists apply to has the name"
     );
 
     let allowed = refusal(with(json!({ "allow": ["bash", "raed_file"] }))).await;
@@ -57,18 +82,20 @@ async fn a_name_in_a_list_that_no_tool_has_is_refused_with_the_list_it_is_in() {
         allowed,
         BuildError::UnknownTool {
             list: FilterList::Allow,
+            place: LINE,
             name: "raed_file".to_owned(),
         }
     );
     assert_eq!(
         allowed.to_string(),
-        "tools.allow: raed_file is refused: no tool the lists apply to has the name"
+        "tools.allow (line 1): raed_file is refused: no tool the lists apply to has the name"
     );
 
     assert_eq!(
         refusal(with(json!({ "allow": ["write_file"] }))).await,
         BuildError::UnknownTool {
             list: FilterList::Allow,
+            place: LINE,
             name: "write_file".to_owned(),
         },
         "a built-in tool that isn't enabled is a tool the run doesn't have"
@@ -108,19 +135,21 @@ async fn task_complete_is_in_neither_list_in_explicit_mode() {
             error,
             BuildError::UnknownTool {
                 list,
+                place: LINE,
                 name: "task_complete".to_owned(),
             }
         );
         assert!(
             error
                 .to_string()
-                .starts_with(&format!("tools.{list}: task_complete is refused")),
+                .starts_with(&format!("tools.{list} (line 1): task_complete is refused")),
             "{error}"
         );
         assert_eq!(
             refusal(with("natural", tools)).await,
             BuildError::UnknownTool {
                 list,
+                place: LINE,
                 name: "task_complete".to_owned(),
             },
             "in natural mode no tool has the name at all"
@@ -141,7 +170,7 @@ async fn a_built_in_tool_without_a_root_is_refused_by_the_key_of_the_root() {
     assert_eq!(
         error,
         BuildError::Config(ConfigError::Missing {
-            key: "tools.builtin.root",
+            key: "tools.builtin.root".to_owned(),
             reason: "`tools.builtin.enabled` holds `bash`, and a built-in tool works under the \
                      root"
                 .to_owned(),
@@ -166,14 +195,8 @@ async fn a_root_that_is_no_directory_is_refused_by_its_key_and_its_value() {
             json!({ "tools": { "builtin": { "root": root, "enabled": ["bash"] } } }),
         );
 
-        match refusal(config).await {
-            BuildError::Refused { key, value, reason } => {
-                assert_eq!(key, "tools.builtin.root");
-                assert_eq!(value, root.display().to_string());
-                assert!(!reason.is_empty());
-            }
-            other => panic!("{other:?}"),
-        }
+        let reason = refused_file(refusal(config).await, "tools.builtin.root", root);
+        assert!(!reason.is_empty());
     }
 }
 
@@ -182,6 +205,7 @@ async fn a_root_that_holds_a_file_of_lablets_own_is_refused_with_the_file_it_hol
     let scratch = Lab::new("root-holds");
     let root = scratch.root();
     let holds = |holds, path: &std::path::Path| BuildError::RootHolds {
+        place: LINE,
         root: root.display().to_string(),
         holds,
         path: path.display().to_string(),
@@ -196,7 +220,7 @@ async fn a_root_that_holds_a_file_of_lablets_own_is_refused_with_the_file_it_hol
     assert_eq!(
         error.to_string(),
         format!(
-            "tools.builtin.root: {} is refused: it holds the config, {}",
+            "tools.builtin.root (line 1): {} is refused: it holds the config, {}",
             root.display(),
             inside.display()
         )
@@ -259,6 +283,7 @@ async fn a_root_that_holds_the_working_directory_holds_the_telemetry_a_run_has_t
     assert_eq!(
         refusal(read(&tree)).await,
         BuildError::RootHolds {
+            place: LINE,
             root: here.display().to_string(),
             holds: OwnFile::Telemetry,
             path: here
@@ -277,7 +302,11 @@ async fn a_variable_no_command_can_start_with_is_refused_by_its_name() {
 
     assert_eq!(
         refusal(scratch.config(ENDS, json!({ "tools": { "builtin": builtin } }))).await,
-        refused("tools.builtin.env", "A=B", "its name holds `=` or a NUL")
+        refused(
+            "tools.builtin.env.A=B",
+            "\"1\"",
+            "its name holds `=` or a NUL"
+        )
     );
 }
 
@@ -401,13 +430,15 @@ async fn where_a_script_is_served_is_refused_since_nothing_serves_it() {
         error,
         BuildError::Config(ConfigError::NotApplied {
             key: "model.base_url",
-            value: "http://localhost:4000".to_owned(),
+            place: LINE,
+            value: Some("\"http://localhost:4000\"".to_owned()),
             reached: "the provider `fake`".to_owned(),
         })
     );
     assert_eq!(
         error.to_string(),
-        "model.base_url: http://localhost:4000 is refused: the provider `fake` can't apply it"
+        "model.base_url (line 1): \"http://localhost:4000\" is refused: the provider `fake` \
+         can't apply it"
     );
 }
 
@@ -422,11 +453,11 @@ async fn a_config_is_checked_whole_before_any_adapter_is_selected() {
 
         assert_eq!(
             error,
-            BuildError::Config(ConfigError::Invalid {
-                key: "run.retry_jitter".to_owned(),
-                value: "2".to_owned(),
-                reason: "the jitter is a share of a wait, from 0 to 1".to_owned(),
-            }),
+            refused(
+                "run.retry_jitter",
+                "2.0",
+                "the jitter is a share of a wait, from 0 to 1"
+            ),
             "{kind:?}"
         );
     }
@@ -439,7 +470,8 @@ async fn a_config_is_checked_whole_before_any_adapter_is_selected() {
         refusal(config).await,
         BuildError::Config(ConfigError::NotApplied {
             key: "model.seed",
-            value: "7".to_owned(),
+            place: LINE,
+            value: Some("7".to_owned()),
             reached: "the provider `anthropic`".to_owned(),
         })
     );
@@ -459,8 +491,8 @@ async fn a_provider_that_needs_a_key_needs_the_variable_that_holds_it_to_be_set(
     assert_eq!(
         error.to_string(),
         format!(
-            "model.api_key_env is refused: `{NO_VARIABLE}`, the variable it names, isn't set, \
-             and the provider `anthropic` needs a key"
+            "model.api_key_env (line 1) is refused: `{NO_VARIABLE}`, the variable it names, \
+             isn't set, and the provider `anthropic` needs a key"
         )
     );
     assert!(matches!(error, BuildError::KeyVariable { .. }), "{error:?}");
@@ -468,8 +500,8 @@ async fn a_provider_that_needs_a_key_needs_the_variable_that_holds_it_to_be_set(
     let error = refusal(anthropic(&lower)).await;
     assert_eq!(
         error.to_string(),
-        "model.api_key_env is refused: the variable it names isn't set, and the provider \
-         `anthropic` needs a key"
+        "model.api_key_env (line 1) is refused: the variable it names isn't set, and the \
+         provider `anthropic` needs a key"
     );
     assert!(!format!("{error:?}").contains(&lower), "{error:?}");
     assert_eq!(
@@ -497,7 +529,7 @@ async fn a_key_written_where_its_variable_is_named_is_refused_and_never_shown() 
         assert!(
             error
                 .to_string()
-                .starts_with("model.api_key_env is refused: "),
+                .starts_with("model.api_key_env (line 1) is refused: "),
             "{error}"
         );
         for shown in [error.to_string(), format!("{error:?}")] {
@@ -540,14 +572,8 @@ async fn a_script_that_cannot_be_played_is_refused_by_its_key_and_its_path() {
         tree["model"]["script"] = json!(script);
         read(&tree)
     };
-    let said = |error: BuildError, script: &std::path::Path| match error {
-        BuildError::Refused { key, value, reason } => {
-            assert_eq!(key, "model.script");
-            assert_eq!(value, script.display().to_string());
-            reason
-        }
-        other => panic!("{other:?}"),
-    };
+    let said =
+        |error: BuildError, script: &std::path::Path| refused_file(error, "model.script", script);
 
     let missing = scratch.at("missing.yaml");
     assert!(!said(refusal(with(&missing)).await, &missing).is_empty());
@@ -599,12 +625,6 @@ async fn the_system_prompt_is_read_from_the_file_the_config_names() {
 
     let missing = scratch.at("missing.md");
     tree["prompt"] = json!({ "system_file": missing });
-    match refusal(read(&tree)).await {
-        BuildError::Refused { key, value, reason } => {
-            assert_eq!(key, "prompt.system_file");
-            assert_eq!(value, missing.display().to_string());
-            assert!(!reason.is_empty());
-        }
-        other => panic!("{other:?}"),
-    }
+    let reason = refused_file(refusal(read(&tree)).await, "prompt.system_file", &missing);
+    assert!(!reason.is_empty());
 }

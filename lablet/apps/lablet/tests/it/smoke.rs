@@ -89,10 +89,12 @@ impl Smoke {
                 "tools": { "builtin": scratch.builtin(&["bash", "read_file", "write_file"]) },
             }),
         );
-        let config_digest = config.digest();
+        let config_digest = config.digest().to_string();
         let mut lablet = lablet::build(config).await.unwrap();
 
-        let finished = lablet.run(request().run_id(RunId::new(RUN).unwrap())).await;
+        let finished = lablet
+            .run(request().run_id(RunId::new(RUN).unwrap()).unwrap())
+            .await;
         // Read before the shutdown: the file is whole when `run` returns.
         let exported = scratch.exported();
         lablet.shutdown().await;

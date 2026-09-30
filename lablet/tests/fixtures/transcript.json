@@ -48,6 +48,7 @@
     }
   ],
   "system": "You fix tests.",
+  "task_prompt": "Fix the failing test.",
   "turns": [
     {
       "input": [

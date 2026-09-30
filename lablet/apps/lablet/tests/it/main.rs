@@ -4,6 +4,10 @@
 #[cfg(test)]
 mod build;
 #[cfg(test)]
+mod cancel;
+#[cfg(test)]
+mod check;
+#[cfg(test)]
 mod digests;
 #[cfg(test)]
 mod failures;
@@ -13,6 +17,8 @@ mod harness;
 mod labels;
 #[cfg(test)]
 mod library;
+#[cfg(test)]
+mod schema;
 #[cfg(test)]
 mod smoke;
 #[cfg(test)]

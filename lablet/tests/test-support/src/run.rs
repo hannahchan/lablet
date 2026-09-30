@@ -69,7 +69,10 @@ pub fn context(run: &str) -> RunContext {
         run_id: must(RunId::new(run), "naming the run"),
         labels: RunLabels::default(),
         started_unix_ms: STARTED_UNIX_MS,
-        config_digest: CONFIG_DIGEST.to_owned(),
+        config_digest: must(
+            lablet_model::ConfigDigest::new(CONFIG_DIGEST),
+            "naming the config",
+        ),
         agent_version: AGENT_VERSION.to_owned(),
         transcript_path: None,
         skills_count: 0,

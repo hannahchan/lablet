@@ -5,12 +5,13 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::written::{duration, path};
 
 /// The `run` section.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Run {
     /// How the run decides that the model has finished.
@@ -20,6 +21,7 @@ pub struct Run {
     pub max_turns: Option<NonZeroU32>,
     /// How long the run may take.
     #[serde(with = "duration")]
+    #[schemars(with = "String")]
     pub timeout: Duration,
     /// The budget of input plus output tokens, summed over every provider
     /// call; `None` is no budget.
@@ -29,20 +31,24 @@ pub struct Run {
     pub max_retries: u32,
     /// The wait after the first failed attempt, which doubles each time.
     #[serde(with = "duration")]
+    #[schemars(with = "String")]
     pub retry_backoff_base: Duration,
     /// The longest backoff.
     #[serde(with = "duration")]
+    #[schemars(with = "String")]
     pub retry_backoff_max: Duration,
     /// The largest share of a wait that's added to it, from 0 to 1.
     pub retry_jitter: f64,
     /// The longest wait a server may ask for; a longer one ends the retries.
     #[serde(with = "duration")]
+    #[schemars(with = "String")]
     pub retry_hint_max: Duration,
     /// How many turns in a row may make no call that reached a tool; `None`
     /// is no cap.
     pub max_consecutive_invalid_turns: Option<NonZeroU32>,
     /// How long one provider call may take, when the run has that long left.
     #[serde(with = "duration")]
+    #[schemars(with = "String")]
     pub provider_timeout: Duration,
     /// What's sent of the conversation on each provider call.
     pub context: Context,
@@ -80,7 +86,7 @@ impl Default for Run {
 }
 
 /// How a run decides that the model has finished.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Completion {
     /// A response that calls no tool completes the run.
@@ -91,7 +97,7 @@ pub enum Completion {
 }
 
 /// What's sent of the conversation on each provider call.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Context {
     /// All of it.
@@ -107,7 +113,7 @@ pub enum Context {
 }
 
 /// The form a transcript is written in.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TranscriptFormat {
     /// The transcript document.

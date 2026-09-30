@@ -1,0 +1,1035 @@
+{
+  "$defs": {
+    "Api": {
+      "description": "One of the two APIs an `openai` model is reached through.",
+      "oneOf": [
+        {
+          "const": "responses",
+          "description": "The Responses API.",
+          "type": "string"
+        },
+        {
+          "const": "chat_completions",
+          "description": "Chat completions.",
+          "type": "string"
+        }
+      ]
+    },
+    "Builtin": {
+      "additionalProperties": false,
+      "description": "The `tools.builtin` section.",
+      "properties": {
+        "enabled": {
+          "default": [],
+          "description": "The tools to serve. `task_complete` isn't one of them: explicit\ncompletion implies it.",
+          "items": {
+            "$ref": "#/$defs/BuiltinTool"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Variables a command starts with beside the short list `bash` has.",
+          "type": "object"
+        },
+        "root": {
+          "default": null,
+          "description": "The directory `bash` starts in and the file tools stay under. It's\nneeded once a tool is enabled, and it holds none of lablet's own\nfiles.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "default": "2m",
+          "description": "The longest a call may take.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "BuiltinTool": {
+      "description": "One of the built-in tools.",
+      "oneOf": [
+        {
+          "const": "bash",
+          "description": "Runs a command.",
+          "type": "string"
+        },
+        {
+          "const": "read_file",
+          "description": "Reads a file under the root.",
+          "type": "string"
+        },
+        {
+          "const": "write_file",
+          "description": "Writes a file under the root.",
+          "type": "string"
+        }
+      ]
+    },
+    "CacheScope": {
+      "description": "Which runs share what a provider caches of a run's requests.",
+      "oneOf": [
+        {
+          "const": "shared",
+          "description": "Every run that sends the same prefix shares what's cached of it.",
+          "type": "string"
+        },
+        {
+          "const": "run",
+          "description": "Each request carries the run id as its cache key.",
+          "type": "string"
+        }
+      ]
+    },
+    "Completion": {
+      "description": "How a run decides that the model has finished.",
+      "oneOf": [
+        {
+          "const": "natural",
+          "description": "A response that calls no tool completes the run.",
+          "type": "string"
+        },
+        {
+          "const": "explicit",
+          "description": "A `task_complete` call made on its own completes the run.",
+          "type": "string"
+        }
+      ]
+    },
+    "Context": {
+      "description": "What's sent of the conversation on each provider call.",
+      "oneOf": [
+        {
+          "const": "full",
+          "description": "All of it.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "All of it, with a placeholder in place of each older tool result.",
+          "properties": {
+            "mask": {
+              "additionalProperties": false,
+              "properties": {
+                "keep_last": {
+                  "description": "How many of the latest tool results are sent whole.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "trigger_tokens": {
+                  "description": "The size of a request, in tokens, from which results are masked.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "trigger_tokens",
+                "keep_last"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "mask"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Effort": {
+      "description": "A reasoning effort level.",
+      "oneOf": [
+        {
+          "const": "low",
+          "description": "The least effort.",
+          "type": "string"
+        },
+        {
+          "const": "medium",
+          "description": "Moderate effort.",
+          "type": "string"
+        },
+        {
+          "const": "high",
+          "description": "High effort.",
+          "type": "string"
+        },
+        {
+          "const": "xhigh",
+          "description": "Above high.",
+          "type": "string"
+        },
+        {
+          "const": "max",
+          "description": "The most effort the provider offers.",
+          "type": "string"
+        }
+      ]
+    },
+    "McpLifetime": {
+      "description": "How long a run's MCP servers live.",
+      "oneOf": [
+        {
+          "const": "run",
+          "description": "The servers are started again for each run after the first.",
+          "type": "string"
+        },
+        {
+          "const": "lablet",
+          "description": "The servers are started once and serve every run.",
+          "type": "string"
+        }
+      ]
+    },
+    "McpNames": {
+      "description": "Whether an MCP tool's name carries its server's.",
+      "oneOf": [
+        {
+          "const": "prefixed",
+          "description": "A tool is offered as `mcp__<server>__<tool>`.",
+          "type": "string"
+        },
+        {
+          "const": "own",
+          "description": "A tool is offered under the name its server gives it.",
+          "type": "string"
+        }
+      ]
+    },
+    "McpResult": {
+      "description": "Which part the model is sent of an MCP result that has two.",
+      "oneOf": [
+        {
+          "const": "structured",
+          "description": "The structured content.",
+          "type": "string"
+        },
+        {
+          "const": "content",
+          "description": "The content items.",
+          "type": "string"
+        }
+      ]
+    },
+    "McpServer": {
+      "description": "One MCP server, by how it's reached.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A child process, spoken to over its standard input and output.",
+          "properties": {
+            "args": {
+              "default": [],
+              "description": "The command's arguments.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "call_timeout": {
+              "default": "5m",
+              "description": "The longest a call may take.",
+              "type": "string"
+            },
+            "command": {
+              "description": "The command that starts the server.",
+              "type": "string"
+            },
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {},
+              "description": "Variables the server starts with beside the short list it has.",
+              "type": "object"
+            },
+            "instructions": {
+              "default": true,
+              "description": "Whether the server's instructions follow the system prompt.",
+              "type": "boolean"
+            },
+            "name": {
+              "description": "The server's name: letters, digits, `-` and `_`.",
+              "type": "string"
+            },
+            "names": {
+              "$ref": "#/$defs/McpNames",
+              "default": "prefixed",
+              "description": "Whether a tool's name carries the server's."
+            },
+            "startup_timeout": {
+              "default": "30s",
+              "description": "How long the server may take to start.",
+              "type": "string"
+            },
+            "transport": {
+              "const": "stdio",
+              "type": "string"
+            }
+          },
+          "required": [
+            "transport",
+            "name",
+            "command"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A server reached over streamable HTTP.",
+          "properties": {
+            "call_timeout": {
+              "default": "5m",
+              "description": "The longest a call may take.",
+              "type": "string"
+            },
+            "headers": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {},
+              "description": "Headers sent with every request.",
+              "type": "object"
+            },
+            "instructions": {
+              "default": true,
+              "description": "Whether the server's instructions follow the system prompt.",
+              "type": "boolean"
+            },
+            "name": {
+              "description": "The server's name: letters, digits, `-` and `_`.",
+              "type": "string"
+            },
+            "names": {
+              "$ref": "#/$defs/McpNames",
+              "default": "prefixed",
+              "description": "Whether a tool's name carries the server's."
+            },
+            "startup_timeout": {
+              "default": "30s",
+              "description": "How long the server may take to answer its first request.",
+              "type": "string"
+            },
+            "transport": {
+              "const": "http",
+              "type": "string"
+            },
+            "url": {
+              "description": "Where the server listens.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "transport",
+            "name",
+            "url"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Model": {
+      "additionalProperties": false,
+      "description": "The `model` section.",
+      "properties": {
+        "api": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Api"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "`openai` only: the API; `None` is the Responses API without a\n`base_url` and chat completions with one."
+        },
+        "api_key_env": {
+          "default": null,
+          "description": "The environment variable that holds the API key, and never the key.\n`None` is `ANTHROPIC_API_KEY` for `anthropic` and no variable for\nthe others.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base_url": {
+          "default": null,
+          "description": "`anthropic` and `openai` only: where the API is served, for a\ngateway or a local server.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cache": {
+          "default": null,
+          "description": "`anthropic` only: whether requests carry cache breakpoints; `None`\nis `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cache_scope": {
+          "$ref": "#/$defs/CacheScope",
+          "default": "shared",
+          "description": "Which runs share what the provider caches."
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Effort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "`anthropic`, and `openai` with the Responses API: the reasoning\neffort."
+        },
+        "max_tokens": {
+          "default": 32000,
+          "description": "The cap on output tokens for each call.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "default": "claude-sonnet-5",
+          "description": "The provider's name for the model.",
+          "type": "string"
+        },
+        "pricing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pricing"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the model's tokens cost, in US dollars per million."
+        },
+        "provider": {
+          "$ref": "#/$defs/Provider",
+          "default": "anthropic",
+          "description": "The provider the model is reached through."
+        },
+        "reasoning_replay": {
+          "default": null,
+          "description": "Chat completions only: whether reasoning is sent back; `None` is\n`false`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "script": {
+          "default": null,
+          "description": "`fake` only: the file of scripted responses.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seed": {
+          "default": null,
+          "description": "`openai` only: the sampling seed.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "temperature": {
+          "default": null,
+          "description": "The sampling temperature, sent only when set.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "thinking": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Thinking"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "`anthropic` only: how the model is asked to reason; `None` is the\nprovider's default."
+        }
+      },
+      "type": "object"
+    },
+    "Otlp": {
+      "additionalProperties": false,
+      "description": "The `telemetry.otlp` section.",
+      "properties": {
+        "endpoint": {
+          "default": null,
+          "description": "Where the collector listens; `None` turns the network exporter off.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Headers sent with every export.",
+          "type": "object"
+        },
+        "protocol": {
+          "$ref": "#/$defs/OtlpProtocol",
+          "default": "grpc",
+          "description": "The protocol the collector is sent."
+        }
+      },
+      "type": "object"
+    },
+    "OtlpProtocol": {
+      "description": "The protocol an OTLP collector is sent.",
+      "oneOf": [
+        {
+          "const": "grpc",
+          "description": "OTLP over gRPC.",
+          "type": "string"
+        },
+        {
+          "const": "http",
+          "description": "OTLP over HTTP, as protobuf.",
+          "type": "string"
+        }
+      ]
+    },
+    "OutputCut": {
+      "description": "What's kept of a tool result that's cut.",
+      "oneOf": [
+        {
+          "const": "preview",
+          "description": "A short preview of the start.",
+          "type": "string"
+        },
+        {
+          "const": "head",
+          "description": "The start, up to the cap.",
+          "type": "string"
+        },
+        {
+          "const": "head_tail",
+          "description": "Half the cap from each end.",
+          "type": "string"
+        }
+      ]
+    },
+    "Pricing": {
+      "additionalProperties": false,
+      "description": "What a model's tokens cost, in US dollars per million tokens.",
+      "properties": {
+        "cache_read": {
+          "description": "Input tokens served from the prompt cache.",
+          "format": "double",
+          "type": "number"
+        },
+        "cache_write": {
+          "description": "Input tokens written to the prompt cache.",
+          "format": "double",
+          "type": "number"
+        },
+        "input": {
+          "description": "Input tokens that touched no cache.",
+          "format": "double",
+          "type": "number"
+        },
+        "output": {
+          "description": "Generated tokens, reasoning included.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "input",
+        "output",
+        "cache_read",
+        "cache_write"
+      ],
+      "type": "object"
+    },
+    "Prompt": {
+      "additionalProperties": false,
+      "description": "The `prompt` section. A config states exactly one of `system` and\n`system_file`.",
+      "properties": {
+        "skills": {
+          "default": [],
+          "description": "The `SKILL.md` files of the run's skills.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "skills_mode": {
+          "$ref": "#/$defs/SkillsMode",
+          "default": "tool",
+          "description": "How the model gets a skill's body."
+        },
+        "system": {
+          "default": null,
+          "description": "The system prompt.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "system_file": {
+          "default": null,
+          "description": "The file that holds the system prompt.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Provider": {
+      "description": "A provider of models.",
+      "oneOf": [
+        {
+          "const": "anthropic",
+          "description": "Anthropic's Messages API.",
+          "type": "string"
+        },
+        {
+          "const": "openai",
+          "description": "OpenAI's API, and any server that speaks chat completions.",
+          "type": "string"
+        },
+        {
+          "const": "fake",
+          "description": "A script, played in place of a model.",
+          "type": "string"
+        }
+      ]
+    },
+    "Run": {
+      "additionalProperties": false,
+      "description": "The `run` section.",
+      "properties": {
+        "completion": {
+          "$ref": "#/$defs/Completion",
+          "default": "natural",
+          "description": "How the run decides that the model has finished."
+        },
+        "completion_schema": {
+          "default": null,
+          "description": "The JSON schema of the `task_complete` argument in explicit mode;\n`None` takes any object."
+        },
+        "context": {
+          "$ref": "#/$defs/Context",
+          "default": "full",
+          "description": "What's sent of the conversation on each provider call."
+        },
+        "max_consecutive_invalid_turns": {
+          "default": 3,
+          "description": "How many turns in a row may make no call that reached a tool; `None`\nis no cap.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_retries": {
+          "default": 10,
+          "description": "How many times a failed provider call is tried again; `0` never\nretries.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_total_tokens": {
+          "default": null,
+          "description": "The budget of input plus output tokens, summed over every provider\ncall; `None` is no budget.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_turns": {
+          "default": null,
+          "description": "The cap on turns; `None` is no cap, and the timeout and the token\nbudget bound the run.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "provider_timeout": {
+          "default": "10m",
+          "description": "How long one provider call may take, when the run has that long left.",
+          "type": "string"
+        },
+        "retry_backoff_base": {
+          "default": "500ms",
+          "description": "The wait after the first failed attempt, which doubles each time.",
+          "type": "string"
+        },
+        "retry_backoff_max": {
+          "default": "32s",
+          "description": "The longest backoff.",
+          "type": "string"
+        },
+        "retry_hint_max": {
+          "default": "1m",
+          "description": "The longest wait a server may ask for; a longer one ends the retries.",
+          "type": "string"
+        },
+        "retry_jitter": {
+          "default": 0.25,
+          "description": "The largest share of a wait that's added to it, from 0 to 1.",
+          "format": "double",
+          "type": "number"
+        },
+        "timeout": {
+          "default": "10m",
+          "description": "How long the run may take.",
+          "type": "string"
+        },
+        "transcript_format": {
+          "$ref": "#/$defs/TranscriptFormat",
+          "default": "json",
+          "description": "The form the transcript is written in."
+        },
+        "transcript_path": {
+          "default": null,
+          "description": "Where the transcript is written when the run ends; it may hold\n`{run_id}`. `None` writes none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SkillsMode": {
+      "description": "How the model gets a skill's body.",
+      "oneOf": [
+        {
+          "const": "tool",
+          "description": "The system prompt lists each skill, and a tool loads a body when the\nmodel asks for it.",
+          "type": "string"
+        },
+        {
+          "const": "inline",
+          "description": "Every body follows the system prompt.",
+          "type": "string"
+        }
+      ]
+    },
+    "Telemetry": {
+      "additionalProperties": false,
+      "description": "The `telemetry` section.",
+      "properties": {
+        "capture_content": {
+          "default": false,
+          "description": "Whether prompts, responses and tool content reach telemetry.",
+          "type": "boolean"
+        },
+        "file": {
+          "$ref": "#/$defs/TelemetryFile",
+          "default": {
+            "path": null
+          },
+          "description": "The OTLP/JSON file exporter."
+        },
+        "otlp": {
+          "$ref": "#/$defs/Otlp",
+          "default": {
+            "endpoint": null,
+            "headers": {},
+            "protocol": "grpc"
+          },
+          "description": "The OTLP network exporter."
+        },
+        "resource": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "The composer's own resource attributes, which every export carries.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "TelemetryFile": {
+      "additionalProperties": false,
+      "description": "The `telemetry.file` section.",
+      "properties": {
+        "path": {
+          "default": null,
+          "description": "The file every run's OTLP/JSON lines are appended to, or `-` for\nstandard error. `None` gives each run a file of its own in the\nworking directory, named `lablet-<run_id>.otlp.jsonl`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Thinking": {
+      "description": "How the model is asked to reason before it answers.",
+      "oneOf": [
+        {
+          "const": "provider_default",
+          "description": "Nothing is sent, so the provider's default applies.",
+          "type": "string"
+        },
+        {
+          "const": "adaptive",
+          "description": "The model decides how much to reason.",
+          "type": "string"
+        },
+        {
+          "const": "disabled",
+          "description": "Reasoning is refused.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Reasoning is asked for with this many tokens to spend on it, which\nis fewer than `max_tokens`.",
+          "properties": {
+            "budget": {
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "budget"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Tools": {
+      "additionalProperties": false,
+      "description": "The `tools` section.",
+      "properties": {
+        "allow": {
+          "default": null,
+          "description": "The only tools offered, by the names the model sees; `None` offers\nevery tool.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "builtin": {
+          "$ref": "#/$defs/Builtin",
+          "default": {
+            "enabled": [],
+            "env": {},
+            "root": null,
+            "timeout": "2m"
+          },
+          "description": "The built-in tools."
+        },
+        "deny": {
+          "default": [],
+          "description": "Tools that are never offered, by the names the model sees.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_concurrent_calls": {
+          "default": 10,
+          "description": "How many calls of one turn may run at once; 1 runs every call alone.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_description_chars": {
+          "default": 2048,
+          "description": "The length in characters above which a tool description or a\nserver's instructions are cut; `None` is no cap.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_output_bytes": {
+          "default": 50000,
+          "description": "The size in bytes above which a tool result is cut; `None` is no\ncap.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mcp": {
+          "default": [],
+          "description": "The MCP servers.",
+          "items": {
+            "$ref": "#/$defs/McpServer"
+          },
+          "type": "array"
+        },
+        "mcp_lifetime": {
+          "$ref": "#/$defs/McpLifetime",
+          "default": "run",
+          "description": "How long the MCP servers live."
+        },
+        "mcp_result": {
+          "$ref": "#/$defs/McpResult",
+          "default": "structured",
+          "description": "Which part the model is sent of an MCP result that has two."
+        },
+        "output_cut": {
+          "$ref": "#/$defs/OutputCut",
+          "default": "preview",
+          "description": "What's kept of a result that's cut."
+        },
+        "output_preview_bytes": {
+          "default": 2000,
+          "description": "How many bytes a preview keeps.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "TranscriptFormat": {
+      "description": "The form a transcript is written in.",
+      "oneOf": [
+        {
+          "const": "json",
+          "description": "The transcript document.",
+          "type": "string"
+        },
+        {
+          "const": "atif",
+          "description": "An ATIF trajectory.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "What a `Lablet` is built from.\n\nThe sections hold what the config states, as it's written, with\nlablet's default wherever it states nothing and every provider shares\nthe default. A setting of the `model` section that's one provider's is\nheld as it was stated, and [`Config::resolved`] fills in its default.\n`${VAR}` is held as it's written, and substituted when a `Lablet` is\nbuilt from the config or the config is checked.\n\nReading a config checks its shape. What a config may not state is\nrefused when it's checked, and when a `Lablet` is built from it.",
+  "properties": {
+    "model": {
+      "$ref": "#/$defs/Model",
+      "default": {
+        "api": null,
+        "api_key_env": null,
+        "base_url": null,
+        "cache": null,
+        "cache_scope": "shared",
+        "effort": null,
+        "max_tokens": 32000,
+        "name": "claude-sonnet-5",
+        "pricing": null,
+        "provider": "anthropic",
+        "reasoning_replay": null,
+        "script": null,
+        "seed": null,
+        "temperature": null,
+        "thinking": null
+      },
+      "description": "The provider, the model, and the request settings."
+    },
+    "prompt": {
+      "$ref": "#/$defs/Prompt",
+      "default": {
+        "skills": [],
+        "skills_mode": "tool",
+        "system": null,
+        "system_file": null
+      },
+      "description": "The system prompt and the skills."
+    },
+    "run": {
+      "$ref": "#/$defs/Run",
+      "default": {
+        "completion": "natural",
+        "completion_schema": null,
+        "context": "full",
+        "max_consecutive_invalid_turns": 3,
+        "max_retries": 10,
+        "max_total_tokens": null,
+        "max_turns": null,
+        "provider_timeout": "10m",
+        "retry_backoff_base": "500ms",
+        "retry_backoff_max": "32s",
+        "retry_hint_max": "1m",
+        "retry_jitter": 0.25,
+        "timeout": "10m",
+        "transcript_format": "json",
+        "transcript_path": null
+      },
+      "description": "How a run completes, what bounds it, and where its transcript goes."
+    },
+    "telemetry": {
+      "$ref": "#/$defs/Telemetry",
+      "default": {
+        "capture_content": false,
+        "file": {
+          "path": null
+        },
+        "otlp": {
+          "endpoint": null,
+          "headers": {},
+          "protocol": "grpc"
+        },
+        "resource": {}
+      },
+      "description": "What telemetry captures, and where it's exported."
+    },
+    "tools": {
+      "$ref": "#/$defs/Tools",
+      "default": {
+        "allow": null,
+        "builtin": {
+          "enabled": [],
+          "env": {},
+          "root": null,
+          "timeout": "2m"
+        },
+        "deny": [],
+        "max_concurrent_calls": 10,
+        "max_description_chars": 2048,
+        "max_output_bytes": 50000,
+        "mcp": [],
+        "mcp_lifetime": "run",
+        "mcp_result": "structured",
+        "output_cut": "preview",
+        "output_preview_bytes": 2000
+      },
+      "description": "The tools a run offers, and what bounds a call."
+    }
+  },
+  "title": "Config",
+  "type": "object"
+}

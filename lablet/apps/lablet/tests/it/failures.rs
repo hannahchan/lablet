@@ -20,12 +20,18 @@ async fn a_rejected_key_ends_the_run_at_once_and_the_chat_span_says_auth() {
     let scratch = Lab::new("auth");
     let (mut lablet, recorder) = observed(scratch.config(REJECTS_THE_KEY, json!({}))).await;
 
-    let finished = lablet.run(request().run_id(RunId::new(RUN).unwrap())).await;
+    let finished = lablet
+        .run(request().run_id(RunId::new(RUN).unwrap()).unwrap())
+        .await;
     lablet.shutdown().await;
 
     let outcome = &finished.summary.outcome;
     assert_eq!(outcome.stop_reason(), StopReason::ProviderError);
     assert_eq!(outcome.error(), Some("401 invalid x-api-key"));
+    assert_eq!(
+        lablet::ErrorClass::of_run(outcome),
+        Some(lablet::ErrorClass::Provider)
+    );
     assert_eq!(outcome.turns, 0);
     assert_eq!(
         recorder.attempts(),

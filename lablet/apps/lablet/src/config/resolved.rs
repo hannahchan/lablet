@@ -2,11 +2,11 @@
 //! in, and the digest that groups the runs made from it.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use lablet_model::ConfigDigest;
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
@@ -272,7 +272,7 @@ impl ResolvedConfig {
     ///
     /// Canonical JSON is compact, with the keys of every object in order.
     #[must_use]
-    pub fn digest(&self) -> String {
+    pub fn digest(&self) -> ConfigDigest {
         // Nothing of a resolved config fails to serialise: every key is
         // text, a path is written as it's shown, and a number JSON can't
         // hold is written as `null`.
@@ -286,14 +286,7 @@ impl ResolvedConfig {
         }
         let mut canonical = String::new();
         write_canonical(&tree, &mut canonical);
-        Sha256::digest(&canonical)
-            .iter()
-            .fold(String::new(), |mut hex, byte| {
-                // Writing to a `String` can't fail, so there's no error to
-                // report.
-                let _ = write!(hex, "{byte:02x}");
-                hex
-            })
+        ConfigDigest::from_sha256(Sha256::digest(&canonical).into())
     }
 }
 

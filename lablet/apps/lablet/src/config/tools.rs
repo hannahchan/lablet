@@ -6,12 +6,13 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::written::{duration, path};
 
 /// The `tools` section.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Tools {
     /// The built-in tools.
@@ -60,7 +61,7 @@ impl Default for Tools {
 }
 
 /// The `tools.builtin` section.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Builtin {
     /// The directory `bash` starts in and the file tools stay under. It's
@@ -73,6 +74,7 @@ pub struct Builtin {
     pub enabled: BTreeSet<BuiltinTool>,
     /// The longest a call may take.
     #[serde(with = "duration")]
+    #[schemars(with = "String")]
     pub timeout: Duration,
     /// Variables a command starts with beside the short list `bash` has.
     pub env: BTreeMap<String, String>,
@@ -90,7 +92,9 @@ impl Default for Builtin {
 }
 
 /// One of the built-in tools.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum BuiltinTool {
     /// Runs a command.
@@ -102,7 +106,7 @@ pub enum BuiltinTool {
 }
 
 /// One MCP server, by how it's reached.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "transport", rename_all = "snake_case", deny_unknown_fields)]
 pub enum McpServer {
     /// A child process, spoken to over its standard input and output.
@@ -119,9 +123,11 @@ pub enum McpServer {
         env: BTreeMap<String, String>,
         /// How long the server may take to start.
         #[serde(default = "startup_timeout", with = "duration")]
+        #[schemars(with = "String")]
         startup_timeout: Duration,
         /// The longest a call may take.
         #[serde(default = "call_timeout", with = "duration")]
+        #[schemars(with = "String")]
         call_timeout: Duration,
         /// Whether a tool's name carries the server's.
         #[serde(default)]
@@ -141,9 +147,11 @@ pub enum McpServer {
         headers: BTreeMap<String, String>,
         /// How long the server may take to answer its first request.
         #[serde(default = "startup_timeout", with = "duration")]
+        #[schemars(with = "String")]
         startup_timeout: Duration,
         /// The longest a call may take.
         #[serde(default = "call_timeout", with = "duration")]
+        #[schemars(with = "String")]
         call_timeout: Duration,
         /// Whether a tool's name carries the server's.
         #[serde(default)]
@@ -177,7 +185,7 @@ const fn instructions() -> bool {
 }
 
 /// Whether an MCP tool's name carries its server's.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum McpNames {
     /// A tool is offered as `mcp__<server>__<tool>`.
@@ -188,7 +196,7 @@ pub enum McpNames {
 }
 
 /// How long a run's MCP servers live.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum McpLifetime {
     /// The servers are started again for each run after the first.
@@ -199,7 +207,7 @@ pub enum McpLifetime {
 }
 
 /// Which part the model is sent of an MCP result that has two.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum McpResult {
     /// The structured content.
@@ -210,7 +218,7 @@ pub enum McpResult {
 }
 
 /// What's kept of a tool result that's cut.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputCut {
     /// A short preview of the start.

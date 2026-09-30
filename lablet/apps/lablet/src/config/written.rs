@@ -20,11 +20,13 @@ pub(crate) mod duration {
     pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Duration, D::Error> {
+        // The refusal holds no part of the text, which the message that
+        // names the setting shows as it was written.
         let text = String::deserialize(deserializer)?;
-        humantime::parse_duration(&text).map_err(|error| {
-            D::Error::custom(format!(
-                "{text:?} isn't a duration such as `500ms` or `10m`: {error}"
-            ))
+        humantime::parse_duration(&text).map_err(|_| {
+            D::Error::custom(
+                "a duration is a number and a unit, as `500ms`, `10m` and `1h 30m` are",
+            )
         })
     }
 }

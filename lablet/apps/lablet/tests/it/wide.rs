@@ -106,7 +106,9 @@ async fn everything(test: &str, capture_content: bool) -> Wrote {
     );
     let mut lablet = lablet::build(config).await.unwrap();
 
-    let finished = lablet.run(request().run_id(RunId::new(RUN).unwrap())).await;
+    let finished = lablet
+        .run(request().run_id(RunId::new(RUN).unwrap()).unwrap())
+        .await;
     let exported = scratch.exported();
     let written = std::fs::read_to_string(scratch.telemetry()).unwrap();
     lablet.shutdown().await;

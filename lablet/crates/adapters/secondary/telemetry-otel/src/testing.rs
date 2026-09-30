@@ -49,7 +49,7 @@ pub(crate) fn context() -> RunContext {
         run_id: run_id(),
         labels: RunLabels::default(),
         started_unix_ms: STARTED_UNIX_MS,
-        config_digest: CONFIG_DIGEST.to_owned(),
+        config_digest: lablet_model::ConfigDigest::new(CONFIG_DIGEST).unwrap(),
         agent_version: "0.1.0".to_owned(),
         transcript_path: None,
         skills_count: 0,

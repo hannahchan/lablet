@@ -23,8 +23,12 @@ pub const TRANSCRIPT_SCHEMA_VERSION: u32 = 1;
 /// The version comes first, so a reader knows the form before the content.
 /// Then what names the run, so a transcript found on its own says which run
 /// it's of and joins the run's outcome and its telemetry; then the tools the
-/// run offered; then the conversation. Times in the turns are offsets from
-/// `started_unix_ms`.
+/// run offered; then the conversation: the system prompt, the task prompt,
+/// and the turns. Times in the turns are offsets from `started_unix_ms`.
+///
+/// The task prompt is the first turn's input too, and it's written on its
+/// own as well because a run that no response reached has no turn: its
+/// transcript still says what was asked.
 ///
 /// It's written and never read, so it has no way in but
 /// [`TranscriptDocument::new`] and its version is always this crate's.
@@ -40,12 +44,14 @@ pub struct TranscriptDocument {
     started_unix_ms: u64,
     tools: Vec<ToolSpec>,
     system: String,
+    task_prompt: String,
     turns: Vec<Turn>,
 }
 
 impl TranscriptDocument {
     /// The document of the run that `context` names, which called `model`,
-    /// was offered `tools` in that order, and held `transcript`.
+    /// was offered `tools` in that order, was given the task `task_prompt`,
+    /// and held `transcript`.
     ///
     /// What names the run is read from the context, which is where the
     /// composition root states it; the outcome's copy of the id and the
@@ -55,6 +61,7 @@ impl TranscriptDocument {
         context: RunContext,
         model: ModelRef,
         tools: Vec<model::ToolSpec>,
+        task_prompt: String,
         transcript: Transcript,
     ) -> Self {
         // What the context holds beyond what names a run describes the
@@ -75,12 +82,13 @@ impl TranscriptDocument {
             schema_version: TRANSCRIPT_SCHEMA_VERSION,
             run_id,
             labels: labels.into(),
-            config_digest,
+            config_digest: config_digest.into(),
             lablet_version: agent_version,
             model: model.into(),
             started_unix_ms,
             tools: tools.into_iter().map(Into::into).collect(),
             system,
+            task_prompt,
             turns: turns.into_iter().map(Into::into).collect(),
         }
     }

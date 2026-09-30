@@ -21,6 +21,7 @@ lablet-run.workspace = true
 lablet-telemetry-otel.workspace = true
 lablet-tools-builtin.workspace = true
 lablet-transcript-json.workspace = true
+schemars.workspace = true
 serde.workspace = true
 serde-saphyr.workspace = true
 serde_json.workspace = true

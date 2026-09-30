@@ -62,7 +62,7 @@ impl Written {
                 "tools": { "builtin": scratch.builtin(&["bash", "read_file"]) },
             }),
         );
-        let config_digest = config.digest();
+        let config_digest = config.digest().to_string();
         let mut lablet = lablet::build(config).await.unwrap();
         let labels = RunLabels {
             task: Some("fix-failing-test".to_owned()),
@@ -75,6 +75,7 @@ impl Written {
             .run(
                 request()
                     .run_id(RunId::new("run-a").unwrap())
+                    .unwrap()
                     .labels(labels),
             )
             .await;
@@ -152,11 +153,13 @@ async fn a_transcript_opens_with_its_version_and_what_names_its_run() {
             "schema_version",
             "started_unix_ms",
             "system",
+            "task_prompt",
             "tools",
             "turns",
         ]
     );
     assert_eq!(document["schema_version"], json!(1));
+    assert_eq!(document["task_prompt"], json!(PROMPT));
     assert_eq!(document["run_id"], json!("run-a"));
     assert_eq!(
         document["labels"],
@@ -363,6 +366,11 @@ async fn a_run_writes_its_transcript_whatever_stopped_it() {
         let document = json_of(&transcript);
         assert_eq!(document["run_id"], json!(outcome.run_id.as_str()), "{test}");
         assert_eq!(document["system"], json!(SYSTEM), "{test}");
+        assert_eq!(
+            document["task_prompt"],
+            json!(PROMPT),
+            "{test}: a run that no response reached still says what was asked"
+        );
         assert_eq!(document["turns"].as_array().unwrap().len(), turns, "{test}");
         if stopped == StopReason::OutputTruncated {
             assert_eq!(
@@ -402,7 +410,9 @@ async fn each_run_has_a_directory_of_its_own_made_for_its_transcript() {
     let diagnostics = Diagnostics::capture();
 
     for run in ["run-a", "run-b"] {
-        lablet.run(request().run_id(RunId::new(run).unwrap())).await;
+        lablet
+            .run(request().run_id(RunId::new(run).unwrap()).unwrap())
+            .await;
     }
     lablet.shutdown().await;
 
@@ -426,7 +436,7 @@ async fn a_transcript_that_cannot_be_written_is_reported_and_the_outcome_is_as_i
     let diagnostics = Diagnostics::capture();
 
     let finished = lablet
-        .run(request().run_id(RunId::new("run-a").unwrap()))
+        .run(request().run_id(RunId::new("run-a").unwrap()).unwrap())
         .await;
     lablet.shutdown().await;
 
@@ -453,40 +463,45 @@ async fn a_transcript_that_cannot_be_written_is_reported_and_the_outcome_is_as_i
     );
 }
 
-#[tokio::test]
-async fn a_run_id_that_cannot_be_part_of_a_path_leaves_the_run_without_a_transcript() {
-    let scratch = Lab::new("no-component");
-    let config = scratch.config(
-        ENDS,
-        json!({ "run": { "transcript_path": scratch.at("{run_id}.json") } }),
-    );
-    let mut lablet = lablet::build(config).await.unwrap();
-    let diagnostics = Diagnostics::capture();
+/// A run's files are named with its id, so an id that isn't one component
+/// of a path is refused when the request is made, before any run, as
+/// `lablet run --run-id` refuses it.
+#[test]
+fn a_run_id_that_cannot_be_part_of_a_path_is_refused_by_the_request() {
+    for (id, reason) in [
+        ("../run-a", "it holds a `/`"),
+        ("runs/a", "it holds a `/`"),
+        ("/", "it holds a `/`"),
+        (".", "it names the directory itself"),
+        ("..", "it names the directory above"),
+        ("run\0a", "it holds a NUL"),
+    ] {
+        let refused = request().run_id(RunId::new(id).unwrap()).unwrap_err();
 
-    let finished = lablet
-        .run(request().run_id(RunId::new("../run-a").unwrap()))
-        .await;
-    lablet.shutdown().await;
-
-    assert_eq!(
-        finished.summary.outcome.stop_reason(),
-        StopReason::Completed
-    );
-    assert!(!scratch.at("../run-a.json").exists());
-    let lines = diagnostics.lines();
-    assert!(
-        lines.iter().any(|line| line.contains("WARN")
-            && line.contains("the run has no transcript file")
-            && line.contains("../run-a")),
-        "{lines:?}"
-    );
-    let exported = scratch.exported();
-    assert!(
-        !Traced::of(&exported, "../run-a")
-            .wide()
-            .attributes
-            .contains_key(key::LABLET_RUN_TRANSCRIPT_PATH)
-    );
+        assert_eq!(
+            refused,
+            lablet::RunIdRefused {
+                run_id: id.to_owned(),
+                reason,
+            }
+        );
+        assert_eq!(
+            refused.to_string(),
+            format!(
+                "the run id {id:?} is refused: {reason}, and a run's files are named with its id"
+            )
+        );
+    }
+    for id in [
+        "run-a",
+        "...",
+        ".a",
+        "a.",
+        "run a",
+        "01K5F3Z8Q4X9T2M7B6W1R0VNEC",
+    ] {
+        assert!(request().run_id(RunId::new(id).unwrap()).is_ok(), "{id}");
+    }
 }
 
 #[tokio::test]

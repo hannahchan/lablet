@@ -45,13 +45,13 @@ async fn two_runs_on_one_lablet_are_two_runs_with_one_outcome() {
         CALLS_THEN_ENDS,
         json!({ "tools": { "builtin": scratch.builtin(&["bash"]) } }),
     );
-    let digest = config.digest();
+    let digest = config.digest().to_string();
     let (mut lablet, recorder) = observed(config).await;
     let named = RunId::new("the-second-run").unwrap();
 
     let before = unix_ms_now();
     let first = lablet.run(request()).await;
-    let second = lablet.run(request().run_id(named.clone())).await;
+    let second = lablet.run(request().run_id(named.clone()).unwrap()).await;
     let after = unix_ms_now();
     lablet.shutdown().await;
 
@@ -92,7 +92,7 @@ async fn two_runs_on_one_lablet_are_two_runs_with_one_outcome() {
             panic!("{:?}", events[0]);
         };
         assert_eq!(&context.run_id, run_id);
-        assert_eq!(context.config_digest, digest);
+        assert_eq!(context.config_digest.as_str(), digest);
         assert_eq!(context.agent_version, lablet::VERSION);
         assert!(
             (before..=after).contains(&context.started_unix_ms),
@@ -165,7 +165,7 @@ async fn what_a_lablet_prints_of_itself_names_its_config_and_holds_no_prompt() {
         ENDS,
         json!({ "tools": { "builtin": scratch.builtin(&["bash"]) } }),
     );
-    let digest = config.digest();
+    let digest = config.digest().to_string();
 
     let lablet = lablet::build(config).await.unwrap();
 

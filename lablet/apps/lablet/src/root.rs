@@ -14,6 +14,9 @@ pub enum OwnFile {
     Config,
     /// The file `prompt.system_file` names.
     SystemPrompt,
+    /// The file a run's task prompt is read from, as `lablet run
+    /// --prompt-file` names it: [`crate::Config::with_prompt_file`].
+    TaskPrompt,
     /// The file `run.transcript_path` names.
     Transcript,
     /// The file `telemetry.file.path` names, or the one a run has in the
@@ -26,6 +29,7 @@ impl fmt::Display for OwnFile {
         f.write_str(match self {
             Self::Config => "the config",
             Self::SystemPrompt => "the system prompt that `prompt.system_file` names",
+            Self::TaskPrompt => "the task prompt's file",
             Self::Transcript => "the transcript that `run.transcript_path` names",
             Self::Telemetry => "the telemetry file that `telemetry.file.path` names",
         })

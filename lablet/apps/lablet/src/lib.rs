@@ -7,6 +7,14 @@
 //! telemetry is in the file the config names, as OTLP/JSON lines, and its
 //! transcript is written when the config names a place for one.
 //!
+//! A config's text is read into a [`RawConfig`] first, where an override
+//! can state a setting over the text, and then into a [`Config`], which
+//! holds `${VAR}` as it's written: the variables are read when the config is
+//! checked or a `Lablet` is built, so the digest and every message see the
+//! config as it's written. [`check`] checks a config as [`build`] does and
+//! stops before the provider is selected. A run stops early when the
+//! [`CancelHandle`] its request was given is fired.
+//!
 //! A `Lablet` is built and run on a tokio runtime, which its adapters keep
 //! their deadlines on.
 //!
@@ -64,7 +72,7 @@
 //!     let first = lablet.run(RunRequest::new("What's in the directory?")?).await;
 //!     let named = RunId::new("the-second-run")?;
 //!     let second = lablet
-//!         .run(RunRequest::new("What's in the directory?")?.run_id(named.clone()))
+//!         .run(RunRequest::new("What's in the directory?")?.run_id(named.clone())?)
 //!         .await;
 //!     lablet.shutdown().await;
 //!
@@ -106,6 +114,7 @@
 //! ```
 
 mod build;
+mod cancel;
 mod clock;
 pub mod config;
 mod fanout;
@@ -113,11 +122,15 @@ mod lablet;
 mod root;
 mod settings;
 
-pub use build::{BuildError, Unsupported, build, build_observed};
-pub use config::{Config, ConfigError, Format, ResolvedConfig};
-pub use lablet::{Lablet, RunRequest};
+pub use build::{BuildError, Checked, ErrorClass, Unsupported, build, build_observed, check};
+pub use cancel::CancelHandle;
+pub use config::{Config, ConfigError, Format, Place, RawConfig, ResolvedConfig, schema};
+pub use lablet::{Lablet, RunIdRefused, RunRequest};
 pub use lablet_documents::OutcomeDocument;
-pub use lablet_model::{BlankTask, FinishedRun, IdError, RunId, RunLabels, StopReason};
+pub use lablet_model::{
+    BlankTask, ConfigDigest, FinishedRun, IdError, RunId, RunLabels, RunOutcome, StopReason,
+    ToolSpec,
+};
 pub use lablet_run::{EventKind, FilterList, RunEvent, RunObserver};
 pub use root::OwnFile;
 

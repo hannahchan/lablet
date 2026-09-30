@@ -102,6 +102,8 @@ fn defaults() -> Config {
             resource: BTreeMap::new(),
         },
         source: None,
+        places: Places::default(),
+        prompt_file: None,
     }
 }
 
@@ -249,87 +251,183 @@ telemetry:
     assert_eq!(from_yaml.telemetry.file.path, Some("-".into()));
 }
 
+/// The refusal of `text`, which is YAML.
+fn refused(text: &str) -> ConfigError {
+    Config::from_str(text, Format::Yaml).unwrap_err()
+}
+
+fn invalid(key: &str, line: u32, value: &str, reason: &str) -> ConfigError {
+    ConfigError::Invalid {
+        key: key.to_owned(),
+        place: Some(Place::Line(line)),
+        value: Some(value.to_owned()),
+        reason: reason.to_owned(),
+    }
+}
+
 #[test]
-fn a_key_the_config_does_not_know_is_refused_by_name_in_every_section() {
+fn a_key_the_config_does_not_know_is_refused_by_its_path_in_every_section() {
     for (text, key) in [
         ("runs: {}", "runs"),
-        ("run: { max_turn: 3 }", "max_turn"),
+        ("run: { max_turn: 3 }", "run.max_turn"),
         (
             "run: { context: { mask: { trigger_tokens: 1, keep_last: 1, keep: 2 } } }",
-            "keep",
+            "run.context.mask.keep",
         ),
-        ("model: { nme: scripted-1 }", "nme"),
+        ("model: { nme: scripted-1 }", "model.nme"),
         (
             "model: { pricing: { input: 1, output: 1, cache_read: 1, cache_write: 1, cached: 1 } }",
-            "cached",
+            "model.pricing.cached",
         ),
-        ("prompt: { sytem: Hi. }", "sytem"),
-        ("tools: { alow: [bash] }", "alow"),
-        ("tools: { builtin: { roots: work } }", "roots"),
+        ("prompt: { sytem: Hi. }", "prompt.sytem"),
+        ("tools: { alow: [bash] }", "tools.alow"),
+        ("tools: { builtin: { roots: work } }", "tools.builtin.roots"),
         (
             "tools: { mcp: [{ name: docs, transport: stdio, command: npx, colour: red }] }",
-            "colour",
+            "tools.mcp[0].colour",
         ),
         (
             "tools: { mcp: [{ name: docs, transport: http, url: 'http://localhost/mcp', command: npx }] }",
-            "command",
+            "tools.mcp[0].command",
         ),
-        ("telemetry: { capture: true }", "capture"),
-        ("telemetry: { otlp: { endpoints: [] } }", "endpoints"),
-        ("telemetry: { file: { paths: [] } }", "paths"),
+        ("telemetry: { capture: true }", "telemetry.capture"),
+        (
+            "telemetry: { otlp: { endpoints: [] } }",
+            "telemetry.otlp.endpoints",
+        ),
+        ("telemetry: { file: { paths: [] } }", "telemetry.file.paths"),
     ] {
-        let reason = refusal(text, Format::Yaml);
-
-        assert!(
-            reason.contains(&format!("unknown field `{key}`")),
-            "{text}: {reason}"
-        );
+        match refused(text) {
+            ConfigError::UnknownKey {
+                key: refused,
+                place,
+                known,
+            } => {
+                assert_eq!(refused, key, "{text}");
+                assert_eq!(place, Some(Place::Line(1)), "{text}");
+                assert!(!known.is_empty(), "{text}");
+            }
+            other => panic!("{text}: {other:?}"),
+        }
     }
-    let reason = refusal(r#"{"run": {"max_turn": 3}}"#, Format::Json);
-    assert!(reason.contains("unknown field `max_turn`"), "{reason}");
+    let refusal = Config::from_str("{\n  \"run\": {\n    \"max_turn\": 3\n  }\n}", Format::Json);
+    assert_eq!(
+        refusal.unwrap_err().to_string(),
+        "run.max_turn (line 3) is refused: no setting has the key; the keys beside it are \
+         `completion`, `max_turns`, `timeout`, `max_total_tokens`, `max_retries`, \
+         `retry_backoff_base`, `retry_backoff_max`, `retry_jitter`, `retry_hint_max`, \
+         `max_consecutive_invalid_turns`, `provider_timeout`, `context`, `transcript_path`, \
+         `transcript_format`, `completion_schema`"
+    );
+}
+
+#[test]
+fn a_refusal_names_the_line_its_key_is_written_on() {
+    let text = "
+run:
+  max_turns: 5
+  completion: sometimes
+tools:
+  allow:
+    - bash
+    - 7
+";
+    assert_eq!(
+        refused(text),
+        invalid(
+            "run.completion",
+            4,
+            "\"sometimes\"",
+            "the accepted values are `natural`, `explicit`"
+        )
+    );
+    assert_eq!(
+        refused(&text.replace("sometimes", "natural")),
+        invalid("tools.allow[1]", 8, "7", "expected a string")
+    );
+    assert_eq!(
+        refused(&text.replace("sometimes", "natural")).to_string(),
+        "tools.allow[1] (line 8): 7 is refused: expected a string"
+    );
 }
 
 #[test]
 fn a_value_no_setting_takes_is_refused_with_the_values_it_takes() {
-    for (text, said) in [
+    for (text, key, value, said) in [
         (
             "run: { completion: sometimes }",
-            "unknown variant `sometimes`, expected one of natural, explicit",
+            "run.completion",
+            "\"sometimes\"",
+            "the accepted values are `natural`, `explicit`",
         ),
         (
             "model: { provider: gemini }",
-            "unknown variant `gemini`, expected one of anthropic, openai, fake",
+            "model.provider",
+            "\"gemini\"",
+            "the accepted values are `anthropic`, `openai`, `fake`",
         ),
         (
             "model: { effort: extreme }",
-            "unknown variant `extreme`, expected one of low, medium, high, xhigh, max",
+            "model.effort",
+            "\"extreme\"",
+            "the accepted values are `low`, `medium`, `high`, `xhigh`, `max`",
         ),
         (
             "tools: { builtin: { enabled: [task_complete] } }",
-            "unknown variant `task_complete`, expected one of bash, read_file, write_file",
+            "tools.builtin.enabled[0]",
+            "\"task_complete\"",
+            "the accepted values are `bash`, `read_file`, `write_file`",
         ),
         (
             "tools: { output_cut: tail }",
-            "unknown variant `tail`, expected one of preview, head, head_tail",
+            "tools.output_cut",
+            "\"tail\"",
+            "the accepted values are `preview`, `head`, `head_tail`",
         ),
         (
             "tools: { mcp: [{ name: docs, transport: pipe }] }",
-            "unknown variant `pipe`, expected one of stdio, http",
+            "tools.mcp[0].transport",
+            "\"pipe\"",
+            "the accepted values are `stdio`, `http`",
         ),
-        ("run: { max_turns: 0 }", "expected a nonzero u32"),
+        (
+            "run: { context: { masked: { trigger_tokens: 1, keep_last: 1 } } }",
+            "run.context",
+            r#"{"masked":{"keep_last":1,"trigger_tokens":1}}"#,
+            "the accepted values are `full`, `mask`",
+        ),
+        (
+            "run: { max_turns: 0 }",
+            "run.max_turns",
+            "0",
+            "expected a nonzero u32",
+        ),
         (
             "tools: { max_concurrent_calls: 0 }",
+            "tools.max_concurrent_calls",
+            "0",
             "expected a nonzero u32",
         ),
         (
             "model: { thinking: { budget: 0 } }",
+            "model.thinking.budget",
+            "0",
             "expected a nonzero u32",
         ),
-        ("run: { max_retries: -1 }", "invalid u32"),
+        (
+            "run: { max_retries: -1 }",
+            "run.max_retries",
+            "-1",
+            "expected u32",
+        ),
+        (
+            "run: { max_turns: five }",
+            "run.max_turns",
+            "\"five\"",
+            "expected a nonzero u32",
+        ),
     ] {
-        let reason = refusal(text, Format::Yaml);
-
-        assert!(reason.contains(said), "{text}: {reason}");
+        assert_eq!(refused(text), invalid(key, 1, value, said), "{text}");
     }
 }
 
@@ -355,16 +453,21 @@ tools:
     assert_eq!(config.run.provider_timeout, Duration::from_secs(45));
     assert_eq!(config.tools.builtin.timeout, Duration::from_millis(1_500));
 
-    for written in ["10", "ten minutes", "-5s"] {
-        let reason = refusal(&format!("run: {{ timeout: {written} }}"), Format::Yaml);
-
-        assert!(
-            reason.contains(&format!("{written:?} isn't a duration")),
-            "{reason}"
+    for written in ["ten minutes", "-5s", "5"] {
+        assert_eq!(
+            refused(&format!("run: {{ timeout: '{written}' }}")),
+            invalid(
+                "run.timeout",
+                1,
+                &format!("{written:?}"),
+                "a duration is a number and a unit, as `500ms`, `10m` and `1h 30m` are"
+            )
         );
     }
-    let reason = refusal(r#"{"run": {"timeout": 10}}"#, Format::Json);
-    assert!(reason.contains("expected a string"), "{reason}");
+    assert_eq!(
+        refused("run: { timeout: 10 }"),
+        invalid("run.timeout", 1, "10", "expected a string")
+    );
 }
 
 #[test]
@@ -399,10 +502,10 @@ fn yaml_reads_yes_as_text_and_a_key_written_twice_as_an_error() {
         "{reason}"
     );
     let reason = refusal(
-        r#"{"run": {"timeout": "1m", "timeout": "2m"}}"#,
+        "{\"run\": {\"timeout\": \"1m\",\n \"timeout\": \"2m\"}}",
         Format::Json,
     );
-    assert!(reason.contains("duplicate field `timeout`"), "{reason}");
+    assert_eq!(reason, "the key `timeout` is written twice, on line 2");
 }
 
 #[test]
@@ -478,9 +581,70 @@ fn a_file_that_cannot_be_read_as_a_config_is_refused_and_the_error_names_it() {
     let misspelt = scratch.write("misspelt.yaml", "run: { max_turn: 3 }");
     assert!(matches!(
         Config::from_path(&misspelt),
-        Err(ConfigError::Syntax {
-            format: Format::Yaml,
-            ..
-        })
+        Err(ConfigError::UnknownKey { key, .. }) if key == "run.max_turn"
     ));
+    let text = scratch.write("list.json", "[1, 2]");
+    assert_eq!(
+        Config::from_path(&text),
+        Err(ConfigError::Syntax {
+            format: Format::Json,
+            reason: "a config is a mapping of sections, such as `run:` and `model:`".to_owned(),
+        })
+    );
+}
+
+#[test]
+fn a_message_shows_a_value_as_json_writes_it_and_cuts_a_long_one() {
+    let key = KeyPath::of("prompt.system");
+
+    assert_eq!(
+        shown(&key, Some(&json!("Fix it."))),
+        Some("\"Fix it.\"".to_owned())
+    );
+    assert_eq!(shown(&key, Some(&json!(7))), Some("7".to_owned()));
+    assert_eq!(shown(&key, None), None);
+    let long = "\u{e9}".repeat(200);
+    let cut = shown(&key, Some(&json!(long))).unwrap();
+    assert_eq!(cut.chars().count(), SHOWN_CHARS + 1);
+    assert!(
+        cut.starts_with("\"\u{e9}") && cut.ends_with("\u{e9}…"),
+        "{cut}"
+    );
+    let fits = "a".repeat(SHOWN_CHARS - 2);
+    assert_eq!(shown(&key, Some(&json!(fits))), Some(format!("\"{fits}\"")));
+}
+
+/// What `model.api_key_env` holds is shown only when it's written as a
+/// variable's name is, whatever refused it.
+#[test]
+fn a_message_shows_the_key_variable_only_when_it_is_written_as_a_variable() {
+    let key = KeyPath::of("model.api_key_env");
+
+    assert_eq!(
+        shown(&key, Some(&json!("WORK_KEY_2"))),
+        Some("\"WORK_KEY_2\"".to_owned())
+    );
+    for hidden in [
+        json!("sk-ant-api03-secret"),
+        json!("work_key"),
+        json!(""),
+        json!(7),
+    ] {
+        assert_eq!(shown(&key, Some(&hidden)), None, "{hidden}");
+    }
+
+    let error = refused("model: { api_key_env: [sk-ant-api03-secret] }");
+    assert_eq!(
+        error,
+        ConfigError::Invalid {
+            key: "model.api_key_env".to_owned(),
+            place: Some(Place::Line(1)),
+            value: None,
+            reason: "expected a string".to_owned(),
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "model.api_key_env (line 1): its value is refused: expected a string"
+    );
 }

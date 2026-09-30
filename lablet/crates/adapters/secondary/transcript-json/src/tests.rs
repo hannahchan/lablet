@@ -53,7 +53,7 @@ fn document(run: &str, system: &str) -> TranscriptDocument {
         run_id: id(run),
         labels: RunLabels::default(),
         started_unix_ms: 1_790_000_000_123,
-        config_digest: "9f2c".to_owned(),
+        config_digest: lablet_model::ConfigDigest::new("9f2c".repeat(16)).unwrap(),
         agent_version: "0.1.0".to_owned(),
         transcript_path: None,
         skills_count: 0,
@@ -72,7 +72,13 @@ fn document(run: &str, system: &str) -> TranscriptDocument {
         None,
         None,
     );
-    TranscriptDocument::new(context, model(), Vec::new(), finished.transcript)
+    TranscriptDocument::new(
+        context,
+        model(),
+        Vec::new(),
+        "Fix the failing test.".to_owned(),
+        finished.transcript,
+    )
 }
 
 fn compact(document: &TranscriptDocument) -> String {

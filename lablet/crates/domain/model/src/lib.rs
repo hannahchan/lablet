@@ -65,6 +65,7 @@ macro_rules! every_variant {
     };
 }
 
+mod digest;
 mod id;
 mod labels;
 mod mcp;
@@ -83,6 +84,7 @@ mod totals;
 mod transcript;
 mod usage;
 
+pub use digest::{ConfigDigest, DigestError};
 pub use id::{IdError, RunId, ToolCallId, ToolName};
 pub use labels::RunLabels;
 pub use mcp::{McpLifetime, McpServer, McpServers, NoMcpServers};

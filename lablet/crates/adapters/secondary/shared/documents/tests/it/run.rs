@@ -7,11 +7,11 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use lablet_model::{
-    Answer, CacheScope, CompletionMode, ContentBlock, FinishReason, KeptOutput, McpLifetime,
-    McpServer, McpServers, ModelRef, OutputCap, OutputCut, Prompts, ProviderApi, ProviderResponse,
-    RequestParams, Responded, Run, RunContext, RunId, RunLabels, RunSetup, Schedule, StopReason,
-    Thinking, TokenCounts, ToolCallEnd, ToolCallId, ToolCallStatus, ToolConcurrency, ToolInput,
-    ToolName, ToolSource, ToolSpec, ToolUse, Transcript, Usage,
+    Answer, CacheScope, CompletionMode, ConfigDigest, ContentBlock, FinishReason, KeptOutput,
+    McpLifetime, McpServer, McpServers, ModelRef, OutputCap, OutputCut, Prompts, ProviderApi,
+    ProviderResponse, RequestParams, Responded, Run, RunContext, RunId, RunLabels, RunSetup,
+    Schedule, StopReason, Thinking, TokenCounts, ToolCallEnd, ToolCallId, ToolCallStatus,
+    ToolConcurrency, ToolInput, ToolName, ToolSource, ToolSpec, ToolUse, Transcript, Usage,
 };
 use serde_json::json;
 
@@ -46,8 +46,10 @@ pub(crate) fn context() -> RunContext {
         run_id: run_id(),
         labels: labels(),
         started_unix_ms: 1_790_000_000_123,
-        config_digest: "9f2c6a1d0b7e4c35a8f1d2e3b4c5a6978877665544332211ffeeddccbbaa0099"
-            .to_owned(),
+        config_digest: ConfigDigest::new(
+            "9f2c6a1d0b7e4c35a8f1d2e3b4c5a6978877665544332211ffeeddccbbaa0099",
+        )
+        .unwrap(),
         agent_version: "0.1.0".to_owned(),
         transcript_path: Some("out/transcript.json".into()),
         skills_count: 2,
@@ -119,12 +121,12 @@ fn setup() -> RunSetup {
     }
 }
 
+/// The task every run here is given.
+pub(crate) const TASK: &str = "Fix the failing test.";
+
 /// A run that has been given its prompts and nothing else.
 pub(crate) fn started() -> Run {
-    Run::start(
-        setup(),
-        Prompts::new("You fix tests.", "Fix the failing test.").unwrap(),
-    )
+    Run::start(setup(), Prompts::new("You fix tests.", TASK).unwrap())
 }
 
 /// The transcript of a run that stopped before it received a response.

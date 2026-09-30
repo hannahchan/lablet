@@ -48,7 +48,7 @@ fn context() -> RunContext {
         run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").expect("a valid run id"),
         labels: RunLabels::default(),
         started_unix_ms: 1_790_000_000_000,
-        config_digest: "0".repeat(64),
+        config_digest: lablet_model::ConfigDigest::new("0".repeat(64)).expect("a digest"),
         agent_version: "0.1.0".to_owned(),
         transcript_path: None,
         skills_count: 0,

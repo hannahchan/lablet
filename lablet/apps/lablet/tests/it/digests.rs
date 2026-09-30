@@ -13,10 +13,12 @@ use crate::harness::{ENDS, Lab, Traced, read, request};
 async fn digests(scratch: &Lab, run: &str, more: Value) -> [String; 3] {
     let tree = scratch.tree(ENDS, more);
     let config = read(&tree);
-    let digest = config.digest();
+    let digest = config.digest().to_string();
     let mut lablet = lablet::build(config).await.unwrap();
 
-    let finished: FinishedRun = lablet.run(request().run_id(RunId::new(run).unwrap())).await;
+    let finished: FinishedRun = lablet
+        .run(request().run_id(RunId::new(run).unwrap()).unwrap())
+        .await;
     lablet.shutdown().await;
 
     let exported = scratch.exported();

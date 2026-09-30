@@ -51,11 +51,12 @@ async fn the_labels_of_a_request_are_on_every_record_of_its_run_and_of_no_other(
         .run(
             request()
                 .run_id(RunId::new("labelled").unwrap())
+                .unwrap()
                 .labels(labels.clone()),
         )
         .await;
     let bare = lablet
-        .run(request().run_id(RunId::new("bare").unwrap()))
+        .run(request().run_id(RunId::new("bare").unwrap()).unwrap())
         .await;
     lablet.shutdown().await;
 

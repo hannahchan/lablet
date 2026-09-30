@@ -5,14 +5,18 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lablet_documents::TranscriptDocument;
-use lablet_model::{BlankTask, FinishedRun, Prompts, RunContext, RunId, RunLabels};
+use lablet_model::{
+    BlankTask, ConfigDigest, FinishedRun, Prompts, RunContext, RunId, RunLabels, ToolSpec,
+};
 use lablet_provider_fake::FakeProvider;
 use lablet_run::{RunService, ToolSet};
 use lablet_telemetry_otel::OtelObserver;
 use lablet_transcript_json::TranscriptFile;
 use ulid::Ulid;
 
-/// What a run is asked to do, and what it's known by.
+use crate::cancel::{CancelHandle, RunCancellation};
+
+/// What a run is asked to do, what it's known by, and what may stop it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunRequest {
     /// The task, under no system prompt: the `Lablet` that runs the
@@ -20,6 +24,19 @@ pub struct RunRequest {
     task: Prompts,
     run_id: Option<RunId>,
     labels: RunLabels,
+    cancellation: Option<CancelHandle>,
+}
+
+/// Why a run id was refused for a run: a run's files are named with its
+/// id, and one that isn't one component of a path would name another
+/// place than the one the config names, or none.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("the run id {run_id:?} is refused: {reason}, and a run's files are named with its id")]
+pub struct RunIdRefused {
+    /// The refused id.
+    pub run_id: String,
+    /// Which rule of a path component it breaks.
+    pub reason: &'static str,
 }
 
 impl RunRequest {
@@ -35,15 +52,46 @@ impl RunRequest {
             task: Prompts::new(String::new(), prompt)?,
             run_id: None,
             labels: RunLabels::default(),
+            cancellation: None,
         })
     }
 
     /// The same request under the run id `id`, for a caller that has to
     /// know the id before the run starts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RunIdRefused`] when `id` isn't one component of a path:
+    /// when it's `.` or `..`, or holds a `/` or a NUL. The run's telemetry
+    /// file and its transcript may be named with its id, and such an id
+    /// would put them in another directory than the config names, or name
+    /// no file at all.
+    pub fn run_id(self, id: RunId) -> Result<Self, RunIdRefused> {
+        let reason = match id.as_str() {
+            "." => "it names the directory itself",
+            ".." => "it names the directory above",
+            named if named.contains('/') => "it holds a `/`",
+            named if named.contains('\0') => "it holds a NUL",
+            _ => {
+                return Ok(Self {
+                    run_id: Some(id),
+                    ..self
+                });
+            }
+        };
+        Err(RunIdRefused {
+            run_id: id.into(),
+            reason,
+        })
+    }
+
+    /// The same request, stopped when `handle` is fired: the run ends with
+    /// `cancelled`, and its outcome, its transcript and its wide event are
+    /// written.
     #[must_use]
-    pub fn run_id(self, id: RunId) -> Self {
+    pub fn cancellation(self, handle: CancelHandle) -> Self {
         Self {
-            run_id: Some(id),
+            cancellation: Some(handle),
             ..self
         }
     }
@@ -75,7 +123,7 @@ impl Played {
 /// What every run of one `Lablet` shares, beside the loop.
 pub(crate) struct Fixed {
     pub(crate) system: String,
-    pub(crate) config_digest: String,
+    pub(crate) config_digest: ConfigDigest,
     pub(crate) capture_content: bool,
     /// Where a transcript goes, as the config states it.
     pub(crate) transcript_path: Option<PathBuf>,
@@ -90,6 +138,7 @@ pub struct Lablet {
     provider: Played,
     tools: Arc<ToolSet>,
     telemetry: OtelObserver,
+    cancellation: Arc<RunCancellation>,
     fixed: Fixed,
 }
 
@@ -113,6 +162,7 @@ impl Lablet {
         provider: Played,
         tools: Arc<ToolSet>,
         telemetry: OtelObserver,
+        cancellation: Arc<RunCancellation>,
         fixed: Fixed,
     ) -> Self {
         Self {
@@ -120,8 +170,16 @@ impl Lablet {
             provider,
             tools,
             telemetry,
+            cancellation,
             fixed,
         }
+    }
+
+    /// The tools every run of this `Lablet` is offered, in the order
+    /// they're offered, after `tools.allow` and `tools.deny`.
+    #[must_use]
+    pub fn tools(&self) -> &[ToolSpec] {
+        self.tools.specs()
     }
 
     /// Runs one task to its outcome.
@@ -141,6 +199,7 @@ impl Lablet {
             task,
             run_id,
             labels,
+            cancellation,
         } = request;
         // One reading of the clock, so a fresh id holds the time its run
         // started.
@@ -160,11 +219,16 @@ impl Lablet {
         };
 
         self.provider.begin_run();
+        let task_prompt = task.task().to_owned();
         let prompts = task.with_system(self.fixed.system.as_str());
+        // Every run sets its own, so a handle of an earlier run never
+        // reaches this one.
+        self.cancellation.set(cancellation);
         let finished = self.service.run(context.clone(), prompts).await;
 
         if let Some(file) = transcript {
-            self.write_transcript(file, context, &finished).await;
+            self.write_transcript(file, context, task_prompt, &finished)
+                .await;
         }
         if let Err(error) = self.telemetry.flush().await {
             tracing::warn!(
@@ -196,12 +260,19 @@ impl Lablet {
             .ok()
     }
 
-    async fn write_transcript(&self, file: TranscriptFile, context: RunContext, run: &FinishedRun) {
+    async fn write_transcript(
+        &self,
+        file: TranscriptFile,
+        context: RunContext,
+        task_prompt: String,
+        run: &FinishedRun,
+    ) {
         let run_id = context.run_id.clone();
         let document = TranscriptDocument::new(
             context,
             run.summary.model.clone(),
             self.tools.specs().to_vec(),
+            task_prompt,
             run.transcript.clone(),
         );
         // A file is written where waiting is allowed, as the telemetry's

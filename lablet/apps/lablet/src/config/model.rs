@@ -9,10 +9,13 @@ use std::fmt;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::written::path;
+
 /// The `model` section.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Model {
     /// The provider the model is reached through.
@@ -21,6 +24,7 @@ pub struct Model {
     /// `base_url` and chat completions with one.
     pub api: Option<Api>,
     /// `fake` only: the file of scripted responses.
+    #[serde(serialize_with = "path::optional")]
     pub script: Option<PathBuf>,
     /// The provider's name for the model.
     pub name: String,
@@ -151,11 +155,9 @@ impl Model {
     /// Validation has already held the value to a variable's name, so only
     /// its case and its characters are asked about here.
     pub(crate) fn shown_key_variable(&self) -> Option<&str> {
-        self.api_key_env.as_deref().filter(|named| {
-            named
-                .bytes()
-                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
-        })
+        self.api_key_env
+            .as_deref()
+            .filter(|named| is_written_as_a_variable(named))
     }
 
     /// Whether the provider can apply `setting`.
@@ -191,8 +193,18 @@ impl Model {
     }
 }
 
+/// Whether `named` is written in capitals, digits and `_`, as environment
+/// variables conventionally are and few key formats are: the one rule for
+/// whether a message may show what `model.api_key_env` holds.
+pub(crate) fn is_written_as_a_variable(named: &str) -> bool {
+    !named.is_empty()
+        && named
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
 /// A provider of models.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
     /// Anthropic's Messages API.
@@ -217,7 +229,7 @@ impl Provider {
 }
 
 /// One of the two APIs an `openai` model is reached through.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Api {
     /// The Responses API.
@@ -238,7 +250,7 @@ impl Api {
 }
 
 /// How the model is asked to reason before it answers.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Thinking {
     /// Nothing is sent, so the provider's default applies.
@@ -276,7 +288,7 @@ impl From<Thinking> for lablet_model::Thinking {
 }
 
 /// A reasoning effort level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Effort {
     /// The least effort.
@@ -332,7 +344,7 @@ macro_rules! display_as_str {
 display_as_str!(Provider, Api, Effort);
 
 /// Which runs share what a provider caches of a run's requests.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CacheScope {
     /// Every run that sends the same prefix shares what's cached of it.
@@ -352,7 +364,7 @@ impl From<CacheScope> for lablet_model::CacheScope {
 }
 
 /// What a model's tokens cost, in US dollars per million tokens.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Pricing {
     /// Input tokens that touched no cache.

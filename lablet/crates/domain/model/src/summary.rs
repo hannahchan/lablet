@@ -6,9 +6,9 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 
 use crate::{
-    CompletionMode, Cost, Endpoint, FinishReason, McpServers, ModelRef, ProviderTotals, Rates,
-    RequestParams, RunId, RunLabels, RunOutcome, ToolCallTotals, ToolName, ToolStats, Transcript,
-    Usage,
+    CompletionMode, ConfigDigest, Cost, Endpoint, FinishReason, McpServers, ModelRef,
+    ProviderTotals, Rates, RequestParams, RunId, RunLabels, RunOutcome, ToolCallTotals, ToolName,
+    ToolStats, Transcript, Usage,
 };
 
 /// What only the composition root knows about a run: its part of the wide
@@ -29,8 +29,8 @@ pub struct RunContext {
     /// read where the context is filled in: the domain reads no clock, and
     /// the loop's gives instants, which have no date.
     pub started_unix_ms: u64,
-    /// SHA-256 of the resolved config, in hex.
-    pub config_digest: String,
+    /// SHA-256 of the resolved config, which groups the runs made from it.
+    pub config_digest: ConfigDigest,
     /// The lablet version.
     pub agent_version: String,
     /// Where the transcript is written, when it is.
