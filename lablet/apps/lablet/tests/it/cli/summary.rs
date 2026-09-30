@@ -4,7 +4,7 @@
 use lablet_conformance::otlp::Exported;
 use serde_json::json;
 
-use crate::harness::{CONFIG, ENDS, Lab, ran};
+use super::harness::{CONFIG, ENDS, Lab, ran};
 
 /// A call of a tool the run offers, and a response that ends the run.
 const CALLS_ENDS: &str = "
@@ -46,7 +46,7 @@ fn ends_in_a_duration(line: &str) -> bool {
 #[test]
 fn a_run_ends_with_one_summary_line_on_standard_error() {
     let lab = Lab::new("summary-line");
-    lab.config(CALLS_ENDS, with_bash(&lab, json!({})));
+    lab.write_config(CALLS_ENDS, with_bash(&lab, json!({})));
 
     let run = lab.run_config(&[]);
 
@@ -63,7 +63,7 @@ fn a_run_ends_with_one_summary_line_on_standard_error() {
 #[test]
 fn quiet_leaves_the_summary_line_out_and_the_outcome_in() {
     let lab = Lab::new("summary-quiet");
-    lab.config(ENDS, json!({}));
+    lab.write_config(ENDS, json!({}));
 
     for quiet in ["--quiet", "-q"] {
         let run = lab.run_config(&[quiet]);
@@ -77,7 +77,7 @@ fn quiet_leaves_the_summary_line_out_and_the_outcome_in() {
 #[test]
 fn a_run_that_reached_its_token_budget_says_how_far_and_what_the_numbers_count() {
     let lab = Lab::new("summary-budget");
-    lab.config(
+    lab.write_config(
         CALLS_ENDS,
         with_bash(&lab, json!({ "max_total_tokens": 1000 })),
     );
@@ -100,7 +100,7 @@ fn a_run_that_reached_its_token_budget_says_how_far_and_what_the_numbers_count()
 /// can't be written, which lablet warns of on the diagnostic log.
 fn on_stderr_with_a_warning(lab: &Lab) {
     let blocked = lab.write("blocked", "");
-    lab.config(
+    lab.write_config(
         ENDS,
         json!({
             "run": { "transcript_path": blocked.join("transcript.json") },
@@ -154,7 +154,7 @@ fn rust_log_brings_the_diagnostic_log_back_beside_the_otlp_lines() {
 fn the_warning_those_runs_are_given_reaches_standard_error_when_the_telemetry_is_elsewhere() {
     let lab = Lab::new("summary-warning");
     let blocked = lab.write("blocked", "");
-    lab.config(
+    lab.write_config(
         ENDS,
         json!({ "run": { "transcript_path": blocked.join("transcript.json") } }),
     );

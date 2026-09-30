@@ -11,7 +11,7 @@ use serde_json::{Map, Number, Value};
 use serde_saphyr::Spanned;
 
 use super::de::{At, Fault, FaultKind, listed};
-use super::key::{KeyPath, Place, Places};
+use super::key::{KeyPath, Place, Places, place_in};
 use super::{Config, ConfigError, Format, shown};
 
 /// A config's text, read into a tree of values, before the tree is read as
@@ -99,9 +99,10 @@ impl RawConfig {
     /// # Errors
     ///
     /// Returns [`ConfigError::Override`] when the text isn't `key=value`,
-    /// when a key of it is empty, and when the way to the key passes
-    /// through a value or a place a list doesn't have. The refusal never
-    /// shows the value.
+    /// when a key of it is empty, when the way to the key passes through a
+    /// value or a place a list doesn't have, and when it names a place in a
+    /// list where no list is written. The refusal never shows the value,
+    /// and a refused override changes nothing.
     pub fn set(&mut self, key_value: &str) -> Result<(), ConfigError> {
         let refuse = |key: Option<&str>, reason: String| ConfigError::Override {
             key: key.map(str::to_owned),
@@ -124,16 +125,30 @@ impl RawConfig {
         }
         let value = scalar(value);
 
-        let mut node = &mut self.tree;
+        // The override is stated on a copy, which takes the tree's place
+        // only once it's stated whole, so a refused one changes nothing.
+        let mut tree = self.tree.clone();
+        let mut node = &mut tree;
         let mut path = KeyPath::default();
         for (place, name) in keys.iter().enumerate() {
-            let last = place + 1 == keys.len();
             node = match node {
                 Value::Object(entries) => {
                     path = path.key(name);
                     let slot = entries.entry((*name).to_owned()).or_insert(Value::Null);
-                    if !last && slot.is_null() {
-                        *slot = Value::Object(Map::new());
+                    match keys.get(place + 1) {
+                        // A section made here would hold the number as a
+                        // key, and the refusal would be of a value nobody
+                        // wrote.
+                        Some(next) if slot.is_null() && next.parse::<usize>().is_ok() => {
+                            return Err(refuse(
+                                Some(key),
+                                format!(
+                                    "no list is written at {path}, so `{next}` is no place in one"
+                                ),
+                            ));
+                        }
+                        Some(_) if slot.is_null() => *slot = Value::Object(Map::new()),
+                        _ => {}
                     }
                     slot
                 }
@@ -163,6 +178,7 @@ impl RawConfig {
             };
         }
         *node = value;
+        self.tree = tree;
         self.places.retain(|written, _| !written.is_within(&path));
         self.places.insert(path, Place::Override);
         Ok(())
@@ -198,7 +214,7 @@ impl RawConfig {
 
     fn refusal(&self, fault: Fault) -> ConfigError {
         let key = fault.key.unwrap_or_default();
-        let place = self.places.get(&key).copied();
+        let place = place_in(&self.places, &key);
         match fault.kind {
             FaultKind::UnknownKey { known, .. } => ConfigError::UnknownKey {
                 key: key.to_string(),

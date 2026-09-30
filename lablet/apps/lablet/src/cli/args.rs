@@ -24,8 +24,9 @@ pub(crate) enum Command {
     /// completed, 2 when it stopped any other way, and 1 when it never
     /// started.
     Run(RunArgs),
-    /// Validate a config, start its MCP servers and list the tools, without
-    /// calling the model.
+    /// Validate a config, start its MCP servers and list the tools a run is
+    /// offered, without calling the model, and exit 0 when it passed and 1
+    /// when it didn't.
     Check(CheckArgs),
     /// Print the JSON Schema of the config.
     Schema,
@@ -101,18 +102,12 @@ pub(crate) struct Overrides {
 
 /// The arguments of `lablet check`.
 #[derive(Debug, Args)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "they parse, so a script can be written against them, and nothing reads them until check is built"
-    )
-)]
 pub(crate) struct CheckArgs {
     /// The config, in YAML or JSON as its name says.
     #[arg(long, value_name = "FILE")]
     pub(crate) config: PathBuf,
-    /// Print the config with every default filled in.
+    /// Print the config with every default filled in, as YAML, in place of
+    /// the tools.
     #[arg(long)]
     pub(crate) resolved: bool,
     #[command(flatten)]

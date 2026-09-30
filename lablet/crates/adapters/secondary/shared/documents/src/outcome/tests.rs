@@ -191,6 +191,8 @@ fn an_outcome_no_run_can_have_is_refused_with_the_rule_it_breaks() {
 
         assert_eq!(refused, OutcomeDocumentError::BrokenRule(rule));
         assert_eq!(refused.to_string(), message);
+        // The rule's words are the message, so they aren't its source too.
+        assert!(std::error::Error::source(&refused).is_none());
     }
 }
 

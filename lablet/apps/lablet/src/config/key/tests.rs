@@ -42,6 +42,31 @@ fn a_place_says_the_line_or_that_an_override_set_it() {
 }
 
 #[test]
+fn a_setting_was_written_by_an_override_when_an_override_set_anything_within_it() {
+    let allow = KeyPath::of("tools.allow");
+    let places = Places::new(BTreeMap::from([
+        (KeyPath::of("tools"), Place::Line(1)),
+        (allow.clone(), Place::Line(2)),
+        (allow.index(0), Place::Line(3)),
+        (allow.index(1), Place::Override),
+        (KeyPath::of("tools.allowed"), Place::Line(5)),
+        (KeyPath::of("tools.deny"), Place::Line(6)),
+        (KeyPath::of("tools.deny").index(0), Place::Line(7)),
+        (KeyPath::of("tools.max"), Place::Override),
+    ]));
+
+    assert_eq!(places.of(&KeyPath::of("tools")), Some(Place::Override));
+    assert_eq!(places.of(&allow), Some(Place::Override));
+    assert_eq!(places.of(&allow.index(0)), Some(Place::Line(3)));
+    assert_eq!(
+        places.of(&KeyPath::of("tools.allowed")),
+        Some(Place::Line(5))
+    );
+    assert_eq!(places.of(&KeyPath::of("tools.deny")), Some(Place::Line(6)));
+    assert_eq!(places.of(&KeyPath::of("tools.mcp")), None);
+}
+
+#[test]
 fn places_answer_for_the_settings_they_hold_and_equal_any_other() {
     let run = KeyPath::of("run");
     let places = Places::new(BTreeMap::from([(run.clone(), Place::Line(2))]));

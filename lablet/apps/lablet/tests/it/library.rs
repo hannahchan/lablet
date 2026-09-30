@@ -231,11 +231,15 @@ async fn telemetry_that_cannot_be_written_leaves_the_outcome_alone() {
     assert_eq!(outcome.result().text, "Nothing to fix.");
     assert!(!nowhere.exists());
     let lines = diagnostics.lines();
+    let warned: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.contains("WARN") && line.contains(outcome.run_id.as_str()))
+        .collect();
+    assert_eq!(warned.len(), 1, "{lines:?}");
     assert!(
-        lines.iter().any(|line| line.contains("WARN")
-            && line.contains("the run's telemetry wasn't exported whole")
-            && line.contains(outcome.run_id.as_str())),
+        warned[0].contains("the run's telemetry wasn't exported whole"),
         "{lines:?}"
     );
+    assert_eq!(warned[0].matches("exported whole").count(), 1, "{lines:?}");
     lablet.shutdown().await;
 }

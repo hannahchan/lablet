@@ -1,74 +1,21 @@
-//! A directory for each test, a config whose files are in it, and the
-//! binary run there.
+//! The binary, run in a lab's directory, and what it printed and how it
+//! exited.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use lablet_conformance::otlp::Exported;
-use lablet_test_support::Scratch;
-use serde_json::{Value, json};
+use serde_json::Value;
 
-pub use lablet_test_support::{PROMPT, SYSTEM};
+pub use crate::harness::{ENDS, Lab, PROMPT};
 
-pub const MODEL: &str = "scripted-1";
-
-/// The name of the config [`Lab::config`] writes.
+/// The name of the config [`Lab::write_config`] writes.
 pub const CONFIG: &str = "lablet.json";
 
-/// A response that ends the run, and nothing before it.
-pub const ENDS: &str = "
-- response:
-    content:
-      - text: Nothing to fix.
-    usage: { input_tokens: 100, output_tokens: 10 }
-    finish: end_turn
-";
-
-/// A scratch directory of one test's own, which the binary runs in.
-pub struct Lab(Scratch);
-
 impl Lab {
-    pub fn new(test: &str) -> Self {
-        Self(Scratch::new(test))
-    }
-
-    pub fn path(&self) -> &Path {
-        self.0.path()
-    }
-
-    pub fn at(&self, path: &str) -> PathBuf {
-        self.0.at(path)
-    }
-
-    pub fn write(&self, path: &str, text: &str) -> PathBuf {
-        self.0.write(path, text)
-    }
-
-    /// The file the telemetry of [`Lab::config`]'s runs is appended to.
-    pub fn telemetry(&self) -> PathBuf {
-        self.at("telemetry.otlp.jsonl")
-    }
-
-    /// What the runs so far exported to [`Lab::telemetry`].
-    pub fn exported(&self) -> Exported {
-        Exported::read(&self.telemetry()).unwrap()
-    }
-
-    /// Writes [`CONFIG`], a config of a fake model that plays the YAML
-    /// script `script`, with `more` stated over it.
-    pub fn config(&self, script: &str, more: Value) {
-        let mut tree = json!({
-            "model": {
-                "provider": "fake",
-                "script": self.write("script.yaml", script),
-                "name": MODEL,
-            },
-            "prompt": { "system": SYSTEM },
-            "telemetry": { "file": { "path": self.telemetry() } },
-        });
-        state(&mut tree, more);
-        self.write(CONFIG, &tree.to_string());
+    /// Writes [`CONFIG`], the lab's config of a fake model that plays the
+    /// YAML script `script`, with `more` stated over it.
+    pub fn write_config(&self, script: &str, more: Value) {
+        self.write(CONFIG, &self.tree(script, more).to_string());
     }
 
     /// The binary with `args`, to be run in the directory, with no
@@ -92,19 +39,6 @@ impl Lab {
         let mut args = vec!["run", "--config", CONFIG, "--prompt", PROMPT];
         args.extend(more);
         self.run(&args)
-    }
-}
-
-/// States `more` over `tree`: a mapping is stated key by key, and anything
-/// else in place of what was there.
-fn state(tree: &mut Value, more: Value) {
-    match (tree, more) {
-        (Value::Object(tree), Value::Object(more)) => {
-            for (key, value) in more {
-                state(tree.entry(key).or_insert(Value::Null), value);
-            }
-        }
-        (tree, more) => *tree = more,
     }
 }
 

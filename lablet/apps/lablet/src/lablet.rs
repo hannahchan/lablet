@@ -1,6 +1,6 @@
 //! The `Lablet`: one loop and its adapters, which runs a task at a time.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -11,7 +11,7 @@ use lablet_model::{
 use lablet_provider_fake::FakeProvider;
 use lablet_run::{RunService, ToolSet};
 use lablet_telemetry_otel::OtelObserver;
-use lablet_transcript_json::TranscriptFile;
+use lablet_transcript_json::{TranscriptFile, TranscriptWriteError};
 use ulid::Ulid;
 
 use crate::cancel::{CancelHandle, RunCancellation};
@@ -125,8 +125,18 @@ pub(crate) struct Fixed {
     pub(crate) system: String,
     pub(crate) config_digest: ConfigDigest,
     pub(crate) capture_content: bool,
-    /// Where a transcript goes, as the config states it.
-    pub(crate) transcript_path: Option<PathBuf>,
+    /// Where a transcript goes, when the config names a place for one.
+    pub(crate) transcript: Option<TranscriptPath>,
+}
+
+/// Where a run's transcript goes, as it's written to and as the config
+/// writes it.
+pub(crate) struct TranscriptPath {
+    /// The path, with `${VAR}` substituted, that's written to.
+    pub(crate) real: PathBuf,
+    /// The path before substitution, which is the one a message shows, so
+    /// that nothing a variable holds reaches the diagnostic log.
+    pub(crate) written: PathBuf,
 }
 
 /// One loop with its adapters, built from a config.
@@ -212,7 +222,7 @@ impl Lablet {
             started_unix_ms: unix_ms(started),
             config_digest: self.fixed.config_digest.clone(),
             agent_version: crate::VERSION.to_owned(),
-            transcript_path: transcript.as_ref().map(|file| file.path().to_owned()),
+            transcript_path: transcript.as_ref().map(|(file, _)| file.path().to_owned()),
             skills_count: 0,
             mcp: None,
             capture_content: self.fixed.capture_content,
@@ -226,14 +236,14 @@ impl Lablet {
         self.cancellation.set(cancellation);
         let finished = self.service.run(context.clone(), prompts).await;
 
-        if let Some(file) = transcript {
-            self.write_transcript(file, context, task_prompt, &finished)
+        if let Some((file, shown)) = transcript {
+            self.write_transcript(file, &shown, context, task_prompt, &finished)
                 .await;
         }
         if let Err(error) = self.telemetry.flush().await {
             tracing::warn!(
                 run_id = %finished.summary.outcome.run_id,
-                %error,
+                failures = ?error.failures(),
                 "the run's telemetry wasn't exported whole"
             );
         }
@@ -245,24 +255,32 @@ impl Lablet {
     /// reported on the diagnostic log.
     pub async fn shutdown(self) {
         if let Err(error) = self.telemetry.shutdown().await {
-            tracing::warn!(%error, "the telemetry didn't shut down clean");
+            tracing::warn!(
+                failures = ?error.failures(),
+                "the telemetry wasn't exported whole at shutdown"
+            );
         }
     }
 
     /// The file of the run's transcript, when the config names a place for
-    /// one and the run id can be part of it.
-    fn transcript_file(&self, run_id: &RunId) -> Option<TranscriptFile> {
-        let configured = self.fixed.transcript_path.as_deref()?;
-        TranscriptFile::for_run(configured, run_id)
+    /// one and the run id can be part of it, and its path as the config
+    /// writes it.
+    fn transcript_file(&self, run_id: &RunId) -> Option<(TranscriptFile, PathBuf)> {
+        let path = self.fixed.transcript.as_ref()?;
+        TranscriptFile::for_run(&path.real, run_id)
             .inspect_err(|error| {
                 tracing::warn!(%run_id, %error, "the run has no transcript file");
             })
             .ok()
+            .map(|file| (file, path.written.clone()))
     }
 
+    /// Writes the run's transcript to `file`, and warns of a write that
+    /// failed with `shown`, the path as the config writes it.
     async fn write_transcript(
         &self,
         file: TranscriptFile,
+        shown: &Path,
         context: RunContext,
         task_prompt: String,
         run: &FinishedRun,
@@ -279,10 +297,18 @@ impl Lablet {
         // files are.
         let written = tokio::task::spawn_blocking(move || file.write(&document))
             .await
-            .map_err(|error| error.to_string())
-            .and_then(|written| written.map_err(|error| error.to_string()));
+            .map_err(|error| format!("the transcript's write didn't run to its end: {error}"))
+            .and_then(|written| {
+                written.map_err(|error| match error {
+                    TranscriptWriteError::Unwritable { reason, .. } => format!(
+                        "the transcript couldn't be written to {}: {reason}",
+                        shown.display()
+                    ),
+                    error @ TranscriptWriteError::RunIdNotOneComponent { .. } => error.to_string(),
+                })
+            });
         if let Err(error) = written {
-            tracing::warn!(%run_id, %error, "the run's transcript wasn't written");
+            tracing::warn!(%run_id, "{error}");
         }
     }
 }

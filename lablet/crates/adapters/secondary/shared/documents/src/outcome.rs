@@ -79,8 +79,9 @@ pub enum OutcomeDocumentError {
         /// The version the document states.
         found: u32,
     },
-    /// The document states an outcome no run could have had.
-    #[error("{0}")]
+    /// The document states an outcome no run could have had, in the
+    /// domain's words.
+    #[error(transparent)]
     BrokenRule(#[from] OutcomeError),
 }
 

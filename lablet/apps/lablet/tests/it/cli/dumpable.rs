@@ -7,12 +7,12 @@ use std::process::Stdio;
 
 use serde_json::json;
 
-use crate::harness::{CONFIG, ENDS, Lab};
+use super::harness::{CONFIG, ENDS, Lab};
 
 #[test]
 fn no_other_process_of_its_user_can_read_the_environment_of_a_running_lablet() {
     let lab = Lab::new("dumpable");
-    lab.config(ENDS, json!({}));
+    lab.write_config(ENDS, json!({}));
     // With no prompt flag, the run waits on standard input, and says so on
     // the diagnostic log first, by which time the flag is clear.
     let mut child = lab

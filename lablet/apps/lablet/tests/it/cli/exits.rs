@@ -4,12 +4,12 @@
 
 use serde_json::json;
 
-use crate::harness::{CONFIG, ENDS, Lab};
+use super::harness::{CONFIG, ENDS, Lab};
 
 #[test]
 fn a_run_that_completed_exits_0() {
     let lab = Lab::new("exit-completed");
-    lab.config(ENDS, json!({}));
+    lab.write_config(ENDS, json!({}));
 
     let run = lab.run_config(&[]);
 
@@ -42,7 +42,7 @@ fn a_refused_run_exits_2_whether_the_model_or_a_filter_refused() {
         ),
     ] {
         let lab = Lab::new(test);
-        lab.config(script, json!({}));
+        lab.write_config(script, json!({}));
 
         let run = lab.run_config(&[]);
 
@@ -58,7 +58,7 @@ fn a_run_whose_key_the_provider_rejected_exits_2_with_its_outcome_printed() {
     // E15: the run began, so it has an outcome, and the rejection is its
     // error.
     let lab = Lab::new("exit-auth");
-    lab.config(
+    lab.write_config(
         "- error: { kind: auth, message: 401 invalid x-api-key }\n",
         json!({}),
     );
@@ -71,12 +71,38 @@ fn a_run_whose_key_the_provider_rejected_exits_2_with_its_outcome_printed() {
     assert_eq!(outcome["turns"], json!(0));
     assert_eq!(outcome["error"], json!("401 invalid x-api-key"));
     assert_eq!(lab.exported().records_of("lablet.run").len(), 1);
+    let lines = run.stderr_lines();
+    assert_eq!(lines.len(), 2, "{run:?}");
+    assert_eq!(lines[0], "provider: 401 invalid x-api-key");
+    assert!(
+        lines[1].starts_with("provider_error: 0 turns, 0 tokens, 0 tool calls, "),
+        "{run:?}"
+    );
+
+    // The message isn't the summary line, so `--quiet` leaves it; the
+    // telemetry on standard error leaves standard error to the telemetry.
+    let quiet = lab.run_config(&["--quiet"]);
+    assert_eq!(quiet.code, Some(2), "{quiet:?}");
+    assert_eq!(quiet.stderr, "provider: 401 invalid x-api-key\n");
+    lab.write_config(
+        "- error: { kind: auth, message: 401 invalid x-api-key }\n",
+        json!({ "telemetry": { "file": { "path": "-" } } }),
+    );
+    let on_stderr = lab.run_config(&[]);
+    assert_eq!(on_stderr.code, Some(2), "{on_stderr:?}");
+    assert!(
+        on_stderr
+            .stderr_lines()
+            .iter()
+            .all(|line| line.starts_with('{')),
+        "{on_stderr:?}"
+    );
 }
 
 #[test]
 fn a_config_that_isnt_read_exits_1_with_a_config_message_and_no_outcome() {
     let lab = Lab::new("exit-unknown-key");
-    lab.config(ENDS, json!({ "run": { "max_turn": 3 } }));
+    lab.write_config(ENDS, json!({ "run": { "max_turn": 3 } }));
 
     let run = lab.run_config(&[]);
 
@@ -92,7 +118,7 @@ fn a_config_that_isnt_read_exits_1_with_a_config_message_and_no_outcome() {
 #[test]
 fn a_config_the_library_wont_build_exits_1_with_a_config_message() {
     let lab = Lab::new("exit-unsupported");
-    lab.config(ENDS, json!({ "run": { "transcript_format": "atif" } }));
+    lab.write_config(ENDS, json!({ "run": { "transcript_format": "atif" } }));
 
     let run = lab.run_config(&[]);
 

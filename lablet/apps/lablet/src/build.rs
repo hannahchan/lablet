@@ -20,7 +20,7 @@ use crate::config::{
     ResolvedConfig, Tools, TranscriptFormat,
 };
 use crate::fanout::FanOut;
-use crate::lablet::{Fixed, Lablet, Played};
+use crate::lablet::{Fixed, Lablet, Played, TranscriptPath};
 use crate::root::{self, OwnFile};
 use crate::settings::{Selected, Settings, System};
 
@@ -255,8 +255,9 @@ fn environment(name: &str) -> Option<OsString> {
 ///
 /// It substitutes `${VAR}`, checks every setting, that the provider's key
 /// variable is set when the provider needs a key, that each file the config
-/// names can be read and the root holds none of lablet's own, and builds
-/// the tool set, so the tools a run is offered are listed.
+/// names can be read, the fake provider's script among them, and the root
+/// holds none of lablet's own, and builds the tool set, so the tools a run
+/// is offered are listed.
 ///
 /// # Errors
 ///
@@ -321,9 +322,19 @@ struct Prepared {
     /// The config with `${VAR}` substituted, which is what runs.
     real: Config,
     settings: Settings,
+    provider: Ready,
     system: String,
     target: FileTarget,
     tools: Arc<ToolSet>,
+}
+
+/// The provider a checked config selects, with what was read for it, so a
+/// build reads no file its check didn't.
+enum Ready {
+    Anthropic,
+    Openai,
+    /// The fake provider, and the script it plays.
+    Fake(Script),
 }
 
 /// Checks `written` whole, on the config it comes to once `${VAR}` is
@@ -340,6 +351,11 @@ async fn prepare(written: &Config, env: Env<'_>) -> Result<Prepared, BuildError>
         System::Text(text) => text.clone(),
         System::File(file) => std::fs::read_to_string(file)
             .map_err(|error| refused(Refusal::invalid("prompt.system_file", error.to_string())))?,
+    };
+    let provider = match &settings.provider {
+        Selected::Anthropic => Ready::Anthropic,
+        Selected::Openai => Ready::Openai,
+        Selected::Fake { script } => Ready::Fake(read_script(script).map_err(refused)?),
     };
 
     let target = match &real.telemetry.file.path {
@@ -390,6 +406,7 @@ async fn prepare(written: &Config, env: Env<'_>) -> Result<Prepared, BuildError>
     Ok(Prepared {
         real,
         settings,
+        provider,
         system,
         target,
         tools,
@@ -429,19 +446,17 @@ async fn build_in(
     let Prepared {
         real,
         settings,
+        provider,
         system,
         target,
         tools,
     } = prepare(&config, env).await?;
-    let script = match &settings.provider {
-        Selected::Fake { script } => script,
-        Selected::Anthropic => return Err(Unsupported::Anthropic.into()),
-        Selected::Openai => return Err(Unsupported::Openai.into()),
+    let script = match provider {
+        Ready::Fake(script) => script,
+        Ready::Anthropic => return Err(Unsupported::Anthropic.into()),
+        Ready::Openai => return Err(Unsupported::Openai.into()),
     };
-    let provider = Arc::new(FakeProvider::new(
-        real.model.name.clone(),
-        read_script(script).map_err(|refusal| BuildError::Config(config.refused(refusal)))?,
-    ));
+    let provider = Arc::new(FakeProvider::new(real.model.name.clone(), script));
 
     let telemetry = OtelObserver::builder(crate::VERSION)
         .resource(real.telemetry.resource.clone().into_iter().collect())
@@ -473,7 +488,11 @@ async fn build_in(
             system,
             config_digest: config.digest(),
             capture_content: real.telemetry.capture_content,
-            transcript_path: real.run.transcript_path,
+            transcript: real
+                .run
+                .transcript_path
+                .zip(config.run.transcript_path.clone())
+                .map(|(real, written)| TranscriptPath { real, written }),
         },
     ))
 }

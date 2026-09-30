@@ -46,9 +46,10 @@ pub enum ToolSetError {
         /// The list it's in.
         list: FilterList,
     },
-    /// An executor couldn't say what it offers.
+    /// An executor couldn't say what it offers. The message holds the
+    /// executor's, so the error has no source, which would show it twice.
     #[error("an executor couldn't list its tools: {0}")]
-    Specs(#[from] Box<ToolError>),
+    Specs(Box<ToolError>),
 }
 
 /// One of a [`ToolFilter`]'s two lists.
@@ -133,7 +134,11 @@ impl ToolSet {
             claimed.insert(ToolName::task_complete());
         }
         for executor in executors {
-            for spec in executor.specs().await.map_err(Box::new)? {
+            let offered = executor
+                .specs()
+                .await
+                .map_err(|error| ToolSetError::Specs(Box::new(error)))?;
+            for spec in offered {
                 // Claimed before the filter is asked, so a second executor
                 // serving a denied name is still a duplicate rather than a
                 // silent substitute for the tool that was filtered out.

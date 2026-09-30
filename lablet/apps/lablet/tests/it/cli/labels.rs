@@ -4,12 +4,12 @@
 use lablet_telemetry_registry::attribute as key;
 use serde_json::json;
 
-use crate::harness::{ENDS, Lab};
+use super::harness::{ENDS, Lab};
 
 #[test]
 fn the_run_id_and_the_labels_given_are_in_the_outcome_and_on_the_wide_event() {
     let lab = Lab::new("labels");
-    lab.config(ENDS, json!({}));
+    lab.write_config(ENDS, json!({}));
 
     let run = lab.run_config(&[
         "--run-id",
@@ -45,7 +45,7 @@ fn the_run_id_and_the_labels_given_are_in_the_outcome_and_on_the_wide_event() {
 #[test]
 fn a_run_without_names_has_a_fresh_id_and_no_labels() {
     let lab = Lab::new("labels-none");
-    lab.config(ENDS, json!({}));
+    lab.write_config(ENDS, json!({}));
 
     let first = lab.run_config(&[]).outcome();
     let second = lab.run_config(&[]).outcome();
@@ -60,7 +60,7 @@ fn a_run_without_names_has_a_fresh_id_and_no_labels() {
 #[test]
 fn a_run_id_the_library_refuses_exits_1_before_the_run() {
     let lab = Lab::new("labels-refused");
-    lab.config(ENDS, json!({}));
+    lab.write_config(ENDS, json!({}));
 
     let run = lab.run_config(&["--run-id", " r"]);
 

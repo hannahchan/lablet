@@ -286,6 +286,42 @@ fn an_override_that_is_no_key_and_value_is_refused_without_its_value() {
 }
 
 #[test]
+fn an_override_of_a_place_in_a_list_the_text_does_not_write_is_refused_and_changes_nothing() {
+    let mut raw = yaml(TEXT);
+
+    for (written, list) in [
+        ("tools.mcp.0.command=npx", "tools.mcp"),
+        ("telemetry.exporters.0=otlp", "telemetry.exporters"),
+    ] {
+        let (key, reason) = override_refusal(&mut raw, written);
+        assert_eq!(key.as_deref(), written.split_once('=').map(|(key, _)| key));
+        assert_eq!(
+            reason,
+            format!("no list is written at {list}, so `0` is no place in one")
+        );
+    }
+    assert_eq!(raw, yaml(TEXT), "a refused override changes nothing");
+
+    raw.set("telemetry.resource.team=evals").unwrap();
+    assert_eq!(
+        raw.tree()["telemetry"],
+        json!({ "resource": { "team": "evals" } })
+    );
+}
+
+#[test]
+fn a_refusal_of_a_section_an_override_set_a_key_in_names_the_override() {
+    let mut raw = yaml(TEXT);
+    raw.set("model.thinking.bogus=1").unwrap();
+
+    assert_eq!(
+        raw.config().unwrap_err().to_string(),
+        "model.thinking (an override): {\"bogus\":1} is refused: the accepted values are \
+         `provider_default`, `adaptive`, `disabled`, `budget`"
+    );
+}
+
+#[test]
 fn a_config_read_from_a_file_keeps_where_it_was_read_from_through_its_tree() {
     let scratch = lablet_test_support::Scratch::new("raw-from-path");
     let path = scratch.write("lablet.yaml", "run: { max_turns: 4 }");

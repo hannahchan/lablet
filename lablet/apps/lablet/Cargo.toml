@@ -45,7 +45,3 @@ nix.workspace = true
 [[test]]
 name = "it"
 path = "tests/it/main.rs"
-
-[[test]]
-name = "cli"
-path = "tests/cli/main.rs"

@@ -156,11 +156,13 @@ async fn a_destination_that_cannot_be_written_changes_nothing_about_the_run() {
         .map(|failure| failure.split(": ").next().unwrap())
         .collect();
     assert_eq!(queues, ["spans", "log records", "the wide event"]);
+    let failures = failures.to_string();
     assert!(
-        failures.to_string().contains(&format!(
-            "{} couldn't be written: ",
-            missing.join(format!("lablet-{RUN}.otlp.jsonl")).display()
-        )),
+        failures.contains("the telemetry file couldn't be written: "),
+        "{failures}"
+    );
+    assert!(
+        !failures.contains(&missing.display().to_string()),
         "{failures}"
     );
     assert!(!missing.exists());

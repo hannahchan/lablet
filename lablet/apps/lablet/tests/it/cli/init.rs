@@ -6,7 +6,7 @@ use lablet_conformance::otlp::Exported;
 use lablet_telemetry_registry::attribute as key;
 use serde_json::json;
 
-use crate::harness::{Lab, ran};
+use super::harness::{Lab, ran};
 
 /// The telemetry files a run left in `lab`, each named for its run.
 fn telemetry_files(lab: &Lab) -> Vec<PathBuf> {

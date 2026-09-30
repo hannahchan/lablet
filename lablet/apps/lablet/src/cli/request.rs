@@ -47,11 +47,11 @@ impl fmt::Display for Source {
 ///
 /// # Errors
 ///
-/// Returns [`Refusal::Config`] when the file or standard input can't be
+/// Returns a `config:` [`Refusal`] when the file or standard input can't be
 /// read as text.
 pub(crate) fn read(source: &Source, mut stdin: impl Read) -> Result<String, Refusal> {
     let unreadable = |error: std::io::Error| {
-        Refusal::Config(format!("the task prompt {source} can't be read: {error}"))
+        Refusal::config(format!("the task prompt {source} can't be read: {error}"))
     };
     match source {
         Source::Given(text) => Ok(text.clone()),
@@ -69,7 +69,7 @@ pub(crate) fn read(source: &Source, mut stdin: impl Read) -> Result<String, Refu
 ///
 /// # Errors
 ///
-/// Returns [`Refusal::Config`] when the prompt is blank, and when the run id
+/// Returns a `config:` [`Refusal`] when the prompt is blank, and when the run id
 /// is refused.
 pub(crate) fn request(
     prompt: String,
@@ -83,7 +83,7 @@ pub(crate) fn request(
         trial,
     } = names;
     let request = RunRequest::new(prompt)
-        .map_err(|_| Refusal::Config(format!("the task prompt {source} is blank")))?
+        .map_err(|_| Refusal::config(format!("the task prompt {source} is blank")))?
         .labels(RunLabels {
             task,
             experiment,
@@ -92,10 +92,10 @@ pub(crate) fn request(
     match run_id {
         Some(id) => {
             let id =
-                RunId::new(id).map_err(|error| Refusal::Config(format!("--run-id: {error}")))?;
+                RunId::new(id).map_err(|error| Refusal::config(format!("--run-id: {error}")))?;
             request
                 .run_id(id)
-                .map_err(|refused| Refusal::Config(format!("--run-id: {refused}")))
+                .map_err(|refused| Refusal::config(format!("--run-id: {refused}")))
         }
         None => Ok(request),
     }

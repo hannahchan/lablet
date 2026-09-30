@@ -226,7 +226,7 @@ async fn a_run_id_that_would_be_a_path_has_no_file_and_the_run_after_it_has_its_
 }
 
 #[tokio::test]
-async fn a_file_that_cannot_be_written_is_an_error_that_names_it_and_is_tried_again() {
+async fn a_file_that_cannot_be_written_is_an_error_that_names_no_path_and_is_tried_again() {
     let scratch = Scratch::new("missing-directory");
     let directory = scratch.at("not-made-yet");
     let sink = Sink::new(FileTarget::EachRun {
@@ -240,13 +240,10 @@ async fn a_file_that_cannot_be_written_is_an_error_that_names_it_and_is_tried_ag
     std::fs::create_dir_all(&directory).unwrap();
     let written = exporter.export(vec![span("chat second")]).await;
 
-    let refused = refused.unwrap_err().to_string();
-    assert!(
-        refused.starts_with(&format!(
-            "Operation failed: {} couldn't be written: ",
-            path.display()
-        )),
-        "{refused}"
+    assert_eq!(
+        refused.unwrap_err().to_string(),
+        "Operation failed: the telemetry file couldn't be written: No such file or directory \
+         (os error 2)"
     );
     written.unwrap();
     assert_eq!(Exported::read(&path).unwrap().spans[0].name, "chat second");

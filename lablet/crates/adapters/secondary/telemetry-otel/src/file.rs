@@ -209,6 +209,9 @@ impl Sink {
     }
 
     /// Writes one line, whole, and sees it through to the file.
+    ///
+    /// An error names no path: the caller may have taken the path from a
+    /// variable, and what a variable holds is in no message.
     fn write(&self, line: &str) -> Result<(), String> {
         let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
         let Open { destination, held } = &mut *open;
@@ -220,7 +223,7 @@ impl Sink {
             Destination::Stderr { torn } => put(&mut io::stderr().lock(), line, torn)
                 .map_err(|error| format!("standard error couldn't be written: {error}")),
             Destination::File(path) => Held::append(held, path, line, to_append)
-                .map_err(|error| format!("{} couldn't be written: {error}", path.display())),
+                .map_err(|error| format!("the telemetry file couldn't be written: {error}")),
         }
     }
 }

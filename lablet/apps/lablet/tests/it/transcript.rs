@@ -447,13 +447,18 @@ async fn a_transcript_that_cannot_be_written_is_reported_and_the_outcome_is_as_i
     assert!(scratch.at("no-such-directory").is_file());
     let lines = diagnostics.lines();
     assert_eq!(lines.len(), 1, "{lines:?}");
+    // The path is shown as the config writes it, which a variable may have
+    // no part in.
     assert!(
         lines[0].contains("WARN")
-            && lines[0].contains("the run's transcript wasn't written")
-            && lines[0].contains("run-a")
-            && lines[0].contains("no-such-directory/run-a.json"),
+            && lines[0].contains(&format!(
+                "the transcript couldn't be written to {}: ",
+                nowhere.display()
+            ))
+            && lines[0].contains("run-a"),
         "{lines:?}"
     );
+    assert_eq!(lines[0].matches("transcript").count(), 1, "{lines:?}");
     // The record names where the transcript was to go, whether or not it
     // got there.
     let exported = scratch.exported();

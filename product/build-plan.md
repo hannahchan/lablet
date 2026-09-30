@@ -126,7 +126,7 @@ Acceptance: a doctest builds a `Lablet` from a config string, runs twice, and as
 - A run with no response writes a transcript that holds the task prompt, under a key that's added, so `schema_version` stays 1 (the known limit in "The transcript is made of turns"; "Six decisions before phase 5" in `decisions.md`).
 - On Linux, `main.rs` clears the process's `PR_SET_DUMPABLE` flag before anything else, so a command can't read lablet's environment through `/proc`. It's the one thing only `main.rs` does, and `apps/lablet` takes a Linux-only `nix` dependency naming `process` for it (the `signal` feature the workspace pins already turns it on) (spec §6 and §7; quality-bar item 6; "Six decisions before phase 5" in `decisions.md`).
 
-Acceptance: `lablet init --provider fake && lablet run --config lablet.yaml --prompt "..."` completes with no edits, writes an OTLP/JSON file, and prints a `RunOutcome`. The CLI and the phase 4 doctest produce identical outcomes for the same config. Scenarios C1 to C7 and C10 to C18 pass, with the exit codes of L9 and E15.
+Acceptance: `lablet init --provider fake && lablet run --config lablet.yaml --prompt "..."` completes with no edits, writes an OTLP/JSON file, and prints a `RunOutcome`. The CLI and the phase 4 doctest produce identical outcomes for the same config. Scenarios C1 to C8 and C10 to C18 pass, with the exit codes of L9 and E15.
 
 ## Phase 6: OTLP network export and live-check
 

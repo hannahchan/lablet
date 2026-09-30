@@ -60,7 +60,7 @@ pub(crate) fn summary(run: &FinishedRun, budget: Option<u64>) -> String {
 }
 
 /// `count` and the name of what it counts, as one or as many.
-fn counted(count: u64, one: &str, many: &str) -> String {
+pub(crate) fn counted(count: u64, one: &str, many: &str) -> String {
     format!("{} {}", grouped(count), if count == 1 { one } else { many })
 }
 

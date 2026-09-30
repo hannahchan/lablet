@@ -98,10 +98,28 @@ impl Places {
         Self(Some(Arc::new(places)))
     }
 
-    /// Where the setting at `key` was written; `None` for a setting the
-    /// config doesn't state, and for any setting of a config made in code.
+    /// Where the setting at `key` was written, as [`place_in`] says; `None`
+    /// for a setting the config doesn't state, and for any setting of a
+    /// config made in code.
     pub(crate) fn of(&self, key: &KeyPath) -> Option<Place> {
-        self.0.as_ref()?.get(key).copied()
+        place_in(self.0.as_ref()?, key)
+    }
+}
+
+/// Where the setting at `key` was written, of `places`: by an override when
+/// an override set it or any setting within it, since the value there is
+/// then one the override made, and otherwise where the setting was written,
+/// when it was.
+pub(crate) fn place_in(places: &BTreeMap<KeyPath, Place>, key: &KeyPath) -> Option<Place> {
+    // A path sorts before every path within it, and those come together.
+    let overridden = places
+        .range(key..)
+        .take_while(|(written, _)| written.is_within(key))
+        .any(|(_, place)| *place == Place::Override);
+    if overridden {
+        Some(Place::Override)
+    } else {
+        places.get(key).copied()
     }
 }
 

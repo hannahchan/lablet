@@ -35,6 +35,10 @@ impl Lab {
         Self(scratch)
     }
 
+    pub fn path(&self) -> &Path {
+        self.0.path()
+    }
+
     pub fn at(&self, path: &str) -> PathBuf {
         self.0.at(path)
     }

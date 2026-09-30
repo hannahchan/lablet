@@ -168,6 +168,8 @@ async fn an_executor_that_cannot_list_its_tools_refuses_the_run() {
 
     assert!(matches!(refused, ToolSetError::Specs(_)));
     assert!(refused.to_string().contains("couldn't list its tools"));
+    // The executor's words are in the message, and once.
+    assert!(std::error::Error::source(&refused).is_none());
 }
 
 #[tokio::test]

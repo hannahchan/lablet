@@ -91,7 +91,7 @@ fn init_writes_nothing_when_a_file_it_would_write_is_there() {
 
     assert_eq!(
         refused,
-        Err(Refusal::Config(format!(
+        Err(Refusal::config(format!(
             "{} is there already, and init writes over nothing",
             kept.display()
         )))
@@ -109,10 +109,11 @@ fn init_that_cant_make_the_directory_says_which() {
     let file = scratch.write("taken", "");
     let directory = file.join("configs");
 
-    let Err(Refusal::Config(message)) = write(Starter::Anthropic, &directory) else {
+    let Err(refusal) = write(Starter::Anthropic, &directory) else {
         panic!("a directory was made under a file");
     };
-    let named = format!("{} can't be made: ", directory.display());
+    let message = refusal.to_string();
+    let named = format!("config: {} can't be made: ", directory.display());
     assert!(message.starts_with(&named), "{message}");
 }
 

@@ -1,5 +1,5 @@
-//! The library from outside: a config in, runs out, and what each run left
-//! in its files.
+//! The library and the binary from outside: a config in, runs out, and what
+//! each run left in its files.
 
 #[cfg(test)]
 mod build;
@@ -7,6 +7,8 @@ mod build;
 mod cancel;
 #[cfg(test)]
 mod check;
+#[cfg(test)]
+mod cli;
 #[cfg(test)]
 mod digests;
 #[cfg(test)]

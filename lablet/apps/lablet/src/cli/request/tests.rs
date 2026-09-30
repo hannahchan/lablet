@@ -66,21 +66,22 @@ fn standard_input_is_read_to_its_end() {
 fn a_prompt_that_cant_be_read_is_a_config_error_naming_where_it_was_looked_for() {
     let scratch = Scratch::new("prompt-missing");
     let missing = scratch.at("task.md");
-    let Err(Refusal::Config(message)) = read(&Source::File(missing.clone()), Untouched) else {
+    let Err(refusal) = read(&Source::File(missing.clone()), Untouched) else {
         panic!("a missing file was read");
     };
+    let message = refusal.to_string();
     let named = format!(
-        "the task prompt from --prompt-file {} can't be read: ",
+        "config: the task prompt from --prompt-file {} can't be read: ",
         missing.display()
     );
     assert!(message.starts_with(&named), "{message}");
 
-    let Err(Refusal::Config(message)) = read(&Source::Stdin, Untouched) else {
+    let Err(refusal) = read(&Source::Stdin, Untouched) else {
         panic!("standard input that failed was read");
     };
     assert_eq!(
-        message,
-        "the task prompt from standard input can't be read: standard input was read"
+        refusal.to_string(),
+        "config: the task prompt from standard input can't be read: standard input was read"
     );
 }
 
@@ -94,7 +95,7 @@ fn a_blank_prompt_is_a_config_error_naming_its_source() {
         for blank in ["", " \n\t"] {
             assert_eq!(
                 request(blank.to_owned(), &source, unnamed()),
-                Err(Refusal::Config(format!("the task prompt {named} is blank")))
+                Err(Refusal::config(format!("the task prompt {named} is blank")))
             );
         }
     }
@@ -140,6 +141,6 @@ fn a_run_id_the_library_refuses_is_a_config_error_naming_the_flag() {
     let refused = RunId::new(" r").unwrap_err();
     assert_eq!(
         request(PROMPT.to_owned(), &Source::Stdin, names),
-        Err(Refusal::Config(format!("--run-id: {refused}")))
+        Err(Refusal::config(format!("--run-id: {refused}")))
     );
 }

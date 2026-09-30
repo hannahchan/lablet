@@ -70,19 +70,19 @@ impl Starter {
 ///
 /// # Errors
 ///
-/// Returns [`Refusal::Config`] when one of the files is there already, and
+/// Returns a `config:` [`Refusal`] when one of the files is there already, and
 /// when the directory or a file can't be written.
 pub(crate) fn write(starter: Starter, directory: &Path) -> Result<Vec<PathBuf>, Refusal> {
     let files = starter.files();
     let paths: Vec<PathBuf> = files.iter().map(|file| directory.join(file.name)).collect();
     if let Some(there) = paths.iter().find(|path| path.exists()) {
-        return Err(Refusal::Config(format!(
+        return Err(Refusal::config(format!(
             "{} is there already, and init writes over nothing",
             there.display()
         )));
     }
     std::fs::create_dir_all(directory).map_err(|error| {
-        Refusal::Config(format!("{} can't be made: {error}", directory.display()))
+        Refusal::config(format!("{} can't be made: {error}", directory.display()))
     })?;
     for (file, path) in files.iter().zip(&paths) {
         // `create_new`, so a file made since the look above isn't lost.
@@ -92,7 +92,7 @@ pub(crate) fn write(starter: Starter, directory: &Path) -> Result<Vec<PathBuf>, 
             .open(path)
             .and_then(|mut written| written.write_all(file.text.as_bytes()))
             .map_err(|error| {
-                Refusal::Config(format!("{} can't be written: {error}", path.display()))
+                Refusal::config(format!("{} can't be written: {error}", path.display()))
             })?;
     }
     Ok(paths)

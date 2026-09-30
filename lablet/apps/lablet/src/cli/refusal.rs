@@ -1,47 +1,61 @@
-//! Why a command stopped before it did what it was asked, as the line it
-//! prints. Each class of message has a prefix of its own, so a script can
-//! tell them apart.
+//! Why a command didn't do what it was asked, as the line it prints: a
+//! refusal before a run, or the provider's error that ended one. Each class
+//! of message has a prefix of its own, which the library gives, so a script
+//! can tell them apart.
 
-use lablet::{BuildError, ConfigError, ErrorClass};
+use std::fmt;
 
-/// Why a command stopped before it did what it was asked.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum Refusal {
+use lablet::{BuildError, ConfigError, ErrorClass, RunOutcome};
+
+/// Why a command stopped before it did what it was asked: the class of the
+/// failure, whose prefix the line begins with, and what's wrong.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Refusal {
+    class: ErrorClass,
+    message: String,
+}
+
+impl Refusal {
     /// What the command was given can't be used: the config, a flag, the
     /// task prompt, or a file `init` would write.
-    #[error("config: {0}")]
-    Config(String),
-    /// An MCP server couldn't be started.
-    #[error("mcp: {0}")]
-    Mcp(String),
-    /// The provider refused what it was asked.
-    #[error("provider: {0}")]
-    Provider(String),
-    /// The command, or a flag of it, isn't built yet.
-    #[error("{0} isn't built yet")]
-    NotBuilt(&'static str),
+    pub(crate) fn config(message: impl Into<String>) -> Self {
+        Self {
+            class: ErrorClass::Config,
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}", self.class.prefix(), self.message)
+    }
 }
 
 impl From<ConfigError> for Refusal {
     fn from(error: ConfigError) -> Self {
-        Self::Config(error.to_string())
+        Self::config(error.to_string())
     }
 }
 
 impl From<BuildError> for Refusal {
     /// The library says which class a failure is, so the prefix follows
-    /// its class and not the CLI's reading of the variant. The match names
-    /// each class, so a class the library gains can't take another's prefix
-    /// unnoticed.
+    /// its class and not the CLI's reading of the variant.
     fn from(error: BuildError) -> Self {
-        match error.class() {
-            ErrorClass::Config => Self::Config(error.to_string()),
-            ErrorClass::Mcp => Self::Mcp(error.to_string()),
-            // A build never reaches the provider; a rejected key is a run
-            // that began, and its outcome says so.
-            ErrorClass::Provider => Self::Provider(error.to_string()),
+        Self {
+            class: error.class(),
+            message: error.to_string(),
         }
     }
+}
+
+/// The line a run that the provider's error ended prints beside its
+/// outcome, with the prefix of that class, as `provider: 401 invalid
+/// x-api-key`; `None` for a run that ended any other way, whose outcome
+/// says why.
+pub(crate) fn of_run(outcome: &RunOutcome) -> Option<String> {
+    let (class, error) = ErrorClass::of_run(outcome).zip(outcome.error())?;
+    Some(format!("{} {error}", class.prefix()))
 }
 
 #[cfg(test)]
