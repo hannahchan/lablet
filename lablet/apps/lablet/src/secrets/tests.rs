@@ -85,9 +85,17 @@ fn the_variable_lablet_reads_its_key_from_is_withheld_and_what_it_holds_is_cut()
     }
 }
 
+/// The OTLP header variables are the one exception: read for every config,
+/// since the exporter reads them whatever the config names.
 #[test]
-fn a_config_that_names_no_secret_reads_nothing_and_holds_nothing() {
-    let never = |_: &str| -> Option<OsString> { panic!("the environment was read") };
+fn a_config_that_names_no_secret_reads_nothing_but_the_otlp_headers_and_holds_nothing() {
+    let never = |name: &str| -> Option<OsString> {
+        assert!(
+            otlp::HEADER_VARIABLES.contains(&name),
+            "the environment was read: {name}"
+        );
+        None
+    };
 
     let derived = derived_from(FAKE, &never);
 
@@ -327,4 +335,62 @@ fn a_percent_escape_is_decoded_and_what_is_no_escape_is_kept() {
     assert_eq!(percent_decoded("caf%C3%A9"), "café");
     assert_eq!(percent_decoded("%ff"), "\u{FFFD}");
     assert_eq!(percent_decoded("plain"), "plain");
+}
+
+/// The OTLP header variables the exporter reads are the one secret found
+/// rather than told: cut whole, as `env` prints a variable, and each
+/// decoded header with it, and named without being withheld, since the
+/// exporter in every command reads them too.
+#[test]
+fn an_otlp_header_variable_is_cut_whole_and_by_each_header_and_withheld_from_no_command() {
+    const TOKEN: &str = "Bearer sk-0123456789abcdef";
+    let value = "x-env=1,authorization=Bearer%20sk-0123456789abcdef";
+
+    for name in otlp::HEADER_VARIABLES {
+        let derived = derived_from(FAKE, &env(&[(name, value)]));
+
+        assert_eq!(
+            derived,
+            Derived {
+                withheld: BTreeSet::new(),
+                cut: vec![variable(name, Held::Cut)],
+                values: secrets(&[value, TOKEN]),
+            },
+            "{name}"
+        );
+        assert!(!format!("{derived:?}").contains("sk-0123"), "{derived:?}");
+    }
+}
+
+#[test]
+fn an_otlp_header_variable_that_is_empty_or_short_is_named_with_why_it_is_not_cut() {
+    for (value, held) in [("  ", Held::Empty), ("a=b", Held::Short)] {
+        let derived = derived_from(FAKE, &env(&[("OTEL_EXPORTER_OTLP_LOGS_HEADERS", value)]));
+
+        assert_eq!(
+            derived.cut,
+            vec![variable("OTEL_EXPORTER_OTLP_LOGS_HEADERS", held)],
+            "{value:?}"
+        );
+        assert!(derived.withheld.is_empty());
+        assert_eq!(derived.values, Secrets::default());
+    }
+}
+
+#[test]
+fn an_otlp_header_variable_is_named_without_an_executor_and_its_value_held_only_with_one() {
+    let held = env(&[(
+        "OTEL_EXPORTER_OTLP_HEADERS",
+        "authorization=Bearer%20sk-0123456789abcdef",
+    )]);
+    let written = config(FAKE);
+    let real = written.substituted(&held).unwrap();
+
+    let without = derived(&written, &real, &held, false);
+
+    assert_eq!(
+        without.cut,
+        vec![variable("OTEL_EXPORTER_OTLP_HEADERS", Held::Cut)]
+    );
+    assert_eq!(without.values, Secrets::default());
 }

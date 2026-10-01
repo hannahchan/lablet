@@ -1,6 +1,7 @@
 //! The diagnostic log, which names a file as the config writes it, so that
 //! nothing a variable holds reaches standard error (spec §7).
 
+use lablet_conformance::receiver::{Mode, Receiver};
 use serde_json::json;
 
 use super::harness::{CONFIG, ENDS, Lab, PROMPT, ran};
@@ -93,6 +94,79 @@ fn a_script_a_variable_leads_to_is_named_as_the_config_writes_it_in_everything_a
         ];
         for (what, text) in left {
             assert!(!text.contains("held-by-the-variable"), "{what}: {text}");
+        }
+    }
+}
+
+/// O20: at `debug`, where the exporter would print the endpoint it
+/// resolved, no line of the log holds what a variable gave the endpoint or
+/// a header, nor what `OTEL_EXPORTER_OTLP_HEADERS` holds, on either
+/// transport.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_debug_log_holds_neither_the_endpoint_nor_a_header_value_a_variable_gave() {
+    const ENDPOINT: &str = "LABLET_TEST_OTLP_ENDPOINT";
+    const TOKEN: &str = "LABLET_TEST_OTLP_TOKEN";
+    let token = "tok-0123456789abcdef-no-stderr";
+    let environments = "x-env=env-0123456789abcdef-no-stderr";
+
+    for protocol in ["grpc", "http"] {
+        let receiver = Receiver::start(Mode::Answers).await;
+        let endpoint = match protocol {
+            "grpc" => receiver.grpc_endpoint(),
+            _ => receiver.http_endpoint(),
+        };
+        let lab = Lab::new(&format!("diagnostics-otlp-{protocol}"));
+        lab.write_config(
+            ENDS,
+            json!({ "telemetry": { "otlp": {
+                "endpoint": format!("${{{ENDPOINT}}}"),
+                "protocol": protocol,
+                "headers": { "authorization": format!("Bearer ${{{TOKEN}}}") },
+            } } }),
+        );
+        let run_with = |rust_log: &str| {
+            let mut command = lab.lablet(&["run", "--config", CONFIG, "--prompt", PROMPT]);
+            command
+                .env(ENDPOINT, &endpoint)
+                .env(TOKEN, token)
+                .env("OTEL_EXPORTER_OTLP_HEADERS", environments)
+                .env("RUST_LOG", rust_log);
+            let run = ran(command, "");
+            assert_eq!(run.code, Some(0), "{run:?}");
+            run
+        };
+        let host = endpoint.strip_prefix("http://").unwrap();
+
+        let run = run_with("debug");
+
+        for line in run.stderr_lines() {
+            for held in [host, token, "env-0123456789abcdef"] {
+                assert!(
+                    !line.contains(held),
+                    "{protocol}: {held} is in the log: {line}"
+                );
+            }
+        }
+        assert_eq!(
+            receiver.exported().unwrap().records_of("lablet.run").len(),
+            1,
+            "{protocol}: the run reached the collector"
+        );
+
+        // The floor, and not the level, is what keeps the address out: a
+        // crate `RUST_LOG` names is shown as asked, address and all.
+        let lifted = run_with("debug,hyper_util=debug");
+        assert!(
+            lifted.stderr.contains(host),
+            "{protocol}: the connector names the address once lifted: {lifted:?}"
+        );
+        for line in lifted.stderr_lines() {
+            for held in [token, "env-0123456789abcdef"] {
+                assert!(
+                    !line.contains(held),
+                    "{protocol}: {held} is in the log: {line}"
+                );
+            }
         }
     }
 }

@@ -9,14 +9,18 @@
 //! every variable substituted into `tools.builtin.env` or a stdio server's
 //! `env`. The framework that set any other variable is the party that can
 //! name it, and a pattern would cut path-valued and URL-valued variables
-//! from every record.
+//! from every record. The one secret found rather than told is the OTLP
+//! header variables the exporter reads from the environment: inherited by
+//! every command, since the exporter in a child reads them too, and cut.
 
 use std::collections::BTreeSet;
 use std::fmt;
 
 use lablet_model::Secrets;
+use lablet_telemetry_otel::decode_headers;
 
 use crate::config::{Config, Env, KeyPath, McpServer, Substituted};
+use crate::otlp;
 
 /// What a run withholds and cuts, derived from its config.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,6 +145,9 @@ pub(crate) fn derived(
             McpServer::Stdio { .. } => set.env(&key.key("env"), real),
         }
     }
+    for variable in otlp::HEADER_VARIABLES {
+        set.inherited(variable);
+    }
     set.finish()
 }
 
@@ -167,6 +174,25 @@ impl Set<'_> {
             Some(value) => self.value(&value.to_string_lossy()),
             None => Held::Unset,
         };
+        self.cut.push(Named {
+            source: Source::Variable(name.to_owned()),
+            held,
+        });
+    }
+
+    /// A variable every command inherits whose value is a secret all the
+    /// same, when it's set: the value whole, which `env` prints, and each
+    /// header it decodes to, which a request carries, are cut, and the name
+    /// is listed without being withheld.
+    fn inherited(&mut self, name: &str) {
+        let Some(value) = (self.env)(name) else {
+            return;
+        };
+        let value = value.to_string_lossy();
+        let held = self.value(&value);
+        for (_, decoded) in decode_headers(&value) {
+            self.value(&decoded);
+        }
         self.cut.push(Named {
             source: Source::Variable(name.to_owned()),
             held,

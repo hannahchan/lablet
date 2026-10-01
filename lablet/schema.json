@@ -473,11 +473,16 @@
     },
     "Otlp": {
       "additionalProperties": false,
-      "description": "The `telemetry.otlp` section.",
+      "description": "The `telemetry.otlp` section. A field it leaves out is the\nenvironment's: lablet inherits the `OTEL_*` variables the exporter\nreads, and a field the config states wins.",
       "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Whether a run may export over the network at all. `true` leaves it\nto the endpoint, the config's or the environment's. `false` turns\nthe exporter off whatever the environment says, and is refused\nbeside a stated endpoint, which it would make a setting without\neffect.",
+          "type": "boolean"
+        },
         "endpoint": {
           "default": null,
-          "description": "Where the collector listens; `None` turns the network exporter off.",
+          "description": "Where the collector listens. An endpoint turns the network exporter\non, and the headers the environment names aren't sent to it. `None`\nleaves it to `OTEL_EXPORTER_OTLP_ENDPOINT` and the signal variables,\nany of which turns the exporter on, with the environment's headers;\nwithout one the exporter is off. On `http` it's a base URL, to which\n`/v1/traces` and `/v1/logs` are appended.",
           "type": [
             "string",
             "null"
@@ -488,13 +493,20 @@
             "type": "string"
           },
           "default": {},
-          "description": "Headers sent with every export. Every value is a secret, written or\nsubstituted: a variable substituted into one is withheld from every\ncommand, the value is cut out of every tool result, and it's left\nout of the config digest.",
+          "description": "Headers sent with every export, over any header the environment\nnames. Every value is a secret, written or substituted: a variable\nsubstituted into one is withheld from every command, the value is\ncut out of every tool result, and it's left out of the config\ndigest.",
           "type": "object"
         },
         "protocol": {
-          "$ref": "#/$defs/OtlpProtocol",
-          "default": "grpc",
-          "description": "The protocol the collector is sent."
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OtlpProtocol"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The protocol the collector is sent. `None` leaves it to\n`OTEL_EXPORTER_OTLP_PROTOCOL`, and is gRPC when that isn't set; a\nvalue lablet can't send, `http/json` among them, is refused."
         }
       },
       "type": "object"
@@ -759,9 +771,10 @@
         "otlp": {
           "$ref": "#/$defs/Otlp",
           "default": {
+            "enabled": true,
             "endpoint": null,
             "headers": {},
-            "protocol": "grpc"
+            "protocol": null
           },
           "description": "The OTLP network exporter."
         },
@@ -782,7 +795,7 @@
       "properties": {
         "path": {
           "default": null,
-          "description": "The file every run's OTLP/JSON lines are appended to, or `-` for\nstandard error. `None` gives each run a file of its own in the\nworking directory, named `lablet-<run_id>.otlp.jsonl`.",
+          "description": "The file every run's OTLP/JSON lines are appended to, or `-` for\nstandard error. `None` gives each run a file of its own in the\nworking directory, named `lablet-<run_id>.otlp.jsonl`, and no file\nat all when the network exporter is on, by the config's endpoint or\nthe environment's.",
           "type": [
             "string",
             "null"
@@ -999,9 +1012,10 @@
           "path": null
         },
         "otlp": {
+          "enabled": true,
           "endpoint": null,
           "headers": {},
-          "protocol": "grpc"
+          "protocol": null
         },
         "resource": {}
       },

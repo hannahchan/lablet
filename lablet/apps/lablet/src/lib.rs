@@ -119,6 +119,7 @@ mod clock;
 pub mod config;
 mod fanout;
 mod lablet;
+mod otlp;
 mod root;
 mod secrets;
 mod settings;

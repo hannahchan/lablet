@@ -71,9 +71,10 @@ tools:
 telemetry:
   capture_content: false
   otlp:
-    endpoint: null # e.g. http://localhost:4317; null disables the network exporter and makes the file exporter the default
-    protocol: grpc # grpc | http
-    headers: {}
+    enabled: true # false turns the network exporter off whatever the environment says, and is refused beside an endpoint, which it would make a setting without effect
+    endpoint: null # e.g. http://localhost:4317; an endpoint turns the network exporter on, and the environment's headers aren't sent to it; null leaves it to OTEL_EXPORTER_OTLP_ENDPOINT and the signal variables, any of which turns it on, with the environment's headers; on http it's a base URL to which /v1/traces and /v1/logs are appended, as OTEL_EXPORTER_OTLP_ENDPOINT is
+    protocol: null # grpc | http; null means OTEL_EXPORTER_OTLP_PROTOCOL, then grpc; lablet always chooses the transport, never the exporter, and refuses a value it can't send, http/json among them
+    headers: {} # sent with every export, over any header the environment names; every value is a secret: cut everywhere and left out of the digest
   file:
-    path: null # OTLP/JSON lines; file path, "-" for stderr, which implies --quiet; null means lablet-<run_id>.otlp.jsonl when otlp.endpoint is also null
+    path: null # OTLP/JSON lines; file path, "-" for stderr, which implies --quiet; null means lablet-<run_id>.otlp.jsonl when the network exporter is off, and no file when it's on by either source
   resource: {} # extra resource attributes

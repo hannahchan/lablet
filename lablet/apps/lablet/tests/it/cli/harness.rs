@@ -1,6 +1,7 @@
 //! The binary, run in a lab's directory, and what it printed and how it
 //! exited.
 
+use std::ffi::OsString;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -19,16 +20,62 @@ impl Lab {
     }
 
     /// The binary with `args`, to be run in the directory, with no
-    /// `RUST_LOG` of the test's.
+    /// `RUST_LOG` of the test's and none of its `OTEL_*` variables, since
+    /// an endpoint among them would turn the network exporter on under
+    /// every test; a test that needs one sets it with `env` after.
     pub fn lablet(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_lablet"));
         command
             .args(args)
             .current_dir(self.path())
             .env_remove("RUST_LOG");
+        without_otel(&mut command, std::env::vars_os().map(|(name, _)| name));
         command
     }
+}
 
+/// Takes every `OTEL_*` variable among `names`, the environment's names,
+/// off `command`'s environment. The names alone are read, never a value.
+fn without_otel(command: &mut Command, names: impl IntoIterator<Item = OsString>) {
+    for name in names {
+        if name.to_string_lossy().starts_with("OTEL_") {
+            command.env_remove(name);
+        }
+    }
+}
+
+#[test]
+fn the_binary_inherits_no_otel_variable_of_the_test_and_a_test_may_set_one_after() {
+    let mut command = Command::new("lablet");
+    let names = [
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_TRACES_EXPORTER",
+        "NOT_OTEL_X",
+        "RUST_LOG",
+    ];
+
+    without_otel(&mut command, names.map(OsString::from));
+    command.env("OTEL_TRACES_EXPORTER", "none");
+
+    let given: Vec<(String, Option<String>)> = command
+        .get_envs()
+        .map(|(name, value)| {
+            (
+                name.to_string_lossy().into_owned(),
+                value.map(|value| value.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        given,
+        [
+            ("OTEL_EXPORTER_OTLP_ENDPOINT".to_owned(), None),
+            ("OTEL_TRACES_EXPORTER".to_owned(), Some("none".to_owned())),
+        ]
+    );
+}
+
+impl Lab {
     /// Runs `lablet args` in the directory with nothing on standard input.
     pub fn run(&self, args: &[&str]) -> Ran {
         ran(self.lablet(args), "")
