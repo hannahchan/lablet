@@ -6,53 +6,61 @@ use lablet_model::{ProviderErrorKind, TokenCounts, Usage};
 
 use crate::{ERROR_MESSAGE_MAX_BYTES, ProviderError, ToolError, ToolErrorKind};
 
-/// Both errors' messages, built from the same text.
-fn messages(text: &str) -> [String; 2] {
-    [
-        ProviderError::new(ProviderErrorKind::Fatal, text)
-            .message()
-            .to_owned(),
-        ToolError::new(ToolErrorKind::Failed, text)
-            .message()
-            .to_owned(),
-    ]
+/// A provider error's message, built from `text`.
+fn provider_message(text: &str) -> String {
+    ProviderError::new(ProviderErrorKind::Fatal, text)
+        .message()
+        .to_owned()
 }
 
 #[test]
-fn a_message_up_to_the_bound_is_kept_whole() {
+fn a_provider_error_s_message_up_to_the_bound_is_kept_whole() {
     for text in [
         String::new(),
         "400 bad request".to_owned(),
         "x".repeat(ERROR_MESSAGE_MAX_BYTES),
     ] {
-        assert_eq!(messages(&text), [text.clone(), text]);
+        assert_eq!(provider_message(&text), text);
     }
 }
 
 #[test]
-fn a_message_over_the_bound_is_cut_to_it() {
+fn a_provider_error_s_message_over_the_bound_is_cut_to_it() {
     let long = "x".repeat(ERROR_MESSAGE_MAX_BYTES + 1);
 
     assert_eq!(ERROR_MESSAGE_MAX_BYTES, 2_048);
-    for message in messages(&long) {
-        assert_eq!(message, "x".repeat(ERROR_MESSAGE_MAX_BYTES));
-    }
-    for message in messages(&"x".repeat(1_000_000)) {
-        assert_eq!(message.len(), ERROR_MESSAGE_MAX_BYTES);
-    }
+    assert_eq!(provider_message(&long), "x".repeat(ERROR_MESSAGE_MAX_BYTES));
+    assert_eq!(
+        provider_message(&"x".repeat(1_000_000)).len(),
+        ERROR_MESSAGE_MAX_BYTES
+    );
 }
 
 /// The bound counts bytes, and a character that would straddle it is left
 /// out whole, so a cut message is still text.
 #[test]
-fn a_message_is_cut_at_the_last_character_boundary_the_bound_allows() {
+fn a_provider_error_s_message_is_cut_at_the_last_character_boundary_the_bound_allows() {
     let straddling = format!("{}é", "x".repeat(ERROR_MESSAGE_MAX_BYTES - 1));
     let fitting = format!("{}é", "x".repeat(ERROR_MESSAGE_MAX_BYTES - 2));
 
-    for message in messages(&straddling) {
-        assert_eq!(message, "x".repeat(ERROR_MESSAGE_MAX_BYTES - 1));
-    }
-    assert_eq!(messages(&fitting), [fitting.clone(), fitting]);
+    assert_eq!(
+        provider_message(&straddling),
+        "x".repeat(ERROR_MESSAGE_MAX_BYTES - 1)
+    );
+    assert_eq!(provider_message(&fitting), fitting);
+}
+
+/// The loop bounds a tool error's message, once the run's secrets are cut
+/// out of it, so the error holds it whole: a bound made here would leave a
+/// value's edge at the bound for the cut to miss.
+#[test]
+fn a_tool_error_holds_its_message_whole_for_the_loop_to_cut_and_then_bound() {
+    let long = "x".repeat(ERROR_MESSAGE_MAX_BYTES * 4);
+
+    let error = ToolError::new(ToolErrorKind::Failed, long.clone());
+
+    assert_eq!(error.message(), long);
+    assert_eq!(error.to_string(), long);
 }
 
 #[test]

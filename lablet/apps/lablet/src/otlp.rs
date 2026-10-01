@@ -11,7 +11,7 @@ use crate::config::{Config, Env, OtlpProtocol, Refusal};
 
 /// The endpoint variables, generic and per signal. Any of them turns the
 /// exporter on; which one each signal is sent to, the exporter resolves.
-const ENDPOINT_VARIABLES: [&str; 3] = [
+pub(crate) const ENDPOINT_VARIABLES: [&str; 3] = [
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
     "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",

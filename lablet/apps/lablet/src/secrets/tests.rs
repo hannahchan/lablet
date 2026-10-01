@@ -85,13 +85,13 @@ fn the_variable_lablet_reads_its_key_from_is_withheld_and_what_it_holds_is_cut()
     }
 }
 
-/// The OTLP header variables are the one exception: read for every config,
-/// since the exporter reads them whatever the config names.
+/// The OTLP header and endpoint variables are the one exception: read for
+/// every config, since the exporter reads them whatever the config names.
 #[test]
-fn a_config_that_names_no_secret_reads_nothing_but_the_otlp_headers_and_holds_nothing() {
+fn a_config_that_names_no_secret_reads_nothing_but_the_otlp_variables_and_holds_nothing() {
     let never = |name: &str| -> Option<OsString> {
         assert!(
-            otlp::HEADER_VARIABLES.contains(&name),
+            otlp::HEADER_VARIABLES.contains(&name) || otlp::ENDPOINT_VARIABLES.contains(&name),
             "the environment was read: {name}"
         );
         None
@@ -360,6 +360,61 @@ fn an_otlp_header_variable_is_cut_whole_and_by_each_header_and_withheld_from_no_
         );
         assert!(!format!("{derived:?}").contains("sk-0123"), "{derived:?}");
     }
+}
+
+/// The OTLP endpoint variables the exporter reads are the other secret
+/// found rather than told, for the credentials one carries: cut in each
+/// form the config's endpoint's are, and named without being withheld,
+/// since the exporter in every command reads them too. The host is no
+/// secret, so a variable that names only a host isn't listed.
+#[test]
+fn an_otlp_endpoint_variable_s_user_information_is_cut_in_each_form_and_withheld_from_no_command() {
+    const PASSWORD: &str = "pw%40-0123456789abcdef";
+    let value = format!("https://collector-user:{PASSWORD}@collector.internal:4317/v1/traces");
+
+    for name in otlp::ENDPOINT_VARIABLES {
+        let derived = derived_from(FAKE, &env(&[(name, &value)]));
+
+        assert_eq!(
+            derived,
+            Derived {
+                withheld: BTreeSet::new(),
+                cut: vec![variable(name, Held::Cut)],
+                values: secrets(&[
+                    &format!("collector-user:{PASSWORD}"),
+                    "collector-user:pw@-0123456789abcdef",
+                    "collector-user",
+                    PASSWORD,
+                    "pw@-0123456789abcdef",
+                ]),
+            },
+            "{name}"
+        );
+        assert!(
+            !format!("{derived:?}").contains("0123456789"),
+            "{derived:?}"
+        );
+    }
+
+    let short = derived_from(
+        FAKE,
+        &env(&[("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "https://u:p@h")]),
+    );
+    assert_eq!(
+        short.cut,
+        vec![variable("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", Held::Short)]
+    );
+    assert!(short.withheld.is_empty());
+    assert_eq!(short.values, Secrets::default());
+
+    let host_only = derived_from(
+        FAKE,
+        &env(&[(
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "https://collector.internal:4317",
+        )]),
+    );
+    assert_eq!(host_only, derived_from(FAKE, &nothing));
 }
 
 #[test]

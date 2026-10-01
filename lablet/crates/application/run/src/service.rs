@@ -9,16 +9,16 @@ use std::time::{Duration, Instant};
 
 use lablet_model::{
     Answer, CacheScope, Cost, Final, FinishedRun, KeptOutput, Message, OutputCap, Pending,
-    Progress, Prompts, ProviderErrorKind, ProviderResponse, Rates, RedactedOutput, RequestParams,
-    Responded, Run, RunContext, RunId, RunSetup, Schedule, Secrets, StopReason, ToolCallEnd,
-    ToolCallStatus, ToolInput, ToolSource, ToolUse, Turn, Usage,
+    Progress, Prompts, ProviderErrorKind, ProviderResponse, Rates, RequestParams, Responded, Run,
+    RunContext, RunId, RunSetup, Schedule, Secrets, StopReason, ToolCallEnd, ToolCallStatus,
+    ToolInput, ToolSource, ToolUse, Turn, Usage,
 };
 use lablet_policy::{Pricing, RetryPolicy, StopPolicy};
 
 use crate::shown::{OfferedSpecs, system_prompt_digest};
 use crate::{
     Cancellation, Clock, EventKind, McpCallMeta, ModelProvider, ProviderError, ProviderRequest,
-    RunEvent, RunObserver, ToolCall, ToolSet,
+    RunEvent, RunObserver, ToolCall, ToolSet, bounded,
 };
 
 /// What bounds the calls, which is not a stop decision: the run's limits are
@@ -669,12 +669,21 @@ impl RunService {
 
     /// A result the loop wrote itself, held whole, with the run's secrets cut
     /// out of it as an executor cuts them out of a tool's text. The words
-    /// are the loop's own, but the text may carry what an executor said or
-    /// the arguments the model sent, and neither may show a value.
+    /// are the loop's own, but the text may carry the arguments the model
+    /// sent, which may not show a value.
     fn whole(&self, text: &str) -> KeptOutput {
-        let mut output = RedactedOutput::new(Arc::clone(&self.secrets), None);
-        output.push(text);
-        output.kept()
+        KeptOutput::whole(&self.secrets.redacted(text))
+    }
+
+    /// The error result the model is sent of an executor's `message`: the
+    /// run's secrets cut out of it, as out of any text the loop writes, and
+    /// then no more than
+    /// [`ERROR_MESSAGE_MAX_BYTES`](crate::ERROR_MESSAGE_MAX_BYTES) of what's
+    /// left. The bound comes after the cut, since a value the bound chopped
+    /// would be no value to the cut, and every byte of it before the bound
+    /// would be sent; what the bound takes instead is the end of a marker.
+    fn error_result(&self, message: &str) -> KeptOutput {
+        KeptOutput::whole(&bounded(self.secrets.redacted(message)))
     }
 
     /// What became of one call that has `left` to run in, and what the model
@@ -769,7 +778,7 @@ impl RunService {
                 });
                 Settled {
                     status,
-                    output: self.whole(error.message()),
+                    output: self.error_result(error.message()),
                     mcp: error.mcp,
                 }
             }

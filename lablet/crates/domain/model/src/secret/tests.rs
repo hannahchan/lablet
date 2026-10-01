@@ -269,6 +269,31 @@ fn what_was_held_back_is_cut_or_handed_on_once_the_text_ends() {
     assert_eq!(pushed(&[KEY], &["ends with sk-0123"]), "ends with sk-0123");
 }
 
+/// A text that's all there at once is cut as the same text pushed in
+/// pieces is, its end included: what could begin a value there is handed
+/// on, since nothing follows.
+#[test]
+fn a_whole_text_is_cut_as_one_pushed_in_pieces_is_and_its_end_is_handed_on() {
+    let secrets = secrets(&[KEY, LONGER]);
+    for text in [
+        format!("the key {KEY} and {LONGER}, then {KEY}"),
+        format!("ends with {KEY}"),
+        "ends with sk-0123".to_owned(),
+        "no value".to_owned(),
+        String::new(),
+    ] {
+        assert_eq!(
+            secrets.redacted(&text),
+            pushed(&[KEY, LONGER], &[&text]),
+            "{text:?}"
+        );
+    }
+    assert_eq!(
+        secrets.redacted(&format!("{KEY} ends with sk-0123")),
+        format!("{MARKER} ends with sk-0123")
+    );
+}
+
 #[test]
 fn the_closing_line_follows_what_was_held_back_and_is_cut_as_a_text_of_its_own() {
     let mut output = redacting(&[KEY], None);

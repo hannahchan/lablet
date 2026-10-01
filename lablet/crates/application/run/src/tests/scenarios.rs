@@ -13,7 +13,9 @@ use lablet_model::{
 use lablet_policy::{Pricing, RetryPolicy, RetrySettings, StopPolicy};
 
 use super::fakes::{Answer, Answers, FakeCancel, FakeClock, FakeProvider, FakeTools, Recorder};
-use crate::{CallLimits, EventKind, ProviderError, RunService, ToolFilter, ToolSet};
+use crate::{
+    CallLimits, ERROR_MESSAGE_MAX_BYTES, EventKind, ProviderError, RunService, ToolFilter, ToolSet,
+};
 
 const fn ms(millis: u64) -> Duration {
     Duration::from_millis(millis)
@@ -1428,6 +1430,67 @@ async fn an_error_result_is_cut_as_any_other_output_is() {
         .collect();
     assert_eq!(statuses, ["tool_error", "failed", "unknown"]);
     assert_eq!(run.finished.summary.tool_calls.truncated, 3);
+}
+
+/// A 48-byte value of the run's, which an executor's message carries
+/// astride the bound.
+const VALUE: &str = "0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// The error result an executor's message becomes has the run's secrets cut
+/// out of it and is then bounded, in that order. Bounded first, a value
+/// astride the bound would be no value to the cut, and every byte of it
+/// before the bound would reach the model.
+#[tokio::test]
+async fn an_executor_s_error_message_is_bounded_only_after_the_run_s_secrets_are_cut_out_of_it() {
+    const MARKER: &str = lablet_model::Secrets::MARKER;
+    assert_eq!(VALUE.len(), 48);
+    let before = |bytes: usize| "x".repeat(bytes);
+    for (message, sent) in [
+        // The marker fits at the bound, where the value would have straddled
+        // it.
+        (
+            format!("{}{VALUE}", before(ERROR_MESSAGE_MAX_BYTES - MARKER.len())),
+            format!("{}{MARKER}", before(ERROR_MESSAGE_MAX_BYTES - MARKER.len())),
+        ),
+        // The marker lengthens the text past the bound, and the bound takes
+        // the marker's end rather than the value's start.
+        (
+            format!("{}{VALUE}", before(2_040)),
+            format!(
+                "{}{}",
+                before(2_040),
+                &MARKER[..ERROR_MESSAGE_MAX_BYTES - 2_040]
+            ),
+        ),
+        // A message with nothing to cut is bounded all the same.
+        (before(3_000), before(ERROR_MESSAGE_MAX_BYTES)),
+    ] {
+        let mut harness = Harness::new(vec![
+            Answer::now(says("One.", &["bash"], FinishReason::ToolUse)),
+            Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+        ]);
+        harness.secrets = Arc::new(lablet_model::Secrets::new([VALUE.to_owned()]));
+        harness.tools = vec![Arc::new(
+            FakeTools::new(
+                Arc::clone(&harness.clock),
+                vec![spec("bash", ToolSource::Builtin)],
+            )
+            .answers(
+                "bash",
+                Answers::Fails(crate::ToolErrorKind::Failed, message),
+            ),
+        )];
+
+        let run = harness.run().await;
+
+        let mut result = result_of("call_0", &[&sent]);
+        result["is_error"] = serde_json::json!(true);
+        assert_eq!(results_sent(&run), serde_json::json!([result]));
+        assert_eq!(
+            run.finished.summary.tool_calls.truncated, 0,
+            "the bound is no cut of the cap's"
+        );
+    }
 }
 
 // T13: the other two ways to cut, and an executor that keeps only what the

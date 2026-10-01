@@ -210,6 +210,33 @@ async fn the_check_names_an_otlp_header_variable_among_the_cut_and_withholds_it_
     assert!(!format!("{checked:?}").contains(TOKEN), "{checked:?}");
 }
 
+/// C19 at the library: an endpoint variable the exporter reads, holding
+/// credentials, is named among what's cut and not among what's withheld,
+/// and its password is nowhere.
+#[tokio::test]
+async fn the_check_names_an_otlp_endpoint_variable_with_credentials_among_the_cut_and_withholds_it_from_no_command()
+ {
+    const PASSWORD: &str = "otlp-pw-0123456789abcdef";
+    let scratch = lablet_test_support::Scratch::new("check-otlp-endpoint");
+    let script = scratch.write("script.yaml", ENDS);
+    let text = format!(
+        "model: {{ provider: fake, script: '{}' }}\nprompt: {{ system: Hi. }}",
+        script.display()
+    );
+    let held = |name: &str| match name {
+        "OTEL_EXPORTER_OTLP_ENDPOINT" => {
+            Some(format!("https://collector:{PASSWORD}@collector.internal:4317").into())
+        }
+        _ => None,
+    };
+
+    let checked = check_in(&config(&text), &held).await.unwrap();
+
+    assert!(checked.withheld().is_empty());
+    assert_eq!(checked.cut(), ["OTEL_EXPORTER_OTLP_ENDPOINT"]);
+    assert!(!format!("{checked:?}").contains(PASSWORD), "{checked:?}");
+}
+
 /// Where the telemetry file goes: no file only with the network exporter
 /// on and no path stated, and `-` standard error either way.
 #[test]
