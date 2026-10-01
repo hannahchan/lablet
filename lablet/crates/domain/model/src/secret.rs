@@ -65,6 +65,16 @@ impl Secrets {
         self.values.is_empty()
     }
 
+    /// `text` with every value cut out of it, as a text of its own: what a
+    /// text becomes that's all there at once, where [`RedactedOutput`] takes
+    /// one in pieces.
+    #[must_use]
+    pub fn redacted(&self, text: &str) -> String {
+        let mut redacted = String::with_capacity(text.len());
+        self.cut(text, 0, true, &mut |part| redacted.push_str(part));
+        redacted
+    }
+
     /// The longest value that `text` begins with, which is the one cut where
     /// two begin at one place.
     fn begun(&self, text: &str) -> Option<&str> {
@@ -208,10 +218,7 @@ impl RedactedOutput {
     /// back is cut as the end of the text, and `line` as a text of its own.
     pub fn close(&mut self, line: &str) {
         self.end();
-        let mut closing = String::new();
-        self.secrets
-            .cut(line, 0, true, &mut |text| closing.push_str(text));
-        self.kept.close(&closing);
+        self.kept.close(&self.secrets.redacted(line));
     }
 
     /// What was kept of the text, and the size of all of it.

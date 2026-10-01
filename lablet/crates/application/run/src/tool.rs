@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use lablet_model::{KeptOutput, OutputKeep, Secrets, ToolCallEnd, ToolCallId, ToolName, ToolSpec};
 
-use crate::{TraceContext, bounded};
+use crate::TraceContext;
 
 /// One tool call, as the loop hands it to an executor.
 ///
@@ -57,9 +57,13 @@ pub struct ToolOutput {
 
 /// How an executor failed to get an answer from a tool.
 ///
-/// The message is private because [`ToolError::new`] cuts it to
-/// [`ERROR_MESSAGE_MAX_BYTES`](crate::ERROR_MESSAGE_MAX_BYTES), and a field
-/// anyone could write would let a message past the cut.
+/// The message is held whole, and the loop cuts the run's secrets out of
+/// it and then bounds it to
+/// [`ERROR_MESSAGE_MAX_BYTES`](crate::ERROR_MESSAGE_MAX_BYTES) on its way to
+/// the model, in that order: a value the bound chopped would be no value to
+/// the cut, and every byte of it before the bound would be sent. The field
+/// is private, as [`ProviderError`](crate::ProviderError)'s is, so an error
+/// is built and read one way.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct ToolError {
@@ -71,19 +75,18 @@ pub struct ToolError {
 }
 
 impl ToolError {
-    /// A failure of `kind`, described by `message`, over no MCP server. The
-    /// message is cut to
-    /// [`ERROR_MESSAGE_MAX_BYTES`](crate::ERROR_MESSAGE_MAX_BYTES).
+    /// A failure of `kind`, described by `message`, over no MCP server.
     pub fn new(kind: ToolErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
-            message: bounded(message.into()),
+            message: message.into(),
             mcp: None,
         }
     }
 
-    /// What the executor says happened. The model is sent this as its error
-    /// result, so it's what the model has to work from.
+    /// What the executor says happened, whole. The model is sent this as
+    /// its error result, with the run's secrets cut out and bounded, so it's
+    /// what the model has to work from.
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
@@ -221,10 +224,11 @@ pub trait ToolExecutor: Send + Sync {
     ///
     /// The error's message holds no credentials: no user info or query
     /// string of a URL, no header value, and a response body only when the
-    /// run captures content. The type holds the message's length and nothing
-    /// can hold this, so it's the executor's obligation. The loop cuts
-    /// lablet's own secrets out of the message on its way to the model, as
-    /// it does out of every text it writes itself, so a value of
-    /// [`ToolCall::secrets`] that reaches the message is cut.
+    /// run captures content. The loop bounds the message's length and
+    /// nothing can hold this, so it's the executor's obligation. The loop
+    /// cuts lablet's own secrets out of the message on its way to the model,
+    /// as it does out of every text it writes itself, so a value of
+    /// [`ToolCall::secrets`] that reaches the message is cut, and the
+    /// message is bounded only after the cut, so no byte of a value is sent.
     async fn execute(&self, call: ToolCall) -> Result<ToolOutput, ToolError>;
 }

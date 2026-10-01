@@ -24,13 +24,15 @@ pub use tool::{
 pub use toolset::{FilterList, ToolFilter, ToolSet, ToolSetError};
 pub use trace::TraceContext;
 
-/// The longest message a [`ProviderError`] or a [`ToolError`] carries, in
-/// bytes.
+/// The longest message of a [`ProviderError`], and the longest error result
+/// the loop makes of a [`ToolError`]'s message, in bytes.
 ///
 /// An adapter's error text can be as long as whatever a server sent back, and
-/// it reaches the outcome, every exporter and, for a tool, the model. Both
-/// errors cut their message to this when they're built, so no adapter can
-/// leave the bound out.
+/// it reaches the outcome, every exporter and, for a tool, the model. A
+/// provider error cuts its message to this when it's built, and the loop
+/// cuts a tool error's message to it after the run's secrets are cut out of
+/// it, since a value the bound chopped would leave its edge in the text; so
+/// no adapter can leave the bound out.
 pub const ERROR_MESSAGE_MAX_BYTES: usize = 2_048;
 
 /// `message`, cut to [`ERROR_MESSAGE_MAX_BYTES`] at the last character

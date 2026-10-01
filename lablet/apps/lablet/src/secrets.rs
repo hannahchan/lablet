@@ -9,9 +9,11 @@
 //! every variable substituted into `tools.builtin.env` or a stdio server's
 //! `env`. The framework that set any other variable is the party that can
 //! name it, and a pattern would cut path-valued and URL-valued variables
-//! from every record. The one secret found rather than told is the OTLP
-//! header variables the exporter reads from the environment: inherited by
-//! every command, since the exporter in a child reads them too, and cut.
+//! from every record. The one secret found rather than told is what the
+//! exporter reads from the environment: the OTLP header variables, and
+//! the user information of the OTLP endpoint variables when they have any,
+//! inherited by every command, since the exporter in a child reads them
+//! too, and cut.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -29,8 +31,8 @@ pub(crate) struct Derived {
     pub(crate) withheld: BTreeSet<String>,
     /// The names whose values no tool result shows, in the order they're
     /// printed. A variable here and not in `withheld` is inherited by every
-    /// command and cut, which is the class of the OTLP header variables the
-    /// exporter reads from the environment.
+    /// command and cut, which is the class of the OTLP header and endpoint
+    /// variables the exporter reads from the environment.
     pub(crate) cut: Vec<Named>,
     /// The values, behind a `Debug` form that shows none of them. Empty
     /// when the run has no executor to hand them to, since nothing would
@@ -148,6 +150,9 @@ pub(crate) fn derived(
     for variable in otlp::HEADER_VARIABLES {
         set.inherited(variable);
     }
+    for variable in otlp::ENDPOINT_VARIABLES {
+        set.inherited_url(variable);
+    }
     set.finish()
 }
 
@@ -197,6 +202,52 @@ impl Set<'_> {
             source: Source::Variable(name.to_owned()),
             held,
         });
+    }
+
+    /// A variable every command inherits whose value is a URL, and whose
+    /// user information is a secret all the same when it has any: cut in
+    /// each of its forms, as the config's endpoint's is, and the name listed
+    /// without being withheld. A value that names a host and no credentials
+    /// is no secret, and the name isn't listed.
+    fn inherited_url(&mut self, name: &str) {
+        let Some(value) = (self.env)(name) else {
+            return;
+        };
+        let value = value.to_string_lossy();
+        let Some(information) = user_information(&value) else {
+            return;
+        };
+        let held = self.information(information);
+        self.cut.push(Named {
+            source: Source::Variable(name.to_owned()),
+            held,
+        });
+    }
+
+    /// The user information of a URL, `user:password` or a user alone, in
+    /// each form a command could print it: the whole, each half, raw and
+    /// percent-decoded. How the whole is held, raw, is how the URL's
+    /// secret is classified.
+    fn information(&mut self, information: &str) -> Held {
+        let (user, password) = information
+            .split_once(':')
+            .map_or((information, None), |(user, password)| {
+                (user, Some(password))
+            });
+        let mut held = Held::Cut;
+        for part in [Some(information), Some(user), password]
+            .into_iter()
+            .flatten()
+        {
+            let whole = part == information;
+            for form in [part.to_owned(), percent_decoded(part)] {
+                let classified = self.value(&form);
+                if whole && form == information {
+                    held = classified;
+                }
+            }
+        }
+        held
     }
 
     /// A value that's a secret as it stands, held and classified.
@@ -254,24 +305,7 @@ impl Set<'_> {
         let Some(information) = real.and_then(user_information) else {
             return;
         };
-        let (user, password) = information
-            .split_once(':')
-            .map_or((information, None), |(user, password)| {
-                (user, Some(password))
-            });
-        let mut held = Held::Cut;
-        for part in [Some(information), Some(user), password]
-            .into_iter()
-            .flatten()
-        {
-            let whole = part == information;
-            for form in [part.to_owned(), percent_decoded(part)] {
-                let classified = self.value(&form);
-                if whole && form == information {
-                    held = classified;
-                }
-            }
-        }
+        let held = self.information(information);
         let written_information = written.and_then(user_information);
         let variables: Vec<String> = substituted
             .replaced_within(key)
