@@ -334,12 +334,6 @@ fn later(scratch: &Lab) -> Vec<(Value, Unsupported, &'static str, &'static str)>
             "a server in `tools.mcp`",
         ),
         (
-            fake(json!({ "telemetry": { "otlp": { "endpoint": "http://localhost:4317" } } })),
-            Unsupported::OtlpEndpoint,
-            "6",
-            "`telemetry.otlp.endpoint`",
-        ),
-        (
             fake(json!({ "prompt": { "skills": ["skills/review/SKILL.md"] } })),
             Unsupported::Skills,
             "10",

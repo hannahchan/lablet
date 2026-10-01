@@ -77,7 +77,7 @@ Emitted once, after the run ends and whatever the stop reason, in the trace cont
 | [`lablet.run.timeout_ms`](/lablet/docs/telemetry/lablet/README.md#lablet-run-timeout-ms) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | The configured run timeout, in milliseconds. [26] | `600000` |
 | [`lablet.run.turns`](/lablet/docs/telemetry/lablet/README.md#lablet-run-turns) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of turns the run took. [27] | `7` |
 | [`lablet.skills.count`](/lablet/docs/telemetry/lablet/README.md#lablet-skills-count) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of skill files appended to the system prompt. [28] | `2` |
-| [`lablet.telemetry.dropped_records`](/lablet/docs/telemetry/lablet/README.md#lablet-telemetry-dropped-records) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of spans and log records of the run that lablet's exporters refused or dropped before the wide event was made. [29] | `0` |
+| [`lablet.telemetry.dropped_records`](/lablet/docs/telemetry/lablet/README.md#lablet-telemetry-dropped-records) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of spans and log records of the run that the exporters to this destination refused or dropped before the wide event was made. [29] | `0` |
 | [`lablet.tool_calls.errors`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-errors) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Number of tool calls that returned an error result. [30] | `1` |
 | [`lablet.tool_calls.input_bytes.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-input-bytes-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the sizes of every tool call's input, in bytes. [31] | `1820` |
 | [`lablet.tool_calls.latency_ms.total`](/lablet/docs/telemetry/lablet/README.md#lablet-tool-calls-latency-ms-total) | ![Development](https://img.shields.io/badge/-development-blue) | `Required` | int | Sum of the latencies of every tool call, in milliseconds. [32] | `3100` |
@@ -234,7 +234,7 @@ value matches the units the customer is charged for.
 
 **[28] `lablet.skills.count`:** Justification: skills are a lablet config feature with no counterpart in the conventions.
 
-**[29] `lablet.telemetry.dropped_records`:** Justification: the conventions count what an SDK drops as metrics of the SDK, which a consumer of one run's record doesn't have. The count is on the run's one row so that a row whose spans or content are incomplete says so. The wide event is made once the run's other records have been flushed, and it isn't counted itself.
+**[29] `lablet.telemetry.dropped_records`:** Justification: the conventions count what an SDK drops as metrics of the SDK, which a consumer of one run's record doesn't have. The count is on the run's one row so that a row whose spans or content are incomplete says so. Each destination, the file and the network, gets the wide event with its own count: the wide event is made for a destination once the run's other records have been flushed to it, and it isn't counted itself.
 
 **[30] `lablet.tool_calls.errors`:** Justification: no convention counts the failed tool calls of an agent run.
 

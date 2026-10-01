@@ -72,7 +72,7 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 | <a id="lablet-run-turns">`lablet.run.turns`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of turns the run took. [42] | `7` |
 | <a id="lablet-skills-count">`lablet.skills.count`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of skill files appended to the system prompt. [43] | `2` |
 | <a id="lablet-task-id">`lablet.task.id`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | The task the run attempts, as the run request named it. [44] | `fix-failing-test`; `swe-bench/django-11099` |
-| <a id="lablet-telemetry-dropped-records">`lablet.telemetry.dropped_records`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of spans and log records of the run that lablet's exporters refused or dropped before the wide event was made. [45] | `0` |
+| <a id="lablet-telemetry-dropped-records">`lablet.telemetry.dropped_records`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of spans and log records of the run that the exporters to this destination refused or dropped before the wide event was made. [45] | `0` |
 | <a id="lablet-tool-calls">`lablet.tool.calls`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of calls to one tool, `<key>` being the tool name. [46] | `[3]` |
 | <a id="lablet-tool-errors">`lablet.tool.errors`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of error results from one tool, `<key>` being the tool name. [47] | `[1]` |
 | <a id="lablet-tool-input-bytes">`lablet.tool.input.bytes`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Size of a tool call's input in bytes. [48] | `96` |
@@ -184,7 +184,7 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 
 **[44] `lablet.task.id`:** Justification: the conventions identify a conversation and an agent, not the task a run was given. A composer runs one task many times and under many configs, and groups runs by it more than by anything else, so it's declared here rather than left to a resource attribute whose key the registry can't know.
 
-**[45] `lablet.telemetry.dropped_records`:** Justification: the conventions count what an SDK drops as metrics of the SDK, which a consumer of one run's record doesn't have. The count is on the run's one row so that a row whose spans or content are incomplete says so. The wide event is made once the run's other records have been flushed, and it isn't counted itself.
+**[45] `lablet.telemetry.dropped_records`:** Justification: the conventions count what an SDK drops as metrics of the SDK, which a consumer of one run's record doesn't have. The count is on the run's one row so that a row whose spans or content are incomplete says so. Each destination, the file and the network, gets the wide event with its own count: the wide event is made for a destination once the run's other records have been flushed to it, and it isn't counted itself.
 
 **[46] `lablet.tool.calls`:** Justification: per-tool counts on the run's one row answer which tool dominated without a join; the conventions have no per-tool aggregate, and a template is the only dynamic key Weaver allows.
 

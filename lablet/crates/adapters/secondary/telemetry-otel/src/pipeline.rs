@@ -7,8 +7,8 @@
 //! queue holds and turns a span or a record away itself when there's no room
 //! for it, which a processor whose queue is as long then never has to.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use opentelemetry::InstrumentationScope;
@@ -31,21 +31,65 @@ pub(crate) const QUEUE_CAPACITY: usize = 2_048;
 pub(crate) const EXPORT_BATCH: usize = 512;
 
 /// How long a processor lets what it holds wait for a batch to fill.
+///
+/// No export timeout is set beside it: the SDK's thread-based processors
+/// wait on an export for as long as it takes, and only their experimental
+/// async-runtime processors have the setter. The exporter's own timeout is
+/// what bounds one export, and the observer's flush bound is what bounds
+/// the wait.
 const EXPORT_EVERY: Duration = Duration::from_secs(1);
 
-/// How many spans and records an observer's exporters have lost: the ones
-/// turned away from a full queue, and the ones of an export that failed.
+/// The count of what one destination's exporters lost, by generation.
 #[derive(Debug, Default)]
-pub(crate) struct Lost(AtomicU64);
+struct Count {
+    /// Which run's count this is: the wide event of a run takes the count
+    /// and starts the next generation.
+    generation: u64,
+    lost: u64,
+}
+
+/// How many spans and records one destination's exporters have lost: the
+/// ones turned away from a full queue, and the ones of an export that
+/// failed.
+///
+/// The count is of one generation at a time, which ends when it's taken for
+/// a run's wide event. An export that was in flight when the flush gave up
+/// waiting for it fails later; its loss is of the generation it began in,
+/// which has ended, so it's counted against no run and logged instead.
+#[derive(Debug, Default)]
+pub(crate) struct Lost(Mutex<Count>);
 
 impl Lost {
-    fn add(&self, records: usize) {
-        self.0.fetch_add(records as u64, Ordering::Relaxed);
+    fn count(&self) -> std::sync::MutexGuard<'_, Count> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The count, which starts again from none.
+    /// The generation now: the one whose count the next [`Lost::take`]
+    /// gives.
+    pub(crate) fn generation(&self) -> u64 {
+        self.count().generation
+    }
+
+    /// Counts `records` lost in `generation`.
+    fn add(&self, generation: u64, records: usize) {
+        let mut count = self.count();
+        if count.generation == generation {
+            count.lost += records as u64;
+        } else {
+            drop(count);
+            tracing::warn!(
+                records,
+                "records were lost after the wide event of their run was made, so no run counts them"
+            );
+        }
+    }
+
+    /// The count of the generation now, which then ends: what's lost from
+    /// here on is the next generation's.
     pub(crate) fn take(&self) -> u64 {
-        self.0.swap(0, Ordering::Relaxed)
+        let mut count = self.count();
+        count.generation += 1;
+        std::mem::take(&mut count.lost)
     }
 }
 
@@ -76,17 +120,23 @@ impl Room {
             })
             .is_ok();
         if !admitted {
-            self.lost.add(1);
+            self.lost.add(self.lost.generation(), 1);
         }
         admitted
     }
 
-    /// Gives back the room of `records` that left the queue in one export,
-    /// and counts them lost when the export failed.
-    fn left(&self, records: usize, exported: bool) {
+    /// The generation an export that begins now is of.
+    fn generation(&self) -> u64 {
+        self.lost.generation()
+    }
+
+    /// Gives back the room of `records` that left the queue in one export
+    /// that began in `generation`, and counts them lost when the export
+    /// failed.
+    fn left(&self, records: usize, exported: bool, generation: u64) {
         self.held.fetch_sub(records, Ordering::AcqRel);
         if !exported {
-            self.lost.add(records);
+            self.lost.add(generation, records);
         }
     }
 }
@@ -97,6 +147,8 @@ impl Room {
 /// changes nothing about the run, and someone has to be told.
 #[derive(Debug)]
 struct Counted<E> {
+    /// The destination, as the diagnostic log names it.
+    destination: &'static str,
     exporter: E,
     room: Arc<Room>,
 }
@@ -104,10 +156,16 @@ struct Counted<E> {
 impl<E: SpanExporter> SpanExporter for Counted<E> {
     async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
         let spans = batch.len();
+        let generation = self.room.generation();
         let result = self.exporter.export(batch).await;
-        self.room.left(spans, result.is_ok());
+        self.room.left(spans, result.is_ok(), generation);
         if let Err(error) = &result {
-            tracing::warn!(%error, spans, "an export of spans failed, and the spans are lost");
+            tracing::warn!(
+                %error,
+                spans,
+                destination = self.destination,
+                "an export of spans failed, and the spans are lost"
+            );
         }
         result
     }
@@ -128,12 +186,14 @@ impl<E: SpanExporter> SpanExporter for Counted<E> {
 impl<E: LogExporter> LogExporter for Counted<E> {
     async fn export(&self, batch: LogBatch<'_>) -> OTelSdkResult {
         let records = batch.iter().count();
+        let generation = self.room.generation();
         let result = self.exporter.export(batch).await;
-        self.room.left(records, result.is_ok());
+        self.room.left(records, result.is_ok(), generation);
         if let Err(error) = &result {
             tracing::warn!(
                 %error,
                 records,
+                destination = self.destination,
                 "an export of log records failed, and the records are lost"
             );
         }
@@ -158,14 +218,16 @@ pub(crate) struct SpanQueue {
 
 impl SpanQueue {
     /// A queue to `exporter`, which describes what it exports as coming
-    /// from `resource`.
+    /// from `resource`, at the destination `destination` names.
     pub(crate) fn new(
+        destination: &'static str,
         exporter: impl SpanExporter + 'static,
         resource: &Resource,
         lost: &Arc<Lost>,
     ) -> Self {
         let room = Room::new(QUEUE_CAPACITY, Arc::clone(lost));
         let mut exporter = Counted {
+            destination,
             exporter,
             room: Arc::clone(&room),
         };
@@ -208,14 +270,16 @@ pub(crate) struct RecordQueue {
 
 impl RecordQueue {
     /// A queue to `exporter`, which describes what it exports as coming
-    /// from `resource`.
+    /// from `resource`, at the destination `destination` names.
     pub(crate) fn new(
+        destination: &'static str,
         exporter: impl LogExporter + 'static,
         resource: &Resource,
         lost: &Arc<Lost>,
     ) -> Self {
         let room = Room::new(QUEUE_CAPACITY, Arc::clone(lost));
         let mut exporter = Counted {
+            destination,
             exporter,
             room: Arc::clone(&room),
         };

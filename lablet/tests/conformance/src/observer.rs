@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use lablet_model::{RunSummary, StopReason};
 use lablet_run::RunObserver;
@@ -188,6 +189,107 @@ pub async fn a_destination_that_cannot_be_written_changes_nothing_about_the_run(
     assert!(
         flushed.is_err(),
         "the destination was written, so the case held nothing to the observer"
+    );
+}
+
+/// A destination that accepts a connection and never answers changes
+/// nothing about the run, and holds the flush for no longer than `bound`,
+/// which is what the observer was built to wait: the failure is reported
+/// then, and the observer's other destinations, a file say, are whole by
+/// then. What the flush said is returned, for the adapter's test to hold to
+/// its own names.
+///
+/// `stuck` is a subject whose observer exports to such a destination.
+///
+/// # Panics
+///
+/// Panics when that doesn't hold of `stuck`, which is how a case fails.
+pub async fn a_destination_that_never_answers_holds_the_flush_only_for_its_bound(
+    stuck: &dyn Subject,
+    bound: Duration,
+) -> String {
+    let mut unobserved = playing(EVERYTHING, Arc::new(Unobserved)).await;
+    let mut observed = playing(EVERYTHING, stuck.observer()).await;
+
+    let expected = run(&mut unobserved, RUN).await;
+    let finished = run(&mut observed, RUN).await;
+    let began = Instant::now();
+    let flushed = stuck.flush().await;
+    let waited = began.elapsed();
+
+    assert_eq!(
+        finished, expected,
+        "the run ended as it does when nothing observes it"
+    );
+    assert_eq!(
+        finished.summary.outcome.stop_reason(),
+        StopReason::Completed
+    );
+    let Err(said) = flushed else {
+        panic!("the flush returned as if the destination had answered");
+    };
+    assert!(
+        waited >= bound,
+        "the flush gave up after {waited:?}, before its bound of {bound:?}"
+    );
+    // The SDK waits five seconds for each of a destination's queues
+    // whatever it's told, and three queues wait one after another: a flush
+    // that waits on the destination, or on the SDK, can't return before
+    // that.
+    assert!(
+        waited < bound + Duration::from_secs(5),
+        "the flush waited {waited:?}, past its bound of {bound:?}"
+    );
+    said
+}
+
+/// Two destinations of one observer hold the same run: the same spans and
+/// the same log records, as multisets, however each batched them into
+/// exports, with one wide event that counts nothing dropped.
+///
+/// `subject` reads one destination back and `other` the other.
+///
+/// # Panics
+///
+/// Panics when that doesn't hold of `subject` and `other`, which is how a
+/// case fails.
+pub async fn the_destinations_of_one_run_hold_the_same_spans_and_records(
+    subject: &dyn Subject,
+    other: &dyn Fn() -> Result<Exported, ReadError>,
+) {
+    let mut service = playing(EVERYTHING, subject.observer()).await;
+
+    run(&mut service, RUN).await;
+    flushed(subject).await;
+
+    let first = read_back(subject);
+    let second = must(other(), "reading the other destination back");
+    assert_hold_the_same_run(&first, &second, RUN);
+}
+
+/// Holds `first` and `second` to the same spans and the same log records,
+/// as multisets, and to one wide event of the run `run` each, whose count
+/// of dropped records is nothing.
+///
+/// # Panics
+///
+/// Panics when they differ, and when either lacks the run's wide event or
+/// counts a record dropped.
+pub fn assert_hold_the_same_run(first: &Exported, second: &Exported, run: &str) {
+    for exported in [first, second] {
+        let wide = the_wide_event(exported, run);
+        assert_eq!(
+            counted(&wide.attributes, key::LABLET_TELEMETRY_DROPPED_RECORDS),
+            Some(0)
+        );
+    }
+    let (first, second) = (first.ungrouped(), second.ungrouped());
+    assert!(!first.spans.is_empty(), "the run has spans");
+    assert_eq!(first.spans.len(), second.spans.len(), "as many spans");
+    assert_eq!(first.records.len(), second.records.len(), "as many records");
+    assert_eq!(
+        first, second,
+        "the same spans and records, whatever the batches"
     );
 }
 

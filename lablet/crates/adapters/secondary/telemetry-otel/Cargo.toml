@@ -16,11 +16,16 @@ lablet-model.workspace = true
 lablet-run.workspace = true
 lablet-telemetry-registry.workspace = true
 opentelemetry.workspace = true
+opentelemetry-http.workspace = true
+opentelemetry-otlp.workspace = true
 opentelemetry-proto.workspace = true
 opentelemetry_sdk.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
+secrecy.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tonic.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

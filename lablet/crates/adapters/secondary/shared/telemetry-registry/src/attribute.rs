@@ -233,7 +233,7 @@ pub const LABLET_SKILLS_COUNT: &str = "lablet.skills.count";
 /// The task the run attempts, as the run request named it.
 pub const LABLET_TASK_ID: &str = "lablet.task.id";
 
-/// Number of spans and log records of the run that lablet's exporters refused or dropped before the wide event was made.
+/// Number of spans and log records of the run that the exporters to this destination refused or dropped before the wide event was made.
 pub const LABLET_TELEMETRY_DROPPED_RECORDS: &str = "lablet.telemetry.dropped_records";
 
 /// Number of calls to one tool, `<key>` being the tool name.

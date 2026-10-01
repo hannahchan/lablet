@@ -1,6 +1,6 @@
 //! Integration tests of `lablet-telemetry-otel`, through its public surface
-//! only: the loop runs a script, the observer exports the run to a file,
-//! and the file is read back.
+//! only: the loop runs a script, the observer exports the run to a file or
+//! to the in-process receiver, and what it exported is read back.
 
 #[cfg(test)]
 mod cancelled;
@@ -12,6 +12,8 @@ mod content;
 mod file;
 #[cfg(test)]
 mod harness;
+#[cfg(test)]
+mod network;
 #[cfg(test)]
 mod spans;
 #[cfg(test)]

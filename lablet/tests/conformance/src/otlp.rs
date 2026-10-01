@@ -344,6 +344,47 @@ impl Exported {
             .filter(|record| record.event_name == event_name)
             .collect()
     }
+
+    /// The spans and the records as multisets: each without the line it
+    /// was exported in, and sorted, so what two destinations hold of one
+    /// run compares equal however each batched it.
+    #[must_use]
+    pub fn ungrouped(&self) -> Ungrouped {
+        let mut spans: Vec<Span> = self
+            .spans
+            .iter()
+            .cloned()
+            .map(|span| Span { line: 0, ..span })
+            .collect();
+        spans.sort_by(|a, b| {
+            (&a.trace_id, &a.span_id, &a.name).cmp(&(&b.trace_id, &b.span_id, &b.name))
+        });
+        let mut records: Vec<LogRecord> = self
+            .records
+            .iter()
+            .cloned()
+            .map(|record| LogRecord { line: 0, ..record })
+            .collect();
+        records.sort_by(|a, b| {
+            (&a.trace_id, &a.span_id, &a.event_name, a.time_unix_nano).cmp(&(
+                &b.trace_id,
+                &b.span_id,
+                &b.event_name,
+                b.time_unix_nano,
+            ))
+        });
+        Ungrouped { spans, records }
+    }
+}
+
+/// What a run of lines exported, as multisets: see [`Exported::ungrouped`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ungrouped {
+    /// The spans, sorted by trace, span and name, with no line.
+    pub spans: Vec<Span>,
+    /// The log records, sorted by trace, span, event and time, with no
+    /// line.
+    pub records: Vec<LogRecord>,
 }
 
 /// Lower-case hex, two digits to a byte.
