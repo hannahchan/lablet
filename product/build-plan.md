@@ -16,8 +16,8 @@ Sequencing rationale: the loop is proven against fakes before any real adapter e
 | 3b    | The domain and the loop after the design review     | Done, 2026-09-29 |
 | 4     | Library and first traced run                        | Done, 2026-09-29 |
 | 5     | CLI and config surface                              | Done, 2026-09-30 |
-| 6     | OTLP network export and live-check                  | Next             |
-| 7     | Anthropic, and the capture of the primary reference | Not started      |
+| 6     | OTLP network export and live-check                  | Done, 2026-10-02 |
+| 7     | Anthropic, and the capture of the primary reference | Next             |
 | 7a    | Context management                                  | Not started      |
 | 8     | MCP, and the first transfer check                   | Not started      |
 | 9     | Second provider                                     | Not started      |
@@ -130,7 +130,7 @@ Acceptance: `lablet init --provider fake && lablet run --config lablet.yaml --pr
 
 ## Phase 6: OTLP network export and live-check
 
-- The OTLP network exporter (gRPC and HTTP/protobuf on `rustls`) added to `telemetry-otel`, selected by `telemetry.otlp.endpoint`, active alongside the file exporter when both are set.
+- The OTLP network exporter (gRPC and HTTP/protobuf on `rustls`) added to `telemetry-otel`, turned on by `telemetry.otlp.endpoint` or by the `OTEL_EXPORTER_OTLP_*ENDPOINT` variables, beside the file exporter when `telemetry.file.path` is set.
 - An in-process OTLP receiver in `lablet-conformance` (gRPC and HTTP) so network scenarios run in CI without Docker; `telemetry-otel` over the network added to the `RunObserver` conformance matrix, including that an unreachable endpoint doesn't change the run outcome.
 - `cargo xtask weaver live-check`: starts `weaver registry live-check` without `--v2` on a random free port pair, runs the `init --provider fake` starter and `lablet/examples/two-turns` with `--set telemetry.otlp.endpoint=http://127.0.0.1:<port>` and `--set telemetry.capture_content=true` over OTLP gRPC, stops it through the admin endpoint, keeps the report at `lablet/target/weaver-live-check/live_check.json`, and fails on a violation or on a report that saw less than the runs emit. Its CI job runs on Linux against the vendored registry.
 - `lablet/examples/docker-compose.yaml` with a collector (debug exporter, plus the `otlpjsonfile` receiver with `start_at: beginning` and the same `include` path wired into both a traces and a logs pipeline, since the receiver is instantiated per signal and defaults to tailing from the end) and Jaeger, for the manual checks.
