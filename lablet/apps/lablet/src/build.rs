@@ -17,7 +17,7 @@ use crate::cancel::RunCancellation;
 use crate::clock::TokioClock;
 use crate::config::{
     Config, ConfigError, Context, Env, Format, KeyPath, Model, Place, Provider, Refusal,
-    ResolvedConfig, Substituted, Tools, TranscriptFormat,
+    ResolvedConfig, Substituted, Tools, TranscriptFormat, shown,
 };
 use crate::fanout::FanOut;
 use crate::lablet::{Fixed, Lablet, Played, TranscriptPath};
@@ -304,9 +304,18 @@ fn file_target(real: &Config, network_on: bool) -> Option<FileTarget> {
 }
 
 /// The refusal of what the network exporter couldn't be built from, shown
-/// from `written`: the endpoint as the config writes it, and a header by
-/// its key alone, since every header value is a secret.
-fn otlp_refused(written: &Config, error: OtelBuildError) -> BuildError {
+/// from `written`: the endpoint as the config writes it, without its user
+/// information, which is a secret, and a header by its key alone, since
+/// every header value is a secret. When the config states no endpoint,
+/// which `endpoint_stated` says, the exporter read one from `env`, and the
+/// refusal names the variable it read and shows nothing of what it holds.
+fn otlp_refused(
+    written: &Config,
+    env: Env<'_>,
+    endpoint_stated: bool,
+    error: OtelBuildError,
+) -> BuildError {
+    const KEY: &str = "telemetry.otlp.endpoint";
     let reason = match error {
         OtelBuildError::Header { name, reason } => {
             let key = KeyPath::of("telemetry.otlp.headers").key(&name).to_string();
@@ -317,6 +326,18 @@ fn otlp_refused(written: &Config, error: OtelBuildError) -> BuildError {
                 reason: reason.to_owned(),
             });
         }
+        OtelBuildError::Endpoint { signal } if !endpoint_stated => {
+            let variable = otlp::endpoint_variable(signal, env);
+            return BuildError::Config(ConfigError::Invalid {
+                key: KEY.to_owned(),
+                place: written.place_of(KEY),
+                value: None,
+                reason: format!(
+                    "`{variable}`, which is read since the config states no endpoint, holds what \
+                     isn't a URL the exporter accepts"
+                ),
+            });
+        }
         OtelBuildError::Endpoint { .. } => "it isn't a URL the exporter accepts".to_owned(),
         OtelBuildError::Exporter { reason, .. } => {
             format!("the exporter couldn't be made: {reason}")
@@ -325,7 +346,16 @@ fn otlp_refused(written: &Config, error: OtelBuildError) -> BuildError {
             format!("the HTTP client couldn't be made: {reason}")
         }
     };
-    BuildError::Config(written.refused(Refusal::invalid("telemetry.otlp.endpoint", reason)))
+    let key = KeyPath::of(KEY);
+    let value = written
+        .written_text(KEY)
+        .map(|endpoint| serde_json::Value::String(secrets::without_user_information(&endpoint)));
+    BuildError::Config(ConfigError::Invalid {
+        place: written.place_of(KEY),
+        value: shown(&key, value.as_ref()),
+        key: KEY.to_owned(),
+        reason,
+    })
 }
 
 /// Checks `config` whole, as [`build`] does, and stops before the provider
@@ -453,6 +483,12 @@ async fn prepare(written: &Config, env: Env<'_>) -> Result<Prepared, BuildError>
     };
 
     let otlp = otlp::settings(written, &real, env).map_err(refused)?;
+    if let Some(settings) = &otlp {
+        // What the exporter would refuse is refused here, so a check refuses
+        // what a build refuses, and a check installs no exporter.
+        lablet_telemetry_otel::validate(settings)
+            .map_err(|error| otlp_refused(written, env, settings.endpoint.is_some(), error))?;
+    }
     let target = file_target(&real, otlp.is_some());
 
     // The values are held only for an executor to cut, and the built-in
@@ -559,12 +595,15 @@ async fn build_in(
     if let Some(target) = target {
         telemetry = telemetry.file(target);
     }
+    let endpoint_stated = otlp
+        .as_ref()
+        .is_some_and(|settings| settings.endpoint.is_some());
     if let Some(settings) = otlp {
         telemetry = telemetry.otlp(settings);
     }
     let telemetry = telemetry
         .build()
-        .map_err(|error| otlp_refused(&config, error))?;
+        .map_err(|error| otlp_refused(&config, env, endpoint_stated, error))?;
     let mut told: Vec<Arc<dyn RunObserver>> = vec![Arc::new(telemetry.clone())];
     told.extend(observers);
 

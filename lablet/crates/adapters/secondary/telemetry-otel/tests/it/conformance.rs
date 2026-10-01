@@ -12,7 +12,7 @@ use lablet_conformance::observer::{
     the_numbers_of_the_wide_event_are_the_sums_of_the_steps,
 };
 use lablet_conformance::otlp::{Exported, ReadError};
-use lablet_conformance::receiver::{Mode, Receiver};
+use lablet_conformance::receiver::{self, Mode, Receiver};
 use lablet_run::RunObserver;
 use lablet_telemetry_otel::{FileTarget, OtelObserver, OtlpSettings, Transport};
 use lablet_test_support::Scratch;
@@ -288,6 +288,21 @@ async fn a_receiver_that_never_answers_leaves_the_file_whole(transport: Transpor
     assert_eq!(
         said, "telemetry wasn't exported whole: otlp: the flush didn't end within 500ms",
         "the network destination alone is named, by its bound, and the file isn't"
+    );
+    // A port that refused the connection, or a listener never bound, would
+    // hold the flush for its bound just the same: the receiver kept each
+    // request before it hung, so what it kept says the connection was
+    // accepted and the spans read.
+    let over = match transport {
+        Transport::Grpc => receiver::Transport::Grpc,
+        Transport::HttpProtobuf => receiver::Transport::Http,
+    };
+    let requests = subject.receiver.requests();
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.transport == over && request.signal == receiver::Signal::Traces),
+        "the receiver accepted no export of spans over {over:?}: {requests:?}"
     );
     let file = subject.exported().unwrap();
     assert_eq!(file.records.last().unwrap().event_name, "lablet.run");

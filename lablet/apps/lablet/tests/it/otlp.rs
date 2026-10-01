@@ -143,6 +143,15 @@ fn a_port_nothing_listens_on_changes_nothing_and_the_process_exits_within_five_s
     );
 }
 
+/// What `check` and `build` refuse `config` with, which is one answer:
+/// a check refuses what a build refuses, and installs no exporter for it.
+async fn both_refuse(config: lablet::Config) -> BuildError {
+    let checked = lablet::check(&config).await.map(drop).unwrap_err();
+    let built = lablet::build(config).await.map(drop).unwrap_err();
+    assert_eq!(checked, built, "check and build refuse alike");
+    built
+}
+
 #[tokio::test]
 async fn an_endpoint_the_exporter_refuses_is_refused_by_its_key_as_the_config_writes_it() {
     let scratch = Lab::new("otlp-bad-endpoint");
@@ -151,7 +160,7 @@ async fn an_endpoint_the_exporter_refuses_is_refused_by_its_key_as_the_config_wr
         json!({ "telemetry": { "otlp": { "endpoint": "http://[not a host" } } }),
     );
 
-    let refused = lablet::build(config).await.unwrap_err();
+    let refused = both_refuse(config).await;
 
     assert_eq!(
         refused,
@@ -162,6 +171,32 @@ async fn an_endpoint_the_exporter_refuses_is_refused_by_its_key_as_the_config_wr
             reason: "it isn't a URL the exporter accepts".to_owned(),
         })
     );
+}
+
+/// The user information of a refused endpoint is a secret, so the refusal
+/// shows the endpoint without it.
+#[tokio::test]
+async fn a_refused_endpoint_is_shown_without_its_user_information() {
+    const PASSWORD: &str = "hunter2-0123456789abcdef";
+    let scratch = Lab::new("otlp-bad-endpoint-user-information");
+    let config = scratch.config(
+        ENDS,
+        json!({ "telemetry": { "otlp": {
+            "endpoint": format!("http://user:{PASSWORD}@[not a host"),
+        } } }),
+    );
+
+    let refused = both_refuse(config).await;
+
+    assert_eq!(
+        refused.to_string(),
+        "telemetry.otlp.endpoint (line 1): \"http://[not a host\" is refused: it isn't a URL the \
+         exporter accepts"
+    );
+    for shown in [refused.to_string(), format!("{refused:?}")] {
+        assert!(!shown.contains(PASSWORD), "{shown}");
+        assert!(!shown.contains("user:"), "{shown}");
+    }
 }
 
 #[tokio::test]
@@ -175,7 +210,7 @@ async fn a_header_that_is_not_one_is_refused_by_its_key_and_its_value_is_shown_n
         } } }),
     );
 
-    let refused = lablet::build(config).await.unwrap_err();
+    let refused = both_refuse(config).await;
 
     assert_eq!(
         refused,

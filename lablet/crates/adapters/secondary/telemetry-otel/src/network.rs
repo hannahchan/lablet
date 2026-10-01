@@ -16,15 +16,17 @@ use std::time::Duration;
 
 use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
 use opentelemetry_otlp::{
-    ExporterBuildError, LogExporter, OTEL_EXPORTER_OTLP_HEADERS, OTEL_EXPORTER_OTLP_LOGS_HEADERS,
+    ExporterBuildError, LogExporter, OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_HEADERS,
+    OTEL_EXPORTER_OTLP_LOGS_ENDPOINT, OTEL_EXPORTER_OTLP_LOGS_HEADERS,
     OTEL_EXPORTER_OTLP_LOGS_TIMEOUT, OTEL_EXPORTER_OTLP_TIMEOUT,
-    OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT, OTEL_EXPORTER_OTLP_TRACES_HEADERS,
-    OTEL_EXPORTER_OTLP_TRACES_TIMEOUT, Protocol, SpanExporter, WithExportConfig,
-    WithHttpConfig as _, WithTonicConfig as _,
+    OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT, OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+    OTEL_EXPORTER_OTLP_TRACES_HEADERS, OTEL_EXPORTER_OTLP_TRACES_TIMEOUT, Protocol, SpanExporter,
+    WithExportConfig, WithHttpConfig as _, WithTonicConfig as _,
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use secrecy::{ExposeSecret as _, SecretString};
 use tonic::metadata::MetadataMap;
+use tonic::transport::Uri;
 
 /// How an OTLP collector is spoken to. The exporter would pick one itself
 /// where none is chosen, so one is always chosen here.
@@ -46,6 +48,16 @@ pub enum Signal {
 }
 
 impl Signal {
+    /// The variable that names the endpoint of this signal alone, which the
+    /// exporter reads before the generic one.
+    #[must_use]
+    pub const fn endpoint_variable(self) -> &'static str {
+        match self {
+            Self::Traces => OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+            Self::Logs => OTEL_EXPORTER_OTLP_LOGS_ENDPOINT,
+        }
+    }
+
     /// The variable that names the headers of this signal alone.
     const fn headers_variable(self) -> &'static str {
         match self {
@@ -87,7 +99,8 @@ pub struct OtlpSettings {
     pub transport: Transport,
     /// Where the collector listens. On HTTP it's a base URL, to which the
     /// signal's path is appended, as the exporter appends it to
-    /// `OTEL_EXPORTER_OTLP_ENDPOINT`.
+    /// `OTEL_EXPORTER_OTLP_ENDPOINT`. An empty one is left out, as the
+    /// exporter leaves out an empty one it's given.
     pub endpoint: Option<String>,
     /// The headers every export carries, which win over the environment's
     /// of the same name. A value is a secret from here on.
@@ -321,6 +334,81 @@ fn refused(signal: Signal, error: ExporterBuildError) -> OtelBuildError {
     }
 }
 
+/// Holds `settings` to what the exporters take, making none: each header's
+/// name and value, and the endpoint each signal is sent to, parsed as its
+/// transport's exporter parses it. An endpoint the settings state is read as
+/// it is, with the signal's path on HTTP; one they leave out is read from
+/// the environment as the exporter reads it, and the exporter's own default
+/// needs no parsing.
+///
+/// # Errors
+///
+/// Returns what [`OtelObserverBuilder::build`](crate::OtelObserverBuilder::build)
+/// returns for the same settings, so a check refuses what a build refuses.
+pub fn validate(settings: &OtlpSettings) -> Result<(), OtelBuildError> {
+    let network = Network::new(settings)?;
+    for signal in [Signal::Traces, Signal::Logs] {
+        let endpoint = match network.of(signal).endpoint {
+            Some(stated) => stated,
+            None => match environment_endpoint(network.transport, signal)? {
+                Some(inherited) => inherited,
+                None => continue,
+            },
+        };
+        if !accepted(network.transport, &endpoint) {
+            return Err(OtelBuildError::Endpoint { signal });
+        }
+    }
+    Ok(())
+}
+
+/// The endpoint the exporter reads for `signal` from the environment, as it
+/// reads it: the signal's variable as it is, else the generic one with the
+/// signal's path on HTTP, and `None` for the exporter's own default. A
+/// variable set to nothing is unset, and one that isn't UTF-8 is refused,
+/// as the exporter refuses it.
+fn environment_endpoint(
+    transport: Transport,
+    signal: Signal,
+) -> Result<Option<String>, OtelBuildError> {
+    let read = |variable: &str| match std::env::var(variable) {
+        Ok(value) if value.is_empty() => Ok(None),
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(OtelBuildError::Endpoint { signal }),
+    };
+    if let Some(own) = read(signal.endpoint_variable())? {
+        return Ok(Some(own));
+    }
+    Ok(
+        read(OTEL_EXPORTER_OTLP_ENDPOINT)?.map(|generic| match transport {
+            Transport::Grpc => generic,
+            Transport::HttpProtobuf => at_path(&generic, signal.path()),
+        }),
+    )
+}
+
+/// Whether `endpoint` is one `transport`'s exporter accepts, parsed as it
+/// parses it. The gRPC exporter gives an endpoint without a scheme one
+/// before it parses, `https://` unless it's told the endpoint is insecure,
+/// and either scheme parses alike, so `https://` stands for both.
+fn accepted(transport: Transport, endpoint: &str) -> bool {
+    match transport {
+        Transport::Grpc => {
+            let has_scheme = endpoint
+                .split_once("://")
+                .is_some_and(|(scheme, _)| !scheme.contains(['/', '?', '#']));
+            let endpoint = if has_scheme {
+                endpoint.to_owned()
+            } else {
+                format!("https://{endpoint}")
+            };
+            tonic::transport::Endpoint::from_shared(endpoint).is_ok()
+        }
+        Transport::HttpProtobuf => endpoint.parse::<Uri>().is_ok(),
+    }
+}
+
 /// The settings, with each header's value a secret and each header checked.
 pub(crate) struct Network {
     transport: Transport,
@@ -339,7 +427,7 @@ struct OfSignal {
 impl Network {
     /// Takes `settings`, refusing a header whose name or value isn't one a
     /// header may have.
-    pub(crate) fn new(settings: OtlpSettings) -> Result<Self, OtelBuildError> {
+    pub(crate) fn new(settings: &OtlpSettings) -> Result<Self, OtelBuildError> {
         let OtlpSettings {
             transport,
             endpoint,
@@ -347,24 +435,24 @@ impl Network {
             strip_environment_headers,
         } = settings;
         let headers = headers
-            .into_iter()
+            .iter()
             .map(|(name, value)| {
                 let refused = |reason| OtelBuildError::Header {
                     name: name.clone(),
                     reason,
                 };
-                let header = HeaderName::from_str(&name)
+                let header = HeaderName::from_str(name)
                     .map_err(|_| refused("its name isn't one a header may have"))?;
-                HeaderValue::from_str(&value)
+                HeaderValue::from_str(value)
                     .map_err(|_| refused("its value isn't one a header may have"))?;
-                Ok((header, SecretString::from(value)))
+                Ok((header, SecretString::from(value.clone())))
             })
             .collect::<Result<_, _>>()?;
         Ok(Self {
-            transport,
-            endpoint,
+            transport: *transport,
+            endpoint: endpoint.clone().filter(|endpoint| !endpoint.is_empty()),
             headers,
-            strip_environment_headers,
+            strip_environment_headers: *strip_environment_headers,
         })
     }
 

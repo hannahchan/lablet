@@ -5,14 +5,17 @@
 //! alone: whether a run has a network exporter at all, the transport it
 //! speaks, and whether the environment's headers go with it.
 
-use lablet_telemetry_otel::{OtlpSettings, Transport};
+use lablet_telemetry_otel::{OtlpSettings, Signal, Transport};
 
 use crate::config::{Config, Env, OtlpProtocol, Refusal};
+
+/// The endpoint variable every signal falls back on.
+const ENDPOINT: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
 
 /// The endpoint variables, generic and per signal. Any of them turns the
 /// exporter on; which one each signal is sent to, the exporter resolves.
 const ENDPOINT_VARIABLES: [&str; 3] = [
-    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    ENDPOINT,
     "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
     "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
 ];
@@ -40,9 +43,11 @@ pub(crate) const HEADER_VARIABLES: [&str; 3] = [
 /// has no network exporter: `telemetry.otlp.enabled` is `false`,
 /// `OTEL_TRACES_EXPORTER` is `none`, or neither the config nor the
 /// environment names an endpoint. The endpoint is set only when the config
-/// states it, so the exporter resolves an unstated one from the
-/// environment, by signal; and the environment's headers are kept off
-/// every export to the config's endpoint.
+/// states one, and an endpoint of nothing, written so or given by a
+/// variable, states none, as a variable set to nothing is unset: so the
+/// exporter resolves an unstated one from the environment, by signal, and
+/// the environment's headers are kept off every export to the config's
+/// endpoint.
 ///
 /// A refusal names the key as `written`, the same config before
 /// substitution, writes it: `telemetry.otlp.enabled: false` beside an
@@ -55,8 +60,12 @@ pub(crate) fn settings(
     env: Env<'_>,
 ) -> Result<Option<OtlpSettings>, Refusal> {
     let otlp = &real.telemetry.otlp;
+    let endpoint = otlp
+        .endpoint
+        .clone()
+        .filter(|endpoint| !endpoint.is_empty());
     if !otlp.enabled {
-        if otlp.endpoint.is_some() {
+        if endpoint.is_some() {
             let endpoint = written
                 .written_text("telemetry.otlp.endpoint")
                 .unwrap_or_default();
@@ -73,7 +82,6 @@ pub(crate) fn settings(
     if set(env, TRACES_EXPORTER).is_some_and(|value| value.trim().eq_ignore_ascii_case("none")) {
         return Ok(None);
     }
-    let endpoint = otlp.endpoint.clone();
     if endpoint.is_none()
         && !ENDPOINT_VARIABLES
             .iter()
@@ -87,6 +95,18 @@ pub(crate) fn settings(
         endpoint,
         headers: otlp.headers.clone().into_iter().collect(),
     }))
+}
+
+/// The variable the exporter read the endpoint of `signal` from, when the
+/// config states none: the signal's own when it's set to something, else
+/// the generic one. Only which is set is read, never what it holds.
+pub(crate) fn endpoint_variable(signal: Signal, env: Env<'_>) -> &'static str {
+    let own = signal.endpoint_variable();
+    if set(env, own).is_some() {
+        own
+    } else {
+        ENDPOINT
+    }
 }
 
 /// The transport: the config's protocol when it states one, else the

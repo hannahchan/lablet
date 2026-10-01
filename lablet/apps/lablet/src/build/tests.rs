@@ -487,3 +487,52 @@ fn the_telemetry_is_on_standard_error_when_its_path_is_a_dash_once_variables_are
     assert!(!on_stderr(r#""-.jsonl""#, &nothing));
     assert!(!on_stderr("null", &nothing));
 }
+
+/// An endpoint the exporter refuses is shown as the config writes it, less
+/// its user information, which is a secret; and when the config states
+/// none, the refusal names the variable the exporter read in its place,
+/// the signal's own before the generic one, and shows nothing of either.
+#[test]
+fn a_refused_endpoint_is_shown_without_its_user_information_or_names_the_variable_read() {
+    use lablet_telemetry_otel::Signal;
+    const PASSWORD: &str = "hunter2-0123456789abcdef";
+    let refused = |signal| OtelBuildError::Endpoint { signal };
+
+    let written = config(&format!(
+        "telemetry: {{ otlp: {{ endpoint: 'http://user:{PASSWORD}@[not a host' }} }}"
+    ));
+    let shown = otlp_refused(&written, &nothing, true, refused(Signal::Traces));
+    assert_eq!(
+        shown.to_string(),
+        "telemetry.otlp.endpoint (line 1): \"http://[not a host\" is refused: it isn't a URL the \
+         exporter accepts"
+    );
+    assert!(!format!("{shown:?}").contains(PASSWORD), "{shown:?}");
+
+    let written = config("telemetry: { otlp: { headers: { a: b } } }");
+    let held = |name: &str| match name {
+        "OTEL_EXPORTER_OTLP_ENDPOINT" | "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT" => {
+            Some("http://[not a host".into())
+        }
+        _ => None,
+    };
+    let shown = otlp_refused(&written, &held, false, refused(Signal::Traces));
+    assert_eq!(
+        shown,
+        BuildError::Config(ConfigError::Invalid {
+            key: "telemetry.otlp.endpoint".to_owned(),
+            place: None,
+            value: None,
+            reason: "`OTEL_EXPORTER_OTLP_ENDPOINT`, which is read since the config states no \
+                     endpoint, holds what isn't a URL the exporter accepts"
+                .to_owned(),
+        })
+    );
+    let shown = otlp_refused(&written, &held, false, refused(Signal::Logs));
+    assert_eq!(
+        shown.to_string(),
+        "telemetry.otlp.endpoint: its value is refused: `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`, which \
+         is read since the config states no endpoint, holds what isn't a URL the exporter accepts"
+    );
+    assert!(!format!("{shown:?}").contains("not a host"), "{shown:?}");
+}

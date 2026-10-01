@@ -183,8 +183,8 @@ fn a_signals_path_is_appended_to_the_http_endpoint_once_whatever_its_trailing_sl
 
 #[test]
 fn the_endpoint_of_each_signal_is_the_base_url_with_the_signals_path_on_http_and_as_is_on_grpc() {
-    let http = Network::new(settings(Transport::HttpProtobuf, &[])).unwrap();
-    let grpc = Network::new(settings(Transport::Grpc, &[])).unwrap();
+    let http = Network::new(&settings(Transport::HttpProtobuf, &[])).unwrap();
+    let grpc = Network::new(&settings(Transport::Grpc, &[])).unwrap();
 
     assert_eq!(
         http.of(Signal::Traces).endpoint.as_deref(),
@@ -206,7 +206,7 @@ fn the_endpoint_of_each_signal_is_the_base_url_with_the_signals_path_on_http_and
 
 #[test]
 fn an_endpoint_the_config_leaves_out_is_set_on_no_exporter() {
-    let network = Network::new(OtlpSettings {
+    let network = Network::new(&OtlpSettings {
         endpoint: None,
         ..settings(Transport::HttpProtobuf, &[])
     })
@@ -219,8 +219,8 @@ fn an_endpoint_the_config_leaves_out_is_set_on_no_exporter() {
 
 #[test]
 fn a_header_whose_name_or_value_is_not_a_headers_is_refused_without_its_value() {
-    let bad_name = Network::new(settings(Transport::Grpc, &[("not a name", "v")]));
-    let bad_value = Network::new(settings(Transport::Grpc, &[("x-token", "has\nnewline")]));
+    let bad_name = Network::new(&settings(Transport::Grpc, &[("not a name", "v")]));
+    let bad_value = Network::new(&settings(Transport::Grpc, &[("x-token", "has\nnewline")]));
 
     let bad_name = bad_name.err().unwrap();
     assert_eq!(
@@ -241,7 +241,7 @@ fn a_header_whose_name_or_value_is_not_a_headers_is_refused_without_its_value() 
 #[tokio::test]
 async fn an_endpoint_the_exporter_refuses_is_refused_without_the_endpoint_in_the_message() {
     for transport in [Transport::Grpc, Transport::HttpProtobuf] {
-        let network = Network::new(OtlpSettings {
+        let network = Network::new(&OtlpSettings {
             endpoint: Some("http://secret:token@[not a host".to_owned()),
             ..settings(transport, &[])
         })
@@ -269,7 +269,7 @@ async fn an_endpoint_the_exporter_refuses_is_refused_without_the_endpoint_in_the
 #[tokio::test]
 async fn the_exporters_of_either_transport_are_made_from_an_endpoint_nothing_listens_on() {
     for transport in [Transport::Grpc, Transport::HttpProtobuf] {
-        let network = Network::new(settings(transport, &[("x-token", "a value")])).unwrap();
+        let network = Network::new(&settings(transport, &[("x-token", "a value")])).unwrap();
 
         let made = network.exporters();
 
@@ -302,4 +302,107 @@ fn the_default_timeout_is_the_exporters_ten_seconds() {
     // a developer who exports one sees this fail and knows why.
     assert_eq!(timeout_of(Signal::Traces), Duration::from_secs(10));
     assert_eq!(timeout_of(Signal::Logs), Duration::from_secs(10));
+}
+
+// Holding the settings to what the exporters take, making none
+
+/// Endpoints the exporters take, ones they refuse, and ones one transport
+/// takes and the other refuses: the gRPC exporter gives an endpoint without
+/// a scheme one, and the HTTP exporter parses what it's given.
+const ENDPOINTS: [&str; 8] = [
+    "http://127.0.0.1:1",
+    "https://collector.internal:4317/",
+    "collector.internal:4317",
+    "collector.internal:4317/otlp",
+    "http://user:hunter2hunter2@collector.internal:4317",
+    "http://[not a host",
+    "::::not-a-url",
+    "",
+];
+
+fn validated(transport: Transport, endpoint: &str) -> Result<(), OtelBuildError> {
+    validate(&OtlpSettings {
+        endpoint: Some(endpoint.to_owned()),
+        ..settings(transport, &[])
+    })
+}
+
+#[tokio::test]
+async fn the_check_of_an_endpoint_answers_as_the_exporters_do_on_either_transport() {
+    for transport in [Transport::Grpc, Transport::HttpProtobuf] {
+        for endpoint in ENDPOINTS {
+            let settings = OtlpSettings {
+                endpoint: Some(endpoint.to_owned()),
+                ..settings(transport, &[])
+            };
+
+            let checked = validate(&settings);
+            let made = Network::new(&settings).unwrap().exporters().map(|_| ());
+
+            assert_eq!(checked, made, "{transport:?} {endpoint:?}");
+        }
+    }
+}
+
+#[test]
+fn the_check_takes_what_each_transports_exporter_takes_and_refuses_the_rest() {
+    let refused = Err(OtelBuildError::Endpoint {
+        signal: Signal::Traces,
+    });
+    for transport in [Transport::Grpc, Transport::HttpProtobuf] {
+        assert_eq!(validated(transport, "http://127.0.0.1:1"), Ok(()));
+        assert_eq!(validated(transport, "http://[not a host"), refused);
+        assert_eq!(
+            validated(transport, ""),
+            Ok(()),
+            "{transport:?}: an empty endpoint is left out, and the exporter's own default stands"
+        );
+    }
+    assert_eq!(
+        validated(Transport::Grpc, "collector.internal:4317/otlp"),
+        Ok(()),
+        "the gRPC exporter gives it a scheme"
+    );
+    assert_eq!(
+        validated(Transport::HttpProtobuf, "collector.internal:4317/otlp"),
+        refused,
+        "the HTTP exporter parses it as given, with the signal's path"
+    );
+}
+
+#[test]
+fn the_check_refuses_a_header_as_the_exporters_are_refused_one() {
+    assert_eq!(
+        validate(&settings(Transport::Grpc, &[("not a name", "v")])),
+        Err(OtelBuildError::Header {
+            name: "not a name".to_owned(),
+            reason: "its name isn't one a header may have",
+        })
+    );
+    assert_eq!(
+        validate(&settings(
+            Transport::HttpProtobuf,
+            &[("x-token", "has\nnewline")]
+        )),
+        Err(OtelBuildError::Header {
+            name: "x-token".to_owned(),
+            reason: "its value isn't one a header may have",
+        })
+    );
+}
+
+#[test]
+fn the_check_takes_an_endpoint_the_settings_leave_out() {
+    // The endpoint variables aren't set where the tests run, as the timeout
+    // ones aren't, so the exporter's own default stands, which it takes.
+    for transport in [Transport::Grpc, Transport::HttpProtobuf] {
+        assert_eq!(
+            validate(&OtlpSettings {
+                endpoint: None,
+                ..settings(transport, &[])
+            }),
+            Ok(()),
+            "{transport:?}"
+        );
+    }
 }

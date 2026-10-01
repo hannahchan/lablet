@@ -233,6 +233,11 @@ const CHILD: &str = "LABLET_TEST_OTLP_HEADERS_CHILD";
 /// header the code also sets, and one the config also sets.
 const ENVIRONMENT: &str = "x-plain=env%20value,x-lablet=env";
 
+/// What the child's environment sets `OTEL_EXPORTER_OTLP_TRACES_HEADERS`
+/// to: a header of the traces signal's own, which the code also sets, so
+/// the wire says which variable the exporter read for each signal.
+const TRACES_ENVIRONMENT: &str = "x-traces=t";
+
 /// One span, exported by the exporter alone, with nothing of lablet's.
 fn one_span() -> SpanData {
     SpanData {
@@ -258,14 +263,15 @@ fn one_span() -> SpanData {
     }
 }
 
-/// Exports one span through the exporter alone, with `x-plain: code` set
-/// as the exporter's own API sets a header, on a thread with no reactor,
-/// as the SDK's batch threads are.
+/// Exports one span through the exporter alone, with `x-plain: code` and
+/// `x-traces: code` set as the exporter's own API sets a header, on a
+/// thread with no reactor, as the SDK's batch threads are.
 async fn exported_plainly(transport: Transport, endpoint: String) {
     let exporter = match transport {
         Transport::Grpc => {
             let mut metadata = MetadataMap::new();
             metadata.insert("x-plain", MetadataValue::from_static("code"));
+            metadata.insert("x-traces", MetadataValue::from_static("code"));
             SpanExporter::builder()
                 .with_tonic()
                 .with_endpoint(endpoint)
@@ -276,7 +282,10 @@ async fn exported_plainly(transport: Transport, endpoint: String) {
         Transport::HttpProtobuf => SpanExporter::builder()
             .with_http()
             .with_endpoint(format!("{endpoint}/v1/traces"))
-            .with_headers(HashMap::from([("x-plain".to_owned(), "code".to_owned())]))
+            .with_headers(HashMap::from([
+                ("x-plain".to_owned(), "code".to_owned()),
+                ("x-traces".to_owned(), "code".to_owned()),
+            ]))
             .build()
             .unwrap(),
     };
@@ -344,8 +353,10 @@ fn header<'a>(request: &'a Received, name: &str) -> Option<&'a str> {
 }
 
 /// The requests that came in by `transport` and were sent `how`: by the
-/// exporter alone, by lablet keeping the environment's headers, or by
-/// lablet stripping them, told apart by what `x-plain` and `x-lablet` hold.
+/// exporter alone, which sets `x-plain: code` and nothing else does; by
+/// lablet keeping the environment's headers, which carry the signal's
+/// `x-traces` or the generic `x-plain` beside the config's `x-lablet`; or
+/// by lablet stripping them, which leaves the config's alone.
 fn sent<'a>(
     requests: &'a [Received],
     transport: receiver::Transport,
@@ -355,21 +366,36 @@ fn sent<'a>(
         .iter()
         .filter(|request| request.transport == transport)
         .filter(|request| {
-            let (plain, lablet) = (header(request, "x-plain"), header(request, "x-lablet"));
+            let (plain, traces, lablet) = (
+                header(request, "x-plain"),
+                header(request, "x-traces"),
+                header(request, "x-lablet"),
+            );
             match how {
-                "plainly" => lablet == Some("env"),
-                "keeping" => lablet == Some("config") && plain.is_some(),
-                "stripping" => lablet == Some("config") && plain.is_none(),
+                "plainly" => plain == Some("code"),
+                "keeping" => lablet == Some("config") && (plain.is_some() || traces.is_some()),
+                "stripping" => lablet == Some("config") && plain.is_none() && traces.is_none(),
                 _ => unreachable!(),
             }
         })
         .collect()
 }
 
-/// The exporter merges the environment's headers over the ones its own API
-/// was given, name by name, and percent-decodes them; lablet sets the
-/// config's after that merge, so the config's win; and with the config's
-/// endpoint the environment's are sent to it at all.
+/// How many of `requests` carried `signal`.
+fn of_signal(requests: &[&Received], signal: receiver::Signal) -> usize {
+    requests
+        .iter()
+        .filter(|request| request.signal == signal)
+        .count()
+}
+
+/// The exporter reads the signal's header variable in place of the generic
+/// one, merges what it read over the headers its own API was given, name by
+/// name, and percent-decodes them; lablet sets the config's after that
+/// merge, so the config's win; and with the config's endpoint, what the
+/// environment set for each signal is taken off that signal's exports, so
+/// a header the generic variable names reaches no traces request even by
+/// mistake.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_environments_headers_win_in_the_exporter_and_the_configs_win_in_lablet() {
     let receiver = Receiver::start(Mode::Answers).await;
@@ -381,6 +407,7 @@ async fn the_environments_headers_win_in_the_exporter_and_the_configs_win_in_lab
         ])
         .env(CHILD, format!("{},{}", receiver.grpc_endpoint(), receiver.http_endpoint()))
         .env("OTEL_EXPORTER_OTLP_HEADERS", ENVIRONMENT)
+        .env("OTEL_EXPORTER_OTLP_TRACES_HEADERS", TRACES_ENVIRONMENT)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -398,11 +425,19 @@ async fn the_environments_headers_win_in_the_exporter_and_the_configs_win_in_lab
     for transport in [receiver::Transport::Grpc, receiver::Transport::Http] {
         let plainly = sent(&requests, transport, "plainly");
         assert_eq!(plainly.len(), 1, "{transport:?}: {requests:?}");
+        assert_eq!(plainly[0].signal, receiver::Signal::Traces);
+        assert_eq!(
+            header(plainly[0], "x-traces"),
+            Some("t"),
+            "{transport:?}: the signal's variable, in place of the code's value"
+        );
         assert_eq!(
             header(plainly[0], "x-plain"),
-            Some("env value"),
-            "{transport:?}: the environment's value, decoded, in place of the code's"
+            Some("code"),
+            "{transport:?}: the generic variable is left unread once the signal's is set, so the \
+             code's value stands"
         );
+        assert_eq!(header(plainly[0], "x-lablet"), None, "{transport:?}");
 
         let keeping = sent(&requests, transport, "keeping");
         assert_eq!(
@@ -411,22 +446,46 @@ async fn the_environments_headers_win_in_the_exporter_and_the_configs_win_in_lab
             "{transport:?}: the spans and the wide event, each with the config's header; the run \
              has no other records: {requests:?}"
         );
+        assert_eq!(of_signal(&keeping, receiver::Signal::Traces), 1);
         for request in keeping {
             assert_eq!(
-                header(request, "x-plain"),
-                Some("env value"),
-                "{transport:?}"
+                header(request, "x-lablet"),
+                Some("config"),
+                "{transport:?}: the config's wins the name both state"
             );
+            match request.signal {
+                receiver::Signal::Traces => {
+                    assert_eq!(header(request, "x-traces"), Some("t"), "{transport:?}");
+                    assert_eq!(
+                        header(request, "x-plain"),
+                        None,
+                        "{transport:?}: the generic variable's header reaches no traces request"
+                    );
+                }
+                receiver::Signal::Logs => {
+                    assert_eq!(
+                        header(request, "x-plain"),
+                        Some("env value"),
+                        "{transport:?}: the environment's value, decoded"
+                    );
+                    assert_eq!(header(request, "x-traces"), None, "{transport:?}");
+                }
+            }
         }
 
         let stripping = sent(&requests, transport, "stripping");
         assert_eq!(stripping.len(), 2, "{transport:?}: {requests:?}");
+        assert_eq!(of_signal(&stripping, receiver::Signal::Traces), 1);
         for request in &stripping {
             assert!(
-                request.headers.iter().all(|(name, _)| name != "x-plain"),
-                "{transport:?}: the environment's header was sent to the config's endpoint: \
+                request
+                    .headers
+                    .iter()
+                    .all(|(name, _)| name != "x-plain" && name != "x-traces"),
+                "{transport:?}: an environment header was sent to the config's endpoint: \
                  {request:?}"
             );
+            assert_eq!(header(request, "x-lablet"), Some("config"), "{transport:?}");
         }
     }
     assert_eq!(requests.len(), 2 * (1 + 2 + 2));

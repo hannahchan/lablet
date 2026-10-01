@@ -629,11 +629,11 @@ async fn a_destination_that_does_not_answer_holds_a_shutdown_only_for_its_timeou
         "the shutdown stopped waiting at its timeout, and at nothing before it"
     );
     assert!(waited >= brief, "the shutdown gave up after {waited:?}");
-    // A shutdown that waits for the stuck exporter, or for the default bound
-    // in place of the one it was given, can't return before the SDK's own
-    // five seconds.
+    // A shutdown that waited on the stuck exporter, or took the default
+    // bound in place of the one it was given, costs at least the SDK's five
+    // seconds, which the tolerance rules out.
     assert!(
-        waited < SHUTDOWN_TIMEOUT,
+        waited < brief + Duration::from_secs(1),
         "the shutdown waited {waited:?}, past the bound it was given"
     );
 }
@@ -883,8 +883,10 @@ async fn a_destination_that_does_not_answer_holds_a_flush_only_for_its_bound_and
         "the network destination alone is reported, by its bound"
     );
     assert!(waited >= brief, "the flush gave up after {waited:?}");
+    // A flush that waited on a queue, in place of the bound it was given,
+    // costs at least the SDK's five seconds, which the tolerance rules out.
     assert!(
-        waited < SHUTDOWN_TIMEOUT,
+        waited < brief + Duration::from_secs(1),
         "the flush waited {waited:?}, past the bound it was given"
     );
     assert_eq!(file.exported_spans().len(), 4);

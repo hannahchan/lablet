@@ -34,7 +34,7 @@ mod wide;
 
 pub use attributes::ATTRIBUTE_MAX_BYTES;
 pub use file::FileTarget;
-pub use network::{OtelBuildError, OtlpSettings, Signal, Transport, decode_headers};
+pub use network::{OtelBuildError, OtlpSettings, Signal, Transport, decode_headers, validate};
 pub use observer::{FlushError, OtelObserver, OtelObserverBuilder};
 
 #[cfg(test)]

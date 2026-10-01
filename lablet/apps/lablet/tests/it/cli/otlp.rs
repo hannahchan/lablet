@@ -235,3 +235,50 @@ async fn enabled_false_and_otel_traces_exporter_none_each_turn_the_exporter_off_
         );
     }
 }
+
+/// An endpoint the environment names that the exporter doesn't accept is
+/// refused by `check` and by `run` alike, before any run, naming the
+/// variable the exporter read, the signal's own before the generic one,
+/// and never what it holds.
+#[test]
+fn an_endpoint_variable_the_exporter_refuses_is_refused_by_check_and_run_naming_the_variable() {
+    const BAD: &str = "http://[not a host";
+    let lab = Lab::new("otlp-env-bad-endpoint");
+    lab.write_config(ENDS, json!({}));
+    let check = ["check", "--config", CONFIG];
+    let run = ["run", "--config", CONFIG, "--prompt", PROMPT];
+    let generic = vec![("OTEL_EXPORTER_OTLP_ENDPOINT", BAD)];
+    let own = vec![
+        ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1"),
+        ("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", BAD),
+    ];
+
+    for (args, env, named) in [
+        (&check[..], &generic, "OTEL_EXPORTER_OTLP_ENDPOINT"),
+        (&run[..], &generic, "OTEL_EXPORTER_OTLP_ENDPOINT"),
+        (&check[..], &own, "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"),
+        (&run[..], &own, "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"),
+    ] {
+        let mut command = lab.lablet(args);
+        command.envs(env.iter().copied());
+
+        let ran = ran(command, "");
+
+        assert_eq!(ran.code, Some(1), "{ran:?}");
+        assert_eq!(ran.stdout, "", "{ran:?}");
+        assert_eq!(
+            ran.stderr,
+            format!(
+                "config: telemetry.otlp.endpoint: its value is refused: `{named}`, which is read \
+                 since the config states no endpoint, holds what isn't a URL the exporter \
+                 accepts\n"
+            ),
+            "{ran:?}"
+        );
+        assert!(!ran.stderr.contains("not a host"), "{ran:?}");
+    }
+    assert!(
+        !lab.telemetry().exists(),
+        "no run began, so nothing was exported"
+    );
+}

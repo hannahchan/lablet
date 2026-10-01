@@ -240,3 +240,76 @@ fn the_refused_protocol_is_shown_under_its_key_as_the_config_writes_it() {
          \"http/json\", which lablet can't send; it sends `grpc` and `http/protobuf`"
     );
 }
+
+/// An endpoint of nothing states none: it turns the exporter on no more
+/// than a null one, and with the environment's endpoint beside it the
+/// environment's headers go with that endpoint, as they do when the config
+/// states none.
+#[test]
+fn an_endpoint_of_nothing_states_none_whether_written_so_or_given_by_a_variable() {
+    let written = config("telemetry: { otlp: { endpoint: '' } }");
+    assert!(off("telemetry: { otlp: { endpoint: '' } }", &nothing));
+    let on = settings(
+        &written,
+        &written,
+        &env(&[("OTEL_EXPORTER_OTLP_ENDPOINT", FROM_THE_ENVIRONMENT)]),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(on.endpoint, None);
+    assert!(
+        !on.strip_environment_headers,
+        "the environment's headers go to the environment's endpoint"
+    );
+
+    let written = config("telemetry: { otlp: { endpoint: '${COLLECTOR}' } }");
+    let held = env(&[("COLLECTOR", "")]);
+    let real = written.substituted(&held).unwrap();
+    assert!(matches!(settings(&written, &real, &held), Ok(None)));
+    let held = env(&[
+        ("COLLECTOR", ""),
+        ("OTEL_EXPORTER_OTLP_ENDPOINT", FROM_THE_ENVIRONMENT),
+    ]);
+    let real = written.substituted(&held).unwrap();
+    let on = settings(&written, &real, &held).unwrap().unwrap();
+    assert_eq!(on.endpoint, None);
+    assert!(!on.strip_environment_headers);
+}
+
+#[test]
+fn enabled_false_beside_an_endpoint_of_nothing_is_a_config_that_states_no_endpoint() {
+    assert!(off(
+        "telemetry: { otlp: { enabled: false, endpoint: '' } }",
+        &env(&[("OTEL_EXPORTER_OTLP_ENDPOINT", FROM_THE_ENVIRONMENT)])
+    ));
+}
+
+/// The variable a refusal of the environment's endpoint names: the
+/// signal's own when it's set to something, else the generic one, which is
+/// the order the exporter reads them in.
+#[test]
+fn the_variable_at_fault_is_the_signals_own_when_set_to_something_else_the_generic_one() {
+    let both = env(&[
+        ("OTEL_EXPORTER_OTLP_ENDPOINT", FROM_THE_ENVIRONMENT),
+        ("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://[not a host"),
+    ]);
+    assert_eq!(
+        endpoint_variable(Signal::Traces, &both),
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
+    );
+    assert_eq!(
+        endpoint_variable(Signal::Logs, &both),
+        "OTEL_EXPORTER_OTLP_ENDPOINT"
+    );
+
+    let empty_own = env(&[("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "")]);
+    assert_eq!(
+        endpoint_variable(Signal::Logs, &empty_own),
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "a variable set to nothing is unset, as the exporter reads it"
+    );
+    assert_eq!(
+        endpoint_variable(Signal::Traces, &nothing),
+        "OTEL_EXPORTER_OTLP_ENDPOINT"
+    );
+}

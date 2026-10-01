@@ -19,7 +19,7 @@ use opentelemetry_sdk::resource::TelemetryResourceDetector;
 use opentelemetry_sdk::trace::SpanExporter;
 
 use crate::file::{FileLogExporter, FileSpanExporter, FileTarget, Sink};
-use crate::network::{Network, OtelBuildError, OtlpSettings};
+use crate::network::{Network, OtelBuildError, OtlpSettings, validate};
 use crate::pipeline::{Lost, RecordQueue, SpanQueue};
 use crate::run::{Attempt, CallEnd, Closed, OpenRun, Opening};
 use crate::signal::Signals;
@@ -227,7 +227,10 @@ impl OtelObserverBuilder {
             .build();
 
         if let Some(settings) = otlp {
-            let (spans, records, wide) = Network::new(settings)?.exporters()?;
+            // What a check of the settings refuses, the build refuses first,
+            // so the two can't come apart.
+            validate(&settings)?;
+            let (spans, records, wide) = Network::new(&settings)?.exporters()?;
             destinations.push(destination(OTLP, spans, records, wide));
         }
         let sink = file.map(Sink::new);

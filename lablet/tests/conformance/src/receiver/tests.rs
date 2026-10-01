@@ -165,6 +165,26 @@ async fn a_receiver_that_never_answers_keeps_the_request_and_leaves_the_client_w
 }
 
 #[tokio::test]
+async fn an_http_receiver_that_never_answers_keeps_the_request_and_leaves_the_client_waiting() {
+    let receiver = Receiver::start(Mode::NeverAnswers).await;
+    let body = one_span("chat probe").encode_to_vec();
+
+    let answered = tokio::time::timeout(
+        Duration::from_millis(300),
+        posted(&receiver.http_endpoint(), "/v1/traces", &[], &body),
+    )
+    .await;
+
+    assert!(answered.is_err(), "the receiver answered: {answered:?}");
+    let requests = receiver.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        (requests[0].transport, requests[0].signal),
+        (Transport::Http, Signal::Traces)
+    );
+}
+
+#[tokio::test]
 async fn a_closed_port_refuses_a_connection() {
     let closed = Receiver::closed();
 

@@ -232,12 +232,10 @@ pub async fn a_destination_that_never_answers_holds_the_flush_only_for_its_bound
         waited >= bound,
         "the flush gave up after {waited:?}, before its bound of {bound:?}"
     );
-    // The SDK waits five seconds for each of a destination's queues
-    // whatever it's told, and three queues wait one after another: a flush
-    // that waits on the destination, or on the SDK, can't return before
-    // that.
+    // A flush that waited on a queue, in place of the bound it was given,
+    // costs at least the SDK's five seconds, which the tolerance rules out.
     assert!(
-        waited < bound + Duration::from_secs(5),
+        waited < bound + Duration::from_secs(1),
         "the flush waited {waited:?}, past its bound of {bound:?}"
     );
     said
