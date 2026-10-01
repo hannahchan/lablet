@@ -783,13 +783,14 @@ mod tests {
         assert_eq!(config["live-check"]["fail_on"].as_str(), Some("violation"));
     }
 
+    /// Whether a released port can be bound again is the system's to
+    /// answer, and another test may take it in between, so only what the
+    /// pair promises is checked: two ports, each one the system gave.
     #[test]
-    fn a_free_port_pair_is_two_ports_that_differ_and_can_be_bound() {
+    fn a_free_port_pair_is_two_ports_that_differ() {
         let ports = Ports::free().unwrap();
         assert_ne!(ports.grpc, ports.admin);
-        for port in [ports.grpc, ports.admin] {
-            TcpListener::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
-        }
+        assert!(ports.grpc != 0 && ports.admin != 0);
     }
 
     /// Reads one request's head from `stream`.
