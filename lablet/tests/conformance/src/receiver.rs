@@ -309,20 +309,15 @@ impl Receiver {
         }
     }
 
-    /// A port on the loopback interface that nothing listens on: it was
-    /// bound and let go of, so a connection to it is refused.
-    ///
-    /// # Panics
-    ///
-    /// Panics when a port can't be bound, which is a fault of where the
-    /// test runs.
+    /// A port on the loopback interface that nothing listens on, so a
+    /// connection to it is refused. It's a port below the range the system
+    /// hands out, one no service is assigned, which no listener a test binds
+    /// at 0 can be given and no unprivileged process can bind: a port bound
+    /// and let go of was taken by another test's receiver before the
+    /// exporter connected.
     #[must_use]
     pub fn closed() -> SocketAddr {
-        let listener = must(
-            std::net::TcpListener::bind("127.0.0.1:0"),
-            "binding a port to close",
-        );
-        must(listener.local_addr(), "reading the port to close")
+        SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 4))
     }
 
     /// The gRPC listener's endpoint, as a config states it.
