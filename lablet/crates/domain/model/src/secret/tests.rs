@@ -9,10 +9,20 @@ const KEY: &str = "sk-0123456789abc";
 /// A value that begins with [`KEY`] and goes on past it.
 const LONGER: &str = "sk-0123456789abc-and-more";
 
+/// A value on several lines, as a PEM is, whose first and last lines are
+/// too short to be parts and whose middle two are long enough.
+const PEM: &str =
+    "-----BEGIN-----\nMIIEvQIBADANBgkqhkiG9w0BAQEF\nAbCdEf0123456789AbCdEf012\n-----END-----";
+
 const MARKER: &str = Secrets::MARKER;
 
 fn secrets(values: &[&str]) -> Secrets {
     Secrets::new(values.iter().map(|&value| value.to_owned()))
+}
+
+/// Nothing yet of a text that `values` are cut from, and `keep` is kept of.
+fn redacting(values: &[&str], keep: Option<OutputKeep>) -> RedactedOutput {
+    RedactedOutput::new(Arc::new(secrets(values)), keep)
 }
 
 /// The text of what was kept, of which everything was.
@@ -26,7 +36,7 @@ fn text(kept: KeptOutput) -> String {
 
 /// What's kept of `pieces`, pushed one after another, with `values` cut.
 fn pushed(values: &[&str], pieces: &[&str]) -> String {
-    let mut output = RedactedOutput::new(secrets(values), None);
+    let mut output = redacting(values, None);
     for piece in pieces {
         output.push(piece);
     }
@@ -83,6 +93,81 @@ fn the_whitespace_around_a_value_is_no_part_of_it() {
 }
 
 #[test]
+fn each_line_of_a_value_with_several_is_cut_and_so_is_its_escaped_form() {
+    let one_line = "MIIEvQIBADANBgkqhkiG9w0BAQEF\n";
+    let escaped = "key=\"-----BEGIN-----\\nMIIEvQIBADANBgkqhkiG9w0BAQEF\\nAbCdEf0123456789AbCdEf012\\n-----END-----\"";
+
+    assert_eq!(pushed(&[PEM], &[PEM]), MARKER, "the whole value");
+    assert_eq!(pushed(&[PEM], &[one_line]), format!("{MARKER}\n"));
+    assert_eq!(pushed(&[PEM], &[escaped]), format!("key=\"{MARKER}\""));
+    assert_eq!(
+        pushed(&[PEM], &["-----BEGIN-----\n-----END-----\n"]),
+        "-----BEGIN-----\n-----END-----\n",
+        "a line under the minimum is no part"
+    );
+    assert_eq!(
+        pushed(
+            &[" AbCdEf0123456789AbCdEf012 \n"],
+            &["AbCdEf0123456789AbCdEf012"]
+        ),
+        MARKER,
+        "a line is registered without the whitespace around it"
+    );
+}
+
+#[test]
+fn what_follows_a_scheme_word_is_cut_as_the_value_is() {
+    for scheme in ["Bearer", "Basic", "Token"] {
+        let value = format!("{scheme} {LONGER}");
+
+        assert_eq!(pushed(&[&value], &[&value]), MARKER, "{scheme}, whole");
+        assert_eq!(
+            pushed(&[&value], &[&format!("token={LONGER};")]),
+            format!("token={MARKER};"),
+            "{scheme}, the remainder"
+        );
+    }
+    let not_a_scheme = format!("bearer {LONGER}");
+    assert_eq!(
+        pushed(&[&not_a_scheme], &[LONGER]),
+        LONGER,
+        "a scheme word is written as a header writes it"
+    );
+    let short_remainder = "Bearer 0123456789";
+    assert_eq!(pushed(&[short_remainder], &[short_remainder]), MARKER);
+    assert_eq!(
+        pushed(&[short_remainder], &["0123456789"]),
+        "0123456789",
+        "a remainder under the minimum is no part"
+    );
+}
+
+#[test]
+fn secrets_are_shown_by_how_many_there_are_and_a_value_registered_twice_is_held_once() {
+    assert_eq!(
+        format!("{:?}", secrets(&[KEY, LONGER, "short", KEY])),
+        "Secrets { values: 2 }"
+    );
+    assert_eq!(
+        format!("{:?}", secrets(&[KEY, "short", LONGER, KEY])),
+        "Secrets { values: 2 }",
+        "wherever the copies are"
+    );
+    assert_eq!(
+        format!("{:?}", secrets(&[PEM])),
+        "Secrets { values: 4 }",
+        "the value, its two long lines and its escaped form"
+    );
+}
+
+#[test]
+fn secrets_with_nothing_to_cut_say_so() {
+    assert!(Secrets::default().is_empty());
+    assert!(secrets(&["short"]).is_empty());
+    assert!(!secrets(&[KEY]).is_empty());
+}
+
+#[test]
 fn where_two_values_begin_at_one_place_the_longer_is_cut() {
     for values in [[KEY, LONGER], [LONGER, KEY]] {
         assert_eq!(pushed(&values, &[LONGER]), MARKER, "{values:?}");
@@ -122,7 +207,7 @@ fn copies_that_overlap_are_one_cut_that_shows_nothing_of_either() {
 
 #[test]
 fn a_cut_that_one_piece_begins_is_stretched_by_a_copy_the_next_one_ends() {
-    let mut output = RedactedOutput::new(secrets(&[SHARES_ITS_ENDS]), None);
+    let mut output = redacting(&[SHARES_ITS_ENDS], None);
 
     output.push("x0123456789abcdx0123");
     assert_eq!(so_far(&output), (MARKER.to_owned(), "x0123"));
@@ -152,7 +237,7 @@ fn a_value_that_pieces_split_is_cut_as_it_is_in_the_whole_text() {
 
 #[test]
 fn only_the_end_that_may_begin_a_value_is_held_back() {
-    let mut output = RedactedOutput::new(secrets(&[KEY]), None);
+    let mut output = redacting(&[KEY], None);
 
     output.push("key: sk-01");
     assert_eq!(so_far(&output), ("key: ".to_owned(), "sk-01"));
@@ -163,11 +248,11 @@ fn only_the_end_that_may_begin_a_value_is_held_back() {
 
 #[test]
 fn a_value_that_ends_a_piece_is_cut_at_once_unless_a_longer_one_may_follow() {
-    let mut output = RedactedOutput::new(secrets(&[KEY]), None);
+    let mut output = redacting(&[KEY], None);
     output.push(KEY);
     assert_eq!(so_far(&output), (MARKER.to_owned(), ""));
 
-    let mut output = RedactedOutput::new(secrets(&[KEY, LONGER]), None);
+    let mut output = redacting(&[KEY, LONGER], None);
     output.push(KEY);
     assert_eq!(so_far(&output), (String::new(), KEY));
     output.push("-and-more");
@@ -176,7 +261,7 @@ fn a_value_that_ends_a_piece_is_cut_at_once_unless_a_longer_one_may_follow() {
 
 #[test]
 fn what_was_held_back_is_cut_or_handed_on_once_the_text_ends() {
-    let mut output = RedactedOutput::new(secrets(&[KEY, LONGER]), None);
+    let mut output = redacting(&[KEY, LONGER], None);
     output.push("the key ");
     output.push(KEY);
     assert_eq!(text(output.kept()), format!("the key {MARKER}"));
@@ -186,7 +271,7 @@ fn what_was_held_back_is_cut_or_handed_on_once_the_text_ends() {
 
 #[test]
 fn the_closing_line_follows_what_was_held_back_and_is_cut_as_a_text_of_its_own() {
-    let mut output = RedactedOutput::new(secrets(&[KEY]), None);
+    let mut output = redacting(&[KEY], None);
     output.push("ends with sk-01");
     output.close(&format!("said {KEY}"));
 
@@ -196,7 +281,7 @@ fn the_closing_line_follows_what_was_held_back_and_is_cut_as_a_text_of_its_own()
 
 #[test]
 fn the_size_and_the_cut_count_the_text_with_the_marker_in_it() {
-    let mut output = RedactedOutput::new(secrets(&[LONGER]), Some(OutputKeep { head: 8, tail: 0 }));
+    let mut output = redacting(&[LONGER], Some(OutputKeep { head: 8, tail: 0 }));
     output.push(&format!("a {LONGER} b"));
     let kept = output.kept();
 
@@ -210,25 +295,25 @@ fn the_size_and_the_cut_count_the_text_with_the_marker_in_it() {
     );
 }
 
-#[test]
-fn secrets_are_shown_by_how_many_there_are_and_nothing_of_them() {
-    let shown = format!("{:?}", secrets(&[KEY, LONGER, "short"]));
-
-    assert_eq!(shown, "Secrets { values: 2 }");
-}
+/// A value on two lines, each a part of its own, for the property below.
+const TWO_LINES: &str = "pem-0123456789abc\npem-abcdef0123456";
 
 proptest! {
     /// Text cut in any pieces is kept as it's kept whole, whatever values
-    /// begin with each other, repeat or overlap, and none of them is left
-    /// in it.
+    /// begin with each other, repeat or overlap, and no value, line of one
+    /// or escaped form of one is left in it.
     #[test]
     fn pieces_are_cut_as_the_whole_text_is(
-        text in "(a|b|sk-0123456789abc|-and-more|x0123456789abcdx|0123456789abcdx| |€){0,40}",
+        text in "(a|b|sk-0123456789abc|-and-more|x0123456789abcdx|0123456789abcdx|pem-0123456789abc|pem-abcdef0123456|\n|\\\\n| |€){0,40}",
         splits in proptest::collection::vec(0_usize..200, 0..8),
     ) {
-        let values = [KEY, LONGER, "abababababababab", SHARES_ITS_ENDS];
+        let values = [KEY, LONGER, "abababababababab", SHARES_ITS_ENDS, TWO_LINES];
         let whole = pushed(&values, &[&text]);
-        for value in values {
+        let mut never_left = values.to_vec();
+        never_left.extend(TWO_LINES.lines());
+        let escaped = TWO_LINES.replace('\n', "\\n");
+        never_left.push(&escaped);
+        for value in never_left {
             prop_assert!(!whole.contains(value), "{value} is in {whole}");
         }
         let mut at: Vec<usize> = splits

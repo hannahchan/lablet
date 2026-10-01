@@ -1,5 +1,6 @@
 //! What every built-in tool is to the executor, and the results they share.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use lablet_model::{OutputKeep, RedactedOutput, Secrets, ToolConcurrency};
@@ -26,8 +27,9 @@ pub(crate) struct Terms<'a> {
     pub(crate) keep: Option<OutputKeep>,
     /// The longest the call may take, which is more than no time.
     pub(crate) limit: Duration,
-    /// What's cut out of the tool's text before any of it is kept.
-    pub(crate) secrets: &'a Secrets,
+    /// What's cut out of the tool's text before any of it is kept: the
+    /// call's own, which every result of the call shares.
+    pub(crate) secrets: &'a Arc<Secrets>,
 }
 
 /// One built-in tool.
@@ -69,7 +71,7 @@ impl Terms<'_> {
     }
 
     fn result(self, text: &str, is_error: bool) -> ToolOutput {
-        let mut output = RedactedOutput::new(self.secrets.clone(), self.keep);
+        let mut output = RedactedOutput::new(Arc::clone(self.secrets), self.keep);
         output.push(text);
         ToolOutput {
             output: output.kept(),

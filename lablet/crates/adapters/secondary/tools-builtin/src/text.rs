@@ -1,5 +1,7 @@
 //! What a tool wrote, read as text while it arrives.
 
+use std::sync::Arc;
+
 use lablet_model::{KeptOutput, OutputKeep, RedactedOutput, Secrets};
 
 /// What stands for bytes that are no character.
@@ -24,9 +26,9 @@ pub(crate) struct Text {
 impl Text {
     /// No text yet, of an output that `keep` is kept of and that `secrets`
     /// are cut from.
-    pub(crate) fn new(keep: Option<OutputKeep>, secrets: &Secrets) -> Self {
+    pub(crate) fn new(keep: Option<OutputKeep>, secrets: &Arc<Secrets>) -> Self {
         Self {
-            kept: RedactedOutput::new(secrets.clone(), keep),
+            kept: RedactedOutput::new(Arc::clone(secrets), keep),
             begun: Vec::new(),
             at_a_line: true,
         }

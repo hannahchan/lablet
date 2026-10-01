@@ -6,13 +6,20 @@
 //! words. It comes before anything is kept, so the size an output reports
 //! and the cut the output cap makes are of the text the model is sent.
 
+use std::sync::Arc;
+
 use crate::{KeptOutput, OutputKeep};
 
 /// The values of lablet's own secrets, which no tool result shows.
 ///
-/// A value is cut only as it's written, and only when it's at least
-/// [`Secrets::MIN_BYTES`] long once the whitespace around it is gone, since
-/// whitespace a variable was set with is no part of a key.
+/// A value is cut as it's written and as each of its bounded parts: each
+/// line of a value that has several and its `\n`-escaped form, since a file
+/// is read in lines and a dump escapes them, and what follows a scheme
+/// word, `Bearer `, `Basic ` or `Token `, since a header's value holds the
+/// token a command then prints bare. A copy that's encoded or altered any
+/// other way isn't cut. The value and each part are held only when at least
+/// [`Secrets::MIN_BYTES`] long once the whitespace around them is gone,
+/// since whitespace a variable was set with is no part of a key.
 ///
 /// Its `Debug` form says how many values it holds and nothing of them.
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -39,15 +46,23 @@ impl Secrets {
     /// nothing of which one or how long it was.
     pub const MARKER: &'static str = "[secret withheld]";
 
-    /// The values among `values` that are long enough to cut.
+    /// The values among `values`, and their parts, that are long enough to
+    /// cut, each held once.
     #[must_use]
     pub fn new(values: impl IntoIterator<Item = String>) -> Self {
-        let values = values
+        let mut values: Vec<String> = values
             .into_iter()
-            .map(|value| value.trim().to_owned())
-            .filter(|value| value.len() >= Self::MIN_BYTES)
+            .flat_map(|value| registered(&value))
             .collect();
+        values.sort_unstable();
+        values.dedup();
         Self { values }
+    }
+
+    /// Whether nothing is held, so nothing is cut.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
     }
 
     /// The longest value that `text` begins with, which is the one cut where
@@ -115,6 +130,31 @@ impl Secrets {
     }
 }
 
+/// `value` and its bounded parts, as they're registered: each without the
+/// whitespace around it, and only when at least [`Secrets::MIN_BYTES`] long.
+fn registered(value: &str) -> Vec<String> {
+    let value = value.trim();
+    std::iter::once(value.to_owned())
+        .chain(parts_of(value))
+        .map(|part| part.trim().to_owned())
+        .filter(|part| part.len() >= Secrets::MIN_BYTES)
+        .collect()
+}
+
+/// The bounded parts of `value` that are cut beside it: each of its lines
+/// and its `\n`-escaped form, which of a value on one line are the value
+/// itself, and what follows a scheme word, written as a header writes it.
+fn parts_of(value: &str) -> Vec<String> {
+    let mut parts: Vec<String> = value.lines().map(str::to_owned).collect();
+    parts.push(value.replace('\n', "\\n"));
+    for scheme in ["Bearer ", "Basic ", "Token "] {
+        if let Some(rest) = value.strip_prefix(scheme) {
+            parts.push(rest.to_owned());
+        }
+    }
+    parts
+}
+
 /// A call's text on its way to the [`KeptOutput`] that keeps it, with every
 /// value of its [`Secrets`] cut out.
 ///
@@ -123,8 +163,11 @@ impl Secrets {
 /// text. The end of the text that may begin a value is held back until what
 /// follows says whether it does, and nothing else is, so it holds less than
 /// the longest value.
+///
+/// The secrets are shared, since one run holds one set and hands it to
+/// every call, and a call's text is cut piece by piece.
 pub struct RedactedOutput {
-    secrets: Secrets,
+    secrets: Arc<Secrets>,
     kept: KeptOutput,
     /// The end of the text so far, from the first place that may begin a
     /// value.
@@ -138,7 +181,7 @@ impl RedactedOutput {
     /// Nothing yet, of an output that `keep` is kept of and that `secrets`
     /// are cut from.
     #[must_use]
-    pub fn new(secrets: Secrets, keep: Option<OutputKeep>) -> Self {
+    pub fn new(secrets: Arc<Secrets>, keep: Option<OutputKeep>) -> Self {
         Self {
             secrets,
             kept: KeptOutput::new(keep),

@@ -15,6 +15,7 @@ use super::model::{Api, CacheScope, Effort, Pricing, Provider, Thinking};
 use super::tools::{Builtin, BuiltinTool, McpLifetime, McpResult, McpServer, OutputCut, Tools};
 use super::written::{duration, path};
 use super::{Prompt, Run, Telemetry, when};
+use crate::secrets::without_user_information;
 
 /// A config with every default filled in.
 ///
@@ -267,9 +268,18 @@ impl ResolvedConfig {
     /// SHA-256 of the resolved config as canonical JSON, in lower-case hex.
     ///
     /// It covers the settings that say what a run does and leaves out the
-    /// ones that say where its output goes: `run.transcript_path`,
-    /// `run.transcript_format` and the `telemetry` section. So two runs
-    /// that differ only in where they write share a digest.
+    /// ones that say where its output goes, `run.transcript_path`,
+    /// `run.transcript_format` and the `telemetry` section, and the ones
+    /// that are credentials, which a run has but doesn't do: every value of
+    /// an HTTP server's `headers`, whose keys stay, and the user information
+    /// of `model.base_url` and a server's `url`, whose host stays. So two
+    /// runs that differ only in where they write, or only in a rotated
+    /// token, share a digest. `tools.builtin.env` stays in it, since what a
+    /// command starts with is part of what a run does.
+    ///
+    /// The strip is made here and nowhere else, so the resolved config
+    /// `check --resolved` prints holds every value as written and reads
+    /// back to the same digest.
     ///
     /// Canonical JSON is compact, with the keys of every object in order.
     #[must_use]
@@ -283,6 +293,25 @@ impl ResolvedConfig {
             if let Some(Value::Object(run)) = sections.get_mut("run") {
                 run.remove("transcript_path");
                 run.remove("transcript_format");
+            }
+            if let Some(Value::Object(model)) = sections.get_mut("model")
+                && let Some(Value::String(url)) = model.get_mut("base_url")
+            {
+                *url = without_user_information(url);
+            }
+            if let Some(Value::Object(tools)) = sections.get_mut("tools")
+                && let Some(Value::Array(servers)) = tools.get_mut("mcp")
+            {
+                for server in servers.iter_mut().filter_map(Value::as_object_mut) {
+                    if let Some(Value::String(url)) = server.get_mut("url") {
+                        *url = without_user_information(url);
+                    }
+                    if let Some(Value::Object(headers)) = server.get_mut("headers") {
+                        for value in headers.values_mut() {
+                            *value = Value::Null;
+                        }
+                    }
+                }
             }
         }
         let mut canonical = String::new();

@@ -1,11 +1,14 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use lablet_model::{OutputKeep, Secrets};
 use lablet_run::{ToolErrorKind, ToolExecutor};
-use lablet_tools_builtin::{BuiltinTools, Settings, Withheld};
+use lablet_tools_builtin::BuiltinTools;
 use serde_json::{Value, json};
 
-use crate::harness::{Root, TIMEOUT, call, keeping, link, refused, said, within};
+use crate::harness::{
+    Root, TIMEOUT, answered, call, cutting, keeping, link, refused, said, secrets, within,
+};
 
 const FILE: &str = "one\ntwo\nthree\nfour\nfive";
 
@@ -209,41 +212,85 @@ async fn what_cannot_be_read_is_an_error_result_that_says_why() {
     }
 }
 
+/// The text of a `read_file` call with `input`, with `secrets` cut out.
+async fn read(tools: &BuiltinTools, secrets: &Arc<Secrets>, input: Value) -> String {
+    answered(tools, cutting(secrets, call("read_file", input)))
+        .await
+        .0
+}
+
 #[tokio::test]
 async fn a_secret_of_lablet_s_is_cut_from_every_result_of_the_file_tools() {
     let scratch = Root::new("files-secret");
     let key = "a-key-long-enough-to-cut";
-    let tools = BuiltinTools::new(Settings {
-        withheld: Withheld {
-            variables: [].into(),
-            values: Secrets::new([key.to_owned()]),
-        },
-        ..scratch.settings()
-    })
-    .unwrap();
+    let tools = scratch.tools();
+    let secrets = secrets(&[key]);
     scratch.holds("notes.txt", format!("the key is {key}\n"));
 
-    let read = said(&tools, "read_file", json!({ "path": "notes.txt" })).await;
-    let missing = refused(
+    let read = read(&tools, &secrets, json!({ "path": "notes.txt" })).await;
+    let (missing, is_error) = answered(
         &tools,
-        "read_file",
-        json!({ "path": format!("{key}/missing.txt") }),
+        cutting(
+            &secrets,
+            call("read_file", json!({ "path": format!("{key}/missing.txt") })),
+        ),
     )
     .await;
-    let wrote = said(
+    let (wrote, _) = answered(
         &tools,
-        "write_file",
-        json!({ "path": format!("{key}/made.txt"), "content": "abc" }),
+        cutting(
+            &secrets,
+            call(
+                "write_file",
+                json!({ "path": format!("{key}/made.txt"), "content": "abc" }),
+            ),
+        ),
     )
     .await;
 
     assert_eq!(read, "the key is [secret withheld]\n");
+    assert!(is_error, "{missing}");
     assert_eq!(
         missing,
         "[secret withheld]/missing.txt wasn't read: no such file or directory"
     );
     assert_eq!(wrote, "wrote 3 bytes to [secret withheld]/made.txt");
     assert_eq!(scratch.read(&format!("{key}/made.txt")), "abc");
+}
+
+/// A value on several lines is cut by the line, since a read in parts
+/// returns one line of it, and whole where the whole is there.
+#[tokio::test]
+async fn a_read_in_parts_shows_the_marker_for_each_line_of_a_secret_it_returns() {
+    let scratch = Root::new("files-secret-lines");
+    let tools = scratch.tools();
+    let pem = "line-one-0123456789\nline-two-0123456789\nline-three-012345";
+    let secrets = secrets(&[pem]);
+    scratch.holds("key.pem", format!("head\n{pem}\ntail\n"));
+
+    assert_eq!(
+        read(
+            &tools,
+            &secrets,
+            json!({ "path": "key.pem", "offset": 1, "limit": 1 })
+        )
+        .await,
+        "[secret withheld]\n"
+    );
+    assert_eq!(
+        read(
+            &tools,
+            &secrets,
+            json!({ "path": "key.pem", "offset": 2, "limit": 2 })
+        )
+        .await,
+        "[secret withheld]\n[secret withheld]\n"
+    );
+    assert_eq!(
+        read(&tools, &secrets, json!({ "path": "key.pem" })).await,
+        "head\n[secret withheld]\ntail\n",
+        "the value whole is one cut"
+    );
 }
 
 #[tokio::test]

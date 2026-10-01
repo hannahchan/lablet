@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use lablet_model::{Secrets, ToolName, ToolSource, ToolSpec};
+use lablet_model::{ToolName, ToolSource, ToolSpec};
 use lablet_run::{ToolCall, ToolError, ToolErrorKind, ToolExecutor, ToolOutput};
 
 use crate::bash::Bash;
@@ -22,7 +22,6 @@ use crate::{Settings, SettingsError, Tool};
 pub struct BuiltinTools {
     tools: Vec<Box<dyn BuiltIn>>,
     timeout: Duration,
-    secrets: Secrets,
 }
 
 impl core::fmt::Debug for BuiltinTools {
@@ -31,7 +30,6 @@ impl core::fmt::Debug for BuiltinTools {
         f.debug_struct("BuiltinTools")
             .field("tools", &tools)
             .field("timeout", &self.timeout)
-            .field("secrets", &self.secrets)
             .finish()
     }
 }
@@ -55,7 +53,7 @@ impl BuiltinTools {
             withheld,
         } = settings;
         let root = Root::open(&root)?;
-        let environment = environment(std::env::vars_os(), &withheld.variables, env)?;
+        let environment = environment(std::env::vars_os(), &withheld, env)?;
         let tools = enabled
             .into_iter()
             .map(|tool| -> Box<dyn BuiltIn> {
@@ -70,11 +68,7 @@ impl BuiltinTools {
                 }
             })
             .collect();
-        Ok(Self {
-            tools,
-            timeout,
-            secrets: withheld.values,
-        })
+        Ok(Self { tools, timeout })
     }
 }
 
@@ -104,14 +98,23 @@ impl ToolExecutor for BuiltinTools {
     }
 
     async fn execute(&self, call: ToolCall) -> Result<ToolOutput, ToolError> {
-        let name = call.name.as_str();
+        let ToolCall {
+            name,
+            input,
+            deadline,
+            keep,
+            secrets,
+            id: _,
+            trace_context: _,
+        } = call;
+        let name = name.as_str();
         let Some(held) = self.tools.iter().find(|held| held.tool().name() == name) else {
             return Err(ToolError::new(
                 ToolErrorKind::Unknown,
                 format!("no built-in tool named {name} is enabled"),
             ));
         };
-        let limit = call.deadline.min(self.timeout);
+        let limit = deadline.min(self.timeout);
         if limit.is_zero() {
             return Err(ToolError::new(
                 ToolErrorKind::Timeout,
@@ -119,10 +122,10 @@ impl ToolExecutor for BuiltinTools {
             ));
         }
         let terms = Terms {
-            keep: call.keep,
+            keep,
             limit,
-            secrets: &self.secrets,
+            secrets: &secrets,
         };
-        held.run(call.input, terms).await
+        held.run(input, terms).await
     }
 }

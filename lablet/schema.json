@@ -33,7 +33,7 @@
             "type": "string"
           },
           "default": {},
-          "description": "Variables a command starts with on top of lablet's own environment,\nwhich a command inherits less the variables lablet reads its secrets from.",
+          "description": "Variables a command starts with on top of lablet's own environment,\nwhich a command inherits less the variables lablet reads its secrets\nfrom. A variable substituted here is a secret: withheld from every\nother child, and cut out of every tool result. Naming a withheld\nvariable passes it on.",
           "type": "object"
         },
         "root": {
@@ -248,7 +248,7 @@
                 "type": "string"
               },
               "default": {},
-              "description": "Variables the server starts with beside the short list it has.",
+              "description": "Variables the server starts with beside the short list it has. A\nvariable substituted here is a secret: withheld from every\ncommand, and cut out of every tool result.",
               "type": "object"
             },
             "instructions": {
@@ -296,7 +296,7 @@
                 "type": "string"
               },
               "default": {},
-              "description": "Headers sent with every request.",
+              "description": "Headers sent with every request. Every value is a secret, written\nor substituted: a variable substituted into one is withheld from\nevery command, the value is cut out of every tool result, and\nit's left out of the config digest.",
               "type": "object"
             },
             "instructions": {
@@ -354,7 +354,7 @@
         },
         "api_key_env": {
           "default": null,
-          "description": "The environment variable that holds the API key, and never the key.\n`None` is `ANTHROPIC_API_KEY` for `anthropic` and no variable for\nthe others.",
+          "description": "The environment variable that holds the API key, and never the key.\n`None` is `ANTHROPIC_API_KEY` for `anthropic` and no variable for\nthe others. The variable is withheld from every command, and its\nvalue is cut out of every tool result.",
           "type": [
             "string",
             "null"
@@ -362,7 +362,7 @@
         },
         "base_url": {
           "default": null,
-          "description": "`anthropic` and `openai` only: where the API is served, for a\ngateway or a local server.",
+          "description": "`anthropic` and `openai` only: where the API is served, for a\ngateway or a local server. Its user information is a secret: cut\nout of every tool result, and left out of the config digest.",
           "type": [
             "string",
             "null"
@@ -488,7 +488,7 @@
             "type": "string"
           },
           "default": {},
-          "description": "Headers sent with every export.",
+          "description": "Headers sent with every export. Every value is a secret, written or\nsubstituted: a variable substituted into one is withheld from every\ncommand, the value is cut out of every tool result, and it's left\nout of the config digest.",
           "type": "object"
         },
         "protocol": {

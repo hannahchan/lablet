@@ -30,7 +30,10 @@ pub struct Otlp {
     pub endpoint: Option<String>,
     /// The protocol the collector is sent.
     pub protocol: OtlpProtocol,
-    /// Headers sent with every export.
+    /// Headers sent with every export. Every value is a secret, written or
+    /// substituted: a variable substituted into one is withheld from every
+    /// command, the value is cut out of every tool result, and it's left
+    /// out of the config digest.
     pub headers: BTreeMap<String, String>,
 }
 

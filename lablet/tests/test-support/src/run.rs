@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use lablet_model::{
     CacheScope, CompletionMode, OutputCap, Prompts, RequestParams, RunContext, RunId, RunLabels,
-    Thinking,
+    Secrets, Thinking,
 };
 use lablet_policy::{Pricing, RetryPolicy, RetrySettings, StopPolicy};
 use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
@@ -115,7 +115,7 @@ impl RunObserver for Unobserved {
 /// run, stops at the third invalid turn in a row, tries a failed call again
 /// three times after waits of 100 ms doubled each time with no jitter, asks
 /// for [`request`], prices nothing, gives an attempt a minute, sends a
-/// tool's output whole, and runs one tool call at a time.
+/// tool's output whole, holds no secret, and runs one tool call at a time.
 pub struct RunBuilder {
     provider: Arc<dyn ModelProvider>,
     tools: Vec<Arc<dyn ToolExecutor>>,
@@ -128,6 +128,7 @@ pub struct RunBuilder {
     provider_timeout: Duration,
     output_cap: Option<OutputCap>,
     max_concurrent_tool_calls: NonZeroU32,
+    secrets: Arc<Secrets>,
 }
 
 impl RunBuilder {
@@ -146,6 +147,7 @@ impl RunBuilder {
             provider_timeout: Duration::from_secs(60),
             output_cap: None,
             max_concurrent_tool_calls: NonZeroU32::MIN,
+            secrets: Arc::default(),
         }
     }
 
@@ -219,6 +221,14 @@ impl RunBuilder {
         self
     }
 
+    /// Hands `secrets` to every executor with each call, and cuts them out
+    /// of every text the loop writes itself.
+    #[must_use]
+    pub fn secrets(mut self, secrets: Arc<Secrets>) -> Self {
+        self.secrets = secrets;
+        self
+    }
+
     /// The loop.
     ///
     /// # Panics
@@ -261,6 +271,7 @@ impl RunBuilder {
                 output_cap: self.output_cap,
                 max_concurrent_tool_calls: self.max_concurrent_tool_calls,
             },
+            self.secrets,
         )
     }
 }

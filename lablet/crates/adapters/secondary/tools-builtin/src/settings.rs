@@ -6,8 +6,6 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use lablet_model::Secrets;
-
 /// One of the built-in tools.
 ///
 /// The order is the order an executor offers them in, whatever order they
@@ -49,8 +47,9 @@ impl core::fmt::Display for Tool {
 /// executor that serves nothing needs no settings:
 /// [`BuiltinTools::default`](crate::BuiltinTools::default) is one.
 ///
-/// Its `Debug` form names the variables and leaves their values out, since a
-/// value may be a credential that a command needs and a log doesn't.
+/// Its `Debug` form names the variables of `env` and leaves their values
+/// out, since a value may be a credential that a command needs and a log
+/// doesn't.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Settings {
     /// The directory `bash` starts in and the file tools stay under. It has
@@ -65,26 +64,14 @@ pub struct Settings {
     /// that has the name of an inherited variable replaces it, and one that
     /// has the name of a withheld variable passes it on.
     pub env: BTreeMap<String, String>,
-    /// lablet's own secrets, which no command inherits and no result shows.
-    pub withheld: Withheld,
-}
-
-/// lablet's own secrets: the variables lablet reads them from, which no
-/// command inherits, and their values, which are cut out of every result.
-///
-/// A command can find a value some other way than its environment, in a
-/// file or in lablet's own environment through the process table, as
-/// `ps eww -p $PPID` and `/proc/<pid>/environ` read it. So a value is cut
-/// out of every result however the command came by it, as long as it's
-/// written as lablet holds it.
-///
-/// Its `Debug` form names the variables and says nothing of the values.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Withheld {
-    /// Variables of lablet's environment that no command inherits.
-    pub variables: BTreeSet<String>,
-    /// Values that no result shows.
-    pub values: Secrets,
+    /// Variables of lablet's environment that no command inherits: the
+    /// ones lablet reads its secrets from. Their values aren't here, since
+    /// a command can find a value some other way than its environment, in a
+    /// file or in lablet's own environment through the process table, as
+    /// `ps eww -p $PPID` and `/proc/<pid>/environ` read it. So the values
+    /// come with every call, as [`lablet_run::ToolCall::secrets`], and are
+    /// cut out of every result however the command came by them.
+    pub withheld: BTreeSet<String>,
 }
 
 impl core::fmt::Debug for Settings {

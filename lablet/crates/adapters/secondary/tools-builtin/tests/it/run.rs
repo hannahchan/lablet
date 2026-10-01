@@ -1,12 +1,16 @@
 //! Runs of the loop itself, around a scripted provider and the built-in
 //! tools, on the clock as it runs.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lablet_model::{FinishedRun, Secrets, StopReason, ToolCallOutcome, ToolResultContent};
+use lablet_model::{
+    Endpoint, FinishedRun, ModelRef, ProviderResponse, Secrets, StopReason, ToolCallOutcome,
+    ToolResultContent,
+};
+use lablet_run::{ModelProvider, ProviderError, ProviderRequest};
 use lablet_test_support::{RunBuilder, context, prompts, scripted};
-use lablet_tools_builtin::{BuiltinTools, Settings, Withheld};
+use lablet_tools_builtin::{BuiltinTools, Settings};
 
 use crate::harness::{Root, link};
 
@@ -18,13 +22,53 @@ const SECRET: &str = "what the model is not to read";
 /// withheld as lablet's key is.
 const NOT_FOR_A_COMMAND: &str = "CARGO_MANIFEST_DIR";
 
-/// One run of the YAML script `script`, whose tools are `tools`.
-async fn run(script: &str, tools: BuiltinTools) -> FinishedRun {
-    let mut service = RunBuilder::new(scripted(script))
+/// One run of the YAML script `script`, whose tools are `tools` and whose
+/// secrets are `secrets`, and what the provider was sent.
+async fn run(
+    script: &str,
+    tools: BuiltinTools,
+    secrets: Arc<Secrets>,
+) -> (FinishedRun, Arc<Recording>) {
+    let provider = Arc::new(Recording {
+        inner: scripted(script),
+        sent: Mutex::new(Vec::new()),
+    });
+    let mut service = RunBuilder::new(Arc::clone(&provider) as _)
         .tools(vec![Arc::new(tools) as _])
+        .secrets(secrets)
         .build()
         .await;
-    service.run(context(RUN), prompts()).await
+    (service.run(context(RUN), prompts()).await, provider)
+}
+
+/// A provider that keeps what each call was sent, around the scripted one,
+/// so a test holds what the model saw rather than what was recorded of it.
+struct Recording {
+    inner: Arc<dyn ModelProvider>,
+    /// The messages of each call, as JSON.
+    sent: Mutex<Vec<String>>,
+}
+
+#[async_trait::async_trait]
+impl ModelProvider for Recording {
+    fn model(&self) -> &ModelRef {
+        self.inner.model()
+    }
+
+    fn endpoint(&self) -> Option<Endpoint> {
+        self.inner.endpoint()
+    }
+
+    async fn complete(
+        &self,
+        request: ProviderRequest<'_>,
+    ) -> Result<ProviderResponse, ProviderError> {
+        self.sent
+            .lock()
+            .unwrap()
+            .push(serde_json::to_string(request.messages).unwrap());
+        self.inner.complete(request).await
+    }
 }
 
 /// What the model was sent of a call: its status, and its text.
@@ -47,7 +91,7 @@ async fn a_command_past_the_timeout_is_an_error_result_of_kind_timeout_and_the_r
     })
     .unwrap();
 
-    let finished = run(
+    let (finished, _) = run(
         r"
 - response:
     content:
@@ -63,6 +107,7 @@ async fn a_command_past_the_timeout_is_an_error_result_of_kind_timeout_and_the_r
     finish: end_turn
 ",
         tools,
+        Arc::default(),
     )
     .await;
 
@@ -95,6 +140,8 @@ async fn a_command_past_the_timeout_is_an_error_result_of_kind_timeout_and_the_r
     );
 }
 
+/// T16 from the executor's side, and the provider's: what the model was
+/// sent of a secret a command found is the marker, as the transcript says.
 #[tokio::test]
 async fn a_run_is_refused_what_is_outside_the_root_and_kept_from_lablet_s_environment() {
     let scratch = Root::new("run-refusals");
@@ -104,16 +151,14 @@ async fn a_run_is_refused_what_is_outside_the_root_and_kept_from_lablet_s_enviro
         &scratch.root().join("notes.txt"),
     );
     let held = std::env::var(NOT_FOR_A_COMMAND).expect("cargo sets it for a test");
+    scratch.holds("key.txt", &held);
     let tools = BuiltinTools::new(Settings {
-        withheld: Withheld {
-            variables: [NOT_FOR_A_COMMAND.to_owned()].into(),
-            values: Secrets::new([held.clone()]),
-        },
+        withheld: [NOT_FOR_A_COMMAND.to_owned()].into(),
         ..scratch.settings()
     })
     .unwrap();
 
-    let finished = run(
+    let (finished, provider) = run(
         r"
 - response:
     content:
@@ -121,6 +166,7 @@ async fn a_run_is_refused_what_is_outside_the_root_and_kept_from_lablet_s_enviro
       - tool_use: { id: call_2, name: read_file, input: { json: { path: notes.txt } } }
       - tool_use: { id: call_3, name: bash, input: { json: { command: env } } }
       - tool_use: { id: call_4, name: bash, input: { json: { command: exit 3 } } }
+      - tool_use: { id: call_5, name: bash, input: { json: { command: cat key.txt } } }
     finish: tool_use
 - response:
     content:
@@ -128,16 +174,17 @@ async fn a_run_is_refused_what_is_outside_the_root_and_kept_from_lablet_s_enviro
     finish: end_turn
 ",
         tools,
+        Arc::new(Secrets::new([held.clone()])),
     )
     .await;
 
     let outcome = &finished.summary.outcome;
     assert_eq!(outcome.stop_reason(), StopReason::Completed);
-    assert_eq!((outcome.turns, outcome.tool_calls), (2, 4));
+    assert_eq!((outcome.turns, outcome.tool_calls), (2, 5));
     assert_eq!(finished.summary.tool_calls.errors, 2);
     let calls = finished.transcript.turns()[0].tool_calls();
     let ids: Vec<&str> = calls.iter().map(|call| call.call_id.as_str()).collect();
-    assert_eq!(ids, ["call_1", "call_2", "call_3", "call_4"]);
+    assert_eq!(ids, ["call_1", "call_2", "call_3", "call_4", "call_5"]);
     assert_eq!(
         sent(&calls[0]),
         (
@@ -161,4 +208,19 @@ async fn a_run_is_refused_what_is_outside_the_root_and_kept_from_lablet_s_enviro
     );
     assert_eq!(sent(&calls[3]), ("ok", "exit code: 3".to_owned()));
     assert!(!calls[3].status.is_error());
+    assert_eq!(
+        sent(&calls[4]),
+        ("ok", "[secret withheld]\nexit code: 0".to_owned())
+    );
+    let sent_to_the_model = provider.sent.lock().unwrap().clone();
+    assert_eq!(sent_to_the_model.len(), 2, "two provider calls");
+    assert!(
+        sent_to_the_model[1].contains("[secret withheld]"),
+        "{}",
+        sent_to_the_model[1]
+    );
+    assert!(
+        !sent_to_the_model[1].contains(&held),
+        "the model was sent the value"
+    );
 }

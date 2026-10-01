@@ -169,6 +169,7 @@ struct Harness {
     retry: RetryPolicy,
     pricing: Option<Pricing>,
     calls: CallLimits,
+    secrets: Arc<lablet_model::Secrets>,
     context: RunContext,
     completion: CompletionMode,
     request: RequestParams,
@@ -205,6 +206,7 @@ impl Harness {
                 output_cap: Some(output_cap(50_000, OutputCut::Preview { bytes: 2_000 })),
                 max_concurrent_tool_calls: nz(10),
             },
+            secrets: Arc::default(),
             context: context(),
             completion: CompletionMode::Natural,
             request: request(),
@@ -227,6 +229,7 @@ impl Harness {
             self.request,
             self.pricing,
             self.calls,
+            self.secrets,
         );
         let finished = movable(service.run(self.context, self.prompts)).await;
         Run {
@@ -1933,6 +1936,7 @@ async fn the_span_an_observer_opens_reaches_the_executor() {
         harness.request,
         None,
         harness.calls,
+        harness.secrets,
     );
     service.run(harness.context, harness.prompts).await;
 
@@ -4962,4 +4966,69 @@ async fn a_scripted_run_that_shares_its_cache_says_so_in_its_summary() {
     assert_eq!(summary(&run).model.api, ProviderApi::Script);
     assert!(!summary(&run).model.replays_reasoning);
     assert_eq!(summary(&run).request.cache_scope, CacheScope::Shared);
+}
+
+// The loop cuts the run's secrets out of every text it writes itself.
+
+/// A value of lablet's that no text the model is sent may hold.
+const SECRET: &str = "sk-0123456789abcdef-a-key-no-model-reads";
+
+/// The run's secrets reach every executor on its call, and are cut out of
+/// an executor's error message and out of the arguments of a call that
+/// didn't parse, which the loop echoes to the model.
+#[tokio::test]
+async fn the_secrets_a_run_holds_reach_the_executor_and_are_cut_out_of_the_loop_s_own_texts() {
+    let mut harness = Harness::new(vec![
+        Answer::now(says("One.", &["bash"], FinishReason::ToolUse)),
+        Answer::now(calls_with_unparsed_input(
+            "read_file",
+            &format!("{{\"path\": \"{SECRET}"),
+        )),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    let secrets = Arc::new(lablet_model::Secrets::new([SECRET.to_owned()]));
+    harness.secrets = Arc::clone(&secrets);
+    let tools = Arc::new(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![
+                spec("bash", ToolSource::Builtin),
+                spec("read_file", ToolSource::Builtin),
+            ],
+        )
+        .answers(
+            "bash",
+            Answers::Fails(
+                crate::ToolErrorKind::Failed,
+                format!("bash couldn't be started: {SECRET} isn't a shell"),
+            ),
+        ),
+    );
+    harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
+
+    let run = harness.run().await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(
+        contents(&run),
+        [
+            vec!["bash couldn't be started: [secret withheld] isn't a shell".to_owned()],
+            vec![
+                "the arguments weren't valid JSON, so read_file wasn't called: {\"path\": \
+                 \"[secret withheld]"
+                    .to_owned()
+            ],
+            vec![],
+        ]
+    );
+    let taken = tools.taken();
+    assert_eq!(
+        taken.len(),
+        1,
+        "the unparsed call never reached the executor"
+    );
+    assert!(
+        Arc::ptr_eq(&taken[0].secrets, &secrets),
+        "the executor was handed the run's secrets"
+    );
 }

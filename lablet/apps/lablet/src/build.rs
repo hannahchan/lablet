@@ -7,21 +7,22 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lablet_model::{RunOutcome, Secrets, StopReason, ToolSpec};
+use lablet_model::{RunOutcome, StopReason, ToolSpec};
 use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
 use lablet_run::{FilterList, RunObserver, RunService, ToolExecutor, ToolSet, ToolSetError};
 use lablet_telemetry_otel::{FileTarget, OtelObserver};
-use lablet_tools_builtin::{BuiltinTools, SettingsError, Withheld};
+use lablet_tools_builtin::{BuiltinTools, SettingsError};
 
 use crate::cancel::RunCancellation;
 use crate::clock::TokioClock;
 use crate::config::{
     Config, ConfigError, Context, Env, Format, KeyPath, Model, Place, Provider, Refusal,
-    ResolvedConfig, Tools, TranscriptFormat,
+    ResolvedConfig, Substituted, Tools, TranscriptFormat,
 };
 use crate::fanout::FanOut;
 use crate::lablet::{Fixed, Lablet, Played, TranscriptPath};
 use crate::root::{self, OwnFile};
+use crate::secrets::{self, Derived, Named};
 use crate::settings::{Selected, Settings, System};
 
 /// The name of a run's own telemetry file, with the run id where a run's
@@ -220,12 +221,14 @@ fn at(place: Option<Place>) -> String {
     place.map(|place| format!(" ({place})")).unwrap_or_default()
 }
 
-/// What a config passed its check with: what it resolves to, and the tools
-/// a run of it is offered.
+/// What a config passed its check with: what it resolves to, the tools a
+/// run of it is offered, and the names of its secrets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Checked {
     resolved: ResolvedConfig,
     tools: Vec<ToolSpec>,
+    withheld: BTreeSet<String>,
+    cut: Vec<Named>,
 }
 
 impl Checked {
@@ -241,6 +244,22 @@ impl Checked {
     #[must_use]
     pub fn tools(&self) -> &[ToolSpec] {
         &self.tools
+    }
+
+    /// The variables no command of a run inherits: the ones lablet reads
+    /// its secrets from.
+    #[must_use]
+    pub fn withheld(&self) -> &BTreeSet<String> {
+        &self.withheld
+    }
+
+    /// The names whose values no tool result shows, a variable's name or
+    /// the key of a value written in the config, in order, each followed by
+    /// a note when its value isn't cut: not set, empty, or under the floor.
+    /// Never a value.
+    #[must_use]
+    pub fn cut(&self) -> Vec<String> {
+        self.cut.iter().map(ToString::to_string).collect()
     }
 }
 
@@ -306,6 +325,8 @@ pub(crate) async fn check_in(config: &Config, env: Env<'_>) -> Result<Checked, B
     Ok(Checked {
         resolved: config.resolved(),
         tools: checked.tools.specs().to_vec(),
+        withheld: checked.secrets.withheld,
+        cut: checked.secrets.cut,
     })
 }
 
@@ -353,12 +374,15 @@ pub async fn build_observed(
 /// What checking a config comes to, which a build goes on from.
 struct Prepared {
     /// The config with `${VAR}` substituted, which is what runs.
-    real: Config,
+    real: Substituted,
     settings: Settings,
     provider: Ready,
     system: String,
     target: FileTarget,
     tools: Arc<ToolSet>,
+    /// lablet's secrets: what's withheld, what's cut, and the values when
+    /// the run has an executor to hand them to.
+    secrets: Derived,
 }
 
 /// The provider a checked config selects, with what was read for it, so a
@@ -401,11 +425,14 @@ async fn prepare(written: &Config, env: Env<'_>) -> Result<Prepared, BuildError>
 
     let target = file_target(&real);
 
+    // The values are held only for an executor to cut, and the built-in
+    // tools are the one executor a run can have.
+    let secrets = secrets::derived(written, &real, env, settings.builtin.is_some());
     let executors = match settings.builtin.clone() {
         Some(builtin) => {
             outside_root(&builtin.root, &real, written, &target)?;
             let builtin = lablet_tools_builtin::Settings {
-                withheld: withheld(&real, env),
+                withheld: secrets.withheld.clone(),
                 ..builtin
             };
             let tools = BuiltinTools::new(builtin).map_err(|error| match error {
@@ -445,6 +472,7 @@ async fn prepare(written: &Config, env: Env<'_>) -> Result<Prepared, BuildError>
         system,
         target,
         tools,
+        secrets,
     })
 }
 
@@ -485,6 +513,7 @@ async fn build_in(
         system,
         target,
         tools,
+        secrets,
     } = prepare(&config, env).await?;
     let script = match provider {
         Ready::Fake(script) => script,
@@ -512,6 +541,7 @@ async fn build_in(
         settings.request,
         settings.pricing,
         settings.calls,
+        Arc::new(secrets.values),
     );
     Ok(Lablet::new(
         service,
@@ -526,6 +556,7 @@ async fn build_in(
             transcript: real
                 .run
                 .transcript_path
+                .clone()
                 .zip(config.run.transcript_path.clone())
                 .map(|(real, written)| TranscriptPath { real, written }),
         },
@@ -557,29 +588,6 @@ fn key_is_set(model: &Model, written: &Config, env: Env<'_>) -> Result<(), Build
         place: written.place_of("model.api_key_env"),
         reason: format!("{variable} {fault}, and the provider `anthropic` needs a key"),
     })
-}
-
-/// lablet's own secrets: the variables it reads them from, which no
-/// command inherits, and what they hold, which no tool result shows. Every
-/// variable lablet reads a secret from is named here, so withholding another
-/// is one more entry in the list.
-///
-/// It's read only when a built-in tool is enabled, since that executor is
-/// the one place that holds a value beside lablet's environment. `env` is
-/// lablet's environment.
-fn withheld(config: &Config, env: Env<'_>) -> Withheld {
-    let variables: BTreeSet<String> = [config.model.key_variable()]
-        .into_iter()
-        .flatten()
-        .map(str::to_owned)
-        .collect();
-    let values = variables
-        .iter()
-        .filter_map(|variable| Some(env(variable)?.to_string_lossy().into_owned()));
-    Withheld {
-        values: Secrets::new(values),
-        variables,
-    }
 }
 
 /// Refuses what the config selects, beside its provider, that this lablet

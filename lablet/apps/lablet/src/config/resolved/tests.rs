@@ -529,6 +529,115 @@ fn a_setting_that_is_applied_changes_the_digest() {
     );
 }
 
+/// A server at `url` with `headers`, as a config states it.
+fn http_server(headers: &str, url: &str) -> String {
+    format!("tools: {{ mcp: [{{ transport: http, name: s, url: '{url}', headers: {headers} }}] }}")
+}
+
+/// The digest of an `openai` model at the gateway `url`.
+fn gateway(url: &str) -> ConfigDigest {
+    yaml(&format!(
+        "model: {{ provider: openai, base_url: '{url}' }}\nprompt: {{ system: You fix tests. }}"
+    ))
+    .digest()
+}
+
+/// Pairs of configs that differ only in a credential share a digest: a
+/// rotated token isn't a change to what a run does.
+#[test]
+fn two_configs_that_differ_only_in_a_credential_share_a_digest() {
+    let at = "http://h/mcp";
+
+    assert_eq!(
+        digest(&http_server(
+            "{ Authorization: 'Bearer one-0123456789' }",
+            at
+        )),
+        digest(&http_server(
+            "{ Authorization: 'Bearer two-0123456789' }",
+            at
+        )),
+        "a rotated literal header"
+    );
+    assert_eq!(
+        digest(&http_server("{ Authorization: '${A}' }", at)),
+        digest(&http_server("{ Authorization: '${B}' }", at)),
+        "a header from another variable"
+    );
+    assert_eq!(
+        digest(&http_server("{}", "https://u:p1@h/mcp")),
+        digest(&http_server("{}", "https://u:p2@h/mcp")),
+        "a URL password"
+    );
+    assert_eq!(
+        digest(&http_server("{}", "https://u:p1@h/mcp")),
+        digest(&http_server("{}", "https://h/mcp")),
+        "user information at all"
+    );
+    assert_eq!(
+        gateway("https://hannah:one-0123456789@gw.example/v1"),
+        gateway("https://hannah:two-0123456789@gw.example/v1")
+    );
+    assert_eq!(
+        gateway("https://hannah:one-0123456789@gw.example/v1"),
+        gateway("https://gw.example/v1")
+    );
+}
+
+/// What stays in the digest beside a credential: the header's key, the
+/// URL's host, and the variables a command starts with.
+#[test]
+fn a_header_s_key_a_url_s_host_and_a_command_s_variables_change_the_digest() {
+    let at = "http://h/mcp";
+
+    assert_ne!(
+        digest(&http_server("{ Authorization: x }", at)),
+        digest(&http_server("{ Authorization: x, X-Tenant: y }", at)),
+        "a header key added"
+    );
+    assert_ne!(
+        digest(&http_server("{}", "https://u:p@h/mcp")),
+        digest(&http_server("{}", "https://u:p@other/mcp")),
+        "a URL host"
+    );
+    assert_ne!(
+        gateway("https://u:p@gw.example/v1"),
+        gateway("https://u:p@other.example/v1")
+    );
+    assert_ne!(
+        digest("tools: { builtin: { root: work, enabled: [bash], env: { TOKEN: one } } }"),
+        digest("tools: { builtin: { root: work, enabled: [bash], env: { TOKEN: two } } }"),
+        "tools.builtin.env"
+    );
+}
+
+/// The strip is the digest's alone: the resolved config holds every
+/// credential as written, and reads back to the same digest.
+#[test]
+fn the_resolved_config_keeps_a_credential_as_written_and_reads_back_to_the_same_digest() {
+    let config = yaml(&format!(
+        "{FAKE}{}",
+        http_server(
+            "{ Authorization: 'Bearer token-0123456789' }",
+            "https://u:p@h/mcp"
+        )
+    ));
+
+    let printed = serde_json::to_value(config.resolved()).unwrap();
+
+    assert_eq!(
+        printed["tools"]["mcp"][0]["headers"]["Authorization"],
+        json!("Bearer token-0123456789")
+    );
+    assert_eq!(
+        printed["tools"]["mcp"][0]["url"],
+        json!("https://u:p@h/mcp")
+    );
+    let read_back = Config::from_str(&printed.to_string(), Format::Json).unwrap();
+    assert_eq!(read_back.digest(), config.digest());
+    assert_ne!(config.digest(), digest(""), "the server is in the digest");
+}
+
 #[test]
 fn the_digest_is_the_same_whatever_order_and_format_the_config_is_written_in() {
     let from_yaml = yaml(

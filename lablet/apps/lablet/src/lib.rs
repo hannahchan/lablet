@@ -120,6 +120,7 @@ pub mod config;
 mod fanout;
 mod lablet;
 mod root;
+mod secrets;
 mod settings;
 
 pub use build::{
