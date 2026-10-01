@@ -37,7 +37,7 @@ pub use prompt::{Prompt, SkillsMode};
 pub use raw::RawConfig;
 pub use resolved::{Applied, ResolvedBuiltin, ResolvedConfig, ResolvedModel, ResolvedTools};
 pub use run::{Completion, Context, Run, TranscriptFormat};
-pub(crate) use substitute::Env;
+pub(crate) use substitute::{Env, Substituted};
 pub use telemetry::{Otlp, OtlpProtocol, Telemetry, TelemetryFile};
 pub use tools::{
     Builtin, BuiltinTool, McpLifetime, McpNames, McpResult, McpServer, OutputCut, Tools,

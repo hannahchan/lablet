@@ -77,7 +77,10 @@ pub struct Builtin {
     #[schemars(with = "String")]
     pub timeout: Duration,
     /// Variables a command starts with on top of lablet's own environment,
-    /// which a command inherits less the variables lablet reads its secrets from.
+    /// which a command inherits less the variables lablet reads its secrets
+    /// from. A variable substituted here is a secret: withheld from every
+    /// other child, and cut out of every tool result. Naming a withheld
+    /// variable passes it on.
     pub env: BTreeMap<String, String>,
 }
 
@@ -119,7 +122,9 @@ pub enum McpServer {
         /// The command's arguments.
         #[serde(default)]
         args: Vec<String>,
-        /// Variables the server starts with beside the short list it has.
+        /// Variables the server starts with beside the short list it has. A
+        /// variable substituted here is a secret: withheld from every
+        /// command, and cut out of every tool result.
         #[serde(default)]
         env: BTreeMap<String, String>,
         /// How long the server may take to start.
@@ -143,7 +148,10 @@ pub enum McpServer {
         name: String,
         /// Where the server listens.
         url: String,
-        /// Headers sent with every request.
+        /// Headers sent with every request. Every value is a secret, written
+        /// or substituted: a variable substituted into one is withheld from
+        /// every command, the value is cut out of every tool result, and
+        /// it's left out of the config digest.
         #[serde(default)]
         headers: BTreeMap<String, String>,
         /// How long the server may take to answer its first request.

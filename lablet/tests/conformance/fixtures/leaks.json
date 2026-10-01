@@ -1,0 +1,58 @@
+[
+  {
+    "name": "a 401 body echoes the key",
+    "why": "a provider or a gateway that refuses a key often sends it back in the error body, which a command's output then holds",
+    "secret": "sk-ant-api03-0123456789abcdef0123456789abcdef",
+    "writes": "HTTP/1.1 401 Unauthorized\n{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key: sk-ant-api03-0123456789abcdef0123456789abcdef\"}}\n",
+    "kept": "HTTP/1.1 401 Unauthorized\n{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key: [secret withheld]\"}}\n"
+  },
+  {
+    "name": "env prints a variable a command was handed by name",
+    "why": "a variable tools.builtin.env passes on reaches the command's environment, and env prints every variable",
+    "secret": "ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+    "writes": "HOME=/home/runner\nGITHUB_TOKEN=ghp_0123456789abcdefghijklmnopqrstuvwxyz\nPATH=/usr/local/bin:/usr/bin\n",
+    "kept": "HOME=/home/runner\nGITHUB_TOKEN=[secret withheld]\nPATH=/usr/local/bin:/usr/bin\n"
+  },
+  {
+    "name": "curl -v echoes a header whole, and the token after its scheme word",
+    "why": "a header value is registered whole and as what follows Bearer, so the header line and a bare token are both cut",
+    "secret": "Bearer otel-token-0123456789abcdef",
+    "writes": "> GET /v1/traces HTTP/1.1\n> Host: otel.example.internal\n> Authorization: Bearer otel-token-0123456789abcdef\n> \n* token otel-token-0123456789abcdef sent\n",
+    "kept": "> GET /v1/traces HTTP/1.1\n> Host: otel.example.internal\n> Authorization: [secret withheld]\n> \n* token [secret withheld] sent\n"
+  },
+  {
+    "name": "read_file with offset and limit returns one line of a PEM",
+    "why": "each line of a multi-line value is registered, so a part of a key read on its own is cut; the body line is used because the BEGIN and END lines are parts too and would be cut wherever any PEM prints them",
+    "secret": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\nAbCdEf0123456789AbCdEf0123456789AbCdEf0123456789AbCd\n-----END PRIVATE KEY-----",
+    "writes": "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n",
+    "kept": "[secret withheld]\n"
+  },
+  {
+    "name": "a JSON dump holds the PEM with its newlines escaped",
+    "why": "the \\n-escaped form of a multi-line value is registered, which is how a JSON or .env dump prints it on one line",
+    "secret": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\nAbCdEf0123456789AbCdEf0123456789AbCdEf0123456789AbCd\n-----END PRIVATE KEY-----",
+    "writes": "{\"private_key\":\"-----BEGIN PRIVATE KEY-----\\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\\nAbCdEf0123456789AbCdEf0123456789AbCdEf0123456789AbCd\\n-----END PRIVATE KEY-----\"}\n",
+    "kept": "{\"private_key\":\"[secret withheld]\"}\n"
+  },
+  {
+    "name": "a base64 copy of the key is not cut",
+    "why": "an encoded or altered copy is the accepted cost: nothing is decoded or guessed, so the copy is kept as written",
+    "secret": "sk-ant-api03-0123456789abcdef0123456789abcdef",
+    "writes": "key: c2stYW50LWFwaTAzLTAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVm\n",
+    "kept": "key: c2stYW50LWFwaTAzLTAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVm\n"
+  },
+  {
+    "name": "a credential held as one JSON blob is cut whole",
+    "why": "a variable may hold a whole service-account document, which is cut as the one value it is",
+    "secret": "{\"type\":\"service_account\",\"client_id\":\"0123456789\",\"private_key_id\":\"0123456789abcdef0123456789abcdef\"}",
+    "writes": "credentials: {\"type\":\"service_account\",\"client_id\":\"0123456789\",\"private_key_id\":\"0123456789abcdef0123456789abcdef\"}\n",
+    "kept": "credentials: [secret withheld]\n"
+  },
+  {
+    "name": "a k=v,k=v composite is cut whole",
+    "why": "OTEL_EXPORTER_OTLP_HEADERS is one value of this shape; its whole is cut here, and the round that reads the variable registers each decoded value beside it",
+    "secret": "Authorization=Bearer%20otel-token-0123456789abcdef,X-Tenant=acme-0123456789abcdef",
+    "writes": "OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer%20otel-token-0123456789abcdef,X-Tenant=acme-0123456789abcdef\n",
+    "kept": "OTEL_EXPORTER_OTLP_HEADERS=[secret withheld]\n"
+  }
+]

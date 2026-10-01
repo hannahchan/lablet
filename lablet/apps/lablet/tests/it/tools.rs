@@ -18,6 +18,10 @@ const KEY_VARIABLE: &str = "CARGO_MANIFEST_DIR";
 /// A variable cargo sets for every test, which holds no secret of lablet's.
 const NOT_A_SECRET: &str = "CARGO_PKG_NAME";
 
+/// A variable cargo sets for every test, whose value is under the floor a
+/// secret is cut from.
+const SHORT_VARIABLE: &str = "CARGO_PKG_VERSION_MAJOR";
+
 /// What the model was sent of a call: its status, and its text.
 fn sent(outcome: &ToolCallOutcome) -> (&'static str, String) {
     let text = outcome
@@ -292,6 +296,7 @@ async fn a_command_past_the_timeout_is_an_error_result_of_kind_timeout_and_the_r
     );
 }
 
+/// T16: what a run withholds and cuts, and what `check` says of it.
 #[tokio::test]
 async fn a_command_has_lablet_s_environment_less_the_key_and_no_result_shows_the_key() {
     let key = std::env::var(KEY_VARIABLE)
@@ -299,12 +304,14 @@ async fn a_command_has_lablet_s_environment_less_the_key_and_no_result_shows_the
     let scratch = Lab::new("environment");
     scratch.write("secret.txt", SECRET);
     scratch.write("work/key.txt", &key);
+    scratch.write("work/header.txt", &format!("Bearer {key}"));
     symlink(scratch.at("secret.txt"), scratch.at("work/link.txt")).unwrap();
     let script = calling(&[
         ("bash", json!({ "command": "env" })),
         ("read_file", json!({ "path": "link.txt" })),
         ("bash", json!({ "command": "echo leaving; exit 3" })),
         ("bash", json!({ "command": "cat key.txt" })),
+        ("bash", json!({ "command": "cat header.txt" })),
     ]);
     let mut tree = scratch.tree(
         &script,
@@ -313,8 +320,28 @@ async fn a_command_has_lablet_s_environment_less_the_key_and_no_result_shows_the
     tree["model"]["api_key_env"] = json!(KEY_VARIABLE);
     tree["tools"]["builtin"]["env"] = json!({ "LABLET_TEST_ADDED": "added by the config" });
     tree["telemetry"]["capture_content"] = json!(true);
-    let mut lablet = lablet::build(crate::harness::read(&tree)).await.unwrap();
+    tree["telemetry"]["otlp"]["headers"] = json!({
+        "Authorization": format!("Bearer ${{{KEY_VARIABLE}}}"),
+        "X-Short": format!("${{{SHORT_VARIABLE}}}"),
+    });
+    let config = crate::harness::read(&tree);
 
+    let checked = lablet::check(&config).await.unwrap();
+    assert_eq!(
+        checked.withheld(),
+        &[KEY_VARIABLE.to_owned(), SHORT_VARIABLE.to_owned()].into()
+    );
+    assert_eq!(
+        checked.cut(),
+        [
+            KEY_VARIABLE.to_owned(),
+            format!("{SHORT_VARIABLE} (under 16 bytes, not cut)")
+        ],
+        "the literal `tools.builtin.env` entry is no secret"
+    );
+    assert!(!format!("{checked:?}").contains(&key), "{checked:?}");
+
+    let mut lablet = lablet::build(config).await.unwrap();
     let finished = lablet.run(request()).await;
     lablet.shutdown().await;
 
@@ -351,6 +378,12 @@ async fn a_command_has_lablet_s_environment_less_the_key_and_no_result_shows_the
     assert_eq!(
         sent(printed),
         ("ok", "[secret withheld]\nexit code: 0".to_owned())
+    );
+    let header = &turns[4].tool_calls()[0];
+    assert_eq!(
+        sent(header),
+        ("ok", "[secret withheld]\nexit code: 0".to_owned()),
+        "the header's value is cut whole"
     );
     let telemetry = std::fs::read_to_string(scratch.telemetry()).unwrap();
     assert!(telemetry.contains("[secret withheld]"), "{telemetry}");

@@ -1,16 +1,17 @@
 //! A root of a test's own, an executor under it, and calls to it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use lablet_model::{
-    Answer, KeptOutput, OutputCap, OutputKeep, ToolCallEnd, ToolCallId, ToolCallStatus, ToolName,
-    ToolResultContent, ToolSource,
+    Answer, KeptOutput, OutputCap, OutputKeep, Secrets, ToolCallEnd, ToolCallId, ToolCallStatus,
+    ToolName, ToolResultContent, ToolSource,
 };
 use lablet_run::{ToolCall, ToolError, ToolExecutor, ToolOutput};
 use lablet_test_support::Scratch;
-use lablet_tools_builtin::{BuiltinTools, Settings, Tool, Withheld};
+use lablet_tools_builtin::{BuiltinTools, Settings, Tool};
 use nix::errno::Errno;
 use nix::sys::signal::kill;
 use nix::unistd::Pid;
@@ -57,14 +58,15 @@ impl Root {
         std::fs::read_to_string(self.root().join(path)).unwrap()
     }
 
-    /// The settings of an executor that serves every tool under the root.
+    /// The settings of an executor that serves every tool under the root,
+    /// and withholds nothing.
     pub fn settings(&self) -> Settings {
         Settings {
             root: self.root(),
             enabled: Tool::ALL.into(),
             timeout: TIMEOUT,
             env: BTreeMap::new(),
-            withheld: Withheld::default(),
+            withheld: BTreeSet::new(),
         }
     }
 
@@ -83,8 +85,8 @@ pub fn name(tool: &str) -> ToolName {
     ToolName::new(tool).unwrap()
 }
 
-/// A call to `tool` that has the executor's own limit to run in, and of
-/// whose text everything is kept.
+/// A call to `tool` that has the executor's own limit to run in, of whose
+/// text everything is kept, and that carries no secret.
 pub fn call(tool: &str, input: Value) -> ToolCall {
     ToolCall {
         id: ToolCallId::new("call_1").unwrap(),
@@ -92,8 +94,28 @@ pub fn call(tool: &str, input: Value) -> ToolCall {
         input,
         deadline: TIMEOUT,
         keep: None,
+        secrets: Arc::default(),
         trace_context: None,
     }
+}
+
+/// `values`, as the secrets a call carries.
+pub fn secrets(values: &[&str]) -> Arc<Secrets> {
+    Arc::new(Secrets::new(values.iter().map(|&value| value.to_owned())))
+}
+
+/// `call`, with `secrets` to cut out of its text.
+pub fn cutting(secrets: &Arc<Secrets>, mut call: ToolCall) -> ToolCall {
+    call.secrets = Arc::clone(secrets);
+    call
+}
+
+/// The text of `call`, which returned a result, and whether the result is
+/// an error result.
+pub async fn answered(tools: &BuiltinTools, call: ToolCall) -> (String, bool) {
+    let output = tools.execute(call).await.unwrap();
+    let is_error = output.is_error;
+    (text(output.output), is_error)
 }
 
 pub fn within(deadline: Duration, mut call: ToolCall) -> ToolCall {

@@ -5,6 +5,7 @@
 //! Nothing here reads a file, a variable or a clock, so whether a config is
 //! refused depends on the config alone.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ use lablet_model::{
 };
 use lablet_policy::{Pricing, RetryPolicy, RetryPolicyError, RetrySettings, StopPolicy};
 use lablet_run::{CallLimits, ToolFilter};
-use lablet_tools_builtin::{Tool, Withheld};
+use lablet_tools_builtin::Tool;
 
 use crate::config::{
     self, BuiltinTool, Completion, Config, KeyPath, Provider, Refusal, ResolvedModel, Setting,
@@ -353,9 +354,9 @@ fn builtin(builtin: &config::Builtin) -> Result<Option<lablet_tools_builtin::Set
         enabled: builtin.enabled.iter().copied().map(Tool::from).collect(),
         timeout: builtin.timeout,
         env: builtin.env.clone(),
-        // lablet's secrets are read from where it runs, which `build` reads
-        // and this doesn't.
-        withheld: Withheld::default(),
+        // lablet's secrets are derived from the config and where it runs,
+        // which `build` reads and this doesn't.
+        withheld: BTreeSet::new(),
     }))
 }
 

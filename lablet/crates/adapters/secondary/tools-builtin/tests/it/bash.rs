@@ -2,15 +2,16 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use lablet_model::{OutputCap, OutputCut, OutputKeep, Secrets};
+use lablet_model::{OutputCap, OutputCut, OutputKeep};
 use lablet_run::{ToolErrorKind, ToolExecutor};
-use lablet_tools_builtin::{BuiltinTools, Settings, Withheld};
+use lablet_tools_builtin::{BuiltinTools, Settings};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde_json::json;
 
 use crate::harness::{
-    Root, TIMEOUT, ask, call, came_to_hold, id_in, is_there, keeping, refused, said, sent, within,
+    Root, TIMEOUT, answered, ask, call, came_to_hold, cutting, id_in, is_there, keeping, refused,
+    said, secrets, sent, within,
 };
 
 /// A variable cargo sets for every test, which stands for the one lablet
@@ -20,14 +21,12 @@ const KEY_VARIABLE: &str = "CARGO_MANIFEST_DIR";
 /// A variable cargo sets for every test, which holds no secret of lablet's.
 const NOT_A_SECRET: &str = "CARGO_PKG_NAME";
 
-/// Settings that withhold [`KEY_VARIABLE`] and cut its value, and the value.
+/// Settings that withhold [`KEY_VARIABLE`], and its value, which a test
+/// hands a call to cut.
 fn withholding_the_key(scratch: &Root) -> (Settings, String) {
     let key = std::env::var(KEY_VARIABLE).expect("cargo sets it for a test");
     let settings = Settings {
-        withheld: Withheld {
-            variables: [KEY_VARIABLE.to_owned()].into(),
-            values: Secrets::new([key.clone()]),
-        },
+        withheld: [KEY_VARIABLE.to_owned()].into(),
         ..scratch.settings()
     };
     (settings, key)
@@ -138,7 +137,15 @@ async fn a_command_inherits_lablet_s_environment_less_what_is_withheld_and_what_
     let not_a_secret = std::env::var(NOT_A_SECRET).expect("cargo sets it for a test");
     let path = std::env::var("PATH").expect("a test has a PATH");
 
-    let text = said(&tools, "bash", json!({ "command": "env" })).await;
+    // Another variable of cargo's holds the key's value in a path, which
+    // the cut takes out of what the command printed of it.
+    let (text, is_error) = answered(
+        &tools,
+        cutting(&secrets(&[&key]), call("bash", json!({ "command": "env" }))),
+    )
+    .await;
+
+    assert!(!is_error);
 
     let lines: BTreeSet<&str> = text.lines().collect();
     assert!(
@@ -170,8 +177,13 @@ async fn a_withheld_variable_the_settings_name_is_passed_on_and_its_value_is_sti
     let command = json!({ "command": format!("echo \"${{#{KEY_VARIABLE}}} ${KEY_VARIABLE}\"") });
 
     let named = said(&given("the task's own"), "bash", command.clone()).await;
-    let the_key = said(&given(&key), "bash", command).await;
+    let (the_key, is_error) = answered(
+        &given(&key),
+        cutting(&secrets(&[&key]), call("bash", command)),
+    )
+    .await;
 
+    assert!(!is_error);
     assert_eq!(named, "14 the task's own\nexit code: 0");
     assert_eq!(
         the_key,
@@ -187,7 +199,11 @@ async fn a_secret_a_command_finds_is_cut_from_what_it_wrote_however_it_arrives()
     scratch.holds("key.txt", &key);
     let command = "head -c 5 key.txt; sleep 0.05; tail -c +6 key.txt; echo; cat key.txt";
 
-    let output = ask(&tools, "bash", json!({ "command": command }))
+    let output = tools
+        .execute(cutting(
+            &secrets(&[&key]),
+            call("bash", json!({ "command": command })),
+        ))
         .await
         .unwrap();
 
@@ -515,4 +531,31 @@ async fn arguments_that_do_not_fit_are_an_error_result_that_says_what_is_wrong()
             "{text}"
         );
     }
+}
+
+/// A value on several lines is cut by the line, since a command can print
+/// one line of a key, and a header's value by what follows its scheme word,
+/// since a command prints the bare token.
+#[tokio::test]
+async fn a_line_of_a_secret_with_several_and_what_follows_bearer_are_cut() {
+    let scratch = Root::new("bash-secret-parts");
+    let tools = scratch.tools();
+    let pem = "-----BEGIN KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEF\nAbCdEf0123456789AbCdEf012\n-----END KEY-----";
+    let token = "tok-0123456789abcdef0123";
+    scratch.holds("key.pem", pem);
+    scratch.holds("token.txt", token);
+    let secrets = secrets(&[pem, &format!("Bearer {token}")]);
+    let command = "sed -n 2p key.pem; cat token.txt; echo; cat key.pem";
+
+    let (text, is_error) = answered(
+        &tools,
+        cutting(&secrets, call("bash", json!({ "command": command }))),
+    )
+    .await;
+
+    assert!(!is_error);
+    assert_eq!(
+        text,
+        "[secret withheld]\n[secret withheld]\n[secret withheld]\nexit code: 0"
+    );
 }

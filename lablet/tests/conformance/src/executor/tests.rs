@@ -5,7 +5,7 @@
 use std::future::Future;
 use std::sync::Mutex;
 
-use lablet_model::ToolSpec;
+use lablet_model::{RedactedOutput, ToolSpec};
 use lablet_run::{ToolError, ToolOutput};
 
 use super::*;
@@ -46,6 +46,8 @@ enum Fault {
     AnswersEveryCallAlike,
     /// It says that it failed to run a tool it doesn't have.
     FailsOnAnUnknownName,
+    /// It keeps a tool's text as written, whatever secrets the call carries.
+    SkipsTheCut,
 }
 
 struct Fake {
@@ -100,16 +102,20 @@ impl Fake {
         }
     }
 
-    fn write(&self, text: &str, keep: Option<OutputKeep>) -> ToolOutput {
+    fn write(&self, text: &str, keep: Option<OutputKeep>, secrets: Arc<Secrets>) -> ToolOutput {
         let cut = keep.is_some();
         let keep = match self.fault {
             Fault::KeepsEverything => None,
             Fault::KeepsLittleOfEveryCall => Some(KEPT),
             _ => keep,
         };
+        let secrets = match self.fault {
+            Fault::SkipsTheCut => Arc::default(),
+            _ => secrets,
+        };
         let room = keep.map_or(usize::MAX, |keep| usize::try_from(keep.head).unwrap());
         let lines: Vec<&str> = text.split_inclusive('\n').collect();
-        let mut output = KeptOutput::new(keep);
+        let mut output = RedactedOutput::new(secrets, keep);
         for (line, written) in lines.iter().enumerate() {
             let fed = match self.fault {
                 Fault::CountsWhatItKept if line * written.len() >= room => break,
@@ -123,7 +129,7 @@ impl Fake {
             output.close("exit code: 0");
         }
         ToolOutput {
-            output,
+            output: output.kept(),
             is_error: false,
             mcp: None,
         }
@@ -186,7 +192,11 @@ impl ToolExecutor for Fake {
                 (says, Some(kind)) => Err(ToolError::new(kind, says)),
                 (says, None) => Ok(said(says, None)),
             },
-            "write" => Ok(self.write(call.input["text"].as_str().unwrap(), call.keep)),
+            "write" => Ok(self.write(
+                call.input["text"].as_str().unwrap(),
+                call.keep,
+                call.secrets,
+            )),
             "echo" => Ok(self.echo(call.input["text"].as_str().unwrap()).await),
             other => Err(ToolError::new(
                 match self.fault {
@@ -268,6 +278,11 @@ async fn of_an_unknown_name(fault: Fault) -> Option<String> {
     refusal(async move { a_name_the_executor_does_not_offer_is_unknown(&fake).await }).await
 }
 
+async fn of_the_cut(fault: Fault) -> Option<String> {
+    let fake = Fake::with(fault);
+    refusal(async move { an_executor_cuts_the_secrets_it_is_handed(&fake).await }).await
+}
+
 /// Holds `refusal` to being one, in words that hold `words`.
 fn assert_refused(refusal: Option<String>, words: &str) {
     let said = refusal.unwrap_or_else(|| panic!("the case passed, and was to say: {words}"));
@@ -281,6 +296,8 @@ async fn an_executor_that_keeps_the_contract_passes_every_case() {
     assert_eq!(of_the_output(Fault::ClosesWithALine).await, None);
     assert_eq!(of_shared_calls(Fault::None).await, None);
     assert_eq!(of_an_unknown_name(Fault::None).await, None);
+    assert_eq!(of_the_cut(Fault::None).await, None);
+    assert_eq!(of_the_cut(Fault::ClosesWithALine).await, None);
 }
 
 #[tokio::test(start_paused = true)]
@@ -393,4 +410,41 @@ async fn an_unknown_name_that_ends_as_anything_but_unknown_is_refused() {
         of_an_unknown_name(Fault::FailsOnAnUnknownName).await,
         "no tool is called no_such_tool",
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_executor_that_keeps_a_secret_as_written_is_refused() {
+    assert_refused(
+        of_the_cut(Fault::SkipsTheCut).await,
+        "a 401 body echoes the key: the text kept",
+    );
+}
+
+/// The fixture holds what the case needs of it: a text the subject can
+/// write, which is ASCII and ends a line, a value long enough to cut, and
+/// what's kept of it, which never holds the value.
+#[test]
+fn every_leak_is_a_text_the_subject_can_write_with_a_value_long_enough_to_cut() {
+    let leaks = leaks();
+
+    assert_eq!(leaks.len(), 8);
+    for leak in leaks {
+        assert!(
+            leak.writes.is_ascii() && leak.writes.ends_with('\n'),
+            "{}",
+            leak.name
+        );
+        assert!(
+            leak.kept.is_ascii() && leak.kept.ends_with('\n'),
+            "{}",
+            leak.name
+        );
+        assert!(
+            leak.secret.trim().len() >= Secrets::MIN_BYTES,
+            "{}: the value is under the floor",
+            leak.name
+        );
+        assert!(!leak.kept.contains(&leak.secret), "{}", leak.name);
+        assert!(!Secrets::new([leak.secret]).is_empty(), "{}", leak.name);
+    }
 }

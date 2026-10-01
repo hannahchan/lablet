@@ -1,6 +1,6 @@
 //! What lablet reads of where it runs, against an environment the test
 //! states, since a test can't set a variable of its own process: the check
-//! of the key's variable, what's withheld of lablet's secrets, and `${VAR}`.
+//! of the key's variable, the names of lablet's secrets, and `${VAR}`.
 
 use super::*;
 
@@ -128,47 +128,51 @@ fn a_provider_that_needs_no_key_has_no_variable_read() {
     }
 }
 
-#[test]
-fn the_variable_lablet_reads_its_key_from_is_withheld_and_what_it_holds_is_cut() {
-    let named = config("model: { provider: fake, script: run.yaml, api_key_env: WORK_KEY }");
-    let by_default = config("");
-
-    for (config, variable) in [(named, "WORK_KEY"), (by_default, "ANTHROPIC_API_KEY")] {
-        let withheld = withheld(&config, &holding(variable, KEY));
-
-        assert_eq!(
-            withheld,
-            Withheld {
-                variables: [variable.to_owned()].into(),
-                values: Secrets::new([KEY.to_owned()]),
-            }
-        );
-        assert!(!format!("{withheld:?}").contains(KEY), "{withheld:?}");
-    }
-}
-
-#[test]
-fn a_config_that_names_no_key_withholds_nothing() {
-    let never = |_: &str| -> Option<OsString> { panic!("the environment was read") };
-
-    let withheld = withheld(
-        &config("model: { provider: fake, script: run.yaml }"),
-        &never,
+/// T16: the check names the variables a run withholds and the names whose
+/// values it cuts, with a note on a value that isn't, and never a value.
+#[tokio::test]
+async fn the_check_names_what_a_run_withholds_and_cuts_and_never_a_value() {
+    let scratch = lablet_test_support::Scratch::new("check-names");
+    let script = scratch.write("script.yaml", ENDS);
+    let text = format!(
+        "model: {{ provider: fake, script: '{}', api_key_env: WORK_KEY }}\n\
+         prompt: {{ system: Hi. }}\n\
+         telemetry: {{ otlp: {{ headers: {{ X-Short: '${{SHORT}}' }} }} }}",
+        script.display()
     );
-
-    assert_eq!(withheld, Withheld::default());
-}
-
-#[test]
-fn a_key_variable_that_is_not_set_or_holds_a_short_value_is_withheld_with_nothing_to_cut() {
-    let named = config("model: { provider: fake, script: run.yaml, api_key_env: WORK_KEY }");
-    let expected = Withheld {
-        variables: ["WORK_KEY".to_owned()].into(),
-        values: Secrets::default(),
+    let held = |name: &str| match name {
+        "WORK_KEY" => Some(KEY.into()),
+        "SHORT" => Some("short".into()),
+        _ => None,
     };
 
-    assert_eq!(withheld(&named, &nothing), expected);
-    assert_eq!(withheld(&named, &holding("WORK_KEY", "short")), expected);
+    let checked = check_in(&config(&text), &held).await.unwrap();
+
+    assert_eq!(
+        checked.withheld(),
+        &["SHORT".to_owned(), "WORK_KEY".to_owned()].into()
+    );
+    assert_eq!(
+        checked.cut(),
+        ["SHORT (under 16 bytes, not cut)", "WORK_KEY"]
+    );
+    assert!(!format!("{checked:?}").contains(KEY), "{checked:?}");
+}
+
+#[tokio::test]
+async fn a_config_that_names_no_secret_reads_nothing_of_the_environment() {
+    let never = |_: &str| -> Option<OsString> { panic!("the environment was read") };
+    let scratch = lablet_test_support::Scratch::new("check-no-secret");
+    let script = scratch.write("script.yaml", ENDS);
+    let text = format!(
+        "model: {{ provider: fake, script: '{}' }}\nprompt: {{ system: Hi. }}",
+        script.display()
+    );
+
+    let checked = check_in(&config(&text), &never).await.unwrap();
+
+    assert!(checked.withheld().is_empty());
+    assert_eq!(checked.cut(), Vec::<String>::new());
 }
 
 /// Every event of a run's start that tells what the run was built with.

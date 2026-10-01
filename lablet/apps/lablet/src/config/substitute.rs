@@ -6,8 +6,11 @@
 //! variable holds. So the digest and every message see the config as it's
 //! written, and nothing a variable holds reaches either.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::fmt;
+use std::ops::Deref;
 use std::path::PathBuf;
 
 use serde_json::Value;
@@ -23,14 +26,15 @@ pub(crate) type Env<'a> = &'a dyn Fn(&str) -> Option<OsString>;
 
 /// `text` with each `${NAME}` in it replaced by what the variable `NAME`
 /// holds, and each `$${` by `${`, so a text can hold `${` itself. Any other
-/// `$` is text.
+/// `$` is text. The name of each variable replaced is pushed onto `names`,
+/// in order, so the caller knows which variables the text held.
 ///
 /// # Errors
 ///
 /// Returns why the text was refused: a `${` that begins no reference to a
 /// variable, a variable that isn't set, or one that holds what isn't UTF-8.
 /// No reason shows what a variable holds.
-pub(crate) fn substituted(text: &str, env: Env<'_>) -> Result<String, String> {
+fn replaced(text: &str, env: Env<'_>, names: &mut Vec<String>) -> Result<String, String> {
     let mut written = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(at) = rest.find('$') {
@@ -53,6 +57,7 @@ pub(crate) fn substituted(text: &str, env: Env<'_>) -> Result<String, String> {
                 .into_string()
                 .map_err(|_| format!("the variable `{name}` holds what isn't UTF-8"))?;
             written.push_str(&value);
+            names.push(name.to_owned());
             rest = beyond;
         } else {
             written.push('$');
@@ -76,15 +81,21 @@ fn is_name(name: &str) -> bool {
 /// Substitutes into one setting's text, and refuses it by its key.
 struct Substitute<'a> {
     env: Env<'a>,
+    /// Each variable replaced so far, by the setting it was replaced in.
+    replaced: RefCell<Vec<(KeyPath, String)>>,
 }
 
 impl Substitute<'_> {
     fn text(&self, text: &mut String, key: &KeyPath) -> Result<(), Refusal> {
         if text.contains('$') {
-            *text = substituted(text, self.env).map_err(|reason| Refusal::Invalid {
+            let mut names = Vec::new();
+            *text = replaced(text, self.env, &mut names).map_err(|reason| Refusal::Invalid {
                 key: key.clone(),
                 reason,
             })?;
+            self.replaced
+                .borrow_mut()
+                .extend(names.into_iter().map(|name| (key.clone(), name)));
         }
         Ok(())
     }
@@ -289,14 +300,67 @@ impl Substitute<'_> {
     }
 }
 
+/// A config with `${VAR}` substituted, which is what runs.
+///
+/// It's never formatted or serialised: what a variable holds is in it, and
+/// a `Debug` form or a JSON tree of it would carry a secret into a message
+/// or a file. So it has no `Serialize`, its `Debug` form names the type and
+/// nothing in it, and its settings are read through `Deref`. A message
+/// shows the config as it's written, which is the `Config` this was made
+/// from.
+pub(crate) struct Substituted {
+    config: Config,
+    /// Each variable that was replaced, by the setting it was replaced in,
+    /// in the order the settings are substituted.
+    replaced: Vec<(KeyPath, String)>,
+}
+
+impl Substituted {
+    /// The name of each variable replaced in the setting at `key`, or in
+    /// any setting within it, once each and in order.
+    pub(crate) fn replaced_within<'a>(&'a self, key: &'a KeyPath) -> impl Iterator<Item = &'a str> {
+        let mut seen = Vec::new();
+        self.replaced
+            .iter()
+            .filter(move |(at, _)| at.is_within(key))
+            .map(|(_, name)| name.as_str())
+            .filter(move |name| {
+                if seen.contains(name) {
+                    false
+                } else {
+                    seen.push(*name);
+                    true
+                }
+            })
+    }
+}
+
+impl Deref for Substituted {
+    type Target = Config;
+
+    fn deref(&self) -> &Config {
+        &self.config
+    }
+}
+
+impl fmt::Debug for Substituted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Substituted { .. }")
+    }
+}
+
 impl Config {
     /// The config a run is built from: this one, with each `${NAME}` in a
-    /// setting that holds text replaced by what the variable holds.
+    /// setting that holds text replaced by what the variable holds, and the
+    /// name of each variable replaced kept by the setting it was in.
     ///
     /// Every setting is named on the way, so a setting the config gains
     /// doesn't compile until it says whether it holds text.
-    pub(crate) fn substituted(&self, env: Env<'_>) -> Result<Self, Refusal> {
-        let at = Substitute { env };
+    pub(crate) fn substituted(&self, env: Env<'_>) -> Result<Substituted, Refusal> {
+        let at = Substitute {
+            env,
+            replaced: RefCell::new(Vec::new()),
+        };
         let mut config = self.clone();
         let Self {
             run,
@@ -313,7 +377,10 @@ impl Config {
         at.prompt(prompt)?;
         at.tools(tools)?;
         at.telemetry(telemetry)?;
-        Ok(config)
+        Ok(Substituted {
+            config,
+            replaced: at.replaced.into_inner(),
+        })
     }
 }
 

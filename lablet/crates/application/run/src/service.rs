@@ -9,9 +9,9 @@ use std::time::{Duration, Instant};
 
 use lablet_model::{
     Answer, CacheScope, Cost, Final, FinishedRun, KeptOutput, Message, OutputCap, Pending,
-    Progress, Prompts, ProviderErrorKind, ProviderResponse, Rates, RequestParams, Responded, Run,
-    RunContext, RunId, RunSetup, Schedule, StopReason, ToolCallEnd, ToolCallStatus, ToolInput,
-    ToolSource, ToolUse, Turn, Usage,
+    Progress, Prompts, ProviderErrorKind, ProviderResponse, Rates, RedactedOutput, RequestParams,
+    Responded, Run, RunContext, RunId, RunSetup, Schedule, Secrets, StopReason, ToolCallEnd,
+    ToolCallStatus, ToolInput, ToolSource, ToolUse, Turn, Usage,
 };
 use lablet_policy::{Pricing, RetryPolicy, StopPolicy};
 
@@ -57,6 +57,9 @@ pub struct RunService {
     request: RequestParams,
     pricing: Option<Pricing>,
     calls: CallLimits,
+    /// The values of lablet's own secrets, handed to every executor with
+    /// its call and cut out of every text the loop writes itself.
+    secrets: Arc<Secrets>,
 }
 
 /// A provider call that answered, with the timing of the attempt that did.
@@ -90,10 +93,10 @@ struct Settled {
 
 impl Settled {
     /// A call the loop answered itself, so no executor was reached.
-    fn local(status: ToolCallStatus, message: &str) -> Self {
+    const fn local(status: ToolCallStatus, output: KeptOutput) -> Self {
         Self {
             status,
-            output: KeptOutput::whole(message),
+            output,
             mcp: None,
         }
     }
@@ -170,6 +173,7 @@ impl RunService {
         request: RequestParams,
         pricing: Option<Pricing>,
         calls: CallLimits,
+        secrets: Arc<Secrets>,
     ) -> Self {
         Self {
             provider,
@@ -182,6 +186,7 @@ impl RunService {
             request,
             pricing,
             calls,
+            secrets,
         }
     }
 
@@ -607,7 +612,7 @@ impl RunService {
         if let Some(why) = unstarted {
             return Answer::measured(
                 ToolCallStatus::NotRun,
-                KeptOutput::whole(why),
+                self.whole(why),
                 None,
                 turned,
                 Duration::ZERO,
@@ -662,6 +667,16 @@ impl RunService {
         answer
     }
 
+    /// A result the loop wrote itself, held whole, with the run's secrets cut
+    /// out of it as an executor cuts them out of a tool's text. The words
+    /// are the loop's own, but the text may carry what an executor said or
+    /// the arguments the model sent, and neither may show a value.
+    fn whole(&self, text: &str) -> KeptOutput {
+        let mut output = RedactedOutput::new(Arc::clone(&self.secrets), None);
+        output.push(text);
+        output.kept()
+    }
+
     /// What became of one call that has `left` to run in, and what the model
     /// is sent back.
     ///
@@ -684,7 +699,10 @@ impl RunService {
         let Some(source) = source else {
             return Settled::local(
                 ToolCallStatus::Unknown,
-                &format!("no tool named {} is offered by this run", call.name),
+                self.whole(&format!(
+                    "no tool named {} is offered by this run",
+                    call.name
+                )),
             );
         };
         // The arguments are read here rather than handed in already unwrapped.
@@ -695,19 +713,19 @@ impl RunService {
             ToolInput::Unparsed(text) => {
                 return Settled::local(
                     ToolCallStatus::MalformedInput,
-                    &format!(
+                    self.whole(&format!(
                         "the arguments weren't valid JSON, so {} wasn't called: {text}",
                         call.name
-                    ),
+                    )),
                 );
             }
             ToolInput::Json(_) if self.tools.completion().intercepts(&call.name) => {
                 return Settled::local(
                     ToolCallStatus::Rejected,
-                    &format!(
+                    self.whole(&format!(
                         "call {} on its own, once your other calls have returned",
                         call.name
-                    ),
+                    )),
                 );
             }
             ToolInput::Json(value) => value.clone(),
@@ -720,19 +738,17 @@ impl RunService {
                 input,
                 deadline: left,
                 keep: self.calls.output_cap.map(OutputCap::keeps),
+                secrets: Arc::clone(&self.secrets),
                 trace_context,
             }))
             .await;
         let Some(executed) = executed else {
             // Whatever the call had written went with it, and the transport
             // it went over is the executor's to say, which it didn't.
-            return Settled {
-                status: ToolCallStatus::ran(source, ToolCallEnd::Cancelled),
-                output: KeptOutput::whole(
-                    "the run was cancelled while this call ran, and the call was stopped",
-                ),
-                mcp: None,
-            };
+            return Settled::local(
+                ToolCallStatus::ran(source, ToolCallEnd::Cancelled),
+                self.whole("the run was cancelled while this call ran, and the call was stopped"),
+            );
         };
         match executed {
             Ok(output) => {
@@ -753,7 +769,7 @@ impl RunService {
                 });
                 Settled {
                     status,
-                    output: KeptOutput::whole(error.message()),
+                    output: self.whole(error.message()),
                     mcp: error.mcp,
                 }
             }

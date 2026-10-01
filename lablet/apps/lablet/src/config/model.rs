@@ -30,10 +30,12 @@ pub struct Model {
     pub name: String,
     /// The environment variable that holds the API key, and never the key.
     /// `None` is `ANTHROPIC_API_KEY` for `anthropic` and no variable for
-    /// the others.
+    /// the others. The variable is withheld from every command, and its
+    /// value is cut out of every tool result.
     pub api_key_env: Option<String>,
     /// `anthropic` and `openai` only: where the API is served, for a
-    /// gateway or a local server.
+    /// gateway or a local server. Its user information is a secret: cut
+    /// out of every tool result, and left out of the config digest.
     pub base_url: Option<String>,
     /// The cap on output tokens for each call.
     pub max_tokens: u32,

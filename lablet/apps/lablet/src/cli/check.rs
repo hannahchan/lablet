@@ -27,11 +27,30 @@ pub(crate) fn answer(checked: &Checked, resolved: bool) -> Result<String, String
     Ok(names.join("\n"))
 }
 
-/// The line a check that passed ends with on standard error, which says
-/// how many tools a run is offered, as `passed: 2 tools`.
+/// The three lines a check that passed ends with on standard error:
+/// `withheld:` and the variables no command inherits, `cut:` and the names
+/// whose values no tool result shows, each with a note when its value
+/// isn't cut, then `passed:` and how many tools a run is offered, as
+/// `passed: 2 tools`. A list with nothing in it reads `none`, so a null
+/// effect is visible, and no line holds a value.
 pub(crate) fn summary(checked: &Checked) -> String {
     let tools = u64::try_from(checked.tools().len()).unwrap_or(u64::MAX);
-    format!("passed: {}", counted(tools, "tool", "tools"))
+    format!(
+        "withheld: {}\ncut: {}\npassed: {}",
+        listed(checked.withheld().iter().cloned()),
+        listed(checked.cut()),
+        counted(tools, "tool", "tools")
+    )
+}
+
+/// `names` on one line, or `none`.
+fn listed(names: impl IntoIterator<Item = String>) -> String {
+    let names: Vec<String> = names.into_iter().collect();
+    if names.is_empty() {
+        "none".to_owned()
+    } else {
+        names.join(", ")
+    }
 }
 
 #[cfg(test)]

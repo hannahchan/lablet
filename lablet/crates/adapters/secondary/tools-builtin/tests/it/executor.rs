@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use lablet_model::{Secrets, ToolConcurrency, ToolSource};
+use lablet_model::{ToolConcurrency, ToolSource};
 use lablet_run::{ToolErrorKind, ToolExecutor};
-use lablet_tools_builtin::{BuiltinTools, Settings, SettingsError, Tool, Withheld};
+use lablet_tools_builtin::{BuiltinTools, Settings, SettingsError, Tool};
 use serde_json::json;
 
 use crate::harness::{Root, ask, link, said};
@@ -228,7 +228,7 @@ async fn a_variable_no_command_can_start_with_is_refused_when_the_executor_is_bu
 }
 
 #[tokio::test]
-async fn an_executor_is_shown_as_its_tools_its_timeout_and_how_many_secrets_it_cuts() {
+async fn an_executor_is_shown_as_its_tools_and_its_timeout() {
     let scratch = Root::new("executor-shown");
     let tools = BuiltinTools::new(Settings {
         enabled: [Tool::ReadFile, Tool::Bash].into(),
@@ -237,20 +237,17 @@ async fn an_executor_is_shown_as_its_tools_its_timeout_and_how_many_secrets_it_c
             "a value no log is to hold".to_owned(),
         )]
         .into(),
-        withheld: Withheld {
-            variables: ["ANTHROPIC_API_KEY".to_owned()].into(),
-            values: Secrets::new(["a key no log is to hold".to_owned()]),
-        },
+        withheld: ["ANTHROPIC_API_KEY".to_owned()].into(),
         ..scratch.settings()
     })
     .unwrap();
 
     assert_eq!(
         format!("{tools:?}"),
-        "BuiltinTools { tools: [Bash, ReadFile], timeout: 30s, secrets: Secrets { values: 1 } }"
+        "BuiltinTools { tools: [Bash, ReadFile], timeout: 30s }"
     );
     assert_eq!(
         format!("{:?}", BuiltinTools::default()),
-        "BuiltinTools { tools: [], timeout: 0ns, secrets: Secrets { values: 0 } }"
+        "BuiltinTools { tools: [], timeout: 0ns }"
     );
 }

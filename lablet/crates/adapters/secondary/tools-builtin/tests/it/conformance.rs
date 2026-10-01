@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use lablet_conformance::executor::{
     Asked, Outlasting, Subject, Work, a_call_past_its_deadline_has_stopped_when_execute_returns,
-    a_name_the_executor_does_not_offer_is_unknown, an_executor_keeps_no_more_output_than_its_limit,
+    a_name_the_executor_does_not_offer_is_unknown, an_executor_cuts_the_secrets_it_is_handed,
+    an_executor_keeps_no_more_output_than_its_limit,
     calls_made_at_once_to_a_shared_tool_each_get_their_own_answer,
 };
 use lablet_run::ToolExecutor;
@@ -140,4 +141,18 @@ async fn a_name_that_is_no_built_in_tool_s_is_unknown() {
     let subject = Builtin::under("conformance-unknown", Writer::Bash);
 
     a_name_the_executor_does_not_offer_is_unknown(&subject).await;
+}
+
+#[tokio::test]
+async fn a_secret_a_command_prints_in_any_leak_shape_is_cut() {
+    let subject = Builtin::under("conformance-cut-bash", Writer::Bash);
+
+    an_executor_cuts_the_secrets_it_is_handed(&subject).await;
+}
+
+#[tokio::test]
+async fn a_secret_a_file_holds_in_any_leak_shape_is_cut() {
+    let subject = Builtin::under("conformance-cut-read-file", Writer::ReadFile);
+
+    an_executor_cuts_the_secrets_it_is_handed(&subject).await;
 }

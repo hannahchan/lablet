@@ -1,9 +1,10 @@
 //! The port a tool executor implements, what one call carries, and the MCP
 //! metadata a call over MCP brings back.
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use lablet_model::{KeptOutput, OutputKeep, ToolCallEnd, ToolCallId, ToolName, ToolSpec};
+use lablet_model::{KeptOutput, OutputKeep, Secrets, ToolCallEnd, ToolCallId, ToolName, ToolSpec};
 
 use crate::{TraceContext, bounded};
 
@@ -29,6 +30,12 @@ pub struct ToolCall {
     /// what the executor's [`KeptOutput`] is made from. `None` when the run
     /// has no cap, which keeps everything.
     pub keep: Option<OutputKeep>,
+    /// The values of lablet's own secrets, which the executor cuts out of
+    /// the tool's text before anything is kept, through
+    /// [`lablet_model::RedactedOutput`]. They travel with the call so that
+    /// no executor can be handed a call without them. The run holds one
+    /// set, and this is a handle on it.
+    pub secrets: Arc<Secrets>,
     /// The span the observer opened for this call, for an executor that
     /// propagates one. `None` when no observer keeps spans.
     pub trace_context: Option<TraceContext>,
@@ -200,7 +207,11 @@ pub trait ToolExecutor: Send + Sync {
     /// The executor feeds the tool's text to a [`KeptOutput`] made from
     /// [`ToolCall::keep`], as the text arrives, so it never holds more than
     /// the run's cap can use however much the tool writes. An output kept
-    /// to any other limit is cut from what was kept, and says so.
+    /// to any other limit is cut from what was kept, and says so. The text
+    /// goes through a [`lablet_model::RedactedOutput`] over
+    /// [`ToolCall::secrets`] on its way, so no value of lablet's own is
+    /// kept, in a result or in an error result alike; `lablet-conformance`
+    /// holds a case for it.
     ///
     /// # Errors
     ///
@@ -211,6 +222,9 @@ pub trait ToolExecutor: Send + Sync {
     /// The error's message holds no credentials: no user info or query
     /// string of a URL, no header value, and a response body only when the
     /// run captures content. The type holds the message's length and nothing
-    /// can hold this, so it's the executor's obligation.
+    /// can hold this, so it's the executor's obligation. The loop cuts
+    /// lablet's own secrets out of the message on its way to the model, as
+    /// it does out of every text it writes itself, so a value of
+    /// [`ToolCall::secrets`] that reaches the message is cut.
     async fn execute(&self, call: ToolCall) -> Result<ToolOutput, ToolError>;
 }

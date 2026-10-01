@@ -21,6 +21,11 @@ fn nothing(_: &str) -> Option<OsString> {
     None
 }
 
+/// `text` substituted in the environment `held`, with the names dropped.
+fn substituted(text: &str, held: &dyn Fn(&str) -> Option<OsString>) -> Result<String, String> {
+    replaced(text, held, &mut Vec::new())
+}
+
 #[test]
 fn a_reference_is_replaced_by_what_its_variable_holds() {
     let held = env(&[("HOME", "/home/lab"), ("A", "1"), ("B_2", ""), ("_x", "x")]);
@@ -86,10 +91,47 @@ fn a_reference_that_names_no_variable_is_refused_with_how_to_write_one() {
 }
 
 /// The config of `text`, substituted in the environment `held`.
-fn config(text: &str, held: &dyn Fn(&str) -> Option<OsString>) -> Result<Config, Refusal> {
+fn config(text: &str, held: &dyn Fn(&str) -> Option<OsString>) -> Result<Substituted, Refusal> {
     Config::from_str(text, Format::Yaml)
         .unwrap()
         .substituted(held)
+}
+
+#[test]
+fn the_variables_replaced_are_kept_by_the_setting_they_were_replaced_in() {
+    let held = env(&[("A", "1"), ("B", "2")]);
+    let text = "
+model: { name: '${A}-${B}-${A}' }
+tools: { builtin: { env: { X: '${B}', Y: literal } } }
+telemetry: { otlp: { headers: { H: '${A}' } } }
+";
+    let real = config(text, &held).unwrap();
+    let within =
+        |key: KeyPath| -> Vec<String> { real.replaced_within(&key).map(str::to_owned).collect() };
+
+    assert_eq!(within(KeyPath::of("model.name")), ["A", "B"], "once each");
+    assert_eq!(within(KeyPath::of("tools.builtin.env")), ["B"]);
+    assert_eq!(
+        within(KeyPath::of("tools.builtin.env").key("Y")),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        within(KeyPath::of("telemetry.otlp.headers").key("H")),
+        ["A"]
+    );
+    assert_eq!(within(KeyPath::of("telemetry")), ["A"]);
+    assert_eq!(within(KeyPath::of("prompt")), Vec::<String>::new());
+}
+
+/// The substituted config holds what a variable holds, so it's never
+/// formatted: its `Debug` form names the type and nothing in it.
+#[test]
+fn a_substituted_config_is_shown_as_nothing_of_what_it_holds() {
+    let secret = "sk-0123456789abcdef-no-log-holds";
+    let real = config("model: { name: '${SECRET}' }", &env(&[("SECRET", secret)])).unwrap();
+
+    assert_eq!(format!("{real:?}"), "Substituted { .. }");
+    assert_eq!(real.model.name, secret);
 }
 
 #[test]
@@ -194,7 +236,7 @@ fn a_setting_whose_variable_is_not_set_is_refused_by_its_key() {
         ),
     ] {
         assert_eq!(
-            config(text, &nothing),
+            config(text, &nothing).map(drop),
             Err(Refusal::Invalid {
                 key,
                 reason: "the variable `UNSET` isn't set".to_owned()

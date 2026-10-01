@@ -27,10 +27,15 @@ fn check(lab: &Lab, text: &str, args: &[&str]) -> Ran {
     ran(command, "")
 }
 
-/// A check that passed: its exit code, and the one line it ends with.
-fn passed(run: &Ran, tools: &str) {
+/// The two lines a check of a config with no secret ends with before the
+/// last.
+const NONE: &str = "withheld: none\ncut: none";
+
+/// A check that passed: its exit code, and the three lines it ends with,
+/// the first two being `names`.
+fn passed(run: &Ran, names: &str, tools: &str) {
     assert_eq!(run.code, Some(0), "{run:?}");
-    assert_eq!(run.stderr, format!("passed: {tools}\n"), "{run:?}");
+    assert_eq!(run.stderr, format!("{names}\npassed: {tools}\n"), "{run:?}");
 }
 
 /// A check that was refused with the one line `line`, and nothing printed
@@ -100,7 +105,7 @@ fn an_override_is_in_the_resolved_config_and_a_refused_one_is_named_as_an_overri
         "",
     );
 
-    passed(&run, "0 tools");
+    passed(&run, NONE, "0 tools");
     assert!(run.stdout.contains("\n  max_turns: 5\n"), "{run:?}");
     assert_eq!(resolved(&run).run.max_turns, std::num::NonZeroU32::new(5));
 
@@ -183,7 +188,11 @@ fn an_unset_key_variable_is_named_only_when_it_is_written_in_capitals_and_fake_n
         "model:\n  provider: fake\n  script: script.yaml\n  api_key_env: {UNSET}\nprompt:\n  \
          system: Hi.\n"
     );
-    passed(&check(&lab, &fake, &[]), "0 tools");
+    passed(
+        &check(&lab, &fake, &[]),
+        &format!("withheld: {UNSET}\ncut: {UNSET} (not set, not cut)"),
+        "0 tools",
+    );
 }
 
 #[test]
@@ -229,9 +238,13 @@ fn a_setting_the_provider_cant_apply_is_refused_and_its_default_left_out_of_the_
          its API `chat_completions` can't apply it",
     );
 
-    for (text, left_out) in [(anthropic.as_str(), "seed"), (chat, "thinking")] {
+    let key_named = format!("withheld: {KEY}\ncut: {KEY} (under 16 bytes, not cut)");
+    for (text, left_out, names) in [
+        (anthropic.as_str(), "seed", key_named.as_str()),
+        (chat, "thinking", NONE),
+    ] {
         let run = check(&lab, text, &["--resolved"]);
-        passed(&run, "0 tools");
+        passed(&run, names, "0 tools");
         let printed: Value = serde_saphyr::from_str(&run.stdout).unwrap();
         let model = printed["model"].as_object().unwrap();
         assert!(!model.contains_key(left_out), "{left_out}: {model:?}");
@@ -296,7 +309,11 @@ fn every_default_the_resolved_config_holds_is_the_one_spec_7_gives() {
 
     let run = ran(command, "");
 
-    passed(&run, "0 tools");
+    passed(
+        &run,
+        "withheld: ANTHROPIC_API_KEY\ncut: ANTHROPIC_API_KEY (under 16 bytes, not cut)",
+        "0 tools",
+    );
     let printed: Value = serde_saphyr::from_str(&run.stdout).unwrap();
     assert_eq!(printed, serde_json::to_value(spec.resolved()).unwrap());
     assert_eq!(resolved(&run).digest(), spec.digest());
@@ -315,7 +332,52 @@ fn a_check_lists_the_tools_a_run_is_offered_and_starts_no_run() {
 
     let run = lab.run(&["check", "--config", CONFIG]);
 
-    passed(&run, "2 tools");
+    passed(&run, NONE, "2 tools");
     assert_eq!(run.stdout, "bash\nread_file\n");
     assert!(!lab.telemetry().exists(), "a run started");
+}
+
+/// T16 at the command line: the names a check prints, a value a variable
+/// gave in no line of it, and `--resolved` printing the reference as
+/// written.
+#[test]
+fn a_check_prints_the_names_withheld_and_cut_and_no_value() {
+    let lab = Lab::new("check-secrets");
+    lab.write("script.yaml", ENDS);
+    lab.write(
+        "lablet.yaml",
+        "model:\n  provider: fake\n  script: script.yaml\nprompt:\n  system: Hi.\ntools:\n  \
+         builtin:\n    root: work\n    enabled: [bash]\n    env:\n      TOKEN: \
+         '${LABLET_TEST_TOKEN}'\n      PATH: /usr/bin\ntelemetry:\n  otlp:\n    headers:\n      \
+         Authorization: 'Bearer ${LABLET_TEST_TOKEN}'\n      X-Literal: \
+         literal-0123456789abcdef\n      X-Short: '${LABLET_TEST_SHORT}'\n",
+    );
+    let token = "tok-0123456789abcdef-no-stderr";
+    let check = |args: &[&str]| {
+        let mut command = lab.lablet(&[&["check", "--config", "lablet.yaml"][..], args].concat());
+        command
+            .env("LABLET_TEST_TOKEN", token)
+            .env("LABLET_TEST_SHORT", "short");
+        ran(command, "")
+    };
+
+    let plain = check(&[]);
+    passed(
+        &plain,
+        "withheld: LABLET_TEST_SHORT, LABLET_TEST_TOKEN\ncut: LABLET_TEST_SHORT (under 16 \
+         bytes, not cut), LABLET_TEST_TOKEN, telemetry.otlp.headers.X-Literal",
+        "1 tool",
+    );
+    assert!(!plain.stderr.contains(token), "{plain:?}");
+
+    let resolved = check(&["--resolved"]);
+    assert_eq!(resolved.code, Some(0), "{resolved:?}");
+    assert!(
+        resolved.stdout.contains("${LABLET_TEST_TOKEN}"),
+        "{resolved:?}"
+    );
+    assert!(
+        !resolved.stdout.contains(token) && !resolved.stderr.contains(token),
+        "{resolved:?}"
+    );
 }

@@ -138,10 +138,7 @@ fn settings_are_shown_with_the_names_of_their_variables_and_none_of_the_values()
         enabled: [Tool::Bash].into(),
         timeout: Duration::from_secs(120),
         env: added(&[("NPM_TOKEN", "a value no log is to hold")]),
-        withheld: Withheld {
-            variables: withheld(&["ANTHROPIC_API_KEY"]),
-            values: lablet_model::Secrets::new(["a key no log is to hold".to_owned()]),
-        },
+        withheld: withheld(&["ANTHROPIC_API_KEY"]),
     };
 
     let shown = format!("{settings:?}");
@@ -149,6 +146,6 @@ fn settings_are_shown_with_the_names_of_their_variables_and_none_of_the_values()
     assert_eq!(
         shown,
         "Settings { root: \"/work\", enabled: {Bash}, timeout: 120s, env: [\"NPM_TOKEN\"], \
-         withheld: Withheld { variables: {\"ANTHROPIC_API_KEY\"}, values: Secrets { values: 1 } } }"
+         withheld: {\"ANTHROPIC_API_KEY\"} }"
     );
 }
