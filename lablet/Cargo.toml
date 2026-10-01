@@ -155,10 +155,18 @@ opentelemetry-otlp = { version = "=0.33.0", default-features = false, features =
   "logs",
   "internal-logs",
 ] }
+# The HTTP client trait the OTLP HTTP exporter sends through. telemetry-otel wraps the client
+# behind it, so the config's headers are set after the exporter has merged the environment's.
+opentelemetry-http = "=0.33.0"
+# Holds a header value of `telemetry.otlp.headers` from the builder to the request, so no
+# `Debug` or log line prints one.
+secrecy = "=0.10.3"
 # Protobuf bodies in the in-process OTLP HTTP receiver; the line opentelemetry-proto requires.
 prost = "=0.14.4"
-# In-process OTLP gRPC receiver in lablet-conformance; the line opentelemetry-otlp requires.
-tonic = { version = "=0.14.6", default-features = false, features = ["server", "router"] }
+# The request and status types of the OTLP gRPC exporter's interceptor in telemetry-otel, and
+# the in-process gRPC receiver in lablet-conformance, which adds the server features; the line
+# opentelemetry-otlp requires.
+tonic = { version = "=0.14.6", default-features = false }
 # In-process OTLP HTTP receiver in lablet-conformance; the line tonic's router uses, so one copy.
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
 

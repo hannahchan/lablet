@@ -19,7 +19,7 @@ use lablet_provider_fake::FakeProvider;
 use lablet_run::{
     RunService, ToolCall, ToolError, ToolErrorKind, ToolExecutor, ToolOutput, TraceContext,
 };
-use lablet_telemetry_otel::{FileTarget, FlushError, OtelObserver};
+use lablet_telemetry_otel::{FileTarget, FlushError, OtelObserver, OtlpSettings};
 use lablet_test_support::{CancelledAfter, RunBuilder, Scratch, context, request, scripted};
 use serde_json::json;
 
@@ -200,8 +200,10 @@ impl ToolExecutor for Writer {
 
 /// What a test says of the runs it makes.
 pub struct Settings {
-    /// Where the observer exports to.
-    pub target: FileTarget,
+    /// The file the observer exports to, when it exports to one.
+    pub target: Option<FileTarget>,
+    /// The collector the observer exports to, when it exports to one.
+    pub otlp: Option<OtlpSettings>,
     /// Whether the runs capture content.
     pub capture_content: bool,
     /// What the run request named the runs.
@@ -243,9 +245,10 @@ impl Settings {
     /// transcript, no skills and no MCP servers. Nothing cancels them.
     pub fn in_scratch(scratch: &Scratch) -> Self {
         Self {
-            target: FileTarget::EachRun {
+            target: Some(FileTarget::EachRun {
                 directory: scratch.path().to_owned(),
-            },
+            }),
+            otlp: None,
             capture_content: false,
             labels: RunLabels::default(),
             max_retries: 3,
@@ -284,6 +287,7 @@ impl Harness {
     pub async fn playing(script: &str, settings: Settings) -> Self {
         let Settings {
             target,
+            otlp,
             capture_content,
             labels,
             max_retries,
@@ -302,13 +306,17 @@ impl Harness {
         } = settings;
         let provider = scripted(script);
         let tools = Arc::new(Tools::new(&bash_does, bash_concurrency, read_file_source));
-        let observer = OtelObserver::builder(VERSION)
-            .resource(vec![
-                ("team".to_owned(), "evals".to_owned()),
-                ("deployment.environment.name".to_owned(), "ci".to_owned()),
-            ])
-            .file(target)
-            .build();
+        let mut builder = OtelObserver::builder(VERSION).resource(vec![
+            ("team".to_owned(), "evals".to_owned()),
+            ("deployment.environment.name".to_owned(), "ci".to_owned()),
+        ]);
+        if let Some(target) = target {
+            builder = builder.file(target);
+        }
+        if let Some(settings) = otlp {
+            builder = builder.otlp(settings);
+        }
+        let observer = builder.build().unwrap();
         let mut builder = RunBuilder::new(Arc::clone(&provider) as _);
         if let Some(after) = cancelled_after {
             builder = builder.cancellation(Arc::new(CancelledAfter::new(after)));

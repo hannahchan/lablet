@@ -16,11 +16,14 @@
 //!   and last, so that a batch of content a collector refuses for its size
 //!   can't take it along.
 //!
-//! The one exporter so far writes OTLP/JSON lines to a file.
+//! Two destinations: an OTLP collector over the network, by gRPC or
+//! HTTP/protobuf, and OTLP/JSON lines in a file. A run may go to both, and
+//! each is flushed on its own, so the file never waits on the network.
 
 mod attributes;
 mod content;
 mod file;
+mod network;
 mod observer;
 mod pipeline;
 mod run;
@@ -31,6 +34,7 @@ mod wide;
 
 pub use attributes::ATTRIBUTE_MAX_BYTES;
 pub use file::FileTarget;
+pub use network::{OtelBuildError, OtlpSettings, Signal, Transport, decode_headers};
 pub use observer::{FlushError, OtelObserver, OtelObserverBuilder};
 
 #[cfg(test)]

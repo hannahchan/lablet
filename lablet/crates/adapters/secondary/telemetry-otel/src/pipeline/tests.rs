@@ -77,10 +77,10 @@ fn what_leaves_a_queue_gives_its_room_back() {
     let room = Room::new(2, Arc::clone(&lost));
     assert!(room.admit() && room.admit());
 
-    room.left(1, true);
+    room.left(1, true, room.generation());
 
     assert_eq!([room.admit(), room.admit()], [true, false]);
-    room.left(2, true);
+    room.left(2, true, room.generation());
     assert_eq!(
         [room.admit(), room.admit(), room.admit()],
         [true, true, false]
@@ -94,7 +94,7 @@ fn what_an_export_that_failed_held_is_lost_and_its_room_is_given_back() {
     let room = Room::new(3, Arc::clone(&lost));
     assert!(room.admit() && room.admit() && room.admit());
 
-    room.left(2, false);
+    room.left(2, false, room.generation());
 
     assert_eq!(lost.take(), 2);
     assert_eq!(
@@ -106,13 +106,61 @@ fn what_an_export_that_failed_held_is_lost_and_its_room_is_given_back() {
 #[test]
 fn a_count_that_was_taken_starts_again_from_none() {
     let lost = lost();
-    lost.add(3);
-    lost.add(4);
+    lost.add(lost.generation(), 3);
+    lost.add(lost.generation(), 4);
 
     assert_eq!(lost.take(), 7);
     assert_eq!(lost.take(), 0);
-    lost.add(1);
+    lost.add(lost.generation(), 1);
     assert_eq!(lost.take(), 1);
+}
+
+#[test]
+fn a_loss_of_a_generation_that_was_taken_is_counted_against_no_run() {
+    let lost = lost();
+    let before = lost.generation();
+    lost.add(before, 2);
+
+    assert_eq!(lost.take(), 2);
+    lost.add(before, 3);
+    let now = lost.generation();
+    lost.add(now, 1);
+
+    assert_ne!(before, now);
+    assert_eq!(
+        lost.take(),
+        1,
+        "the late loss isn't in the next run's count"
+    );
+    assert_eq!(lost.take(), 0, "and isn't carried anywhere");
+}
+
+#[test]
+fn an_export_that_fails_after_its_runs_count_was_taken_is_counted_against_no_run() {
+    let (memory, lost) = (Memory::default(), lost());
+    let queue = SpanQueue::new("memory", memory.spans(), &resource(), &lost);
+    memory.hold();
+    memory.refuse_spans(true);
+    queue.end(span(0));
+    // The export of the span is in flight, held by the destination, when
+    // the run's count is taken.
+    memory.wait_until_exporting();
+    let of_the_run = lost.take();
+
+    memory.release();
+    // The flush is answered once the export in flight has failed: the
+    // queue's thread does one thing at a time.
+    let flushed = queue.flush();
+
+    assert_eq!(of_the_run, 0);
+    flushed.unwrap();
+    assert!(memory.exported_spans().is_empty(), "the export was refused");
+    assert_eq!(
+        lost.take(),
+        0,
+        "the loss landed after the run's wide event was made, so no run counts it"
+    );
+    queue.shutdown(Duration::from_secs(5)).unwrap();
 }
 
 // Spans
@@ -120,7 +168,7 @@ fn a_count_that_was_taken_starts_again_from_none() {
 #[test]
 fn a_queue_of_spans_exports_what_it_holds_when_it_is_flushed() {
     let (memory, lost) = (Memory::default(), lost());
-    let queue = SpanQueue::new(memory.spans(), &resource(), &lost);
+    let queue = SpanQueue::new("memory", memory.spans(), &resource(), &lost);
 
     queue.end(span(0));
     queue.end(span(1));
@@ -141,8 +189,8 @@ fn a_queue_of_spans_exports_what_it_holds_when_it_is_flushed() {
 fn an_exporter_is_told_what_its_exports_come_from_before_it_exports() {
     let (memory, lost) = (Memory::default(), lost());
 
-    let spans = SpanQueue::new(memory.spans(), &resource(), &lost);
-    let records = RecordQueue::new(memory.records(), &resource(), &lost);
+    let spans = SpanQueue::new("memory", memory.spans(), &resource(), &lost);
+    let records = RecordQueue::new("memory", memory.records(), &resource(), &lost);
 
     assert_eq!(memory.resources(), [resource(), resource()]);
     assert!(memory.exports().is_empty());
@@ -155,7 +203,7 @@ fn an_exporter_is_told_what_its_exports_come_from_before_it_exports() {
 #[test]
 fn a_span_there_is_no_room_for_is_counted_lost_and_the_rest_are_exported() {
     let (memory, lost) = (Memory::default(), lost());
-    let queue = SpanQueue::new(memory.spans(), &resource(), &lost);
+    let queue = SpanQueue::new("memory", memory.spans(), &resource(), &lost);
     memory.hold();
 
     for number in 0..QUEUE_CAPACITY + 3 {
@@ -196,7 +244,7 @@ fn a_span_there_is_no_room_for_is_counted_lost_and_the_rest_are_exported() {
 #[test]
 fn the_spans_of_an_export_that_failed_are_counted_lost() {
     let (memory, lost) = (Memory::default(), lost());
-    let queue = SpanQueue::new(memory.spans(), &resource(), &lost);
+    let queue = SpanQueue::new("memory", memory.spans(), &resource(), &lost);
     memory.refuse_spans(true);
 
     for number in 0..3 {
@@ -215,7 +263,7 @@ fn the_spans_of_an_export_that_failed_are_counted_lost() {
 #[test]
 fn a_queue_of_records_exports_what_it_holds_when_it_is_flushed() {
     let (memory, lost) = (Memory::default(), lost());
-    let queue = RecordQueue::new(memory.records(), &resource(), &lost);
+    let queue = RecordQueue::new("memory", memory.records(), &resource(), &lost);
 
     emit(&queue, 2);
     let flushed = queue.force_flush();
@@ -229,7 +277,7 @@ fn a_queue_of_records_exports_what_it_holds_when_it_is_flushed() {
 #[test]
 fn a_record_there_is_no_room_for_is_counted_lost_and_the_rest_are_exported() {
     let (memory, lost) = (Memory::default(), lost());
-    let queue = RecordQueue::new(memory.records(), &resource(), &lost);
+    let queue = RecordQueue::new("memory", memory.records(), &resource(), &lost);
     memory.hold();
 
     emit(&queue, QUEUE_CAPACITY + 2);
@@ -250,7 +298,7 @@ fn a_record_there_is_no_room_for_is_counted_lost_and_the_rest_are_exported() {
 #[test]
 fn the_records_of_an_export_that_failed_are_counted_lost() {
     let (memory, lost) = (Memory::default(), lost());
-    let queue = RecordQueue::new(memory.records(), &resource(), &lost);
+    let queue = RecordQueue::new("memory", memory.records(), &resource(), &lost);
     memory.refuse_records(true);
 
     emit(&queue, 4);
@@ -265,7 +313,7 @@ fn the_records_of_an_export_that_failed_are_counted_lost() {
 #[test]
 fn a_provider_has_nothing_to_tell_a_queue_of_its_resource() {
     let (memory, lost) = (Memory::default(), lost());
-    let mut queue = RecordQueue::new(memory.records(), &resource(), &lost);
+    let mut queue = RecordQueue::new("memory", memory.records(), &resource(), &lost);
 
     queue.set_resource(&Resource::builder_empty().build());
 

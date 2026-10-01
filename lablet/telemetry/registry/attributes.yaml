@@ -291,12 +291,13 @@ attributes:
   - key: lablet.telemetry.dropped_records
     type: int
     stability: development
-    brief: Number of spans and log records of the run that lablet's exporters refused or dropped before the wide event was made.
+    brief: Number of spans and log records of the run that the exporters to this destination refused or dropped before the wide event was made.
     note: >
       Justification: the conventions count what an SDK drops as metrics of the SDK, which a
       consumer of one run's record doesn't have. The count is on the run's one row so that a
-      row whose spans or content are incomplete says so. The wide event is made once the
-      run's other records have been flushed, and it isn't counted itself.
+      row whose spans or content are incomplete says so. Each destination, the file and the
+      network, gets the wide event with its own count: the wide event is made for a destination
+      once the run's other records have been flushed to it, and it isn't counted itself.
     examples: [0]
 
   # Provider totals

@@ -10,14 +10,14 @@ use std::sync::Arc;
 use lablet_model::{RunOutcome, Secrets, StopReason, ToolSpec};
 use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
 use lablet_run::{FilterList, RunObserver, RunService, ToolExecutor, ToolSet, ToolSetError};
-use lablet_telemetry_otel::{FileTarget, OtelObserver};
+use lablet_telemetry_otel::{FileTarget, OtelBuildError, OtelObserver, OtlpSettings, Transport};
 use lablet_tools_builtin::{BuiltinTools, SettingsError, Withheld};
 
 use crate::cancel::RunCancellation;
 use crate::clock::TokioClock;
 use crate::config::{
-    Config, ConfigError, Context, Env, Format, KeyPath, Model, Place, Provider, Refusal,
-    ResolvedConfig, Tools, TranscriptFormat,
+    Config, ConfigError, Context, Env, Format, KeyPath, Model, OtlpProtocol, Place, Provider,
+    Refusal, ResolvedConfig, Tools, TranscriptFormat,
 };
 use crate::fanout::FanOut;
 use crate::lablet::{Fixed, Lablet, Played, TranscriptPath};
@@ -37,8 +37,6 @@ pub enum Unsupported {
     Openai,
     /// `tools.mcp` lists a server.
     McpServers,
-    /// `telemetry.otlp.endpoint` is set.
-    OtlpEndpoint,
     /// `prompt.skills` lists a skill.
     Skills,
     /// `run.context` is `mask`.
@@ -57,7 +55,6 @@ impl Unsupported {
     /// The phase of the build plan that delivers it.
     const fn phase(self) -> &'static str {
         match self {
-            Self::OtlpEndpoint => "6",
             Self::Anthropic => "7",
             Self::ContextMask => "7a",
             Self::McpServers | Self::MaxDescriptionChars => "8",
@@ -73,7 +70,6 @@ impl fmt::Display for Unsupported {
             Self::Anthropic => "`model.provider: anthropic`",
             Self::Openai => "`model.provider: openai`",
             Self::McpServers => "a server in `tools.mcp`",
-            Self::OtlpEndpoint => "`telemetry.otlp.endpoint`",
             Self::Skills => "a skill in `prompt.skills`",
             Self::ContextMask => "`run.context: mask`",
             Self::Atif => "`run.transcript_format: atif`",
@@ -267,19 +263,64 @@ pub fn telemetry_on_stderr(config: &Config) -> bool {
 pub(crate) fn telemetry_on_stderr_in(config: &Config, env: Env<'_>) -> bool {
     config
         .substituted(env)
-        .is_ok_and(|real| file_target(&real) == FileTarget::Stderr)
+        .is_ok_and(|real| file_target(&real) == Some(FileTarget::Stderr))
 }
 
-/// Where the telemetry of `real`, a config with `${VAR}` substituted, goes.
-/// Only a path that's `-` whole is standard error, so `-/` names a file.
-fn file_target(real: &Config) -> FileTarget {
+/// Where the telemetry file of `real`, a config with `${VAR}` substituted,
+/// goes, and `None` when it writes no file: a null path with an endpoint
+/// stated. Only a path that's `-` whole is standard error, so `-/` names a
+/// file.
+fn file_target(real: &Config) -> Option<FileTarget> {
     match &real.telemetry.file.path {
-        None => FileTarget::EachRun {
+        None if real.telemetry.otlp.endpoint.is_some() => None,
+        None => Some(FileTarget::EachRun {
             directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        },
-        Some(path) if path.as_os_str() == "-" => FileTarget::Stderr,
-        Some(path) => FileTarget::Path(path.clone()),
+        }),
+        Some(path) if path.as_os_str() == "-" => Some(FileTarget::Stderr),
+        Some(path) => Some(FileTarget::Path(path.clone())),
     }
+}
+
+/// What the network exporter is built from, when `real` states an
+/// endpoint: the config's transport, endpoint and headers. The endpoint is
+/// the config's, so the environment's headers aren't sent to it.
+fn otlp_settings(real: &Config) -> Option<OtlpSettings> {
+    let otlp = &real.telemetry.otlp;
+    let endpoint = otlp.endpoint.clone()?;
+    Some(OtlpSettings {
+        transport: match otlp.protocol {
+            OtlpProtocol::Grpc => Transport::Grpc,
+            OtlpProtocol::Http => Transport::HttpProtobuf,
+        },
+        endpoint: Some(endpoint),
+        headers: otlp.headers.clone().into_iter().collect(),
+        strip_environment_headers: true,
+    })
+}
+
+/// The refusal of what the network exporter couldn't be built from, shown
+/// from `written`: the endpoint as the config writes it, and a header by
+/// its key alone, since every header value is a secret.
+fn otlp_refused(written: &Config, error: OtelBuildError) -> BuildError {
+    let reason = match error {
+        OtelBuildError::Header { name, reason } => {
+            let key = KeyPath::of("telemetry.otlp.headers").key(&name).to_string();
+            return BuildError::Config(ConfigError::Invalid {
+                place: written.place_of(&key),
+                value: None,
+                key,
+                reason: reason.to_owned(),
+            });
+        }
+        OtelBuildError::Endpoint { .. } => "it isn't a URL the exporter accepts".to_owned(),
+        OtelBuildError::Exporter { reason, .. } => {
+            format!("the exporter couldn't be made: {reason}")
+        }
+        OtelBuildError::HttpClient { reason } => {
+            format!("the HTTP client couldn't be made: {reason}")
+        }
+    };
+    BuildError::Config(written.refused(Refusal::invalid("telemetry.otlp.endpoint", reason)))
 }
 
 /// Checks `config` whole, as [`build`] does, and stops before the provider
@@ -357,7 +398,7 @@ struct Prepared {
     settings: Settings,
     provider: Ready,
     system: String,
-    target: FileTarget,
+    target: Option<FileTarget>,
     tools: Arc<ToolSet>,
 }
 
@@ -403,7 +444,7 @@ async fn prepare(written: &Config, env: Env<'_>) -> Result<Prepared, BuildError>
 
     let executors = match settings.builtin.clone() {
         Some(builtin) => {
-            outside_root(&builtin.root, &real, written, &target)?;
+            outside_root(&builtin.root, &real, written, target.as_ref())?;
             let builtin = lablet_tools_builtin::Settings {
                 withheld: withheld(&real, env),
                 ..builtin
@@ -493,10 +534,17 @@ async fn build_in(
     };
     let provider = Arc::new(FakeProvider::new(real.model.name.clone(), script));
 
-    let telemetry = OtelObserver::builder(crate::VERSION)
-        .resource(real.telemetry.resource.clone().into_iter().collect())
-        .file(target)
-        .build();
+    let mut telemetry = OtelObserver::builder(crate::VERSION)
+        .resource(real.telemetry.resource.clone().into_iter().collect());
+    if let Some(target) = target {
+        telemetry = telemetry.file(target);
+    }
+    if let Some(settings) = otlp_settings(&real) {
+        telemetry = telemetry.otlp(settings);
+    }
+    let telemetry = telemetry
+        .build()
+        .map_err(|error| otlp_refused(&config, error))?;
     let mut told: Vec<Arc<dyn RunObserver>> = vec![Arc::new(telemetry.clone())];
     told.extend(observers);
 
@@ -586,15 +634,10 @@ fn withheld(config: &Config, env: Env<'_>) -> Withheld {
 /// has no adapter for, and a setting that only such an adapter applies.
 fn supported(config: &Config) -> Result<(), Unsupported> {
     let Config {
-        run,
-        prompt,
-        tools,
-        telemetry,
-        ..
+        run, prompt, tools, ..
     } = config;
     let selected = [
         (!tools.mcp.is_empty(), Unsupported::McpServers),
-        (telemetry.otlp.endpoint.is_some(), Unsupported::OtlpEndpoint),
         (!prompt.skills.is_empty(), Unsupported::Skills),
         (
             matches!(run.context, Context::Mask { .. }),
@@ -648,7 +691,7 @@ fn outside_root(
     root: &Path,
     real: &Config,
     written: &Config,
-    telemetry: &FileTarget,
+    telemetry: Option<&FileTarget>,
 ) -> Result<(), BuildError> {
     let resolved = std::fs::canonicalize(root).map_err(|error| {
         BuildError::Config(
@@ -656,9 +699,9 @@ fn outside_root(
         )
     })?;
     let telemetry = match telemetry {
-        FileTarget::EachRun { directory } => Some(directory.join(EACH_RUN_FILE)),
-        FileTarget::Path(path) => Some(path.clone()),
-        FileTarget::Stderr => None,
+        Some(FileTarget::EachRun { directory }) => Some(directory.join(EACH_RUN_FILE)),
+        Some(FileTarget::Path(path)) => Some(path.clone()),
+        Some(FileTarget::Stderr) | None => None,
     };
     let files = [
         (OwnFile::Config, real.source()),

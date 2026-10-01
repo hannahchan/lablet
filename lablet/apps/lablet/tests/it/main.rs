@@ -20,6 +20,8 @@ mod labels;
 #[cfg(test)]
 mod library;
 #[cfg(test)]
+mod otlp;
+#[cfg(test)]
 mod schema;
 #[cfg(test)]
 mod smoke;

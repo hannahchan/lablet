@@ -343,6 +343,9 @@ pub(crate) mod memory {
         refuses_wide: AtomicBool,
         held: Mutex<bool>,
         released: Condvar,
+        /// How many exports are waiting to be released.
+        exporting: Mutex<usize>,
+        began: Condvar,
     }
 
     /// The memory of one destination's three exporters, which says what
@@ -405,6 +408,18 @@ pub(crate) mod memory {
             self.0.released.notify_all();
         }
 
+        /// Returns once an export is waiting to be released, which an
+        /// export to a held destination does for as long as it's held.
+        pub(crate) fn wait_until_exporting(&self) {
+            let exporting = self.0.exporting.lock().unwrap();
+            drop(
+                self.0
+                    .began
+                    .wait_while(exporting, |exporting| *exporting == 0)
+                    .unwrap(),
+            );
+        }
+
         /// Every export so far, in order.
         pub(crate) fn exports(&self) -> Vec<Export> {
             self.0.exports.lock().unwrap().clone()
@@ -453,8 +468,11 @@ pub(crate) mod memory {
         }
 
         fn export(&self, export: Export, refuses: &AtomicBool) -> OTelSdkResult {
+            *self.0.exporting.lock().unwrap() += 1;
+            self.0.began.notify_all();
             let held = self.0.held.lock().unwrap();
             drop(self.0.released.wait_while(held, |held| *held).unwrap());
+            *self.0.exporting.lock().unwrap() -= 1;
             if refuses.load(Ordering::SeqCst) {
                 return Err(OTelSdkError::InternalFailure(
                     "the destination can't be written".to_owned(),

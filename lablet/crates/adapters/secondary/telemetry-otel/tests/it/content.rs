@@ -255,7 +255,7 @@ async fn the_records_of_a_run_hold_the_conversation_as_the_model_was_sent_it() {
 /// A script of `turns` turns that each call `write` for a few bytes and a
 /// last one that ends the run; the call of the turn before the last asks
 /// for `long` bytes.
-fn writing(turns: usize, long: usize) -> String {
+pub fn writing(turns: usize, long: usize) -> String {
     let mut script = String::new();
     for turn in 1..=turns {
         let bytes = if turn == turns { long } else { 4 };

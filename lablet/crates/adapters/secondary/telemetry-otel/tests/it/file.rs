@@ -66,7 +66,7 @@ async fn two_runs_of_one_observer_are_appended_to_the_one_file_it_was_given() {
     let mut harness = Harness::playing(
         FAILS_CALLS_ENDS,
         Settings {
-            target: FileTarget::Path(path.clone()),
+            target: Some(FileTarget::Path(path.clone())),
             ..Settings::in_scratch(&scratch)
         },
     )
@@ -95,7 +95,7 @@ async fn a_file_that_was_moved_after_a_run_holds_that_run_and_its_path_the_run_a
     let mut harness = Harness::playing(
         FAILS_CALLS_ENDS,
         Settings {
-            target: FileTarget::Path(path.clone()),
+            target: Some(FileTarget::Path(path.clone())),
             ..Settings::in_scratch(&scratch)
         },
     )
@@ -129,9 +129,9 @@ async fn a_destination_that_cannot_be_written_changes_nothing_about_the_run() {
     let mut unwritable = Harness::playing(
         FAILS_CALLS_ENDS,
         Settings {
-            target: FileTarget::EachRun {
+            target: Some(FileTarget::EachRun {
                 directory: missing.clone(),
-            },
+            }),
             capture_content: true,
             ..Settings::in_scratch(&scratch)
         },

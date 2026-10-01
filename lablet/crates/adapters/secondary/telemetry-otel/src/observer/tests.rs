@@ -13,6 +13,7 @@ use opentelemetry_sdk::trace::SpanData;
 use serde_json::json;
 
 use super::*;
+use crate::network::{OtelBuildError, OtlpSettings, Transport};
 use crate::pipeline::QUEUE_CAPACITY;
 use crate::testing::memory::{Export, Logged, Memory};
 use crate::testing::{
@@ -26,6 +27,7 @@ fn observing(memory: &Memory) -> OtelObserver {
     OtelObserver::builder("0.1.0")
         .exporting_to(memory.spans(), memory.records(), memory.wide())
         .build()
+        .unwrap()
 }
 
 fn of(run: &RunId, kind: EventKind) -> RunEvent {
@@ -611,7 +613,8 @@ async fn a_destination_that_does_not_answer_holds_a_shutdown_only_for_its_timeou
     let observer = OtelObserver::builder("0.1.0")
         .exporting_to(memory.spans(), memory.records(), memory.wide())
         .shutdown_timeout(brief)
-        .build();
+        .build()
+        .unwrap();
     memory.hold();
     told(&observer, a_run(false)).await;
 
@@ -759,7 +762,8 @@ async fn every_signal_is_of_the_scope_that_names_the_registry_s_schema() {
     let memory = Memory::default();
     let observer = OtelObserver::builder("0.4.2")
         .exporting_to(memory.spans(), memory.records(), memory.wide())
-        .build();
+        .build()
+        .unwrap();
 
     told(&observer, a_run(true)).await;
     observer.flush().await.unwrap();
@@ -796,7 +800,8 @@ async fn every_exporter_is_told_the_service_the_sdk_and_what_the_composer_added(
             ("deployment.environment.name".to_owned(), "ci".to_owned()),
         ])
         .exporting_to(memory.spans(), memory.records(), memory.wide())
-        .build();
+        .build()
+        .unwrap();
 
     let resources = memory.resources();
     assert_eq!(resources.len(), 3, "the three exporters of one destination");
@@ -820,33 +825,114 @@ async fn every_exporter_is_told_the_service_the_sdk_and_what_the_composer_added(
 // Where a run is exported to
 
 #[tokio::test]
-async fn every_destination_is_handed_every_span_and_every_record() {
+async fn every_destination_is_handed_every_span_and_every_record_and_counts_its_own_losses() {
     let (first, second) = (Memory::default(), Memory::default());
     let observer = OtelObserver::builder("0.1.0")
         .exporting_to(first.spans(), first.records(), first.wide())
-        .exporting_to(second.spans(), second.records(), second.wide())
-        .build();
+        .exporting_over_the_network_to(second.spans(), second.records(), second.wide())
+        .build()
+        .unwrap();
     second.refuse_records(true);
 
     told(&observer, a_run(true)).await;
     let flushed = observer.flush().await;
 
-    assert!(flushed.is_err());
+    let failures = flushed.unwrap_err();
+    assert_eq!(failures.failures().len(), 1, "{failures}");
+    assert!(
+        failures.failures()[0].starts_with("otlp log records: "),
+        "{failures}"
+    );
     assert_eq!(first.exported_spans(), second.exported_spans());
     assert_eq!(first.exported_spans().len(), 4);
     assert_eq!(first.exported_records().len(), 5);
     assert!(second.exported_records().is_empty());
-    assert_eq!(first.exported_wide(), second.exported_wide());
+    assert_eq!(events_of(&first.exported_wide()), ["lablet.run"]);
+    assert_eq!(events_of(&second.exported_wide()), ["lablet.run"]);
     assert_eq!(
         dropped(&first.exported_wide()[0]),
-        AnyValue::Int(5),
-        "what any destination lost is counted"
+        AnyValue::Int(0),
+        "the first lost nothing, and counts nothing of what the second did"
     );
+    assert_eq!(dropped(&second.exported_wide()[0]), AnyValue::Int(5));
+}
+
+/// A destination that doesn't answer holds a flush for no longer than the
+/// bound it's given, and holds no other destination at all: the file is
+/// whole, wide event and all, while the network is stuck.
+#[tokio::test]
+async fn a_destination_that_does_not_answer_holds_a_flush_only_for_its_bound_and_no_other() {
+    let brief = Duration::from_millis(100);
+    let (file, network) = (Memory::default(), Memory::default());
+    let observer = OtelObserver::builder("0.1.0")
+        .exporting_over_the_network_to(network.spans(), network.records(), network.wide())
+        .exporting_to(file.spans(), file.records(), file.wide())
+        .flush_timeout(brief)
+        .build()
+        .unwrap();
+    network.hold();
+    told(&observer, a_run(true)).await;
+
+    let began = Instant::now();
+    let flushed = observer.flush().await;
+    let waited = began.elapsed();
+
+    assert_eq!(
+        flushed.unwrap_err().failures(),
+        ["otlp: the flush didn't end within 100ms"],
+        "the network destination alone is reported, by its bound"
+    );
+    assert!(waited >= brief, "the flush gave up after {waited:?}");
+    assert!(
+        waited < SHUTDOWN_TIMEOUT,
+        "the flush waited {waited:?}, past the bound it was given"
+    );
+    assert_eq!(file.exported_spans().len(), 4);
+    assert_eq!(file.exported_records().len(), 5);
+    assert_eq!(events_of(&file.exported_wide()), ["lablet.run"]);
+    assert_eq!(dropped(&file.exported_wide()[0]), AnyValue::Int(0));
+    assert!(network.exports().is_empty());
+
+    // Once the destination answers, the thread the flush left makes the
+    // run's wide event, and the shutdown exports it.
+    network.release();
+    observer.shutdown().await.unwrap();
+    assert_eq!(network.exported_spans().len(), 4);
+    assert_eq!(events_of(&network.exported_wide()), ["lablet.run"]);
+}
+
+#[tokio::test]
+async fn a_flush_with_no_destination_returns_at_once_and_a_bound_of_nothing_still_answers() {
+    let (memory, other) = (Memory::default(), Memory::default());
+    let observer = OtelObserver::builder("0.1.0")
+        .exporting_to(memory.spans(), memory.records(), memory.wide())
+        .exporting_over_the_network_to(other.spans(), other.records(), other.wide())
+        .flush_timeout(Duration::ZERO)
+        .build()
+        .unwrap();
+    told(&observer, a_run(false)).await;
+
+    let flushed = observer.flush().await;
+
+    // A bound of nothing gives up on whichever destination hasn't answered
+    // by the time it's checked, and never on one that has.
+    if let Err(failures) = flushed {
+        for failure in failures.failures() {
+            assert!(
+                failure.ends_with("the flush didn't end within 0ns"),
+                "{failures}"
+            );
+        }
+    }
+    other.release();
+    observer.shutdown().await.unwrap();
+    assert_eq!(memory.exported_wide().len(), 1);
+    assert_eq!(other.exported_wide().len(), 1);
 }
 
 #[tokio::test]
 async fn an_observer_with_nowhere_to_export_to_takes_a_run_and_answers_for_its_calls() {
-    let observer = OtelObserver::builder("0.1.0").build();
+    let observer = OtelObserver::builder("0.1.0").build().unwrap();
     let mut events = a_run(true);
     let rest = events.split_off(7);
 
@@ -880,7 +966,7 @@ async fn an_event_is_taken_while_an_export_waits_for_its_destination() {
 }
 
 #[test]
-fn a_builder_prints_what_it_was_given_and_gives_a_shutdown_five_seconds_by_default() {
+fn a_builder_prints_what_it_was_given_and_gives_a_flush_and_a_shutdown_five_seconds_by_default() {
     let builder = OtelObserver::builder("0.1.0")
         .resource(vec![("team".to_owned(), "evals".to_owned())])
         .file(FileTarget::Stderr);
@@ -888,6 +974,52 @@ fn a_builder_prints_what_it_was_given_and_gives_a_shutdown_five_seconds_by_defau
     assert_eq!(
         format!("{builder:?}"),
         "OtelObserverBuilder { version: \"0.1.0\", resource: [(\"team\", \"evals\")], \
-         file: Some(Stderr), shutdown_timeout: 5s, .. }"
+         file: Some(Stderr), otlp: None, flush_timeout: 5s, shutdown_timeout: 5s, .. }"
+    );
+}
+
+#[test]
+fn a_builder_prints_neither_the_endpoint_nor_a_header_value_it_was_given() {
+    let builder = OtelObserver::builder("0.1.0").otlp(OtlpSettings {
+        transport: Transport::HttpProtobuf,
+        endpoint: Some("http://user:hunter2hunter2@collector:4318".to_owned()),
+        headers: vec![(
+            "authorization".to_owned(),
+            "Bearer hunter2hunter2".to_owned(),
+        )],
+        strip_environment_headers: true,
+    });
+
+    let shown = format!("{builder:?}");
+
+    assert!(!shown.contains("hunter2"), "{shown}");
+    assert!(
+        shown.contains(
+            "otlp: Some(OtlpSettings { transport: HttpProtobuf, endpoint: Some(\"..\"), \
+             headers: [\"authorization\"], strip_environment_headers: true })"
+        ),
+        "{shown}"
+    );
+}
+
+#[tokio::test]
+async fn a_header_that_is_not_one_fails_the_build_and_names_the_header() {
+    let refused = OtelObserver::builder("0.1.0")
+        .otlp(OtlpSettings {
+            transport: Transport::Grpc,
+            endpoint: Some("http://127.0.0.1:1".to_owned()),
+            headers: vec![("no spaces allowed".to_owned(), "v".to_owned())],
+            strip_environment_headers: true,
+        })
+        .build()
+        .err()
+        .unwrap();
+
+    assert_eq!(
+        refused,
+        OtelBuildError::Header {
+            name: "no spaces allowed".to_owned(),
+            reason: "its name isn't one a header may have",
+        }
     );
 }
