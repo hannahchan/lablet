@@ -39,7 +39,9 @@ pub struct Otlp {
     /// leaves it to `OTEL_EXPORTER_OTLP_ENDPOINT` and the signal variables,
     /// any of which turns the exporter on, with the environment's headers;
     /// without one the exporter is off. On `http` it's a base URL, to which
-    /// `/v1/traces` and `/v1/logs` are appended.
+    /// `/v1/traces` and `/v1/logs` are appended. Its user information is a
+    /// secret, cut everywhere and out of the digest; set to nothing it states
+    /// none.
     pub endpoint: Option<String>,
     /// The protocol the collector is sent. `None` leaves it to
     /// `OTEL_EXPORTER_OTLP_PROTOCOL`, and is gRPC when that isn't set; a

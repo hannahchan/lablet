@@ -482,7 +482,7 @@
         },
         "endpoint": {
           "default": null,
-          "description": "Where the collector listens. An endpoint turns the network exporter\non, and the headers the environment names aren't sent to it. `None`\nleaves it to `OTEL_EXPORTER_OTLP_ENDPOINT` and the signal variables,\nany of which turns the exporter on, with the environment's headers;\nwithout one the exporter is off. On `http` it's a base URL, to which\n`/v1/traces` and `/v1/logs` are appended.",
+          "description": "Where the collector listens. An endpoint turns the network exporter\non, and the headers the environment names aren't sent to it. `None`\nleaves it to `OTEL_EXPORTER_OTLP_ENDPOINT` and the signal variables,\nany of which turns the exporter on, with the environment's headers;\nwithout one the exporter is off. On `http` it's a base URL, to which\n`/v1/traces` and `/v1/logs` are appended. Its user information is a\nsecret, cut everywhere and out of the digest; set to nothing it states\nnone.",
           "type": [
             "string",
             "null"
