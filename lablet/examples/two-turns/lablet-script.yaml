@@ -1,0 +1,13 @@
+# What the scripted model answers: each entry answers one provider call, in
+# order, whatever it was asked.
+- response:
+    content:
+      - text: I'll read the notes first.
+      - tool_use: { id: call_1, name: read_file, input: { json: { path: notes.md } } }
+    finish: tool_use
+    usage: { input_tokens: 140, output_tokens: 24 }
+- response:
+    content:
+      - text: The notes say the parser is off by one at the end of a line.
+    finish: end_turn
+    usage: { input_tokens: 210, output_tokens: 18 }

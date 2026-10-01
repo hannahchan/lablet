@@ -1,0 +1,21 @@
+# A collector and Jaeger for the checks by hand in README.md. The image tags
+# are pinned; move them on purpose, in a commit of their own.
+services:
+  collector:
+    # The contrib distribution: the core one has no otlpjsonfile receiver.
+    image: otel/opentelemetry-collector-contrib:0.162.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+      - ./replay:/replay:ro
+    # Host ports away from the defaults, since another process often holds
+    # 4317 on a developer's machine. The container side stays.
+    ports:
+      - "14317:4317"
+      - "14318:4318"
+    depends_on:
+      - jaeger
+  jaeger:
+    image: jaegertracing/jaeger:2.21.0
+    ports:
+      - "16686:16686"

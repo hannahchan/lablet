@@ -55,6 +55,19 @@ pub enum Error {
         /// What it wrote on standard error, trimmed.
         stderr: String,
     },
+    /// A command that was started never did what the step waited on, and
+    /// was stopped.
+    #[error("`{command}` (in {}) did not {expected}{}", .command.place(), on_a_line_of_its_own(.output))]
+    Stalled {
+        /// The command, and where it ran.
+        command: Invocation,
+        /// What was waited on and for how long, as `serve GET /health
+        /// within 60s`.
+        expected: String,
+        /// What it wrote on both streams before it was stopped, trimmed.
+        /// Boxed to keep the enum small, as clippy holds it to.
+        output: Box<str>,
+    },
     /// Something a step needs is not on this machine or in this checkout.
     #[error("{what}. {remedy}")]
     Missing {
@@ -218,6 +231,27 @@ mod tests {
             "could not read /a: the outer layer: entity not found"
         );
         assert_eq!(error.to_string(), "could not read /a");
+    }
+
+    #[test]
+    fn a_stalled_command_is_named_with_what_it_did_not_do_and_what_it_wrote() {
+        let root = crate::workspace::repo_root();
+        let command = Invocation::new(&root, "weaver", &["registry", "live-check"]);
+        let stalled = |output: &str| Error::Stalled {
+            command: command.clone(),
+            expected: "serve GET /health within 60s".to_owned(),
+            output: output.into(),
+        };
+        assert_eq!(
+            chain(&stalled("Resolving registry")),
+            "`weaver registry live-check` (in the repository root) did not serve GET /health \
+             within 60s\nResolving registry"
+        );
+        assert_eq!(
+            chain(&stalled("")),
+            "`weaver registry live-check` (in the repository root) did not serve GET /health \
+             within 60s"
+        );
     }
 
     #[test]

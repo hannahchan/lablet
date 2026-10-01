@@ -13,7 +13,9 @@ use std::time::Instant;
 use crate::error::{Error, chain};
 use crate::report::{self, Note, Row};
 use crate::workspace::{Workspace, repo_root, workspace_root, xtask_manifest};
-use crate::{changelog, coverage, generated, lint_layers, lint_manifests, mutants, process};
+use crate::{
+    changelog, coverage, generated, lint_layers, lint_manifests, live_check, mutants, process,
+};
 
 /// `Ok(None)` is a pass, `Ok(Some)` a pass with a note for the report.
 pub type CheckResult = Result<Option<Note>, Failure>;
@@ -215,7 +217,7 @@ fn listed(findings: &[String]) -> CheckResult {
 
 /// The prose vale reads, relative to the repository root. A directory is read
 /// whole, except `product`: its `research/` notes are not held to the style.
-const PROSE: [&str; 7] = [
+const PROSE: [&str; 8] = [
     "README.md",
     "CLAUDE.md",
     "CHANGELOG.md",
@@ -223,6 +225,7 @@ const PROSE: [&str; 7] = [
     "product",
     "lablet/README.md",
     "lablet/docs",
+    "lablet/examples",
 ];
 
 /// A frozen record of what was run, kept out of the linters.
@@ -415,6 +418,14 @@ pub fn weaver_vendor_steps(check: bool) -> Vec<Step> {
         args.push("--check");
     }
     vec![Step::command("weaver vendor", "bash", &args)]
+}
+
+/// What fake-provider runs emit, checked against the registry by weaver's
+/// live checker over OTLP; see [`live_check`]. It builds lablet, binds ports
+/// and takes some seconds of weaver, so it's a CI job of its own and not a
+/// gate step.
+pub fn weaver_live_check_steps() -> Vec<Step> {
+    vec![Step::check("weaver live-check", live_check::check)]
 }
 
 /// cargo-deny under `lablet/deny.toml`, over the workspace and over xtask,
@@ -955,6 +966,34 @@ mod tests {
     }
 
     #[test]
+    fn weaver_live_check_is_one_check_outside_the_gates_re_run_by_both_words() {
+        let steps = weaver_live_check_steps();
+        let [step] = steps.as_slice() else {
+            panic!("{}", labels(&steps));
+        };
+        let Action::Check(run) = step.action else {
+            panic!("`{}` is not a check", step.label);
+        };
+        assert_eq!(step.label, "weaver live-check");
+        assert!(std::ptr::fn_addr_eq(
+            run,
+            live_check::check as fn() -> CheckResult
+        ));
+        assert_eq!(task_of("weaver live-check"), "weaver live-check");
+        assert_eq!(
+            rerun("weaver live-check"),
+            "re-run: cargo xtask weaver live-check"
+        );
+        for gate in [pre_commit_steps(), pre_push_steps()] {
+            assert!(
+                gate.iter().all(|step| step.label != "weaver live-check"),
+                "{}",
+                labels(&gate)
+            );
+        }
+    }
+
+    #[test]
     fn weaver_vendor_runs_the_script_that_holds_the_pins() {
         let args = |check: bool| match &weaver_vendor_steps(check)[0].action {
             Action::Command { program, args, .. } => format!("{program} {}", args.join(" ")),
@@ -1034,7 +1073,12 @@ mod tests {
         assert_eq!(all[..3], errors[..3]);
         assert_eq!(all[3..], errors[5..]);
         let paths = &all[3..];
-        for expected in ["README.md", "contributing", "product/spec.md"] {
+        for expected in [
+            "README.md",
+            "contributing",
+            "product/spec.md",
+            "lablet/examples",
+        ] {
             assert!(paths.iter().any(|path| path == expected), "{expected}");
         }
         for path in paths {

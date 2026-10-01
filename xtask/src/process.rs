@@ -133,7 +133,7 @@ pub fn command(program: &str, args: &[&str]) -> Result<Command, Error> {
 }
 
 /// [`command`], in a directory the caller names.
-fn command_in(directory: &Path, program: &str, args: &[&str]) -> Result<Command, Error> {
+pub fn command_in(directory: &Path, program: &str, args: &[&str]) -> Result<Command, Error> {
     command_running(directory, program, args, runs(program, args).as_deref())
 }
 

@@ -1,0 +1,35 @@
+# The collector of docker-compose.yaml: OTLP in, everything printed, traces
+# on to Jaeger, and lablet's files replayed from /replay.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  # Replays the OTLP/JSON files lablet writes. The receiver is made once for
+  # each pipeline that lists it and reads a file from its end by default, so
+  # both pipelines list it and both start at the beginning.
+  otlpjsonfile:
+    include:
+      - /replay/*.otlp.jsonl
+    start_at: beginning
+
+exporters:
+  debug:
+    verbosity: detailed
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp, otlpjsonfile]
+      exporters: [debug, otlp/jaeger]
+    # Jaeger stores no logs: the wide event and the content records are in
+    # the collector's output only.
+    logs:
+      receivers: [otlp, otlpjsonfile]
+      exporters: [debug]

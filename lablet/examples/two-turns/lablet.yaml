@@ -1,0 +1,14 @@
+# A fake-provider config with a tool call: the script answers the first
+# provider call with a read_file call and the second with text, so a run
+# has two turns and a tool span. It needs no key. A relative path starts at
+# the directory lablet runs in, so run it from this one.
+model:
+  provider: fake
+  script: lablet-script.yaml
+  name: scripted
+prompt:
+  system: You are a careful coding agent. Say what you did, and why.
+tools:
+  builtin:
+    root: work
+    enabled: [read_file]

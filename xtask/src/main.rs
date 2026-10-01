@@ -14,6 +14,7 @@ mod gates;
 mod generated;
 mod lint_layers;
 mod lint_manifests;
+mod live_check;
 mod mutants;
 mod process;
 mod report;
@@ -37,6 +38,7 @@ Telemetry contract:
   weaver generate [--check]
                            Render the registry crate and docs (--check: compare only)
   weaver vendor [--check]  Fetch the pinned upstream registries (--check: compare only)
+  weaver live-check        What fake-provider runs emit, checked by weaver over OTLP
 
 Quality checks:
   fmt [--check]            Format with rustfmt + dprint (--check: verify only)
@@ -70,7 +72,8 @@ XTASK_VERBOSE=1 or CI=true lists the steps anyway. Pinned tools come from
 mise.toml.
 ";
 
-const WEAVER_USAGE: &str = "`weaver` takes `check`, `generate [--check]`, or `vendor [--check]`";
+const WEAVER_USAGE: &str =
+    "`weaver` takes `check`, `generate [--check]`, `vendor [--check]`, or `live-check`";
 
 /// Why the arguments name no task to run.
 #[derive(Debug, thiserror::Error)]
@@ -124,6 +127,9 @@ fn plan(task: &str, args: &[String]) -> Result<Plan, Usage> {
         ("weaver", [subtask, rest @ ..]) if subtask == "vendor" => {
             let check = flag_of("weaver vendor", rest, "--check")?;
             Some((Mode::Command, gates::weaver_vendor_steps(check)))
+        }
+        ("weaver", [subtask]) if subtask == "live-check" => {
+            Some((Mode::Command, gates::weaver_live_check_steps()))
         }
         ("weaver", _) => return Err(Usage::Weaver),
         ("run", []) => return Ok(Plan::Exec(gates::run_args(&[]))),
@@ -226,9 +232,9 @@ mod tests {
     fn the_usage_text_groups_every_task_in_the_order_a_developer_works() {
         assert_eq!(
             documented_tasks().join(", "),
-            "check, build, run, test, doc, weaver check, weaver generate, weaver vendor, fmt, fix, clippy, \
-             lint-layers, lint-manifests, lint-shell, lint-prose, deny, changelog, pre-commit, \
-             pre-push, ci, coverage, mutants, setup, clean"
+            "check, build, run, test, doc, weaver check, weaver generate, weaver vendor, \
+             weaver live-check, fmt, fix, clippy, lint-layers, lint-manifests, lint-shell, \
+             lint-prose, deny, changelog, pre-commit, pre-push, ci, coverage, mutants, setup, clean"
         );
         for task in documented_tasks() {
             assert!(
@@ -276,7 +282,12 @@ mod tests {
             error("mutants", &["--changed", "--branch"]).as_deref(),
             Some("`mutants` takes only `--changed`")
         );
-        for args in [vec![], vec!["live-check"], vec!["check", "--v2"]] {
+        for args in [
+            vec![],
+            vec!["emit"],
+            vec!["check", "--v2"],
+            vec!["live-check", "--v2"],
+        ] {
             assert_eq!(
                 error("weaver", &args).as_deref(),
                 Some(WEAVER_USAGE),
@@ -305,6 +316,7 @@ mod tests {
             ("weaver", vec!["generate", "--check"]),
             ("weaver", vec!["vendor"]),
             ("weaver", vec!["vendor", "--check"]),
+            ("weaver", vec!["live-check"]),
         ] {
             assert_eq!(error(task, &args), None, "{task}");
         }

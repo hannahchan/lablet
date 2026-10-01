@@ -1,0 +1,2280 @@
+{
+  "samples": [
+    {
+      "span": {
+        "name": "invoke_agent lablet",
+        "kind": "internal",
+        "status": {
+          "code": "unset",
+          "message": ""
+        },
+        "attributes": [
+          {
+            "name": "gen_ai.conversation.id",
+            "value": "01K5F3Z8Q4X9T2M7B6W1R0VNEC",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "session.id",
+            "value": "01K5F3Z8Q4X9T2M7B6W1R0VNEC",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.config.digest",
+            "value": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.operation.name",
+            "value": "invoke_agent",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.agent.name",
+            "value": "lablet",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.agent.version",
+            "value": "0.1.0",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.request.model",
+            "value": "scripted",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.run.stop_reason",
+            "value": "completed",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.run.turns",
+            "value": 1,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tool_calls.total",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.usage.input_tokens",
+            "value": 120,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.usage.output_tokens",
+            "value": 16,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          }
+        ],
+        "span_events": [],
+        "span_links": [],
+        "live_check_result": {
+          "all_advice": [],
+          "highest_advice_level": null
+        }
+      }
+    },
+    {
+      "span": {
+        "name": "chat scripted",
+        "kind": "client",
+        "status": {
+          "code": "unset",
+          "message": ""
+        },
+        "attributes": [
+          {
+            "name": "gen_ai.conversation.id",
+            "value": "01K5F3Z8Q4X9T2M7B6W1R0VNEC",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "session.id",
+            "value": "01K5F3Z8Q4X9T2M7B6W1R0VNEC",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.config.digest",
+            "value": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.operation.name",
+            "value": "chat",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.provider.name",
+            "value": "fake",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [
+                {
+                  "type": "PolicyFinding",
+                  "id": "undefined_enum_variant",
+                  "context": {
+                    "attribute_key": "gen_ai.provider.name",
+                    "attribute_value": "fake"
+                  },
+                  "message": "Enum attribute 'gen_ai.provider.name' has value 'fake' which is not documented.",
+                  "level": "information",
+                  "signal_type": "span",
+                  "signal_name": "chat scripted"
+                }
+              ],
+              "highest_advice_level": "information"
+            }
+          },
+          {
+            "name": "gen_ai.request.max_tokens",
+            "value": 4096,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.request.model",
+            "value": "scripted",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.response.model",
+            "value": "scripted",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.response.finish_reasons",
+            "value": [
+              "end_turn"
+            ],
+            "type": "string[]",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.usage.input_tokens",
+            "value": 120,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.usage.output_tokens",
+            "value": 16,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.attempt",
+            "value": 1,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.chat.purpose",
+            "value": "turn",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.request.bytes",
+            "value": 312,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.turn",
+            "value": 1,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          }
+        ],
+        "span_events": [],
+        "span_links": [],
+        "live_check_result": {
+          "all_advice": [],
+          "highest_advice_level": null
+        }
+      }
+    },
+    {
+      "log": {
+        "event_name": "lablet.run",
+        "severity_number": 9,
+        "severity_text": "INFO",
+        "body": "",
+        "attributes": [
+          {
+            "name": "gen_ai.conversation.id",
+            "value": "01K5F3Z8Q4X9T2M7B6W1R0VNEC",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "session.id",
+            "value": "01K5F3Z8Q4X9T2M7B6W1R0VNEC",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.config.digest",
+            "value": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.agent.name",
+            "value": "lablet",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.agent.version",
+            "value": "0.1.0",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.provider.name",
+            "value": "fake",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [
+                {
+                  "type": "PolicyFinding",
+                  "id": "undefined_enum_variant",
+                  "context": {
+                    "attribute_key": "gen_ai.provider.name",
+                    "attribute_value": "fake"
+                  },
+                  "message": "Enum attribute 'gen_ai.provider.name' has value 'fake' which is not documented.",
+                  "level": "information",
+                  "signal_type": "log",
+                  "signal_name": "lablet.run"
+                }
+              ],
+              "highest_advice_level": "information"
+            }
+          },
+          {
+            "name": "gen_ai.request.max_tokens",
+            "value": 4096,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.request.model",
+            "value": "scripted",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.response.finish_reasons",
+            "value": [
+              "end_turn"
+            ],
+            "type": "string[]",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.usage.input_tokens",
+            "value": 120,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.usage.output_tokens",
+            "value": 16,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.prompt.system_bytes",
+            "value": 57,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.prompt.system_digest",
+            "value": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.prompt.tools_bytes",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.prompt.user_bytes",
+            "value": 10,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.provider.latency_ms.max",
+            "value": 3,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.provider.latency_ms.total",
+            "value": 3,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.provider.retries",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.request.api",
+            "value": "script",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.request.cache_scope",
+            "value": "shared",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.request.reasoning_replayed",
+            "value": false,
+            "type": "boolean",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.request.thinking",
+            "value": "off",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.result.has_structured",
+            "value": false,
+            "type": "boolean",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.result.text_bytes",
+            "value": 70,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.run.completion_mode",
+            "value": "natural",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.run.duration_ms",
+            "value": 12,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.run.stop_reason",
+            "value": "completed",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.run.timeout_ms",
+            "value": 600000,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.run.turns",
+            "value": 1,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.skills.count",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.telemetry.dropped_records",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tool_calls.errors",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tool_calls.input_bytes.total",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tool_calls.latency_ms.total",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tool_calls.output_bytes.total",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tool_calls.total",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tool_calls.truncated",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tool_calls.unknown",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tools.count",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tools.digest",
+            "value": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tools.names",
+            "value": [],
+            "type": "string[]",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          }
+        ],
+        "trace_id": "",
+        "span_id": "",
+        "live_check_result": {
+          "all_advice": [
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "error.type"
+              },
+              "message": "Conditionally required attribute 'error.type' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "gen_ai.request.reasoning.level"
+              },
+              "message": "Conditionally required attribute 'gen_ai.request.reasoning.level' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "gen_ai.request.seed"
+              },
+              "message": "Conditionally required attribute 'gen_ai.request.seed' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "gen_ai.request.temperature"
+              },
+              "message": "Conditionally required attribute 'gen_ai.request.temperature' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "gen_ai.usage.cache_read.input_tokens"
+              },
+              "message": "Conditionally required attribute 'gen_ai.usage.cache_read.input_tokens' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "gen_ai.usage.cache_write.input_tokens"
+              },
+              "message": "Conditionally required attribute 'gen_ai.usage.cache_write.input_tokens' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "gen_ai.usage.reasoning.output_tokens"
+              },
+              "message": "Conditionally required attribute 'gen_ai.usage.reasoning.output_tokens' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.experiment.id"
+              },
+              "message": "Conditionally required attribute 'lablet.experiment.id' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.mcp.lifetime"
+              },
+              "message": "Conditionally required attribute 'lablet.mcp.lifetime' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.mcp.server_versions"
+              },
+              "message": "Conditionally required attribute 'lablet.mcp.server_versions' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.mcp.servers"
+              },
+              "message": "Conditionally required attribute 'lablet.mcp.servers' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.pricing.cache_read_usd_per_mtok"
+              },
+              "message": "Conditionally required attribute 'lablet.pricing.cache_read_usd_per_mtok' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.pricing.cache_write_usd_per_mtok"
+              },
+              "message": "Conditionally required attribute 'lablet.pricing.cache_write_usd_per_mtok' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.pricing.input_usd_per_mtok"
+              },
+              "message": "Conditionally required attribute 'lablet.pricing.input_usd_per_mtok' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.pricing.output_usd_per_mtok"
+              },
+              "message": "Conditionally required attribute 'lablet.pricing.output_usd_per_mtok' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.provider.failed.cache_read.input_tokens"
+              },
+              "message": "Conditionally required attribute 'lablet.provider.failed.cache_read.input_tokens' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.provider.failed.cache_write.input_tokens"
+              },
+              "message": "Conditionally required attribute 'lablet.provider.failed.cache_write.input_tokens' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.provider.failed.input_tokens"
+              },
+              "message": "Conditionally required attribute 'lablet.provider.failed.input_tokens' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.provider.failed.output_tokens"
+              },
+              "message": "Conditionally required attribute 'lablet.provider.failed.output_tokens' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "opt_in_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.result.structured"
+              },
+              "message": "Opt-in attribute 'lablet.result.structured' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "opt_in_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.result.text"
+              },
+              "message": "Opt-in attribute 'lablet.result.text' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.run.cost_usd"
+              },
+              "message": "Conditionally required attribute 'lablet.run.cost_usd' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.run.error"
+              },
+              "message": "Conditionally required attribute 'lablet.run.error' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.run.max_turns"
+              },
+              "message": "Conditionally required attribute 'lablet.run.max_turns' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.run.transcript_path"
+              },
+              "message": "Conditionally required attribute 'lablet.run.transcript_path' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.task.id"
+              },
+              "message": "Conditionally required attribute 'lablet.task.id' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.tool.calls"
+              },
+              "message": "Conditionally required attribute 'lablet.tool.calls' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.tool.errors"
+              },
+              "message": "Conditionally required attribute 'lablet.tool.errors' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.tool.latency_ms"
+              },
+              "message": "Conditionally required attribute 'lablet.tool.latency_ms' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.trial"
+              },
+              "message": "Conditionally required attribute 'lablet.trial' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "server.address"
+              },
+              "message": "Conditionally required attribute 'server.address' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "server.port"
+              },
+              "message": "Conditionally required attribute 'server.port' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            }
+          ],
+          "highest_advice_level": "information"
+        }
+      }
+    },
+    {
+      "span": {
+        "name": "invoke_agent lablet",
+        "kind": "internal",
+        "status": {
+          "code": "unset",
+          "message": ""
+        },
+        "attributes": [
+          {
+            "name": "gen_ai.conversation.id",
+            "value": "01K5F4A1B2C3D4E5F6G7H8J9KM",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "session.id",
+            "value": "01K5F4A1B2C3D4E5F6G7H8J9KM",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.config.digest",
+            "value": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.operation.name",
+            "value": "invoke_agent",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.agent.name",
+            "value": "lablet",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.agent.version",
+            "value": "0.1.0",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.request.model",
+            "value": "scripted",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.run.stop_reason",
+            "value": "completed",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.run.turns",
+            "value": 1,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tool_calls.total",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.usage.input_tokens",
+            "value": 120,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.usage.output_tokens",
+            "value": 16,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          }
+        ],
+        "span_events": [],
+        "span_links": [],
+        "live_check_result": {
+          "all_advice": [],
+          "highest_advice_level": null
+        }
+      }
+    },
+    {
+      "span": {
+        "name": "chat scripted",
+        "kind": "client",
+        "status": {
+          "code": "unset",
+          "message": ""
+        },
+        "attributes": [
+          {
+            "name": "gen_ai.conversation.id",
+            "value": "01K5F4A1B2C3D4E5F6G7H8J9KM",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "session.id",
+            "value": "01K5F4A1B2C3D4E5F6G7H8J9KM",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.config.digest",
+            "value": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.operation.name",
+            "value": "chat",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.provider.name",
+            "value": "fake",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [
+                {
+                  "type": "PolicyFinding",
+                  "id": "undefined_enum_variant",
+                  "context": {
+                    "attribute_key": "gen_ai.provider.name",
+                    "attribute_value": "fake"
+                  },
+                  "message": "Enum attribute 'gen_ai.provider.name' has value 'fake' which is not documented.",
+                  "level": "information",
+                  "signal_type": "span",
+                  "signal_name": "chat scripted"
+                }
+              ],
+              "highest_advice_level": "information"
+            }
+          },
+          {
+            "name": "gen_ai.request.max_tokens",
+            "value": 4096,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.request.model",
+            "value": "scripted",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.response.model",
+            "value": "scripted",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.response.finish_reasons",
+            "value": [
+              "end_turn"
+            ],
+            "type": "string[]",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.usage.input_tokens",
+            "value": 120,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.usage.output_tokens",
+            "value": 16,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.attempt",
+            "value": 1,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.chat.purpose",
+            "value": "turn",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.request.bytes",
+            "value": 312,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.turn",
+            "value": 1,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          }
+        ],
+        "span_events": [],
+        "span_links": [],
+        "live_check_result": {
+          "all_advice": [],
+          "highest_advice_level": null
+        }
+      }
+    },
+    {
+      "log": {
+        "event_name": "lablet.run",
+        "severity_number": 9,
+        "severity_text": "INFO",
+        "body": "",
+        "attributes": [
+          {
+            "name": "gen_ai.conversation.id",
+            "value": "01K5F4A1B2C3D4E5F6G7H8J9KM",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "session.id",
+            "value": "01K5F4A1B2C3D4E5F6G7H8J9KM",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.config.digest",
+            "value": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.agent.name",
+            "value": "lablet",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.agent.version",
+            "value": "0.1.0",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.provider.name",
+            "value": "fake",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [
+                {
+                  "type": "PolicyFinding",
+                  "id": "undefined_enum_variant",
+                  "context": {
+                    "attribute_key": "gen_ai.provider.name",
+                    "attribute_value": "fake"
+                  },
+                  "message": "Enum attribute 'gen_ai.provider.name' has value 'fake' which is not documented.",
+                  "level": "information",
+                  "signal_type": "log",
+                  "signal_name": "lablet.run"
+                }
+              ],
+              "highest_advice_level": "information"
+            }
+          },
+          {
+            "name": "gen_ai.request.max_tokens",
+            "value": 4096,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.request.model",
+            "value": "scripted",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.response.finish_reasons",
+            "value": [
+              "end_turn"
+            ],
+            "type": "string[]",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.usage.input_tokens",
+            "value": 120,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "gen_ai.usage.output_tokens",
+            "value": 16,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.prompt.system_bytes",
+            "value": 57,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.prompt.system_digest",
+            "value": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.prompt.tools_bytes",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.prompt.user_bytes",
+            "value": 10,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.provider.latency_ms.max",
+            "value": 3,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.provider.latency_ms.total",
+            "value": 3,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.provider.retries",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.request.api",
+            "value": "script",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.request.cache_scope",
+            "value": "shared",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.request.reasoning_replayed",
+            "value": false,
+            "type": "boolean",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.request.thinking",
+            "value": "off",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.result.has_structured",
+            "value": false,
+            "type": "boolean",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.result.text_bytes",
+            "value": 70,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.run.completion_mode",
+            "value": "natural",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.run.duration_ms",
+            "value": 12,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.run.stop_reason",
+            "value": "completed",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.run.timeout_ms",
+            "value": 600000,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.run.turns",
+            "value": 1,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.skills.count",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.telemetry.dropped_records",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tool_calls.errors",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tool_calls.input_bytes.total",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tool_calls.latency_ms.total",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tool_calls.output_bytes.total",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tool_calls.total",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tool_calls.truncated",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tool_calls.unknown",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tools.count",
+            "value": 0,
+            "type": "int",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tools.digest",
+            "value": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "type": "string",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          },
+          {
+            "name": "lablet.tools.names",
+            "value": [],
+            "type": "string[]",
+            "live_check_result": {
+              "all_advice": [],
+              "highest_advice_level": null
+            }
+          }
+        ],
+        "trace_id": "",
+        "span_id": "",
+        "live_check_result": {
+          "all_advice": [
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "error.type"
+              },
+              "message": "Conditionally required attribute 'error.type' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "gen_ai.request.reasoning.level"
+              },
+              "message": "Conditionally required attribute 'gen_ai.request.reasoning.level' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "gen_ai.request.seed"
+              },
+              "message": "Conditionally required attribute 'gen_ai.request.seed' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "gen_ai.request.temperature"
+              },
+              "message": "Conditionally required attribute 'gen_ai.request.temperature' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "gen_ai.usage.cache_read.input_tokens"
+              },
+              "message": "Conditionally required attribute 'gen_ai.usage.cache_read.input_tokens' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "gen_ai.usage.cache_write.input_tokens"
+              },
+              "message": "Conditionally required attribute 'gen_ai.usage.cache_write.input_tokens' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "gen_ai.usage.reasoning.output_tokens"
+              },
+              "message": "Conditionally required attribute 'gen_ai.usage.reasoning.output_tokens' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.experiment.id"
+              },
+              "message": "Conditionally required attribute 'lablet.experiment.id' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.mcp.lifetime"
+              },
+              "message": "Conditionally required attribute 'lablet.mcp.lifetime' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.mcp.server_versions"
+              },
+              "message": "Conditionally required attribute 'lablet.mcp.server_versions' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.mcp.servers"
+              },
+              "message": "Conditionally required attribute 'lablet.mcp.servers' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.pricing.cache_read_usd_per_mtok"
+              },
+              "message": "Conditionally required attribute 'lablet.pricing.cache_read_usd_per_mtok' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.pricing.cache_write_usd_per_mtok"
+              },
+              "message": "Conditionally required attribute 'lablet.pricing.cache_write_usd_per_mtok' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.pricing.input_usd_per_mtok"
+              },
+              "message": "Conditionally required attribute 'lablet.pricing.input_usd_per_mtok' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.pricing.output_usd_per_mtok"
+              },
+              "message": "Conditionally required attribute 'lablet.pricing.output_usd_per_mtok' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.provider.failed.cache_read.input_tokens"
+              },
+              "message": "Conditionally required attribute 'lablet.provider.failed.cache_read.input_tokens' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.provider.failed.cache_write.input_tokens"
+              },
+              "message": "Conditionally required attribute 'lablet.provider.failed.cache_write.input_tokens' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.provider.failed.input_tokens"
+              },
+              "message": "Conditionally required attribute 'lablet.provider.failed.input_tokens' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.provider.failed.output_tokens"
+              },
+              "message": "Conditionally required attribute 'lablet.provider.failed.output_tokens' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "opt_in_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.result.structured"
+              },
+              "message": "Opt-in attribute 'lablet.result.structured' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "opt_in_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.result.text"
+              },
+              "message": "Opt-in attribute 'lablet.result.text' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.run.cost_usd"
+              },
+              "message": "Conditionally required attribute 'lablet.run.cost_usd' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.run.error"
+              },
+              "message": "Conditionally required attribute 'lablet.run.error' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.run.max_turns"
+              },
+              "message": "Conditionally required attribute 'lablet.run.max_turns' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.run.transcript_path"
+              },
+              "message": "Conditionally required attribute 'lablet.run.transcript_path' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.task.id"
+              },
+              "message": "Conditionally required attribute 'lablet.task.id' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.tool.calls"
+              },
+              "message": "Conditionally required attribute 'lablet.tool.calls' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.tool.errors"
+              },
+              "message": "Conditionally required attribute 'lablet.tool.errors' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.tool.latency_ms"
+              },
+              "message": "Conditionally required attribute 'lablet.tool.latency_ms' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "lablet.trial"
+              },
+              "message": "Conditionally required attribute 'lablet.trial' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "server.address"
+              },
+              "message": "Conditionally required attribute 'server.address' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            },
+            {
+              "type": "PolicyFinding",
+              "id": "conditionally_required_attribute_not_present",
+              "context": {
+                "attribute_key": "server.port"
+              },
+              "message": "Conditionally required attribute 'server.port' is not present.",
+              "level": "information",
+              "signal_type": "log",
+              "signal_name": "lablet.run"
+            }
+          ],
+          "highest_advice_level": "information"
+        }
+      }
+    }
+  ],
+  "statistics": {
+    "total_entities": 142,
+    "total_entities_by_type": {
+      "span": 4,
+      "log": 2,
+      "attribute": 136
+    },
+    "total_advisories": 68,
+    "advice_level_counts": {
+      "information": 68
+    },
+    "highest_advice_level_counts": {
+      "information": 6
+    },
+    "no_advice_count": 136,
+    "advice_type_counts": {
+      "undefined_enum_variant": 4,
+      "conditionally_required_attribute_not_present": 60,
+      "opt_in_attribute_not_present": 4
+    },
+    "advice_message_counts": {
+      "Conditionally required attribute 'gen_ai.usage.cache_write.input_tokens' is not present.": 2,
+      "Conditionally required attribute 'lablet.experiment.id' is not present.": 2,
+      "Conditionally required attribute 'gen_ai.request.temperature' is not present.": 2,
+      "Conditionally required attribute 'lablet.tool.latency_ms' is not present.": 2,
+      "Conditionally required attribute 'server.address' is not present.": 2,
+      "Conditionally required attribute 'lablet.provider.failed.input_tokens' is not present.": 2,
+      "Enum attribute 'gen_ai.provider.name' has value 'fake' which is not documented.": 4,
+      "Conditionally required attribute 'lablet.run.max_turns' is not present.": 2,
+      "Conditionally required attribute 'error.type' is not present.": 2,
+      "Conditionally required attribute 'lablet.provider.failed.cache_write.input_tokens' is not present.": 2,
+      "Conditionally required attribute 'lablet.mcp.lifetime' is not present.": 2,
+      "Conditionally required attribute 'lablet.run.transcript_path' is not present.": 2,
+      "Conditionally required attribute 'lablet.mcp.server_versions' is not present.": 2,
+      "Conditionally required attribute 'gen_ai.usage.cache_read.input_tokens' is not present.": 2,
+      "Conditionally required attribute 'lablet.pricing.cache_write_usd_per_mtok' is not present.": 2,
+      "Conditionally required attribute 'lablet.provider.failed.cache_read.input_tokens' is not present.": 2,
+      "Conditionally required attribute 'lablet.trial' is not present.": 2,
+      "Conditionally required attribute 'server.port' is not present.": 2,
+      "Conditionally required attribute 'lablet.run.cost_usd' is not present.": 2,
+      "Conditionally required attribute 'gen_ai.request.seed' is not present.": 2,
+      "Conditionally required attribute 'gen_ai.usage.reasoning.output_tokens' is not present.": 2,
+      "Conditionally required attribute 'lablet.run.error' is not present.": 2,
+      "Conditionally required attribute 'lablet.pricing.output_usd_per_mtok' is not present.": 2,
+      "Conditionally required attribute 'lablet.pricing.cache_read_usd_per_mtok' is not present.": 2,
+      "Conditionally required attribute 'lablet.tool.errors' is not present.": 2,
+      "Conditionally required attribute 'lablet.mcp.servers' is not present.": 2,
+      "Conditionally required attribute 'lablet.tool.calls' is not present.": 2,
+      "Opt-in attribute 'lablet.result.structured' is not present.": 2,
+      "Opt-in attribute 'lablet.result.text' is not present.": 2,
+      "Conditionally required attribute 'lablet.pricing.input_usd_per_mtok' is not present.": 2,
+      "Conditionally required attribute 'lablet.provider.failed.output_tokens' is not present.": 2,
+      "Conditionally required attribute 'lablet.task.id' is not present.": 2,
+      "Conditionally required attribute 'gen_ai.request.reasoning.level' is not present.": 2
+    },
+    "seen_registry_attributes": {
+      "lablet.run.duration_ms": 2,
+      "gen_ai.conversation.id": 6,
+      "exception.type": 0,
+      "lablet.tools.count": 2,
+      "lablet.tool.output.truncated": 0,
+      "lablet.tools.names": 2,
+      "lablet.trial": 0,
+      "gen_ai.usage.output_tokens": 6,
+      "lablet.provider.latency_ms.max": 2,
+      "lablet.tool_calls.unknown": 2,
+      "mcp.protocol.version": 0,
+      "lablet.pricing.input_usd_per_mtok": 0,
+      "gen_ai.tool.description": 0,
+      "lablet.pricing.output_usd_per_mtok": 0,
+      "service.criticality": 0,
+      "lablet.request.thinking": 2,
+      "service.name": 0,
+      "gen_ai.output.messages": 0,
+      "lablet.prompt.tools_bytes": 2,
+      "lablet.provider.failed.output_tokens": 0,
+      "lablet.tool_calls.output_bytes.total": 2,
+      "gen_ai.usage.cache_read.input_tokens": 0,
+      "lablet.experiment.id": 0,
+      "lablet.run.timeout_ms": 2,
+      "lablet.tool.output.bytes": 0,
+      "gen_ai.system_instructions": 0,
+      "lablet.provider.failed.cache_write.input_tokens": 0,
+      "lablet.tool_calls.errors": 2,
+      "lablet.result.text": 0,
+      "mcp.method.name": 0,
+      "lablet.tool_calls.total": 4,
+      "lablet.retry.will_retry": 0,
+      "lablet.prompt.user_bytes": 2,
+      "gen_ai.agent.version": 4,
+      "gen_ai.response.finish_reasons": 4,
+      "lablet.run.turns": 4,
+      "gen_ai.request.seed": 0,
+      "lablet.tool_calls.truncated": 2,
+      "lablet.request.bytes": 2,
+      "gen_ai.agent.name": 4,
+      "gen_ai.request.model": 6,
+      "lablet.tool.is_error": 0,
+      "lablet.tool.output.original_bytes": 0,
+      "lablet.task.id": 0,
+      "lablet.mcp.server_versions": 0,
+      "lablet.config.digest": 6,
+      "lablet.result.text_bytes": 2,
+      "lablet.turn": 2,
+      "lablet.run.stop_reason": 4,
+      "lablet.pricing.cache_write_usd_per_mtok": 0,
+      "lablet.run.max_turns": 0,
+      "lablet.provider.failed.input_tokens": 0,
+      "lablet.pricing.cache_read_usd_per_mtok": 0,
+      "service.version": 0,
+      "gen_ai.request.reasoning.level": 0,
+      "jsonrpc.request.id": 0,
+      "lablet.run.cost_usd": 0,
+      "telemetry.sdk.name": 0,
+      "error.type": 0,
+      "gen_ai.tool.type": 0,
+      "lablet.run.transcript_path": 0,
+      "lablet.retry.backoff_ms": 0,
+      "lablet.tool_calls.latency_ms.total": 2,
+      "lablet.mcp.lifetime": 0,
+      "lablet.result.has_structured": 2,
+      "lablet.request.cache_scope": 2,
+      "gen_ai.usage.cache_write.input_tokens": 0,
+      "lablet.request.reasoning_replayed": 2,
+      "lablet.provider.retries": 2,
+      "gen_ai.tool.definitions": 0,
+      "lablet.tool.source": 0,
+      "exception.message": 0,
+      "lablet.provider.failed.cache_read.input_tokens": 0,
+      "gen_ai.usage.input_tokens": 6,
+      "lablet.skills.count": 2,
+      "telemetry.sdk.version": 0,
+      "lablet.result.structured": 0,
+      "gen_ai.provider.name": 4,
+      "rpc.response.status_code": 0,
+      "lablet.tool.input.bytes": 0,
+      "gen_ai.tool.call.id": 0,
+      "gen_ai.tool.call.result": 0,
+      "gen_ai.request.max_tokens": 4,
+      "lablet.mcp.servers": 0,
+      "lablet.tool.latency_ms": 0,
+      "lablet.telemetry.dropped_records": 2,
+      "gen_ai.usage.reasoning.output_tokens": 0,
+      "gen_ai.tool.call.arguments": 0,
+      "mcp.session.id": 0,
+      "lablet.tool.calls": 0,
+      "gen_ai.request.temperature": 0,
+      "session.id": 6,
+      "gen_ai.response.model": 2,
+      "server.address": 0,
+      "telemetry.sdk.language": 0,
+      "gen_ai.tool.name": 0,
+      "lablet.prompt.system_digest": 2,
+      "lablet.run.error": 0,
+      "lablet.prompt.system_bytes": 2,
+      "lablet.provider.latency_ms.total": 2,
+      "lablet.tool.errors": 0,
+      "gen_ai.input.messages": 0,
+      "lablet.tool_calls.input_bytes.total": 2,
+      "lablet.tools.digest": 2,
+      "lablet.attempt": 2,
+      "lablet.chat.purpose": 2,
+      "network.transport": 0,
+      "lablet.request.api": 2,
+      "lablet.tool.status": 0,
+      "gen_ai.response.id": 0,
+      "lablet.run.completion_mode": 2,
+      "server.port": 0,
+      "gen_ai.operation.name": 4
+    },
+    "seen_non_registry_attributes": {},
+    "seen_registry_metrics": {},
+    "seen_non_registry_metrics": {},
+    "seen_registry_events": {
+      "gen_ai.client.inference.operation.details": 0,
+      "gen_ai.client.operation.exception": 0,
+      "lablet.retry": 0,
+      "lablet.run": 2
+    },
+    "seen_non_registry_events": {},
+    "registry_coverage": 0.41025642
+  }
+}
