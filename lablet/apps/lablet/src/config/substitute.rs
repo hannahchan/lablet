@@ -287,6 +287,7 @@ impl Substitute<'_> {
                 Otlp {
                     endpoint,
                     headers,
+                    enabled: _,
                     protocol: _,
                 },
             file: TelemetryFile { path },

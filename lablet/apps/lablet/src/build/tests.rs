@@ -159,9 +159,18 @@ async fn the_check_names_what_a_run_withholds_and_cuts_and_never_a_value() {
     assert!(!format!("{checked:?}").contains(KEY), "{checked:?}");
 }
 
+/// The `OTEL_*` variables are the one exception: read for every config,
+/// since lablet inherits them and the exporter reads them whatever the
+/// config names.
 #[tokio::test]
-async fn a_config_that_names_no_secret_reads_nothing_of_the_environment() {
-    let never = |_: &str| -> Option<OsString> { panic!("the environment was read") };
+async fn a_config_that_names_no_secret_reads_nothing_of_the_environment_but_the_otel_variables() {
+    let never = |name: &str| -> Option<OsString> {
+        assert!(
+            name.starts_with("OTEL_"),
+            "the environment was read: {name}"
+        );
+        None
+    };
     let scratch = lablet_test_support::Scratch::new("check-no-secret");
     let script = scratch.write("script.yaml", ENDS);
     let text = format!(
@@ -173,6 +182,86 @@ async fn a_config_that_names_no_secret_reads_nothing_of_the_environment() {
 
     assert!(checked.withheld().is_empty());
     assert_eq!(checked.cut(), Vec::<String>::new());
+}
+
+/// C19 at the library: a header variable the exporter reads is named among
+/// what's cut and not among what's withheld, since every command inherits
+/// it, and its value is nowhere.
+#[tokio::test]
+async fn the_check_names_an_otlp_header_variable_among_the_cut_and_withholds_it_from_no_command() {
+    const TOKEN: &str = "otlp-0123456789abcdef";
+    let scratch = lablet_test_support::Scratch::new("check-otlp-headers");
+    let script = scratch.write("script.yaml", ENDS);
+    let text = format!(
+        "model: {{ provider: fake, script: '{}' }}\nprompt: {{ system: Hi. }}",
+        script.display()
+    );
+    let held = |name: &str| match name {
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS" => {
+            Some(format!("authorization=Bearer%20{TOKEN}").into())
+        }
+        _ => None,
+    };
+
+    let checked = check_in(&config(&text), &held).await.unwrap();
+
+    assert!(checked.withheld().is_empty());
+    assert_eq!(checked.cut(), ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"]);
+    assert!(!format!("{checked:?}").contains(TOKEN), "{checked:?}");
+}
+
+/// Where the telemetry file goes: no file only with the network exporter
+/// on and no path stated, and `-` standard error either way.
+#[test]
+fn a_null_path_writes_no_file_only_when_the_network_exporter_is_on_and_a_dash_is_standard_error() {
+    let target = |path: &str, network_on: bool| {
+        file_target(
+            &config(&format!("telemetry: {{ file: {{ path: {path} }} }}")),
+            network_on,
+        )
+    };
+
+    assert_eq!(target("null", true), None);
+    assert!(matches!(
+        target("null", false),
+        Some(FileTarget::EachRun { .. })
+    ));
+    for network_on in [true, false] {
+        assert_eq!(target(r#""-""#, network_on), Some(FileTarget::Stderr));
+        assert_eq!(
+            target("out.jsonl", network_on),
+            Some(FileTarget::Path("out.jsonl".into()))
+        );
+    }
+}
+
+/// O17 before the wire: an endpoint the environment names turns the
+/// exporter on, with the endpoint left to the exporter and the
+/// environment's headers with it, and a null path then writes no file.
+#[tokio::test]
+async fn an_endpoint_from_the_environment_turns_the_exporter_on_and_a_null_path_then_writes_no_file()
+ {
+    let scratch = lablet_test_support::Scratch::new("env-endpoint");
+    let script = scratch.write("script.yaml", ENDS);
+    let text = format!(
+        "model: {{ provider: fake, script: '{}' }}\nprompt: {{ system: Hi. }}",
+        script.display()
+    );
+    let held = holding(
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "http://collector.internal:4317",
+    );
+
+    let prepared = prepare(&config(&text), &held).await.unwrap();
+
+    assert_eq!(prepared.target, None);
+    let otlp = prepared.otlp.unwrap();
+    assert_eq!(otlp.endpoint, None);
+    assert!(!otlp.strip_environment_headers);
+
+    let prepared = prepare(&config(&text), &nothing).await.unwrap();
+    assert!(matches!(prepared.target, Some(FileTarget::EachRun { .. })));
+    assert!(prepared.otlp.is_none());
 }
 
 /// Every event of a run's start that tells what the run was built with.

@@ -7,10 +7,22 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 
 /// The crates whose own events are held to `warn` unless `RUST_LOG` names
-/// one: at `debug` the exporter prints the endpoint it resolved, which may
-/// hold what a variable holds, and a line of the log holds an endpoint only
-/// as the config writes it.
-const FLOORED: [&str; 3] = ["opentelemetry", "opentelemetry_sdk", "opentelemetry_otlp"];
+/// one: at `debug` the exporter prints the endpoint it resolved, and the
+/// network crates under it print the address they connect to, either of
+/// which may hold what a variable holds, and a line of the log holds an
+/// endpoint only as the config writes it.
+const FLOORED: [&str; 10] = [
+    "opentelemetry",
+    "opentelemetry_sdk",
+    "opentelemetry_otlp",
+    "tonic",
+    "tower",
+    "hyper",
+    "hyper_util",
+    "h2",
+    "reqwest",
+    "rustls",
+];
 
 /// What the diagnostic log shows: what `rust_log`, the value of `RUST_LOG`,
 /// asks for, with [`FLOORED`] held to `warn` unless it names one, and

@@ -4,9 +4,11 @@
 //! `pre-push` holds each step's output back and shows it only on failure.
 //! Either way every step runs, so one run reports every failure.
 
+use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::io::{IsTerminal, Read as _, Write as _};
 use std::path::Path;
+use std::process::Command;
 use std::sync::LazyLock;
 use std::time::Instant;
 
@@ -47,6 +49,8 @@ enum Action {
         program: &'static str,
         args: Vec<String>,
         env: &'static [(&'static str, &'static str)],
+        /// The prefixes of the variables the command doesn't inherit.
+        without: &'static [&'static str],
     },
     Check(fn() -> CheckResult),
 }
@@ -59,6 +63,7 @@ impl Step {
                 program,
                 args: args.iter().map(|arg| (*arg).to_owned()).collect(),
                 env: &[],
+                without: &[],
             },
             hint: None,
         }
@@ -93,6 +98,15 @@ impl Step {
     fn with_env(mut self, variables: &'static [(&'static str, &'static str)]) -> Self {
         if let Action::Command { env, .. } = &mut self.action {
             *env = variables;
+        }
+        self
+    }
+
+    /// Runs the command with every variable whose name begins with one of
+    /// `prefixes` taken off its environment.
+    fn without(mut self, prefixes: &'static [&'static str]) -> Self {
+        if let Action::Command { without, .. } = &mut self.action {
+            *without = prefixes;
         }
         self
     }
@@ -456,9 +470,14 @@ pub fn doc_steps() -> Vec<Step> {
         .into()
 }
 
-/// The workspace's tests, doctests included, and xtask's own.
+/// The workspace's tests, doctests included, and xtask's own. Every
+/// `OTEL_*` variable is kept from them: an endpoint there would turn the
+/// network exporter on in every test that builds a `Lablet` in its own
+/// process, which can't scrub its own environment.
 pub fn test_steps() -> Vec<Step> {
-    both(["test", "test (xtask)"], "test", WORKSPACE, &[]).into()
+    both(["test", "test (xtask)"], "test", WORKSPACE, &[])
+        .map(|step| step.without(&["OTEL_"]))
+        .into()
 }
 
 /// The line and region floors, or with `branch` the branch floors, which are
@@ -550,9 +569,14 @@ pub fn run(mode: Mode, steps: &[Step]) -> bool {
         }
         let start = Instant::now();
         let result = match &step.action {
-            Action::Command { program, args, env } => {
+            Action::Command {
+                program,
+                args,
+                env,
+                without,
+            } => {
                 let args: Vec<&str> = args.iter().map(String::as_str).collect();
-                run_command(program, &args, env, capture)
+                run_command(program, &args, env, without, capture)
             }
             Action::Check(check) => check(),
         };
@@ -597,6 +621,18 @@ pub fn run(mode: Mode, steps: &[Step]) -> bool {
     failed == 0
 }
 
+/// Takes every variable of `names`, the environment's names, whose name
+/// begins with one of `prefixes` off `command`'s environment. The names
+/// alone are read, never a value.
+fn stripped(command: &mut Command, names: impl IntoIterator<Item = OsString>, prefixes: &[&str]) {
+    for name in names {
+        let shown = name.to_string_lossy();
+        if prefixes.iter().any(|prefix| shown.starts_with(prefix)) {
+            command.env_remove(&name);
+        }
+    }
+}
+
 /// The task that runs a step alone: its label up to any ` (qualifier)`, so
 /// `clippy (xtask)` is `clippy` and `weaver check` is itself.
 pub fn task_of(label: &str) -> &str {
@@ -619,11 +655,25 @@ fn rerun(label: &str) -> String {
 /// Streamed, a failure is one line, since the output is already on screen.
 /// Captured, both streams share one pipe so their interleaving survives, and
 /// the failure carries the capture.
-fn run_command(program: &str, args: &[&str], env: &[(&str, &str)], capture: bool) -> CheckResult {
+fn run_command(
+    program: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+    without: &[&str],
+    capture: bool,
+) -> CheckResult {
     let invocation = process::invocation(program, args);
     let failed = || format!("error: {}", invocation.failed());
+    let could_not_run = invocation.not_started();
+    let mut command = process::command(program, args)?;
+    command.envs(env.iter().copied());
+    stripped(
+        &mut command,
+        std::env::vars_os().map(|(name, _)| name),
+        without,
+    );
     if !capture {
-        let status = process::stream(program, args, env)?;
+        let status = command.status().map_err(could_not_run)?;
         return if status.success() {
             Ok(None)
         } else {
@@ -631,11 +681,8 @@ fn run_command(program: &str, args: &[&str], env: &[(&str, &str)], capture: bool
         };
     }
 
-    let could_not_run = invocation.not_started();
     let (mut reader, writer) = std::io::pipe().map_err(&could_not_run)?;
-    let mut command = process::command(program, args)?;
     command
-        .envs(env.iter().copied())
         .stdout(writer.try_clone().map_err(&could_not_run)?)
         .stderr(writer);
     if on_terminal() {
@@ -762,6 +809,52 @@ mod tests {
         }
     }
 
+    /// The prefixes a step keeps from its command's environment.
+    fn kept_from(step: &Step) -> Vec<&'static str> {
+        match &step.action {
+            Action::Command { without, .. } => without.to_vec(),
+            Action::Check(_) => Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_test_steps_keep_every_otel_variable_from_the_tests_and_the_other_steps_keep_none() {
+        for step in test_steps() {
+            assert_eq!(kept_from(&step), ["OTEL_"], "{}", step.label);
+        }
+        for step in check_steps().iter().chain(doc_steps().iter()) {
+            assert!(kept_from(step).is_empty(), "{}", step.label);
+        }
+    }
+
+    #[test]
+    fn a_stripped_command_inherits_no_variable_under_a_prefix_and_every_other() {
+        let mut command = Command::new("sh");
+        let names = [
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "OTEL_TRACES_EXPORTER",
+            "NOT_OTEL_X",
+            "RUST_LOG",
+        ];
+
+        stripped(&mut command, names.map(OsString::from), &["OTEL_"]);
+
+        let removed: Vec<String> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            removed,
+            ["OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_TRACES_EXPORTER"]
+        );
+        assert_eq!(
+            command.get_envs().count(),
+            2,
+            "the others are left as they are"
+        );
+    }
+
     #[test]
     fn prose_is_linted_under_the_repository_config_and_refused_without_one() {
         let steps = lint_prose_steps(false);
@@ -815,21 +908,24 @@ mod tests {
         let failed = "error: command failed (in the repository root): sh -c echo held for the \
                       report; exit 3";
         assert_eq!(
-            run_command("sh", &script, &[], true)
+            run_command("sh", &script, &[], &[], true)
                 .unwrap_err()
                 .into_verdict(),
             format!("held for the report\n{failed}")
         );
         let silent = ["-c", "exit 3"];
         assert_eq!(
-            run_command("sh", &silent, &[], false)
+            run_command("sh", &silent, &[], &[], false)
                 .unwrap_err()
                 .into_verdict(),
             "error: command failed (in the repository root): sh -c exit 3"
         );
-        assert_eq!(run_command("sh", &["-c", "true"], &[], true).unwrap(), None);
         assert_eq!(
-            run_command("sh", &["-c", "true"], &[], false).unwrap(),
+            run_command("sh", &["-c", "true"], &[], &[], true).unwrap(),
+            None
+        );
+        assert_eq!(
+            run_command("sh", &["-c", "true"], &[], &[], false).unwrap(),
             None
         );
 
@@ -837,7 +933,7 @@ mod tests {
         let missing = "lablet-xtask-no-such-program";
         let why = std::io::Error::from_raw_os_error(2);
         for capture in [true, false] {
-            let error = run_command(missing, &[], &[], capture).unwrap_err();
+            let error = run_command(missing, &[], &[], &[], capture).unwrap_err();
             assert_eq!(
                 chain(&error.into_error()),
                 format!("could not run `{missing}` (in the repository root): {why}")

@@ -10,17 +10,18 @@ use std::sync::Arc;
 use lablet_model::{RunOutcome, StopReason, ToolSpec};
 use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
 use lablet_run::{FilterList, RunObserver, RunService, ToolExecutor, ToolSet, ToolSetError};
-use lablet_telemetry_otel::{FileTarget, OtelBuildError, OtelObserver, OtlpSettings, Transport};
+use lablet_telemetry_otel::{FileTarget, OtelBuildError, OtelObserver, OtlpSettings};
 use lablet_tools_builtin::{BuiltinTools, SettingsError};
 
 use crate::cancel::RunCancellation;
 use crate::clock::TokioClock;
 use crate::config::{
-    Config, ConfigError, Context, Env, Format, KeyPath, Model, OtlpProtocol, Place, Provider,
-    Refusal, ResolvedConfig, Substituted, Tools, TranscriptFormat,
+    Config, ConfigError, Context, Env, Format, KeyPath, Model, Place, Provider, Refusal,
+    ResolvedConfig, Substituted, Tools, TranscriptFormat,
 };
 use crate::fanout::FanOut;
 use crate::lablet::{Fixed, Lablet, Played, TranscriptPath};
+use crate::otlp;
 use crate::root::{self, OwnFile};
 use crate::secrets::{self, Derived, Named};
 use crate::settings::{Selected, Settings, System};
@@ -280,41 +281,26 @@ pub fn telemetry_on_stderr(config: &Config) -> bool {
 
 /// [`telemetry_on_stderr`], where `env` is lablet's environment.
 pub(crate) fn telemetry_on_stderr_in(config: &Config, env: Env<'_>) -> bool {
+    // Whether the network exporter is on changes nothing about `-`, so the
+    // answer is read from the path alone.
     config
         .substituted(env)
-        .is_ok_and(|real| file_target(&real) == Some(FileTarget::Stderr))
+        .is_ok_and(|real| file_target(&real, false) == Some(FileTarget::Stderr))
 }
 
 /// Where the telemetry file of `real`, a config with `${VAR}` substituted,
-/// goes, and `None` when it writes no file: a null path with an endpoint
-/// stated. Only a path that's `-` whole is standard error, so `-/` names a
-/// file.
-fn file_target(real: &Config) -> Option<FileTarget> {
+/// goes, and `None` when it writes no file: a null path with the network
+/// exporter on, `network_on`, by the config's endpoint or the environment's.
+/// Only a path that's `-` whole is standard error, so `-/` names a file.
+fn file_target(real: &Config, network_on: bool) -> Option<FileTarget> {
     match &real.telemetry.file.path {
-        None if real.telemetry.otlp.endpoint.is_some() => None,
+        None if network_on => None,
         None => Some(FileTarget::EachRun {
             directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         }),
         Some(path) if path.as_os_str() == "-" => Some(FileTarget::Stderr),
         Some(path) => Some(FileTarget::Path(path.clone())),
     }
-}
-
-/// What the network exporter is built from, when `real` states an
-/// endpoint: the config's transport, endpoint and headers. The endpoint is
-/// the config's, so the environment's headers aren't sent to it.
-fn otlp_settings(real: &Config) -> Option<OtlpSettings> {
-    let otlp = &real.telemetry.otlp;
-    let endpoint = otlp.endpoint.clone()?;
-    Some(OtlpSettings {
-        transport: match otlp.protocol {
-            OtlpProtocol::Grpc => Transport::Grpc,
-            OtlpProtocol::Http => Transport::HttpProtobuf,
-        },
-        endpoint: Some(endpoint),
-        headers: otlp.headers.clone().into_iter().collect(),
-        strip_environment_headers: true,
-    })
 }
 
 /// The refusal of what the network exporter couldn't be built from, shown
@@ -420,6 +406,8 @@ struct Prepared {
     provider: Ready,
     system: String,
     target: Option<FileTarget>,
+    /// What the network exporter is built from, when the run has one.
+    otlp: Option<OtlpSettings>,
     tools: Arc<ToolSet>,
     /// lablet's secrets: what's withheld, what's cut, and the values when
     /// the run has an executor to hand them to.
@@ -464,7 +452,8 @@ async fn prepare(written: &Config, env: Env<'_>) -> Result<Prepared, BuildError>
         }
     };
 
-    let target = file_target(&real);
+    let otlp = otlp::settings(written, &real, env).map_err(refused)?;
+    let target = file_target(&real, otlp.is_some());
 
     // The values are held only for an executor to cut, and the built-in
     // tools are the one executor a run can have.
@@ -512,6 +501,7 @@ async fn prepare(written: &Config, env: Env<'_>) -> Result<Prepared, BuildError>
         provider,
         system,
         target,
+        otlp,
         tools,
         secrets,
     })
@@ -553,6 +543,7 @@ async fn build_in(
         provider,
         system,
         target,
+        otlp,
         tools,
         secrets,
     } = prepare(&config, env).await?;
@@ -568,7 +559,7 @@ async fn build_in(
     if let Some(target) = target {
         telemetry = telemetry.file(target);
     }
-    if let Some(settings) = otlp_settings(&real) {
+    if let Some(settings) = otlp {
         telemetry = telemetry.otlp(settings);
     }
     let telemetry = telemetry

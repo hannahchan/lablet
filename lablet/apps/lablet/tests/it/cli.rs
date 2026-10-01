@@ -20,6 +20,8 @@ mod init;
 #[cfg(test)]
 mod labels;
 #[cfg(test)]
+mod otlp;
+#[cfg(test)]
 mod parity;
 #[cfg(test)]
 mod prompts;

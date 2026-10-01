@@ -94,8 +94,9 @@ fn defaults() -> Config {
         telemetry: Telemetry {
             capture_content: false,
             otlp: Otlp {
+                enabled: true,
                 endpoint: None,
-                protocol: OtlpProtocol::Grpc,
+                protocol: None,
                 headers: BTreeMap::new(),
             },
             file: TelemetryFile { path: None },

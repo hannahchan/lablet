@@ -381,3 +381,79 @@ fn a_check_prints_the_names_withheld_and_cut_and_no_value() {
         "{resolved:?}"
     );
 }
+
+/// C19: a header variable the exporter reads is named among what's cut and
+/// not among what's withheld, with no line holding its value; `--resolved`
+/// prints `enabled: true` and `protocol: null` as written and nothing the
+/// environment holds; a protocol from the environment lablet can't send is
+/// refused under its key, naming the variable and the value; and
+/// `enabled: false` beside an endpoint is refused as a setting without
+/// effect.
+#[test]
+fn an_otlp_header_variable_is_cut_and_not_withheld_and_what_the_environment_cannot_set_is_refused()
+{
+    let lab = Lab::new("check-otel");
+    lab.write("script.yaml", ENDS);
+    let text = "model:\n  provider: fake\n  script: script.yaml\nprompt:\n  system: Hi.\n";
+    lab.write("lablet.yaml", text);
+    let token = "tok-0123456789abcdef-no-stderr";
+    let check = |args: &[&str], env: &[(&str, &str)]| {
+        let mut command = lab.lablet(&[&["check", "--config", "lablet.yaml"][..], args].concat());
+        command.envs(env.iter().copied());
+        ran(command, "")
+    };
+
+    let headers = format!("authorization=Bearer%20{token}");
+    let named = check(&[], &[("OTEL_EXPORTER_OTLP_HEADERS", &headers)]);
+    passed(
+        &named,
+        "withheld: none\ncut: OTEL_EXPORTER_OTLP_HEADERS",
+        "0 tools",
+    );
+    assert!(!named.stderr.contains(token), "{named:?}");
+
+    let printed = check(
+        &["--resolved"],
+        &[("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")],
+    );
+    passed(&printed, NONE, "0 tools");
+    assert!(
+        printed
+            .stdout
+            .contains("  otlp:\n    enabled: true\n    endpoint: null\n    protocol: null\n"),
+        "{printed:?}"
+    );
+    assert!(
+        !printed.stdout.contains("127.0.0.1"),
+        "the environment's endpoint is nowhere in the resolved config: {printed:?}"
+    );
+    assert_eq!(
+        resolved(&printed).digest(),
+        Config::from_str(text, Format::Yaml).unwrap().digest()
+    );
+
+    refused(
+        &check(
+            &[],
+            &[
+                ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1"),
+                ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json"),
+            ],
+        ),
+        "config: telemetry.otlp.protocol: null is refused: `OTEL_EXPORTER_OTLP_PROTOCOL` holds \
+         \"http/json\", which lablet can't send; it sends `grpc` and `http/protobuf`",
+    );
+
+    lab.write(
+        "lablet.yaml",
+        &format!(
+            "{text}telemetry:\n  otlp:\n    enabled: false\n    endpoint: http://localhost:4317\n"
+        ),
+    );
+    refused(
+        &check(&[], &[]),
+        "config: telemetry.otlp.enabled (line 8): false is refused: it turns the network \
+         exporter off, and `telemetry.otlp.endpoint: http://localhost:4317` turns it on; a \
+         config that wants it off states no endpoint",
+    );
+}
