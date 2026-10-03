@@ -25,7 +25,7 @@ Sequencing rationale: the loop is proven against fakes before any real adapter e
 | 11    | Hardening and release                               | Not started      |
 | 12    | After the release                                   | Not started      |
 
-A date is the date of the `decisions.md` entry that closed the phase. Spec §6 and §7 describe what phases 4 to 10 build: phase 4's part is built, and the rest is ahead of the code.
+A date is the date of the `decisions.md` entry that closed the phase. Spec §6 and §7 describe what phases 4 to 10 build: the parts of phases 4 to 6 are built, and the rest is ahead of the code.
 
 ## Phase 0: Scaffold
 
@@ -150,6 +150,13 @@ Acceptance: a fake-provider run against the in-process receiver yields the same 
 
 - Each provider adapter maps its own API's finish reasons onto `FinishReason`'s known variants in a closed match, so the domain's table stops holding two vendors' spellings. `Usage`'s cache addition, which its doc says can't be forgotten while its fields are public, is held by a constructor before the Anthropic adapter, the first to report input tokens without the cached ones, depends on it ("What the assessment after phase 5 settled").
 
+- From phase 6 ("What the after-phase-6 panel found" in `decisions.md`):
+  - `ProviderError` keeps its message whole, and the loop cuts the run's secrets from it and then bounds it, as it does a tool's error; the secret values are then held for every run, not only one with tools, and a run with no tools whose provider error carries a registered secret holds it (P11).
+  - The adapter is built in `prepare`, so `check` sees what its construction refuses: the key read once as a `SecretString`, `base_url` parsed once, in a module of the composition root as `otlp.rs` is. Spec §7 and `check`'s doc then say `check` builds each adapter that exists and calls none.
+  - `cargo xtask weaver live-check` takes a config and a prompt, keeping the provider's key variable while it strips `OTEL_*`, so the human can run the real-key check; and it runs a third fake script, a retryable error then a success with cache counts, `model.pricing` and `--task`, `--experiment` and `--trial`, its reach check asking for one exception record and one `lablet.retry` event.
+  - The capture's first recorded decision is the tool surface it shares with lablet without MCP and the matrix rows it settles; the rest waits for phase 8's.
+  - A test that needs a refused connection takes `refused_address()` from `lablet-test-support`, moved there from the conformance receiver, and a listener a test binds at port 0 is held while anything may connect to it.
+
 Acceptance: scenarios P1, P2, P6, P8, and P11 pass in CI against wiremock. Manual: `lablet run --config examples/anthropic.yaml --prompt "..."` completes a real task against the Anthropic API and its trace passes live-check with no attribute added for it; the capture is recorded.
 
 ## Phase 7a: Context management
@@ -162,6 +169,8 @@ Decided on 2026-09-24 and 2026-09-28 as a phase before phase 4, and moved here o
 - Room for compaction. The transcript document's rules say where a compaction entry goes, so that phase 12 adds to the document and changes nothing in it.
 
 - Before the design commit: `lablet-run`'s `service.rs` split along its seams in a move-only commit, since phases 7a, 10 and 12 all add to it and parallel streams would collide on one file. In the design: the request size is measured whole once masking can change a settled message (`RequestBytes` measures each message once); `Progress` carries the latest request's input tokens, which `trigger_tokens` reads; `ToolCallOutcome` gets a constructor before it gains a field; closing a run takes a `Closing` and a `Priced` rather than six arguments through five signatures ("What the assessment after phase 5 settled").
+
+- Masking reaches the content records ("What the after-phase-6 panel found" in `decisions.md`): the observer rebuilds each request from events, so what's masked must reach it through an event, and K1 checks that the fourth call's `gen_ai.input.messages` holds the placeholder.
 
 Acceptance: scenarios K1 to K3 pass, the floors hold, and every earlier scenario still passes.
 
@@ -178,6 +187,8 @@ Acceptance: scenarios K1 to K3 pass, the floors hold, and every earlier scenario
 - Questions for the owner in the design commit, from the assessment after phase 5: when a server started again for a run fails to start, does the run end with a stop reason and an outcome, or does `Lablet::run` fail with no outcome? The likely shape either way: a `RunService` built for each run, which decisions.md allows and which removes `RunCancellation`; typed MCP handles in the composition root with an async close; servers started concurrently and under the build's cancellation; a `BuildError` of class `mcp` that names the server. `tools-mcp` maps a server's "no such tool" for a name it offered to `failed`, since `unknown` means a name that was never offered. A fixture of the tool specs' serde form, which sets `lablet.tools.digest` and `lablet.prompt.tools_bytes`, and whether the changelog gate watches it, is the owner's call before `ToolSpec` changes.
 
 - A stdio server's `env` values are secrets as `tools.builtin.env`'s are, and the server alone receives them; its stderr is piped, bounded per line and in total, and cut before it becomes a diagnostic; the MCP executor passes the conformance case that hands it secrets ("Secrets are derived from the config" in `decisions.md`).
+
+- From phase 6 ("What the after-phase-6 panel found" in `decisions.md`): a server's `specs()` failure is cut and bounded before it becomes `ToolSetError::Specs`, since `ToolError` no longer bounds itself; and `check` awaits the close of the servers it started, with a CLI test that the test server's process is gone after it.
 
 Acceptance: scenarios T1, T3, T5 to T9, T12, and T18 to T20 pass in CI against the test server. Manual: a run using a public MCP server over stdio completes, its tool spans carry the `mcp.*` attributes, and removing a tool via `tools.deny` changes the `RunStarted` tool list and nothing else; the capture and the transfer check are recorded.
 
@@ -197,6 +208,8 @@ Acceptance: the same config with only the `model` section changed completes the 
 
 - In the design commit: the tools the loop answers itself, `task_complete` and `skill`, designed together, and where the JSON Schema check for `run.completion_schema` is made, since the domain takes no such dependency and the verdict is passed in; whether a `task_complete` whose arguments parse but break the schema is `rejected` or `malformed_input` (S5 says `rejected`); `Pending` reading the completion mode from its own setup, so the stop policy's unreachable arm goes; and, if the run id's file-name rule is shared rather than checked by each writer, a shared adapter crate holds it, not `lablet-model` ("What the assessment after phase 5 settled").
 
+- The skill tool's span takes the skill's name from a field of the event, since the tool's arguments reach the observer only when content is captured ("What the after-phase-6 panel found" in `decisions.md`).
+
 Acceptance: scenarios S1 to S5 pass. An ATIF export of a fake run validates against Harbor's Pydantic models.
 
 ## Phase 11: Hardening and release
@@ -206,6 +219,8 @@ Acceptance: scenarios S1 to S5 pass. An ATIF export of a fake run validates agai
 - Release workflow publishing static Linux (musl, rustls) and macOS binaries; `cargo install` works from the repo. First `CHANGELOG.md` release section.
 
 - Before the release: whether `RunObserver::on` stays async and takes its event by value. Every observer is synchronous inside and the loop awaits `on` unbounded; a new signature doesn't bound it, a queue or a timeout would, and either is a breaking change after the release ("What the assessment after phase 5 settled").
+
+- With the observer's signature: whether `EventKind`'s variants hold named payload structs, and a cap in bytes on each export batch, decided with how an over-long content value is cut, since today's cut keeps the start of `gen_ai.input.messages` and ends mid-JSON ("What the after-phase-6 panel found" in `decisions.md`).
 
 Acceptance: a new user can follow `lablet/docs/getting-started.md` from clone to a traced run in under five minutes without reading the spec, verified and timed by someone who didn't write it. The release checklist in `acceptance.md` is signed off once.
 
