@@ -156,6 +156,11 @@ Acceptance: a fake-provider run against the in-process receiver yields the same 
   - `cargo xtask weaver live-check` takes a config and a prompt, keeping the provider's key variable while it strips `OTEL_*`, so the human can run the real-key check; and it runs a third fake script, a retryable error then a success with cache counts, `model.pricing` and `--task`, `--experiment` and `--trial`, its reach check asking for one exception record and one `lablet.retry` event.
   - The capture's first recorded decision is the tool surface it shares with lablet without MCP and the matrix rows it settles; the rest waits for phase 8's.
   - A test that needs a refused connection takes `refused_address()` from `lablet-test-support`, moved there from the conformance receiver, and a listener a test binds at port 0 is held while anything may connect to it.
+- From the panel before phase 7 ("What the panel before phase 7 found" in `decisions.md`):
+  - The capture settles matrix row E1, how the primary reference clears old tool output: an edit of earlier turns on the client, `context_management.edits`, or `cache_edits`, and which `anthropic-beta` values it sends. A wiremock scenario holds that each request's `system`, `tools` and earlier messages are byte for byte the previous request's, `cache_control` aside, since editing an earlier turn invalidates every later thinking block on the current models.
+  - A setting for how thinking is shown, sent as `thinking.display` and recorded with the `:summarized` suffix the registry already names, since the current models send thinking blocks with empty text unless asked. If it slips, the registry's note on `lablet.request.thinking` is corrected in the same commit.
+  - How a setting the model rejects is refused (a thinking budget, disabled thinking, `temperature`, each a 400 on Opus 5.5) is one recorded decision. The default is that the provider's 400 is a fatal error naming the setting, rather than a table of models that goes stale.
+  - The adapter's design commit decides whether JSON objects keep the order the model or server gave them (`serde_json`'s `preserve_order`) or are sorted, as today, and whether a reordered `tool_use` input counts as an edit under the thinking check. The choice is recorded, correcting the 2026-09-26 decision on what the observer receives and `content.rs`'s doc, and a test pins the order.
 
 Acceptance: scenarios P1, P2, P6, P8, and P11 pass in CI against wiremock. Manual: `lablet run --config examples/anthropic.yaml --prompt "..."` completes a real task against the Anthropic API and its trace passes live-check with no attribute added for it; the capture is recorded.
 
@@ -171,6 +176,7 @@ Decided on 2026-09-24 and 2026-09-28 as a phase before phase 4, and moved here o
 - Before the design commit: `lablet-run`'s `service.rs` split along its seams in a move-only commit, since phases 7a, 10 and 12 all add to it and parallel streams would collide on one file. In the design: the request size is measured whole once masking can change a settled message (`RequestBytes` measures each message once); `Progress` carries the latest request's input tokens, which `trigger_tokens` reads; `ToolCallOutcome` gets a constructor before it gains a field; closing a run takes a `Closing` and a `Priced` rather than six arguments through five signatures ("What the assessment after phase 5 settled").
 
 - Masking reaches the content records ("What the after-phase-6 panel found" in `decisions.md`): the observer rebuilds each request from events, so what's masked must reach it through an event, and K1 checks that the fourth call's `gen_ai.input.messages` holds the placeholder.
+- Masking on Anthropic takes the server-side route, context editing, or is recorded as dropping later thinking, since editing earlier turns in lablet invalidates every later thinking block on the current models: a 400 for accounts created on or after 2026-08-31, unchecked for older ones. Which route is the owner's call at the design commit, and the 2026-09-20 line that lablet already satisfies the thinking check is superseded when 7a lands ("What the panel before phase 7 found" in `decisions.md`).
 
 Acceptance: scenarios K1 to K3 pass, the floors hold, and every earlier scenario still passes.
 
@@ -209,6 +215,7 @@ Acceptance: the same config with only the `model` section changed completes the 
 - In the design commit: the tools the loop answers itself, `task_complete` and `skill`, designed together, and where the JSON Schema check for `run.completion_schema` is made, since the domain takes no such dependency and the verdict is passed in; whether a `task_complete` whose arguments parse but break the schema is `rejected` or `malformed_input` (S5 says `rejected`); `Pending` reading the completion mode from its own setup, so the stop policy's unreachable arm goes; and, if the run id's file-name rule is shared rather than checked by each writer, a shared adapter crate holds it, not `lablet-model` ("What the assessment after phase 5 settled").
 
 - The skill tool's span takes the skill's name from a field of the event, since the tool's arguments reach the observer only when content is captured ("What the after-phase-6 panel found" in `decisions.md`).
+- Before the design commit, the GenAI conventions pin is refreshed, and the skill's attribute is `gen_ai.skill.name` if upstream still has it, in place of `lablet.skill.name` ("What the panel before phase 7 found" in `decisions.md`).
 
 Acceptance: scenarios S1 to S5 pass. An ATIF export of a fake run validates against Harbor's Pydantic models.
 
@@ -221,6 +228,7 @@ Acceptance: scenarios S1 to S5 pass. An ATIF export of a fake run validates agai
 - Before the release: whether `RunObserver::on` stays async and takes its event by value. Every observer is synchronous inside and the loop awaits `on` unbounded; a new signature doesn't bound it, a queue or a timeout would, and either is a breaking change after the release ("What the assessment after phase 5 settled").
 
 - With the observer's signature: whether `EventKind`'s variants hold named payload structs, and a cap in bytes on each export batch, decided with how an over-long content value is cut, since today's cut keeps the start of `gen_ai.input.messages` and ends mid-JSON ("What the after-phase-6 panel found" in `decisions.md`).
+- Before the release ("What the panel before phase 7 found" in `decisions.md`): the semantic conventions pin refreshed in a commit of its own, with each `lablet.*` justification checked again against it; the registry's `schema_url` set to the release's version; and a test that pins whole OTLP/JSON file lines against hand-written fixtures, unless the first upgrade of an `opentelemetry` crate has brought it already. The batch-cap decision names the OTLP JSON file receiver's default line limit of 1 MiB, which the example collector raises.
 
 Acceptance: a new user can follow `lablet/docs/getting-started.md` from clone to a traced run in under five minutes without reading the spec, verified and timed by someone who didn't write it. The release checklist in `acceptance.md` is signed off once.
 
