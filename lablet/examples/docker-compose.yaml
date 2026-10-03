@@ -3,7 +3,7 @@
 services:
   collector:
     # The contrib distribution: the core one has no otlpjsonfile receiver.
-    image: otel/opentelemetry-collector-contrib:0.162.0
+    image: otel/opentelemetry-collector-contrib:0.161.0
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes:
       - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
