@@ -2,7 +2,7 @@
 # are pinned; move them on purpose, in a commit of their own.
 services:
   collector:
-    # The contrib distribution: the core one has no otlpjsonfile receiver.
+    # The contrib distribution: the core one has no OTLP JSON file receiver.
     image: otel/opentelemetry-collector-contrib:0.161.0
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes:

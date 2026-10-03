@@ -191,6 +191,7 @@ Run before tagging a release and recorded in the release notes. These can't be a
 
 - [ ] Someone who didn't write the docs follows `lablet/docs/getting-started.md` from clone to a traced run in under five minutes.
 - [ ] A fake-provider run's traces and wide event look right in Jaeger, Grafana Tempo, Honeycomb, and Langfuse.
+- [ ] A long run with content captured, written to a file and replayed through `lablet/examples`, shows its `lablet.run` and `gen_ai.client.inference.operation.details` records in `docker compose logs collector`, so the file's log records, and not only its spans, are read by the Collector.
 - [ ] P5 passes against a local Ollama model.
 - [ ] A real Anthropic run against a public MCP server over stdio completes and its trace passes live-check.
 - [ ] The captures of phases 7, 8 and 9 are recorded in `product/research/parity/`, each at the reference's pinned version, and the parity matrix has no row marked as needing one.

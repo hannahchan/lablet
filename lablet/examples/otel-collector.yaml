@@ -9,11 +9,14 @@ receivers:
         endpoint: 0.0.0.0:4318
   # Replays the OTLP/JSON files lablet writes. The receiver is made once for
   # each pipeline that lists it and reads a file from its end by default, so
-  # both pipelines list it and both start at the beginning.
-  otlpjsonfile:
+  # both pipelines list it and both start at the beginning. A line longer
+  # than max_log_size is dropped with no message, and its default of 1MiB is
+  # less than one export of a long run's content records.
+  otlp_json_file:
     include:
       - /replay/*.otlp.jsonl
     start_at: beginning
+    max_log_size: 64MiB
 
 exporters:
   debug:
@@ -26,10 +29,10 @@ exporters:
 service:
   pipelines:
     traces:
-      receivers: [otlp, otlpjsonfile]
+      receivers: [otlp, otlp_json_file]
       exporters: [debug, otlp/jaeger]
     # Jaeger stores no logs: the wide event and the content records are in
     # the collector's output only.
     logs:
-      receivers: [otlp, otlpjsonfile]
+      receivers: [otlp, otlp_json_file]
       exporters: [debug]
