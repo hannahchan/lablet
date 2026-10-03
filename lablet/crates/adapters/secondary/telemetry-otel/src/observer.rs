@@ -199,8 +199,8 @@ impl OtelObserverBuilder {
     /// # Errors
     ///
     /// Returns an [`OtelBuildError`] when the network exporters can't be
-    /// made: the endpoint isn't one the exporter accepts, or a header isn't
-    /// one a header may have.
+    /// made: the endpoint isn't one the exporter accepts, a header isn't
+    /// one a header may have, or TLS to the endpoint can't be set up.
     pub fn build(self) -> Result<OtelObserver, OtelBuildError> {
         let Self {
             version,
@@ -237,7 +237,9 @@ impl OtelObserverBuilder {
 
         if let Some(settings) = otlp {
             // What a check of the settings refuses, the build refuses first,
-            // so the two can't come apart.
+            // so the two can't come apart. Only what the check can't do
+            // without making it is the build's alone: the trust roots of a
+            // gRPC exporter that speaks TLS, and the HTTP client.
             validate(&settings)?;
             let (spans, records, wide) = Network::new(&settings)?.exporters()?;
             destinations.push(destination(OTLP, spans, records, wide));

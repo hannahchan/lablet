@@ -8,7 +8,7 @@ use lablet::{BuildError, ConfigError, Place, StopReason};
 use lablet_conformance::receiver::{self, Mode, Receiver};
 use serde_json::json;
 
-use crate::harness::{ENDS, Lab, request};
+use crate::harness::{ENDS, Lab, refusal, request};
 
 /// The name of a run's own telemetry file, in the working directory, which
 /// a run with an endpoint and no path must not write.
@@ -143,15 +143,8 @@ fn a_port_nothing_listens_on_changes_nothing_and_the_process_exits_within_five_s
     );
 }
 
-/// What `check` and `build` refuse `config` with, which is one answer:
-/// a check refuses what a build refuses, and installs no exporter for it.
-async fn both_refuse(config: lablet::Config) -> BuildError {
-    let checked = lablet::check(&config).await.map(drop).unwrap_err();
-    let built = lablet::build(config).await.map(drop).unwrap_err();
-    assert_eq!(checked, built, "check and build refuse alike");
-    built
-}
-
+/// C20: a stated endpoint the exporter doesn't accept is refused by `check`
+/// and `build` alike, by its key and as the config writes it.
 #[tokio::test]
 async fn an_endpoint_the_exporter_refuses_is_refused_by_its_key_as_the_config_writes_it() {
     let scratch = Lab::new("otlp-bad-endpoint");
@@ -160,7 +153,7 @@ async fn an_endpoint_the_exporter_refuses_is_refused_by_its_key_as_the_config_wr
         json!({ "telemetry": { "otlp": { "endpoint": "http://[not a host" } } }),
     );
 
-    let refused = both_refuse(config).await;
+    let refused = refusal(config).await;
 
     assert_eq!(
         refused,
@@ -173,29 +166,37 @@ async fn an_endpoint_the_exporter_refuses_is_refused_by_its_key_as_the_config_wr
     );
 }
 
-/// The user information of a refused endpoint is a secret, so the refusal
-/// shows the endpoint without it.
+/// C20: the user information of a refused endpoint is a secret, and where
+/// it ends can't be told once it may hold an unencoded `/`, so the refusal
+/// of an endpoint that holds an `@` shows no value: with a scheme, without
+/// one, which the gRPC exporter gives one, and with a `/` in the password,
+/// which a URL reads as ending the authority.
 #[tokio::test]
-async fn a_refused_endpoint_is_shown_without_its_user_information() {
+async fn a_refused_endpoint_that_holds_an_at_is_shown_with_no_value() {
     const PASSWORD: &str = "hunter2-0123456789abcdef";
     let scratch = Lab::new("otlp-bad-endpoint-user-information");
-    let config = scratch.config(
-        ENDS,
-        json!({ "telemetry": { "otlp": {
-            "endpoint": format!("http://user:{PASSWORD}@[not a host"),
-        } } }),
-    );
+    for endpoint in [
+        format!("http://user:{PASSWORD}@[not a host"),
+        format!("user:{PASSWORD}@[not a host"),
+        format!("https://user:ab/{PASSWORD}@[not a host"),
+    ] {
+        let config = scratch.config(
+            ENDS,
+            json!({ "telemetry": { "otlp": { "endpoint": endpoint } } }),
+        );
 
-    let refused = both_refuse(config).await;
+        let refused = refusal(config).await;
 
-    assert_eq!(
-        refused.to_string(),
-        "telemetry.otlp.endpoint (line 1): \"http://[not a host\" is refused: it isn't a URL the \
-         exporter accepts"
-    );
-    for shown in [refused.to_string(), format!("{refused:?}")] {
-        assert!(!shown.contains(PASSWORD), "{shown}");
-        assert!(!shown.contains("user:"), "{shown}");
+        assert_eq!(
+            refused.to_string(),
+            "telemetry.otlp.endpoint (line 1): its value is refused: it isn't a URL the exporter \
+             accepts",
+            "{endpoint}"
+        );
+        assert!(
+            !format!("{refused:?}").contains(PASSWORD),
+            "{endpoint}: {refused:?}"
+        );
     }
 }
 
@@ -210,7 +211,7 @@ async fn a_header_that_is_not_one_is_refused_by_its_key_and_its_value_is_shown_n
         } } }),
     );
 
-    let refused = both_refuse(config).await;
+    let refused = refusal(config).await;
 
     assert_eq!(
         refused,

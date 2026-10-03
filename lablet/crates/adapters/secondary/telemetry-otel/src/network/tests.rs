@@ -215,6 +215,93 @@ fn an_endpoint_the_config_leaves_out_is_set_on_no_exporter() {
     assert_eq!(network.of(Signal::Traces).endpoint, None);
 }
 
+// Which endpoints the gRPC exporter speaks TLS to
+
+/// The scheme and host of the endpoint the exporter speaks TLS to for
+/// `stated`, when it does.
+fn spoken_to_over_tls(stated: Option<&str>) -> Option<String> {
+    over_tls(stated, Signal::Traces).map(|endpoint| endpoint.uri().to_string())
+}
+
+#[test]
+fn the_grpc_exporter_speaks_tls_to_an_https_endpoint_and_to_one_without_a_scheme() {
+    assert_eq!(
+        spoken_to_over_tls(Some("https://collector.internal:4317")),
+        Some("https://collector.internal:4317/".to_owned())
+    );
+    assert_eq!(
+        spoken_to_over_tls(Some("HTTPS://collector.internal:4317")),
+        Some("https://collector.internal:4317/".to_owned())
+    );
+    assert_eq!(
+        spoken_to_over_tls(Some("collector.internal:4317")),
+        Some("https://collector.internal:4317/".to_owned()),
+        "the exporter gives it `https://`, as the environment says nothing of it"
+    );
+    assert_eq!(
+        spoken_to_over_tls(Some("collector.internal:4317/p://q")),
+        Some("https://collector.internal:4317/p://q".to_owned()),
+        "a `://` after a `/` ends no scheme"
+    );
+    assert_eq!(
+        spoken_to_over_tls(Some("http://collector.internal:4317")),
+        None
+    );
+    assert_eq!(spoken_to_over_tls(Some("unix:///run/otel.sock")), None);
+    assert_eq!(
+        spoken_to_over_tls(Some("https://[not a host")),
+        None,
+        "the exporter refuses it before it sets up TLS"
+    );
+    // The endpoint variables aren't set where the tests run, so the
+    // exporter's own default stands, which is `http://`.
+    assert_eq!(spoken_to_over_tls(None), None);
+}
+
+#[test]
+fn only_a_grpc_exporter_is_given_tls() {
+    let endpoint = |transport| {
+        Network::new(&OtlpSettings {
+            endpoint: Some("https://collector.internal:4317".to_owned()),
+            ..settings(transport, &[])
+        })
+        .unwrap()
+        .of(Signal::Logs)
+        .tls
+        .map(|endpoint| endpoint.uri().to_string())
+    };
+
+    assert_eq!(
+        endpoint(Transport::Grpc),
+        Some("https://collector.internal:4317/".to_owned())
+    );
+    assert_eq!(endpoint(Transport::HttpProtobuf), None);
+}
+
+#[test]
+fn a_refusal_of_an_endpoint_whose_tls_sets_up_is_the_endpoints() {
+    // The platform's roots load where the tests run, as they must where
+    // lablet speaks TLS.
+    let of = Network::new(&OtlpSettings {
+        endpoint: Some("https://collector.internal:4317".to_owned()),
+        ..settings(Transport::Grpc, &[])
+    })
+    .unwrap()
+    .of(Signal::Traces);
+
+    let refusal = refused(
+        &of,
+        ExporterBuildError::InvalidConfiguration("protocol: a made-up refusal".to_owned()),
+    );
+
+    assert_eq!(
+        refusal,
+        OtelBuildError::Endpoint {
+            signal: Signal::Traces
+        }
+    );
+}
+
 // What's refused, and what a refusal says
 
 #[test]

@@ -515,26 +515,43 @@ fn the_telemetry_is_on_standard_error_when_its_path_is_a_dash_once_variables_are
     assert!(!on_stderr("null", &nothing));
 }
 
-/// An endpoint the exporter refuses is shown as the config writes it, less
-/// its user information, which is a secret; and when the config states
-/// none, the refusal names the variable the exporter read in its place,
-/// the signal's own before the generic one, and shows nothing of either.
+/// An endpoint the exporter refuses is shown as the config writes it, or
+/// with no value when that holds an `@`: user information is a secret, and
+/// where it ends can't be told once it may hold an unencoded `/`. When the
+/// config states no endpoint, the refusal names the variable the exporter
+/// read in its place, the signal's own before the generic one, and shows
+/// nothing of either.
 #[test]
-fn a_refused_endpoint_is_shown_without_its_user_information_or_names_the_variable_read() {
+fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_or_names_the_variable_read() {
     use lablet_telemetry_otel::Signal;
     const PASSWORD: &str = "hunter2-0123456789abcdef";
     let refused = |signal| OtelBuildError::Endpoint { signal };
 
-    let written = config(&format!(
-        "telemetry: {{ otlp: {{ endpoint: 'http://user:{PASSWORD}@[not a host' }} }}"
-    ));
+    let written = config("telemetry: { otlp: { endpoint: 'http://[not a host' } }");
     let shown = otlp_refused(&written, &nothing, true, refused(Signal::Traces));
     assert_eq!(
         shown.to_string(),
         "telemetry.otlp.endpoint (line 1): \"http://[not a host\" is refused: it isn't a URL the \
          exporter accepts"
     );
-    assert!(!format!("{shown:?}").contains(PASSWORD), "{shown:?}");
+
+    for endpoint in [
+        format!("http://user:{PASSWORD}@[not a host"),
+        format!("user:{PASSWORD}@[not a host"),
+        format!("https://user:ab/{PASSWORD}@[not a host"),
+    ] {
+        let written = config(&format!(
+            "telemetry: {{ otlp: {{ endpoint: '{endpoint}' }} }}"
+        ));
+        let shown = otlp_refused(&written, &nothing, true, refused(Signal::Traces));
+        assert_eq!(
+            shown.to_string(),
+            "telemetry.otlp.endpoint (line 1): its value is refused: it isn't a URL the exporter \
+             accepts",
+            "{endpoint}"
+        );
+        assert!(!format!("{shown:?}").contains(PASSWORD), "{shown:?}");
+    }
 
     let written = config("telemetry: { otlp: { headers: { a: b } } }");
     let held = |name: &str| match name {
@@ -562,4 +579,49 @@ fn a_refused_endpoint_is_shown_without_its_user_information_or_names_the_variabl
          is read since the config states no endpoint, holds what isn't a URL the exporter accepts"
     );
     assert!(!format!("{shown:?}").contains("not a host"), "{shown:?}");
+}
+
+/// TLS to the collector that can't be set up is refused with what stood in
+/// the way and no guess at why, since roots that can't be loaded and an
+/// address TLS can't name are refused alike: by the endpoint as the config
+/// writes it, or by the variable the exporter read it from, showing
+/// nothing of what that holds.
+#[test]
+fn tls_that_cannot_be_set_up_is_refused_by_the_endpoint_as_written_or_the_variable_read() {
+    use lablet_telemetry_otel::Signal;
+    let tls = |signal| OtelBuildError::Tls {
+        signal,
+        reason: "transport error: no native certs found".to_owned(),
+    };
+
+    let written = config("telemetry: { otlp: { endpoint: 'https://collector.internal:4317' } }");
+    let shown = otlp_refused(&written, &nothing, true, tls(Signal::Traces));
+    assert_eq!(
+        shown.to_string(),
+        "telemetry.otlp.endpoint (line 1): \"https://collector.internal:4317\" is refused: TLS to \
+         the collector couldn't be set up: transport error: no native certs found"
+    );
+
+    let written = config("telemetry: { otlp: { headers: { a: b } } }");
+    let held = holding(
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        "https://collector.internal:4317",
+    );
+    let shown = otlp_refused(&written, &held, false, tls(Signal::Logs));
+    assert_eq!(
+        shown,
+        BuildError::Config(ConfigError::Invalid {
+            key: "telemetry.otlp.endpoint".to_owned(),
+            place: None,
+            value: None,
+            reason: "`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`, which is read since the config states no \
+                     endpoint, names the collector, and TLS to it couldn't be set up: transport \
+                     error: no native certs found"
+                .to_owned(),
+        })
+    );
+    assert!(
+        !format!("{shown:?}").contains("collector.internal"),
+        "{shown:?}"
+    );
 }

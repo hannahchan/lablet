@@ -143,7 +143,8 @@ opentelemetry-proto = { version = "=0.33.0", default-features = false, features 
   "logs",
   "with-serde",
 ] }
-# OTLP network exporter over gRPC and HTTP/protobuf, on rustls.
+# OTLP network exporter over gRPC and HTTP/protobuf, on rustls. `tls-roots` builds tonic with
+# the platform's trust roots, which telemetry-otel turns on for a gRPC endpoint over TLS.
 opentelemetry-otlp = { version = "=0.33.0", default-features = false, features = [
   "grpc-tonic",
   "http-proto",
@@ -163,9 +164,9 @@ opentelemetry-http = "=0.33.0"
 secrecy = "=0.10.3"
 # Protobuf bodies in the in-process OTLP HTTP receiver; the line opentelemetry-proto requires.
 prost = "=0.14.4"
-# The request and status types of the OTLP gRPC exporter's interceptor in telemetry-otel, and
-# the in-process gRPC receiver in lablet-conformance, which adds the server features; the line
-# opentelemetry-otlp requires.
+# The request and status types of the OTLP gRPC exporter's interceptor and its TLS in
+# telemetry-otel, and the in-process gRPC receiver in lablet-conformance, which adds the server
+# and TLS features; the line opentelemetry-otlp requires.
 tonic = { version = "=0.14.6", default-features = false }
 # In-process OTLP HTTP receiver in lablet-conformance; the line tonic's router uses, so one copy.
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
@@ -197,6 +198,9 @@ schemars = "=1.2.2"
 wiremock = "=0.6.5"
 # Benchmarks behind `cargo xtask bench`. Default features are off to avoid plotters and rayon.
 criterion = { version = "=0.8.2", default-features = false, features = ["cargo_bench_support"] }
+# The CA and certificate of the in-process receiver's TLS listener, made when it starts, so no
+# key is committed. On aws-lc-rs, the provider rustls already has.
+rcgen = { version = "=0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
 # Property tests for the laws the domain's aggregation depends on, which examples can't state:
 # that cost is additive over consistent usages, and that usage sums are a monoid. Default
 # features are off to drop the fork-based test runner and its `rusty-fork` and `tempfile` trees;

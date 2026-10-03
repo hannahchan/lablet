@@ -296,8 +296,8 @@ async fn the_environments_resource_attributes_go_beneath_the_configs_and_the_ser
     }
 }
 
-/// An endpoint the environment names that the exporter doesn't accept is
-/// refused by `check` and by `run` alike, before any run, naming the
+/// C20: an endpoint the environment names that the exporter doesn't accept
+/// is refused by `check` and by `run` alike, before any run, naming the
 /// variable the exporter read, the signal's own before the generic one,
 /// and never what it holds.
 #[test]
