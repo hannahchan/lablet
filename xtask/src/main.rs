@@ -33,19 +33,15 @@ Development:
   test                     Run tests, doctests included
   doc                      Build rustdoc with warnings denied
 
-Telemetry contract:
-  weaver check             Registry against the lablet, naming, and stability policies
-  weaver generate [--check]
-                           Render the registry crate and docs (--check: compare only)
-  weaver vendor [--check]  Fetch the pinned upstream registries (--check: compare only)
-  weaver live-check        What fake-provider runs emit, checked by weaver over OTLP
-
 Quality checks:
   fmt [--check]            Format with rustfmt + dprint (--check: verify only)
   fix                      Apply clippy's machine-applicable fixes, then fmt
   clippy                   Lint every target with warnings denied
   lint-layers              Layer dependency rules
   lint-manifests           Manifest rules: inheritance, exact pins, xtask's lint copy
+  weaver check             Registry against the lablet, naming, and stability policies
+  weaver generate [--check]
+                           Render the registry crate and docs (--check: compare only)
   lint-shell               Shell scripts with shellcheck
   lint-prose [--all]       Prose style with vale (--all: warnings and suggestions too)
   deny                     Licences, advisories, bans, sources
@@ -60,20 +56,23 @@ Quality gates:
 Analysis:
   coverage [--branch]      Line and region coverage floors (--branch: branches, on nightly)
   mutants [--changed]      The exact mutation floor (--changed: only what changed)
+  weaver live-check        What fake-provider runs emit, checked by weaver over OTLP
 
 Project:
   setup                    Install the pinned toolchain, tools, and git hooks
+  weaver vendor [--check]  Fetch the pinned upstream registries (--check: compare only)
   clean                    Remove build, coverage, and mutation output
 
-Tasks cover the lablet/ workspace and, where it applies, xtask. A gate runs
-every step even after one fails. On a terminal it lists each step; off one (a
-hook, a pipe) a green gate prints one line and any warning, and
-XTASK_VERBOSE=1 or CI=true lists the steps anyway. Pinned tools come from
-mise.toml.
+Tasks cover the lablet/ workspace and, where it applies, xtask. Pinned tools
+come from mise.toml.
+
+A gate runs every step even after one fails. On a terminal it lists each step;
+off one (a hook, a pipe) it says it's running, and a green gate then prints one
+line and any warning. XTASK_VERBOSE=1 or CI=true lists the steps anyway.
 ";
 
 const WEAVER_USAGE: &str =
-    "`weaver` takes `check`, `generate [--check]`, `vendor [--check]`, or `live-check`";
+    "`weaver` takes `check`, `generate [--check]`, `live-check`, or `vendor [--check]`";
 
 /// Why the arguments name no task to run.
 #[derive(Debug, thiserror::Error)]
@@ -100,7 +99,8 @@ enum Plan {
     Exec(Vec<String>),
 }
 
-/// What a task does, or why the arguments are wrong.
+/// What a task does, or why the arguments are wrong. The arms follow the
+/// usage text, so a new task's place in it is decided here too.
 fn plan(task: &str, args: &[String]) -> Result<Plan, Usage> {
     let flag_of = |task: &str, args: &[String], name: &str| match args {
         [] => Ok(false),
@@ -111,61 +111,57 @@ fn plan(task: &str, args: &[String]) -> Result<Plan, Usage> {
         }),
     };
     let flag = |name: &str| flag_of(task, args, name);
-    let with_arguments = match (task, args) {
-        ("build", _) => Some((Mode::Command, gates::build_steps(flag("--release")?))),
-        ("fmt", _) => Some((Mode::Command, gates::fmt_steps(flag("--check")?))),
-        ("lint-prose", _) => Some((Mode::Command, gates::lint_prose_steps(flag("--all")?))),
-        ("coverage", _) => Some((Mode::Command, gates::coverage_steps(flag("--branch")?))),
-        ("mutants", _) => Some((Mode::Command, gates::mutants_steps(flag("--changed")?))),
-        ("weaver", [subtask]) if subtask == "check" => {
-            Some((Mode::Command, gates::weaver_check_steps()))
-        }
+    let command = |steps| Ok(Plan::Steps(Mode::Command, steps));
+    let gate = |name, steps| Ok(Plan::Steps(Mode::Gate(name), steps));
+    match (task, args) {
+        // Development, in the order a developer escalates.
+        ("check", []) => command(gates::check_steps()),
+        ("build", _) => command(gates::build_steps(flag("--release")?)),
+        ("run", []) => Ok(Plan::Exec(gates::run_args(&[]))),
+        ("run", [dashes, rest @ ..]) if dashes == "--" => Ok(Plan::Exec(gates::run_args(rest))),
+        ("run", _) => Err(Usage::Run),
+        ("test", []) => command(gates::test_steps()),
+        ("doc", []) => command(gates::doc_steps()),
+        // Quality checks, in gate order.
+        ("fmt", _) => command(gates::fmt_steps(flag("--check")?)),
+        ("fix", []) => command(gates::fix_steps()),
+        ("clippy", []) => command(gates::clippy_steps()),
+        ("lint-layers", []) => command(gates::lint_layers_steps()),
+        ("lint-manifests", []) => command(gates::lint_manifests_steps()),
+        ("weaver", [subtask]) if subtask == "check" => command(gates::weaver_check_steps()),
         ("weaver", [subtask, rest @ ..]) if subtask == "generate" => {
             let check = flag_of("weaver generate", rest, "--check")?;
-            Some((Mode::Command, gates::weaver_generate_steps(check)))
+            command(gates::weaver_generate_steps(check))
         }
+        ("lint-shell", []) => command(gates::lint_shell_steps()),
+        ("lint-prose", _) => command(gates::lint_prose_steps(flag("--all")?)),
+        ("deny", []) => command(gates::deny_steps()),
+        ("changelog", []) => command(gates::changelog_steps()),
+        // Quality gates.
+        ("pre-commit", []) => gate("pre-commit", gates::pre_commit_steps()),
+        ("pre-push", []) => gate("pre-push", gates::pre_push_steps()),
+        ("ci", []) => gate("ci", gates::pre_push_steps()),
+        // Analysis.
+        ("coverage", _) => command(gates::coverage_steps(flag("--branch")?)),
+        ("mutants", _) => command(gates::mutants_steps(flag("--changed")?)),
+        ("weaver", [subtask]) if subtask == "live-check" => {
+            command(gates::weaver_live_check_steps())
+        }
+        // Project.
+        ("setup", []) => command(gates::setup_steps()),
         ("weaver", [subtask, rest @ ..]) if subtask == "vendor" => {
             let check = flag_of("weaver vendor", rest, "--check")?;
-            Some((Mode::Command, gates::weaver_vendor_steps(check)))
+            command(gates::weaver_vendor_steps(check))
         }
-        ("weaver", [subtask]) if subtask == "live-check" => {
-            Some((Mode::Command, gates::weaver_live_check_steps()))
-        }
-        ("weaver", _) => return Err(Usage::Weaver),
-        ("run", []) => return Ok(Plan::Exec(gates::run_args(&[]))),
-        ("run", [dashes, rest @ ..]) if dashes == "--" => {
-            return Ok(Plan::Exec(gates::run_args(rest)));
-        }
-        ("run", _) => return Err(Usage::Run),
-        _ => None,
-    };
-    if let Some((mode, steps)) = with_arguments {
-        return Ok(Plan::Steps(mode, steps));
-    }
-    let (mode, steps) = match task {
-        "check" => (Mode::Command, gates::check_steps()),
-        "test" => (Mode::Command, gates::test_steps()),
-        "doc" => (Mode::Command, gates::doc_steps()),
-        "fix" => (Mode::Command, gates::fix_steps()),
-        "clippy" => (Mode::Command, gates::clippy_steps()),
-        "lint-layers" => (Mode::Command, gates::lint_layers_steps()),
-        "lint-manifests" => (Mode::Command, gates::lint_manifests_steps()),
-        "lint-shell" => (Mode::Command, gates::lint_shell_steps()),
-        "deny" => (Mode::Command, gates::deny_steps()),
-        "changelog" => (Mode::Command, gates::changelog_steps()),
-        "pre-commit" => (Mode::Gate("pre-commit"), gates::pre_commit_steps()),
-        "pre-push" => (Mode::Gate("pre-push"), gates::pre_push_steps()),
-        "ci" => (Mode::Gate("ci"), gates::pre_push_steps()),
-        "setup" => (Mode::Command, gates::setup_steps()),
-        "clean" => (Mode::Command, gates::clean_steps()),
-        other => return Err(Usage::UnknownTask(other.to_owned())),
-    };
-    match args.first() {
-        Some(arg) => Err(Usage::NoArguments {
+        ("clean", []) => command(gates::clean_steps()),
+        ("weaver", _) => Err(Usage::Weaver),
+        // Only a task that takes no arguments gets here with some, and that
+        // task plans without them.
+        (_, [got, ..]) if plan(task, &[]).is_ok() => Err(Usage::NoArguments {
             task: task.to_owned(),
-            got: arg.clone(),
+            got: got.clone(),
         }),
-        None => Ok(Plan::Steps(mode, steps)),
+        _ => Err(Usage::UnknownTask(task.to_owned())),
     }
 }
 
@@ -232,9 +228,10 @@ mod tests {
     fn the_usage_text_groups_every_task_in_the_order_a_developer_works() {
         assert_eq!(
             documented_tasks().join(", "),
-            "check, build, run, test, doc, weaver check, weaver generate, weaver vendor, \
-             weaver live-check, fmt, fix, clippy, lint-layers, lint-manifests, lint-shell, \
-             lint-prose, deny, changelog, pre-commit, pre-push, ci, coverage, mutants, setup, clean"
+            "check, build, run, test, doc, fmt, fix, clippy, lint-layers, lint-manifests, \
+             weaver check, weaver generate, lint-shell, lint-prose, deny, changelog, \
+             pre-commit, pre-push, ci, coverage, mutants, weaver live-check, setup, \
+             weaver vendor, clean"
         );
         for task in documented_tasks() {
             assert!(
@@ -242,6 +239,33 @@ mod tests {
                 "`{task}` is documented but not dispatched"
             );
         }
+    }
+
+    /// So the help reads the way a gate runs.
+    #[test]
+    fn the_quality_checks_are_listed_in_the_order_the_gates_run_them() {
+        let section: Vec<String> = USAGE
+            .split("\n\n")
+            .find(|section| section.starts_with("Quality checks:"))
+            .unwrap()
+            .lines()
+            .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
+            .filter_map(|line| line.trim_start().split("  ").next())
+            .map(|usage| usage.split(" [").next().unwrap_or(usage).to_owned())
+            .collect();
+        let mut gated: Vec<&str> = Vec::new();
+        for step in gates::pre_push_steps() {
+            let task = gates::task_of(step.label);
+            if section.iter().any(|listed| listed == task) && !gated.contains(&task) {
+                gated.push(task);
+            }
+        }
+        let listed: Vec<&str> = section
+            .iter()
+            .map(String::as_str)
+            .filter(|task| gated.contains(task))
+            .collect();
+        assert_eq!(listed, gated);
     }
 
     #[test]

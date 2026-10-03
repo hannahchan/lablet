@@ -1173,3 +1173,9 @@ The human ran both checks by hand in `lablet/examples/README.md`, against the co
 ## 2026-10-03 The shutdown waits for a flush that gave up
 
 A flush that gives up on a destination leaves its thread, which holds the runs it took and makes their wide events once the destination answers. The shutdown didn't wait for that thread, so it could stop the destination's queues first and the wide event was lost, which a CI run on Linux caught. The shutdown now waits for each destination's leftover flush threads before it stops that destination's queues. It does so on its own thread, which the SDK's five-second caps bound, so the caller still waits no longer than the shutdown's bound.
+
+## 2026-10-03 `cargo xtask help` grouped by what each task does
+
+The weaver tasks had a group of their own, between development and the quality checks, so the quality checks no longer read in the order the gates run them, and the group held tasks of four kinds. Each now sits with its kind: `weaver check` and `weaver generate` among the quality checks where the gates run them, `weaver live-check` in analysis beside the other checks CI runs outside the gates, and `weaver vendor` in project, since it refreshes pinned inputs. A test holds the quality checks to gate order. The dispatch in `xtask/src/main.rs` follows the help, group by group, as UsefulBytes' does.
+
+A gate run off a terminal now says it's running before its first step, as UsefulBytes' does, so a hook's log isn't blank through a cold clippy of some minutes. lablet keeps two departures from UsefulBytes, since each serves the developer better: a gate runs every step after a failure, and its table lists the failed steps first, each with the command that runs it alone.

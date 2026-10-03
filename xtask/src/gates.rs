@@ -558,6 +558,13 @@ pub fn run(mode: Mode, steps: &[Step]) -> bool {
         Mode::Command => true,
         Mode::Gate(_) => verbose(),
     };
+    // A quiet gate says it started, so a hook's log isn't blank while a long
+    // step runs.
+    if let Mode::Gate(name) = mode
+        && !lists_passes
+    {
+        println!("{name}: running...");
+    }
     let mut rows = Vec::new();
     for step in steps {
         if capture && on_terminal() {
@@ -1216,8 +1223,8 @@ mod tests {
         assert!(!passed);
     }
 
-    /// Off a terminal a green gate is one line, which says a step warned, and
-    /// the warning itself is shown above it. The gate runs in a child of this
+    /// Off a terminal a green gate says it started and ends in one line, which
+    /// says a step warned, and the warning itself is shown between them. The gate runs in a child of this
     /// test binary whose output goes to a pipe, as a hook's or an agent's does.
     #[test]
     fn a_green_gate_off_a_terminal_still_shows_a_warning_and_says_a_step_warned() {
@@ -1247,7 +1254,10 @@ mod tests {
         let printed: Vec<String> = stdout
             .lines()
             .filter_map(|line| {
-                let at = line.find("[ok] ").or_else(|| line.find("gate · "))?;
+                let at = line
+                    .find("gate: ")
+                    .or_else(|| line.find("[ok] "))
+                    .or_else(|| line.find("gate · "))?;
                 Some(&line[at..])
             })
             .map(|line| {
@@ -1256,10 +1266,11 @@ mod tests {
                 format!("{before}{after}")
             })
             .collect();
-        assert_eq!(printed.len(), 2, "{stdout}");
-        assert_eq!(printed[0], "[ok] warns: warning: skipped", "{stdout}");
+        assert_eq!(printed.len(), 3, "{stdout}");
+        assert_eq!(printed[0], "gate: running...", "{stdout}");
+        assert_eq!(printed[1], "[ok] warns: warning: skipped", "{stdout}");
         assert!(
-            printed[1].starts_with("gate · 3 steps ok · 1 warned · "),
+            printed[2].starts_with("gate · 3 steps ok · 1 warned · "),
             "{stdout}"
         );
     }
