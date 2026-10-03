@@ -2,6 +2,8 @@
 
 Configs to run lablet with, and a collector to send the runs to. A relative path in a config starts at the directory lablet runs in, so run each config from its own directory. The `cargo run` lines below build lablet on their first use.
 
+Lablet takes the OpenTelemetry settings of the environment it runs in, so run these steps in a shell where no `OTEL_*` variable is set: an endpoint there turns the network exporter on and stops the file, and a protocol there changes the transport. `env | grep ^OTEL_` lists any.
+
 ## A two-turn run (`two-turns/`)
 
 A fake-provider config whose script answers the first provider call with a `read_file` call and the second with text, so a run has two turns, a tool span, and a turn 2 to find. It needs no key.
@@ -32,19 +34,18 @@ Run the two-turn config against the collector:
 
 ```bash
 cd lablet/examples/two-turns
-cargo run --locked --manifest-path ../../Cargo.toml --bin lablet -- run --config lablet.yaml --prompt "Read notes.md and say what it holds." --set telemetry.otlp.endpoint=http://localhost:14317
+cargo run --locked --manifest-path ../../Cargo.toml --bin lablet -- run --config lablet.yaml --prompt "Read notes.md and say what it holds." --set telemetry.otlp.endpoint=http://localhost:14317 --set telemetry.otlp.protocol=grpc
 ```
 
 In Jaeger, select the service `lablet`, put `lablet.turn=2` in the Tags field, and find traces. The one trace found holds the span `chat scripted` of turn 2 beside the root span `invoke_agent lablet`, the chat span of turn 1, and `execute_tool read_file`.
 
 ### A file replayed through the collector
 
-Run the config without an endpoint, so it writes a file, and copy the file into `replay/`:
+Run the config with its file in `replay/`, where the collector reads it:
 
 ```bash
 cd lablet/examples/two-turns
-cargo run --locked --manifest-path ../../Cargo.toml --bin lablet -- run --config lablet.yaml --prompt "Read notes.md and say what it holds."
-cp lablet-*.otlp.jsonl ../replay/
+cargo run --locked --manifest-path ../../Cargo.toml --bin lablet -- run --config lablet.yaml --prompt "Read notes.md and say what it holds." --set telemetry.file.path=../replay/lablet-replay.otlp.jsonl
 ```
 
 The collector's OTLP/JSON file receiver reads the file from its start, and the run reaches Jaeger within seconds. Its run id is in the outcome the run printed; find it with the tag `session.id=<run id>`, or as the newest trace of the service `lablet`.
