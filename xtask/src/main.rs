@@ -27,41 +27,41 @@ const USAGE: &str = "\
 Usage: cargo xtask <task> [args]
 
 Development:
-  check                    Type-check every target
-  build [--release]        Build the workspace
-  run [-- <args>]          Run the lablet binary, passing <args> to it
-  test                     Run tests, doctests included
-  doc                      Build rustdoc with warnings denied
+  check                      Type-check every target
+  build [--release]          Build the workspace
+  run [-- <args>]            Run the lablet binary, passing <args> to it
+  test                       Run tests, doctests included
+  doc                        Build rustdoc with warnings denied
 
 Quality checks:
-  fmt [--check]            Format with rustfmt + dprint (--check: verify only)
-  fix                      Apply clippy's machine-applicable fixes, then fmt
-  clippy                   Lint every target with warnings denied
-  lint-layers              Layer dependency rules
-  lint-manifests           Manifest rules: inheritance, exact pins, xtask's lint copy
-  weaver check             Registry against the lablet, naming, and stability policies
-  weaver generate [--check]
-                           Render the registry crate and docs (--check: compare only)
-  lint-shell               Shell scripts with shellcheck
-  lint-prose [--all]       Prose style with vale (--all: warnings and suggestions too)
-  deny                     Licences, advisories, bans, sources
-  changelog                A contract change has an entry under Unreleased
+  fmt [--check]              Format with rustfmt + dprint (--check: verify only)
+  fix                        Apply clippy's machine-applicable fixes, then fmt
+  clippy                     Lint every target with warnings denied
+  lint-layers                Layer dependency rules
+  lint-manifests             Manifest rules: inheritance, exact pins, xtask's lint copy
+  weaver check               Registry against the lablet, naming, and stability policies
+  weaver generate [--check]  Render the registry crate and docs (--check: compare only)
+  lint-shell                 Shell scripts with shellcheck
+  lint-prose [--all]         Prose style with vale (--all: warnings and suggestions too)
+  deny                       Licences, advisories, bans, sources
+  changelog                  A contract change has an entry under Unreleased
 
 Quality gates:
-  pre-commit               fmt --check + clippy + lint-layers + lint-manifests + weaver check
-                           + weaver generate --check + lint-shell + lint-prose
-  pre-push                 pre-commit + deny + changelog + doc + test + mutants --changed
-  ci                       pre-push
+  pre-commit                 fmt --check + clippy + lint-layers + lint-manifests
+                             + weaver check + weaver generate --check
+                             + lint-shell + lint-prose
+  pre-push                   pre-commit + deny + changelog + doc + test + mutants --changed
+  ci                         pre-push
 
 Analysis:
-  coverage [--branch]      Line and region coverage floors (--branch: branches, on nightly)
-  mutants [--changed]      The exact mutation floor (--changed: only what changed)
-  weaver live-check        What fake-provider runs emit, checked by weaver over OTLP
+  coverage [--branch]        Line and region coverage floors (--branch: branches, on nightly)
+  mutants [--changed]        The exact mutation floor (--changed: only what changed)
+  weaver live-check          What fake-provider runs emit, checked by weaver over OTLP
 
 Project:
-  setup                    Install the pinned toolchain, tools, and git hooks
-  weaver vendor [--check]  Fetch the pinned upstream registries (--check: compare only)
-  clean                    Remove build, coverage, and mutation output
+  setup                      Install the pinned toolchain, tools, and git hooks
+  weaver vendor [--check]    Fetch the pinned upstream registries (--check: compare only)
+  clean                      Remove build, coverage, and mutation output
 
 Tasks cover the lablet/ workspace and, where it applies, xtask. Pinned tools
 come from mise.toml.
