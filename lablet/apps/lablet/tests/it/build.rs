@@ -5,17 +5,13 @@ use std::os::unix::fs::symlink;
 use lablet::{BuildError, Config, ConfigError, FilterList, Format, OwnFile, Place, Unsupported};
 use serde_json::{Value, json};
 
-use crate::harness::{ENDS, Lab, read, request};
+use crate::harness::{ENDS, Lab, read, refusal, request};
 
 /// A variable cargo sets for every test, as a key is set for lablet.
 const KEY_VARIABLE: &str = "CARGO_MANIFEST_DIR";
 
 /// A variable nothing sets.
 const NO_VARIABLE: &str = "LABLET_TEST_A_VARIABLE_NOTHING_SETS";
-
-async fn refusal(config: Config) -> BuildError {
-    lablet::build(config).await.unwrap_err()
-}
 
 /// Where every setting of a config the harness writes is: its JSON is on
 /// one line.

@@ -1,16 +1,21 @@
 //! The network exporter against the in-process receiver: what both
 //! destinations hold of one run, a run whose content outgrows a batch, what
-//! a closed port costs, and the headers on the wire, which pins what the
-//! exporter does with the environment's and what lablet does after it.
+//! a closed port costs, the headers on the wire, which pins what the
+//! exporter does with the environment's and what lablet does after it, and
+//! TLS to the collector with the trust roots the environment names.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use lablet_conformance::observer::assert_hold_the_same_run;
 use lablet_conformance::otlp::Exported;
 use lablet_conformance::receiver::{self, Mode, Received, Receiver};
-use lablet_telemetry_otel::{ATTRIBUTE_MAX_BYTES, FileTarget, OtlpSettings, Transport};
+use lablet_telemetry_otel::{
+    ATTRIBUTE_MAX_BYTES, FileTarget, OtelBuildError, OtelObserver, OtlpSettings, Signal, Transport,
+    validate,
+};
 use lablet_telemetry_registry::attribute as key;
 use lablet_test_support::Scratch;
 use opentelemetry::InstrumentationScope;
@@ -24,7 +29,7 @@ use opentelemetry_sdk::trace::{SpanData, SpanEvents, SpanExporter as _, SpanLink
 use tonic::metadata::{MetadataMap, MetadataValue};
 
 use crate::content::writing;
-use crate::harness::{FAILS_CALLS_ENDS, Harness, RUN, Settings};
+use crate::harness::{FAILS_CALLS_ENDS, Harness, RUN, Settings, VERSION};
 
 /// The event name of a content record.
 const CONTENT: &str = "gen_ai.client.inference.operation.details";
@@ -489,4 +494,172 @@ async fn the_environments_headers_win_in_the_exporter_and_the_configs_win_in_lab
         }
     }
     assert_eq!(requests.len(), 2 * (1 + 2 + 2));
+}
+
+// TLS to the collector, from a child process whose environment names the
+// roots it trusts
+
+/// Set in the environment of the child process the first test below
+/// starts, to the endpoints it exports to over TLS, with a comma between.
+const TLS_CHILD: &str = "LABLET_TEST_OTLP_TLS_CHILD";
+
+/// Set in the environment of the child process the second test below
+/// starts, to the endpoints whose exporters it makes, with a comma between,
+/// each after `refused:` or `made:`, which is what becomes of it.
+const NO_ROOTS_CHILD: &str = "LABLET_TEST_OTLP_NO_ROOTS_CHILD";
+
+/// Runs the child test `name` with `variable` set to `endpoints`, with
+/// `SSL_CERT_FILE` naming `roots` in place of the platform's, and with
+/// `more` set, and holds it to passing as the one test run, since a name
+/// that matches none runs nothing and passes.
+async fn child(name: &str, variable: &str, endpoints: &str, roots: &Path, more: &[(&str, &str)]) {
+    let child = tokio::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--test-threads=1"])
+        .env(variable, endpoints)
+        .env("SSL_CERT_FILE", roots)
+        .env_remove("SSL_CERT_DIR")
+        .envs(more.iter().copied())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&child.stdout);
+    assert!(
+        child.status.success(),
+        "the child failed:\n{stdout}\n{}",
+        String::from_utf8_lossy(&child.stderr)
+    );
+    assert!(
+        stdout.contains("test result: ok. 1 passed;"),
+        "the child ran other than one test:\n{stdout}"
+    );
+}
+
+/// The child's side of the first test below, which does nothing unless that
+/// test started it: one run exported over gRPC to each endpoint, each of
+/// which must take the whole run.
+#[test]
+fn a_child_process_exports_a_run_to_each_endpoint_over_tls() {
+    let Some(endpoints) = std::env::var_os(TLS_CHILD) else {
+        return;
+    };
+    let endpoints = endpoints.to_str().unwrap().to_owned();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        for endpoint in endpoints.split(',') {
+            exported_by_lablet(Transport::Grpc, endpoint.to_owned(), true, "tls-child").await;
+        }
+    });
+}
+
+/// The gRPC exporter speaks TLS to an `https` endpoint, and to one without a
+/// scheme, which it gives `https://`, and trusts the roots the platform has
+/// or, in their place, the ones `SSL_CERT_FILE` names: here the receiver's
+/// CA alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_grpc_exporter_trusts_the_roots_its_environment_names_with_a_scheme_or_without() {
+    let receiver = Receiver::start(Mode::Answers).await;
+    let scratch = Scratch::new("network-tls");
+    let roots = scratch.at("roots.pem");
+    std::fs::write(&roots, receiver.ca_certificate()).unwrap();
+    let https = receiver.grpc_tls_endpoint();
+    let schemeless = https.trim_start_matches("https://");
+
+    child(
+        "network::a_child_process_exports_a_run_to_each_endpoint_over_tls",
+        TLS_CHILD,
+        &format!("{https},{schemeless}"),
+        &roots,
+        &[],
+    )
+    .await;
+
+    let requests = receiver.requests();
+    assert_eq!(
+        requests.len(),
+        2 * 2,
+        "the spans and the wide event of each run: {requests:?}"
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.transport == receiver::Transport::GrpcTls),
+        "{requests:?}"
+    );
+}
+
+/// The child's side of the second test below, which does nothing unless
+/// that test started it: with no roots to trust, the check of each endpoint
+/// takes it, since it loads none, and the build makes the exporters of one
+/// that's spoken to without TLS and refuses the rest for TLS, without the
+/// endpoint in the message.
+#[test]
+fn a_child_process_with_no_roots_to_trust_makes_no_exporter_that_speaks_tls() {
+    let Some(endpoints) = std::env::var_os(NO_ROOTS_CHILD) else {
+        return;
+    };
+    let endpoints = endpoints.to_str().unwrap().to_owned();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        for entry in endpoints.split(',') {
+            let (becomes, endpoint) = entry.split_once(':').unwrap();
+            let settings = settings(Transport::Grpc, endpoint.to_owned(), &[]);
+            assert_eq!(validate(&settings), Ok(()), "{endpoint}");
+
+            let built = OtelObserver::builder(VERSION).otlp(settings).build();
+
+            if becomes == "made" {
+                built.unwrap().shutdown().await.unwrap();
+                continue;
+            }
+            let refused = built.err().unwrap();
+            assert_eq!(
+                refused,
+                OtelBuildError::Tls {
+                    signal: Signal::Traces,
+                    reason: "transport error: no native certs found".to_owned(),
+                },
+                "{endpoint}"
+            );
+            assert!(!refused.to_string().contains("127.0.0.1"), "{refused}");
+        }
+    });
+}
+
+/// Trust roots that can't be loaded fail the build, as TLS rather than as
+/// the endpoint, and a check, which makes no exporter, takes the endpoint.
+/// An endpoint without a scheme is spoken to without TLS when the
+/// environment says it's insecure, as the exporter reads it: the signal's
+/// own variable before the generic one, `true` in any case. So no roots are
+/// loaded for it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_grpc_endpoint_over_tls_with_no_roots_to_trust_is_refused_for_tls_by_the_build_alone() {
+    const NAME: &str =
+        "network::a_child_process_with_no_roots_to_trust_makes_no_exporter_that_speaks_tls";
+    const INSECURE: &str = "OTEL_EXPORTER_OTLP_INSECURE";
+    let scratch = Scratch::new("network-no-roots");
+    let roots = scratch.at("roots.pem");
+    std::fs::write(&roots, "").unwrap();
+    let closed = Receiver::closed();
+
+    let cases: [(&[(&str, &str)], String); 4] = [
+        (&[], format!("refused:https://{closed},refused:{closed}")),
+        (
+            &[(INSECURE, "true")],
+            format!("refused:https://{closed},made:{closed}"),
+        ),
+        (&[(INSECURE, "TRUE")], format!("made:{closed}")),
+        (
+            &[
+                (INSECURE, "true"),
+                ("OTEL_EXPORTER_OTLP_TRACES_INSECURE", "false"),
+            ],
+            format!("refused:{closed}"),
+        ),
+    ];
+    for (more, endpoints) in cases {
+        child(NAME, NO_ROOTS_CHILD, &endpoints, &roots, more).await;
+    }
 }

@@ -17,16 +17,17 @@ use std::time::Duration;
 use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
 use opentelemetry_otlp::{
     ExporterBuildError, LogExporter, OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_HEADERS,
-    OTEL_EXPORTER_OTLP_LOGS_ENDPOINT, OTEL_EXPORTER_OTLP_LOGS_HEADERS,
-    OTEL_EXPORTER_OTLP_LOGS_TIMEOUT, OTEL_EXPORTER_OTLP_TIMEOUT,
+    OTEL_EXPORTER_OTLP_INSECURE, OTEL_EXPORTER_OTLP_LOGS_ENDPOINT, OTEL_EXPORTER_OTLP_LOGS_HEADERS,
+    OTEL_EXPORTER_OTLP_LOGS_INSECURE, OTEL_EXPORTER_OTLP_LOGS_TIMEOUT, OTEL_EXPORTER_OTLP_TIMEOUT,
     OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT, OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
-    OTEL_EXPORTER_OTLP_TRACES_HEADERS, OTEL_EXPORTER_OTLP_TRACES_TIMEOUT, Protocol, SpanExporter,
-    WithExportConfig, WithHttpConfig as _, WithTonicConfig as _,
+    OTEL_EXPORTER_OTLP_TRACES_HEADERS, OTEL_EXPORTER_OTLP_TRACES_INSECURE,
+    OTEL_EXPORTER_OTLP_TRACES_TIMEOUT, Protocol, SpanExporter, WithExportConfig,
+    WithHttpConfig as _, WithTonicConfig as _,
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use secrecy::{ExposeSecret as _, SecretString};
 use tonic::metadata::MetadataMap;
-use tonic::transport::Uri;
+use tonic::transport::{ClientTlsConfig, Endpoint, Uri};
 
 /// How an OTLP collector is spoken to. The exporter would pick one itself
 /// where none is chosen, so one is always chosen here.
@@ -63,6 +64,15 @@ impl Signal {
         match self {
             Self::Traces => OTEL_EXPORTER_OTLP_TRACES_HEADERS,
             Self::Logs => OTEL_EXPORTER_OTLP_LOGS_HEADERS,
+        }
+    }
+
+    /// The variable that says whether this signal alone is sent without
+    /// TLS to a gRPC endpoint that has no scheme.
+    const fn insecure_variable(self) -> &'static str {
+        match self {
+            Self::Traces => OTEL_EXPORTER_OTLP_TRACES_INSECURE,
+            Self::Logs => OTEL_EXPORTER_OTLP_LOGS_INSECURE,
         }
     }
 
@@ -152,6 +162,15 @@ pub enum OtelBuildError {
         /// The signal the exporter is of.
         signal: Signal,
         /// What the exporter said.
+        reason: String,
+    },
+    /// TLS to the collector couldn't be set up, which the gRPC exporter
+    /// does when it's made: the trust roots couldn't be loaded, say.
+    #[error("TLS for the OTLP exporter for {signal} couldn't be set up: {reason}")]
+    Tls {
+        /// The signal the exporter is of.
+        signal: Signal,
+        /// What stood in the way.
         reason: String,
     },
     /// The HTTP client the exports go through couldn't be made.
@@ -326,12 +345,82 @@ fn with_endpoint<B: WithExportConfig>(builder: B, endpoint: Option<&str>) -> B {
 }
 
 /// What the exporter's own refusal comes to, without its message, which
-/// holds the endpoint whole.
-fn refused(signal: Signal, error: ExporterBuildError) -> OtelBuildError {
+/// holds the endpoint whole. The exporter refuses TLS it can't set up as it
+/// refuses an endpoint it can't parse, so for an endpoint it speaks TLS to,
+/// TLS is set up again alone to tell the two apart.
+fn refused(of: &OfSignal, error: ExporterBuildError) -> OtelBuildError {
+    let signal = of.signal;
     match error {
-        ExporterBuildError::InvalidConfiguration(_) => OtelBuildError::Endpoint { signal },
+        ExporterBuildError::InvalidConfiguration(_) => match of.tls.as_ref().and_then(tls_fault) {
+            Some(reason) => OtelBuildError::Tls { signal, reason },
+            None => OtelBuildError::Endpoint { signal },
+        },
         ExporterBuildError::InternalFailure(reason) => OtelBuildError::Exporter { signal, reason },
     }
+}
+
+/// The TLS a gRPC exporter is given for an `https` endpoint. Without it the
+/// exporter sets up TLS that trusts no root, and so refuses every
+/// certificate. The roots `with_enabled_roots` turns on are those the
+/// `tls-roots` feature of `opentelemetry-otlp` builds tonic with: the
+/// platform's, as `rustls-native-certs` loads them, or in their place the
+/// certificates `SSL_CERT_FILE` and `SSL_CERT_DIR` name when either is set.
+/// They're loaded when the exporter is made.
+fn tls() -> ClientTlsConfig {
+    ClientTlsConfig::new().with_enabled_roots()
+}
+
+/// Why TLS to `endpoint` can't be set up as the exporter sets it up, or
+/// nothing when it can. No reason holds a part of the endpoint.
+fn tls_fault(endpoint: &Endpoint) -> Option<String> {
+    let error = endpoint.clone().tls_config(tls()).err()?;
+    let mut reason = error.to_string();
+    let mut cause = std::error::Error::source(&error);
+    while let Some(error) = cause {
+        reason = format!("{reason}: {error}");
+        cause = error.source();
+    }
+    Some(reason)
+}
+
+/// Whether the gRPC exporter takes `endpoint`'s scheme from it, which it
+/// does when a `://` comes before any `/`, `?` or `#`, and gives it one
+/// otherwise.
+fn has_scheme(endpoint: &str) -> bool {
+    endpoint
+        .split_once("://")
+        .is_some_and(|(scheme, _)| !scheme.contains(['/', '?', '#']))
+}
+
+/// Whether the environment says `signal` is sent without TLS to a gRPC
+/// endpoint that has no scheme, as the exporter reads it: the signal's
+/// variable, else the generic one, is `true` in any case.
+fn insecure(signal: Signal) -> bool {
+    std::env::var(signal.insecure_variable())
+        .or_else(|_| std::env::var(OTEL_EXPORTER_OTLP_INSECURE))
+        .is_ok_and(|value| value.eq_ignore_ascii_case("true"))
+}
+
+/// The endpoint the gRPC exporter sends `signal` to, parsed as it parses
+/// it, when it speaks TLS to it: the stated one, else the environment's,
+/// given `https://` when it has no scheme unless the environment says it's
+/// insecure. The exporter's own default is `http://`, and an endpoint it
+/// can't parse it refuses before it sets up TLS.
+fn over_tls(stated: Option<&str>, signal: Signal) -> Option<Endpoint> {
+    let endpoint = match stated {
+        Some(stated) => stated.to_owned(),
+        None => environment_endpoint(Transport::Grpc, signal).ok()??,
+    };
+    let endpoint = if has_scheme(&endpoint) {
+        endpoint
+    } else if insecure(signal) {
+        return None;
+    } else {
+        format!("https://{endpoint}")
+    };
+    Endpoint::from_shared(endpoint)
+        .ok()
+        .filter(|endpoint| endpoint.uri().scheme_str() == Some("https"))
 }
 
 /// Holds `settings` to what the exporters take, making none: each header's
@@ -339,12 +428,15 @@ fn refused(signal: Signal, error: ExporterBuildError) -> OtelBuildError {
 /// transport's exporter parses it. An endpoint the settings state is read as
 /// it is, with the signal's path on HTTP; one they leave out is read from
 /// the environment as the exporter reads it, and the exporter's own default
-/// needs no parsing.
+/// needs no parsing. What can only be made is left to the build: the HTTP
+/// client, and the trust roots of a gRPC exporter that speaks TLS.
 ///
 /// # Errors
 ///
 /// Returns what [`OtelObserverBuilder::build`](crate::OtelObserverBuilder::build)
-/// returns for the same settings, so a check refuses what a build refuses.
+/// returns for the same settings, so a check refuses what a build refuses,
+/// but for what only making the exporters finds: [`OtelBuildError::Tls`],
+/// [`OtelBuildError::HttpClient`] and [`OtelBuildError::Exporter`].
 pub fn validate(settings: &OtlpSettings) -> Result<(), OtelBuildError> {
     let network = Network::new(settings)?;
     for signal in [Signal::Traces, Signal::Logs] {
@@ -395,10 +487,7 @@ fn environment_endpoint(
 fn accepted(transport: Transport, endpoint: &str) -> bool {
     match transport {
         Transport::Grpc => {
-            let has_scheme = endpoint
-                .split_once("://")
-                .is_some_and(|(scheme, _)| !scheme.contains(['/', '?', '#']));
-            let endpoint = if has_scheme {
+            let endpoint = if has_scheme(endpoint) {
                 endpoint.to_owned()
             } else {
                 format!("https://{endpoint}")
@@ -422,6 +511,8 @@ struct OfSignal {
     signal: Signal,
     headers: Arc<Headers>,
     endpoint: Option<String>,
+    /// The endpoint the gRPC exporter speaks TLS to, when it does.
+    tls: Option<Endpoint>,
 }
 
 impl Network {
@@ -469,6 +560,10 @@ impl Network {
         } else {
             Vec::new()
         };
+        let tls = match self.transport {
+            Transport::Grpc => over_tls(endpoint.as_deref(), signal),
+            Transport::HttpProtobuf => None,
+        };
         OfSignal {
             signal,
             headers: Arc::new(Headers {
@@ -476,6 +571,7 @@ impl Network {
                 strip,
             }),
             endpoint,
+            tls,
         }
     }
 
@@ -485,8 +581,8 @@ impl Network {
     ///
     /// # Errors
     ///
-    /// Returns an [`OtelBuildError`] when the exporter refuses the endpoint
-    /// or can't make itself.
+    /// Returns an [`OtelBuildError`] when the exporter refuses the endpoint,
+    /// can't set up TLS to it, or can't make itself.
     pub(crate) fn exporters(
         &self,
     ) -> Result<(SpanExporter, LogExporter, LogExporter), OtelBuildError> {
@@ -508,21 +604,27 @@ impl Network {
 }
 
 fn grpc_spans(of: &OfSignal) -> Result<SpanExporter, OtelBuildError> {
-    let builder = SpanExporter::builder()
+    let mut builder = SpanExporter::builder()
         .with_tonic()
         .with_interceptor(interceptor(Arc::clone(&of.headers)));
+    if of.tls.is_some() {
+        builder = builder.with_tls_config(tls());
+    }
     with_endpoint(builder, of.endpoint.as_deref())
         .build()
-        .map_err(|error| refused(of.signal, error))
+        .map_err(|error| refused(of, error))
 }
 
 fn grpc_logs(of: &OfSignal) -> Result<LogExporter, OtelBuildError> {
-    let builder = LogExporter::builder()
+    let mut builder = LogExporter::builder()
         .with_tonic()
         .with_interceptor(interceptor(Arc::clone(&of.headers)));
+    if of.tls.is_some() {
+        builder = builder.with_tls_config(tls());
+    }
     with_endpoint(builder, of.endpoint.as_deref())
         .build()
-        .map_err(|error| refused(of.signal, error))
+        .map_err(|error| refused(of, error))
 }
 
 /// The protocol is set on the builder, as the transport is chosen here,
@@ -540,7 +642,7 @@ fn http_spans(
         });
     with_endpoint(builder, of.endpoint.as_deref())
         .build()
-        .map_err(|error| refused(of.signal, error))
+        .map_err(|error| refused(of, error))
 }
 
 fn http_logs(
@@ -556,7 +658,7 @@ fn http_logs(
         });
     with_endpoint(builder, of.endpoint.as_deref())
         .build()
-        .map_err(|error| refused(of.signal, error))
+        .map_err(|error| refused(of, error))
 }
 
 #[cfg(test)]

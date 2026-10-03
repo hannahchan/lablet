@@ -304,11 +304,13 @@ fn file_target(real: &Config, network_on: bool) -> Option<FileTarget> {
 }
 
 /// The refusal of what the network exporter couldn't be built from, shown
-/// from `written`: the endpoint as the config writes it, without its user
-/// information, which is a secret, and a header by its key alone, since
-/// every header value is a secret. When the config states no endpoint,
-/// which `endpoint_stated` says, the exporter read one from `env`, and the
-/// refusal names the variable it read and shows nothing of what it holds.
+/// from `written`: a header by its key alone, since every header value is a
+/// secret, and the endpoint as the config writes it, or no value when that
+/// holds an `@`. User information is a secret, and where it ends can't be
+/// told when it holds an unencoded `/`, `?` or `#`. When the config states
+/// no endpoint, which `endpoint_stated` says, the exporter read one from
+/// `env`, and a refusal of that endpoint, or of TLS to it, names the
+/// variable it read and shows nothing of what it holds.
 fn otlp_refused(
     written: &Config,
     env: Env<'_>,
@@ -316,6 +318,17 @@ fn otlp_refused(
     error: OtelBuildError,
 ) -> BuildError {
     const KEY: &str = "telemetry.otlp.endpoint";
+    let from_environment = |signal, what: &str| {
+        let variable = otlp::endpoint_variable(signal, env);
+        BuildError::Config(ConfigError::Invalid {
+            key: KEY.to_owned(),
+            place: written.place_of(KEY),
+            value: None,
+            reason: format!(
+                "`{variable}`, which is read since the config states no endpoint, {what}"
+            ),
+        })
+    };
     let reason = match error {
         OtelBuildError::Header { name, reason } => {
             let key = KeyPath::of("telemetry.otlp.headers").key(&name).to_string();
@@ -327,20 +340,20 @@ fn otlp_refused(
             });
         }
         OtelBuildError::Endpoint { signal } if !endpoint_stated => {
-            let variable = otlp::endpoint_variable(signal, env);
-            return BuildError::Config(ConfigError::Invalid {
-                key: KEY.to_owned(),
-                place: written.place_of(KEY),
-                value: None,
-                reason: format!(
-                    "`{variable}`, which is read since the config states no endpoint, holds what \
-                     isn't a URL the exporter accepts"
-                ),
-            });
+            return from_environment(signal, "holds what isn't a URL the exporter accepts");
         }
         OtelBuildError::Endpoint { .. } => "it isn't a URL the exporter accepts".to_owned(),
         OtelBuildError::Exporter { reason, .. } => {
             format!("the exporter couldn't be made: {reason}")
+        }
+        OtelBuildError::Tls { signal, reason } if !endpoint_stated => {
+            return from_environment(
+                signal,
+                &format!("names the collector, and TLS to it couldn't be set up: {reason}"),
+            );
+        }
+        OtelBuildError::Tls { reason, .. } => {
+            format!("TLS to the collector couldn't be set up: {reason}")
         }
         OtelBuildError::HttpClient { reason } => {
             format!("the HTTP client couldn't be made: {reason}")
@@ -349,7 +362,8 @@ fn otlp_refused(
     let key = KeyPath::of(KEY);
     let value = written
         .written_text(KEY)
-        .map(|endpoint| serde_json::Value::String(secrets::without_user_information(&endpoint)));
+        .filter(|endpoint| !endpoint.contains('@'))
+        .map(serde_json::Value::String);
     BuildError::Config(ConfigError::Invalid {
         place: written.place_of(KEY),
         value: shown(&key, value.as_ref()),
@@ -370,8 +384,10 @@ fn otlp_refused(
 ///
 /// # Errors
 ///
-/// Returns what [`build`] returns, but for
-/// [`BuildError::Unsupported`] of the provider.
+/// Returns what [`build`] returns, but for [`BuildError::Unsupported`] of
+/// the provider, and for what only making the network exporter finds, which
+/// a check passes: trust roots that can't be loaded, or other TLS to the
+/// collector that can't be set up, and an HTTP client that can't be made.
 pub async fn check(config: &Config) -> Result<Checked, BuildError> {
     check_in(config, &environment).await
 }
@@ -485,7 +501,10 @@ async fn prepare(written: &Config, env: Env<'_>) -> Result<Prepared, BuildError>
     let otlp = otlp::settings(written, &real, env).map_err(refused)?;
     if let Some(settings) = &otlp {
         // What the exporter would refuse is refused here, so a check refuses
-        // what a build refuses, and a check installs no exporter.
+        // what a build refuses but for what only making the exporter finds,
+        // trust roots that can't be loaded or other TLS that can't be set
+        // up, and the HTTP client (see `validate`); a check installs no
+        // exporter.
         lablet_telemetry_otel::validate(settings)
             .map_err(|error| otlp_refused(written, env, settings.endpoint.is_some(), error))?;
     }

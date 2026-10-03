@@ -17,11 +17,12 @@ lablet-telemetry-registry.workspace = true
 lablet-test-support.workspace = true
 opentelemetry-proto = { workspace = true, features = ["gen-tonic"] }
 prost.workspace = true
+rcgen.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-tonic = { workspace = true, features = ["server", "router"] }
+tonic = { workspace = true, features = ["server", "router", "tls-aws-lc"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

@@ -8,6 +8,7 @@ use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
 use tonic::metadata::MetadataValue;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 
 use super::*;
 
@@ -96,6 +97,53 @@ async fn a_grpc_export_is_answered_and_kept_with_its_metadata_as_one_line() {
     assert_eq!(exported.spans.len(), 1);
     assert_eq!(exported.spans[0].name, "chat probe");
     assert_eq!(exported.spans[0].resource["service.name"], "probe");
+}
+
+/// A channel to the TLS listener of `receiver` that trusts `roots`.
+async fn over_tls(receiver: &Receiver, roots: ClientTlsConfig) -> Result<Channel, String> {
+    Endpoint::from_shared(receiver.grpc_tls_endpoint())
+        .and_then(|endpoint| endpoint.tls_config(roots))
+        .unwrap()
+        .connect()
+        .await
+        .map_err(|error| format!("{:?}", std::error::Error::source(&error)))
+}
+
+#[tokio::test]
+async fn a_grpc_export_over_tls_is_kept_from_a_client_that_trusts_the_receivers_ca() {
+    let receiver = Receiver::start(Mode::Answers).await;
+    let roots =
+        ClientTlsConfig::new().ca_certificate(Certificate::from_pem(receiver.ca_certificate()));
+    let mut client = TraceServiceClient::new(over_tls(&receiver, roots).await.unwrap());
+
+    let answered = client
+        .export(tonic::Request::new(one_span("chat probe")))
+        .await;
+
+    answered.unwrap();
+    let requests = receiver.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        (requests[0].transport, requests[0].signal),
+        (Transport::GrpcTls, Signal::Traces)
+    );
+    assert_eq!(receiver.exported().unwrap().spans[0].name, "chat probe");
+}
+
+#[tokio::test]
+async fn a_client_that_trusts_no_root_or_another_receivers_ca_is_refused_at_the_handshake() {
+    let receiver = Receiver::start(Mode::Answers).await;
+    let other = Receiver::start(Mode::Answers).await;
+    let another =
+        ClientTlsConfig::new().ca_certificate(Certificate::from_pem(other.ca_certificate()));
+
+    for roots in [ClientTlsConfig::new(), another] {
+        let connected = over_tls(&receiver, roots).await;
+
+        let refused = connected.unwrap_err();
+        assert!(refused.contains("InvalidCertificate"), "{refused}");
+    }
+    assert!(receiver.requests().is_empty());
 }
 
 #[tokio::test]
@@ -196,16 +244,18 @@ async fn a_closed_port_refuses_a_connection() {
 #[tokio::test]
 async fn a_receiver_that_was_dropped_listens_no_more() {
     let receiver = Receiver::start(Mode::Answers).await;
-    let (grpc, http) = (receiver.grpc_endpoint(), receiver.http_endpoint());
+    let (grpc, tls, http) = (
+        receiver.grpc_endpoint(),
+        receiver.grpc_tls_endpoint(),
+        receiver.http_endpoint(),
+    );
     drop(receiver);
 
     // The listeners end on their own tasks, which the drop only signals.
     let refused = |endpoint: String| async move {
         for _ in 0..100 {
-            if TcpStream::connect(endpoint.trim_start_matches("http://"))
-                .await
-                .is_err()
-            {
+            let address = endpoint.split_once("://").unwrap().1.to_owned();
+            if TcpStream::connect(address).await.is_err() {
                 return true;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -213,5 +263,6 @@ async fn a_receiver_that_was_dropped_listens_no_more() {
         false
     };
     assert!(refused(grpc).await, "the gRPC listener still listens");
+    assert!(refused(tls).await, "the TLS listener still listens");
     assert!(refused(http).await, "the HTTP listener still listens");
 }

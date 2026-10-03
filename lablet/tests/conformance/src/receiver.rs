@@ -1,6 +1,7 @@
-//! An OTLP receiver in the test's own process: a gRPC listener and an HTTP
-//! one, each on a port of its own on the loopback interface, so a network
-//! scenario runs wherever the tests do, with no collector to start.
+//! An OTLP receiver in the test's own process: a gRPC listener, a second
+//! that speaks TLS with a certificate from a CA of the receiver's own, and
+//! an HTTP one, each on a port of its own on the loopback interface, so a
+//! network scenario runs wherever the tests do, with no collector to start.
 //!
 //! Each request a listener accepts is kept as one OTLP/JSON line, the form
 //! the file exporter writes, so the reader of the file reads the network's
@@ -29,11 +30,15 @@ use opentelemetry_proto::tonic::collector::trace::v1::{
     ExportTraceServiceRequest, ExportTraceServiceResponse,
 };
 use prost::Message as _;
+use rcgen::{
+    BasicConstraints, CertificateParams, CertifiedIssuer, DnType, ExtendedKeyUsagePurpose, IsCa,
+    KeyPair, KeyUsagePurpose,
+};
 use serde::Serialize;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use tonic::transport::Server;
 use tonic::transport::server::TcpIncoming;
+use tonic::transport::{Identity, Server, ServerTlsConfig};
 
 use crate::must;
 use crate::otlp::{Exported, ReadError};
@@ -65,6 +70,8 @@ pub enum Signal {
 pub enum Transport {
     /// The gRPC listener.
     Grpc,
+    /// The gRPC listener that speaks TLS.
+    GrpcTls,
     /// The HTTP listener.
     Http,
 }
@@ -100,7 +107,7 @@ struct Kept {
     requests: Vec<Received>,
 }
 
-/// What the two listeners share.
+/// What the listeners share.
 #[derive(Debug, Clone)]
 struct Shared {
     mode: Mode,
@@ -165,30 +172,96 @@ fn headers(headers: &HeaderMap) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The two OTLP services a gRPC listener serves: what the listeners share,
+/// and which of them it is.
+#[derive(Debug, Clone)]
+struct Services {
+    shared: Shared,
+    transport: Transport,
+}
+
 #[tonic::async_trait]
-impl TraceService for Shared {
+impl TraceService for Services {
     async fn export(
         &self,
         request: tonic::Request<ExportTraceServiceRequest>,
     ) -> Result<tonic::Response<ExportTraceServiceResponse>, tonic::Status> {
         let headers = metadata(&request);
-        self.took(Transport::Grpc, Signal::Traces, headers, request.get_ref())
+        self.shared
+            .took(self.transport, Signal::Traces, headers, request.get_ref())
             .await;
         Ok(tonic::Response::new(ExportTraceServiceResponse::default()))
     }
 }
 
 #[tonic::async_trait]
-impl LogsService for Shared {
+impl LogsService for Services {
     async fn export(
         &self,
         request: tonic::Request<ExportLogsServiceRequest>,
     ) -> Result<tonic::Response<ExportLogsServiceResponse>, tonic::Status> {
         let headers = metadata(&request);
-        self.took(Transport::Grpc, Signal::Logs, headers, request.get_ref())
+        self.shared
+            .took(self.transport, Signal::Logs, headers, request.get_ref())
             .await;
         Ok(tonic::Response::new(ExportLogsServiceResponse::default()))
     }
+}
+
+/// Serves `services` through `server` on a free port of the loopback
+/// interface until the sender it returns is used or dropped.
+async fn serve(mut server: Server, services: Services) -> (SocketAddr, oneshot::Sender<()>) {
+    let listener = must(
+        TcpListener::bind("127.0.0.1:0").await,
+        "binding a gRPC listener",
+    );
+    let address = must(listener.local_addr(), "reading a gRPC listener's port");
+    let (stop, stopped) = oneshot::channel();
+    let router = server
+        .add_service(TraceServiceServer::new(services.clone()))
+        .add_service(LogsServiceServer::new(services));
+    tokio::spawn(async move {
+        // The listener ends when the receiver is dropped, and nothing
+        // reads what it says of that.
+        let _ = router
+            .serve_with_incoming_shutdown(TcpIncoming::from(listener), async {
+                let _ = stopped.await;
+            })
+            .await;
+    });
+    (address, stop)
+}
+
+/// A CA of a receiver's own, as PEM, and the identity of its TLS listener,
+/// whose certificate the CA signed for the loopback address, by number and
+/// by name. Both keys are made here and kept nowhere else.
+fn certificates() -> (String, Identity) {
+    let mut ca = must(CertificateParams::new(Vec::new()), "stating the CA");
+    ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca.key_usages = vec![KeyUsagePurpose::KeyCertSign];
+    ca.distinguished_name
+        .push(DnType::CommonName, "lablet test CA");
+    let ca = must(
+        CertifiedIssuer::self_signed(ca, must(KeyPair::generate(), "making the CA's key")),
+        "making the CA",
+    );
+    let mut listener = must(
+        CertificateParams::new(["127.0.0.1".to_owned(), "localhost".to_owned()]),
+        "stating the listener's certificate",
+    );
+    listener.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    listener
+        .distinguished_name
+        .push(DnType::CommonName, "lablet test receiver");
+    let key = must(KeyPair::generate(), "making the listener's key");
+    let certificate = must(
+        listener.signed_by(&key, &ca),
+        "signing the listener's certificate",
+    );
+    (
+        ca.pem(),
+        Identity::from_pem(certificate.pem(), key.serialize_pem()),
+    )
 }
 
 /// Answers an OTLP/HTTP request as a collector does: a protobuf response
@@ -240,48 +313,45 @@ async fn logs_over_http(
     answered(Ok(ExportLogsServiceResponse::default().encode_to_vec()))
 }
 
-/// The receiver: two listeners, each stopped when the receiver is dropped.
+/// The receiver: three listeners, each stopped when the receiver is
+/// dropped.
 #[derive(Debug)]
 pub struct Receiver {
     grpc: SocketAddr,
+    grpc_tls: SocketAddr,
     http: SocketAddr,
+    ca: String,
     kept: Arc<Mutex<Kept>>,
-    stop: Option<(oneshot::Sender<()>, oneshot::Sender<()>)>,
+    stop: Vec<oneshot::Sender<()>>,
 }
 
 impl Receiver {
-    /// Binds both listeners to a free port each on the loopback interface
-    /// and serves them on the runtime this is called on, in `mode`.
+    /// Binds the three listeners to a free port each on the loopback
+    /// interface and serves them on the runtime this is called on, in
+    /// `mode`, with a CA made for this receiver alone.
     ///
     /// # Panics
     ///
-    /// Panics when a port can't be bound, which is a fault of where the
-    /// test runs.
+    /// Panics when a port can't be bound or the certificates can't be made,
+    /// which is a fault of where the test runs.
     pub async fn start(mode: Mode) -> Self {
         let shared = Shared {
             mode,
             kept: Arc::default(),
         };
         let kept = Arc::clone(&shared.kept);
+        let services = |transport| Services {
+            shared: shared.clone(),
+            transport,
+        };
 
-        let grpc_listener = must(
-            TcpListener::bind("127.0.0.1:0").await,
-            "binding the gRPC listener",
+        let (grpc, stop_grpc) = serve(Server::builder(), services(Transport::Grpc)).await;
+        let (ca, identity) = certificates();
+        let tls = must(
+            Server::builder().tls_config(ServerTlsConfig::new().identity(identity)),
+            "setting up the TLS listener",
         );
-        let grpc = must(grpc_listener.local_addr(), "reading the gRPC port");
-        let (stop_grpc, stopped) = oneshot::channel();
-        let router = Server::builder()
-            .add_service(TraceServiceServer::new(shared.clone()))
-            .add_service(LogsServiceServer::new(shared.clone()));
-        tokio::spawn(async move {
-            // The listener ends when the receiver is dropped, and nothing
-            // reads what it says of that.
-            let _ = router
-                .serve_with_incoming_shutdown(TcpIncoming::from(grpc_listener), async {
-                    let _ = stopped.await;
-                })
-                .await;
-        });
+        let (grpc_tls, stop_grpc_tls) = serve(tls, services(Transport::GrpcTls)).await;
 
         let http_listener = must(
             TcpListener::bind("127.0.0.1:0").await,
@@ -303,9 +373,11 @@ impl Receiver {
 
         Self {
             grpc,
+            grpc_tls,
             http,
+            ca,
             kept,
-            stop: Some((stop_grpc, stop_http)),
+            stop: vec![stop_grpc, stop_grpc_tls, stop_http],
         }
     }
 
@@ -324,6 +396,22 @@ impl Receiver {
     #[must_use]
     pub fn grpc_endpoint(&self) -> String {
         format!("http://{}", self.grpc)
+    }
+
+    /// The endpoint of the gRPC listener that speaks TLS, as a config states
+    /// it. Its certificate is for `127.0.0.1` and `localhost`, and a client
+    /// that trusts [`Self::ca_certificate`] takes it.
+    #[must_use]
+    pub fn grpc_tls_endpoint(&self) -> String {
+        format!("https://{}", self.grpc_tls)
+    }
+
+    /// The certificate of the CA that signed the TLS listener's, as PEM: a
+    /// file of it is what `SSL_CERT_FILE` names for a client that trusts
+    /// it.
+    #[must_use]
+    pub fn ca_certificate(&self) -> &str {
+        &self.ca
     }
 
     /// The HTTP listener's endpoint, as a config states it: the base URL,
@@ -363,10 +451,9 @@ impl Receiver {
 
 impl Drop for Receiver {
     fn drop(&mut self) {
-        if let Some((grpc, http)) = self.stop.take() {
+        for stop in self.stop.drain(..) {
             // A listener that has already ended has no one to tell.
-            let _ = grpc.send(());
-            let _ = http.send(());
+            let _ = stop.send(());
         }
     }
 }
