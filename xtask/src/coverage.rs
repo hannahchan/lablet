@@ -190,7 +190,7 @@ pub fn check() -> CheckResult {
     let report = floors::output_directory(&workspace.root)?.join("coverage.json");
     let report_arg = report.display().to_string();
     let args = llvm_cov_args(&report_arg, false);
-    let status = process::stream("cargo", &args, &[])?;
+    let status = process::stream("cargo", &args, &[], process::KEPT_FROM_TESTS)?;
     measured(status, || process::command_failed("cargo", &args))?;
     conclude_lines(&read_json(&report)?, &crates)
 }
@@ -213,7 +213,7 @@ pub fn check_branches() -> CheckResult {
     let target_arg = target.display().to_string();
     let args = llvm_cov_args(&report_arg, true);
     let env = [("CARGO_TARGET_DIR", target_arg.as_str())];
-    let status = process::stream_on(NIGHTLY, &args, &env)?;
+    let status = process::stream_on(NIGHTLY, &args, &env, process::KEPT_FROM_TESTS)?;
     measured(status, || process::command_failed_on(NIGHTLY, &args))?;
     conclude_branches(&read_json(&report)?, &crates)
 }

@@ -202,10 +202,44 @@ pub const GIT_REPOSITORY_ENV: &[&str] = &[
     "GIT_COMMON_DIR",
 ];
 
-/// Runs a subprocess with inherited output and returns its status.
-pub fn stream(program: &str, args: &[&str], env: &[(&str, &str)]) -> Result<ExitStatus, Error> {
+/// The variables, by prefix, kept from every command that runs the
+/// workspace's tests. An `OTEL_*` variable in the shell would turn the
+/// network exporter on, or add to the resource, in every test that builds a
+/// `Lablet` in its own process, and a test can't scrub its own environment.
+pub const KEPT_FROM_TESTS: &[&str] = &["OTEL_"];
+
+/// Takes every variable of `names`, the environment's names, whose name
+/// begins with one of `prefixes` off `command`'s environment. The names
+/// alone are read, never a value.
+pub fn stripped(
+    command: &mut Command,
+    names: impl IntoIterator<Item = OsString>,
+    prefixes: &[&str],
+) {
+    for name in names {
+        let shown = name.to_string_lossy();
+        if prefixes.iter().any(|prefix| shown.starts_with(prefix)) {
+            command.env_remove(&name);
+        }
+    }
+}
+
+/// Runs a subprocess with inherited output and returns its status. No
+/// variable of this process's environment that begins with one of `without`
+/// reaches it.
+pub fn stream(
+    program: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+    without: &[&str],
+) -> Result<ExitStatus, Error> {
     let mut command = command(program, args)?;
     command.envs(env.iter().copied());
+    stripped(
+        &mut command,
+        std::env::vars_os().map(|(name, _)| name),
+        without,
+    );
     command
         .status()
         .map_err(invocation(program, args).not_started())
@@ -227,11 +261,17 @@ pub fn stream_on(
     toolchain: &str,
     args: &[&str],
     env: &[(&str, &str)],
+    without: &[&str],
 ) -> Result<ExitStatus, Error> {
     let rustup = on_toolchain(toolchain, args);
     let plugin = cargo_plugin(args);
     let mut command = command_running(&workspace_root(), "rustup", &rustup, plugin.as_deref())?;
     command.envs(env.iter().copied());
+    stripped(
+        &mut command,
+        std::env::vars_os().map(|(name, _)| name),
+        without,
+    );
     command
         .status()
         .map_err(Invocation::new(&workspace_root(), "rustup", &rustup).not_started())
@@ -620,16 +660,56 @@ mod tests {
         assert!(!on_path("weaver", None));
     }
 
+    #[test]
+    fn a_stripped_command_inherits_no_variable_under_a_prefix_and_every_other() {
+        let mut command = Command::new("sh");
+        let names = [
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "OTEL_TRACES_EXPORTER",
+            "NOT_OTEL_X",
+            "RUST_LOG",
+        ];
+
+        stripped(&mut command, names.map(OsString::from), &["OTEL_"]);
+
+        let removed: Vec<String> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            removed,
+            ["OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_TRACES_EXPORTER"]
+        );
+        assert_eq!(
+            command.get_envs().count(),
+            2,
+            "the others are left as they are"
+        );
+    }
+
+    /// `HOME` is set wherever the tests run, so its absence in the command
+    /// shows the prefix was applied to what the command inherits.
+    #[test]
+    fn a_streamed_command_inherits_no_variable_under_a_prefix_it_is_kept_from() {
+        let unset = ["-c", "test -z \"${HOME+set}\""];
+        assert_eq!(
+            stream("sh", &unset, &[], &["HOME"]).unwrap().code(),
+            Some(0)
+        );
+        assert_eq!(stream("sh", &unset, &[], &[]).unwrap().code(), Some(1));
+    }
+
     /// `sh` is pinned by nothing, so it runs from PATH.
     #[test]
     fn a_command_reports_how_it_ended_and_one_that_cannot_start_is_named() {
         assert_eq!(
-            stream("sh", &["-c", "exit 3"], &[]).unwrap().code(),
+            stream("sh", &["-c", "exit 3"], &[], &[]).unwrap().code(),
             Some(3)
         );
         let probe = ["-c", "test \"$XTASK_PROBE\" = given"];
         assert_eq!(
-            stream("sh", &probe, &[("XTASK_PROBE", "given")])
+            stream("sh", &probe, &[("XTASK_PROBE", "given")], &[])
                 .unwrap()
                 .code(),
             Some(0)
@@ -644,7 +724,10 @@ mod tests {
         let why = std::io::Error::from_raw_os_error(2);
         let could_not = format!("could not run `{missing}` (in the repository root): {why}");
         assert_eq!(chain(&capture(missing, &[]).unwrap_err()), could_not);
-        assert_eq!(chain(&stream(missing, &[], &[]).unwrap_err()), could_not);
+        assert_eq!(
+            chain(&stream(missing, &[], &[], &[]).unwrap_err()),
+            could_not
+        );
     }
 
     #[test]
@@ -739,7 +822,7 @@ mod tests {
     #[test]
     fn cargo_on_a_toolchain_that_is_not_installed_is_a_failed_run() {
         let absent = "xtask-test-toolchain-that-is-not-installed";
-        let status = stream_on(absent, &["--version"], &[]).unwrap();
+        let status = stream_on(absent, &["--version"], &[], &[]).unwrap();
         assert_eq!(status.code(), Some(1));
     }
 

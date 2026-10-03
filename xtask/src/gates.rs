@@ -4,11 +4,9 @@
 //! `pre-push` holds each step's output back and shows it only on failure.
 //! Either way every step runs, so one run reports every failure.
 
-use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::io::{IsTerminal, Read as _, Write as _};
 use std::path::Path;
-use std::process::Command;
 use std::sync::LazyLock;
 use std::time::Instant;
 
@@ -470,13 +468,12 @@ pub fn doc_steps() -> Vec<Step> {
         .into()
 }
 
-/// The workspace's tests, doctests included, and xtask's own. Every
-/// `OTEL_*` variable is kept from them: an endpoint there would turn the
-/// network exporter on in every test that builds a `Lablet` in its own
-/// process, which can't scrub its own environment.
+/// The workspace's tests, doctests included, and xtask's own, with
+/// [`process::KEPT_FROM_TESTS`] kept from them, as the coverage and mutation
+/// runs keep it.
 pub fn test_steps() -> Vec<Step> {
     both(["test", "test (xtask)"], "test", WORKSPACE, &[])
-        .map(|step| step.without(&["OTEL_"]))
+        .map(|step| step.without(process::KEPT_FROM_TESTS))
         .into()
 }
 
@@ -621,18 +618,6 @@ pub fn run(mode: Mode, steps: &[Step]) -> bool {
     failed == 0
 }
 
-/// Takes every variable of `names`, the environment's names, whose name
-/// begins with one of `prefixes` off `command`'s environment. The names
-/// alone are read, never a value.
-fn stripped(command: &mut Command, names: impl IntoIterator<Item = OsString>, prefixes: &[&str]) {
-    for name in names {
-        let shown = name.to_string_lossy();
-        if prefixes.iter().any(|prefix| shown.starts_with(prefix)) {
-            command.env_remove(&name);
-        }
-    }
-}
-
 /// The task that runs a step alone: its label up to any ` (qualifier)`, so
 /// `clippy (xtask)` is `clippy` and `weaver check` is itself.
 pub fn task_of(label: &str) -> &str {
@@ -667,7 +652,7 @@ fn run_command(
     let could_not_run = invocation.not_started();
     let mut command = process::command(program, args)?;
     command.envs(env.iter().copied());
-    stripped(
+    process::stripped(
         &mut command,
         std::env::vars_os().map(|(name, _)| name),
         without,
@@ -825,34 +810,6 @@ mod tests {
         for step in check_steps().iter().chain(doc_steps().iter()) {
             assert!(kept_from(step).is_empty(), "{}", step.label);
         }
-    }
-
-    #[test]
-    fn a_stripped_command_inherits_no_variable_under_a_prefix_and_every_other() {
-        let mut command = Command::new("sh");
-        let names = [
-            "OTEL_EXPORTER_OTLP_ENDPOINT",
-            "OTEL_TRACES_EXPORTER",
-            "NOT_OTEL_X",
-            "RUST_LOG",
-        ];
-
-        stripped(&mut command, names.map(OsString::from), &["OTEL_"]);
-
-        let removed: Vec<String> = command
-            .get_envs()
-            .filter(|(_, value)| value.is_none())
-            .map(|(name, _)| name.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(
-            removed,
-            ["OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_TRACES_EXPORTER"]
-        );
-        assert_eq!(
-            command.get_envs().count(),
-            2,
-            "the others are left as they are"
-        );
     }
 
     #[test]

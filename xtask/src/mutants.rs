@@ -395,9 +395,10 @@ fn test_mutants(
 }
 
 /// How [`check`] and [`check_changed`] run cargo-mutants: through cargo
-/// itself, its output streamed.
+/// itself, its output streamed, with [`process::KEPT_FROM_TESTS`] kept from
+/// the tests it runs.
 fn cargo(args: &[&str]) -> Result<ExitStatus, Error> {
-    process::stream("cargo", args, &[])
+    process::stream("cargo", args, &[], process::KEPT_FROM_TESTS)
 }
 
 /// Runs cargo-mutants over the floor crates and judges the exact floor.

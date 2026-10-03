@@ -93,7 +93,7 @@ cargo xtask pre-commit    # fmt (rustfmt and dprint), clippy, lint-layers, lint-
 cargo xtask pre-push      # pre-commit plus cargo deny, changelog, rustdoc without warnings, tests, and the mutants of what changed
 ```
 
-The test step strips every `OTEL_*` variable from the environment it runs `cargo test` in: an endpoint there would turn the network exporter on in every test that builds a `Lablet` in its own process, which can't scrub its own environment, and a hand-run `cargo test` with `OTEL_EXPORTER_OTLP_ENDPOINT` set exports.
+The test step strips every `OTEL_*` variable from the environment it runs `cargo test` in, and so do `coverage` and `mutants` (`KEPT_FROM_TESTS` in `xtask/src/process.rs`): an endpoint there would turn the network exporter on, and `OTEL_RESOURCE_ATTRIBUTES` would add to the resource, in every test that builds a `Lablet` in its own process, which can't scrub its own environment, and a hand-run `cargo test` with `OTEL_EXPORTER_OTLP_ENDPOINT` set exports.
 
 Run `cargo xtask help` for every task, grouped in the order a developer works: development, telemetry contract, quality checks, quality gates, analysis, project. A green gate prints one closing line; the step table appears only when something failed, and it names the task that runs each failed step alone.
 
