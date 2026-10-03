@@ -114,5 +114,6 @@ An entry under `Unreleased` is mandatory for any change to one of these files, a
 
 ### Fixed
 
+- A network destination that answers again before the shutdown gets the wide event of a run whose flush gave up on it. The shutdown could stop that destination's queues before the thread the flush left had made the event.
 - The gRPC network exporter trusts the platform's root certificates, or in their place the ones `SSL_CERT_FILE` or `SSL_CERT_DIR` names, for an `https` endpoint and for one written without a scheme, which it speaks TLS to unless `OTEL_EXPORTER_OTLP_INSECURE` says otherwise. It trusted none, so every export to such a collector failed at the handshake with only a warning in the diagnostic log. Roots that can't be loaded, or other TLS that can't be set up, refuse `lablet run` under `telemetry.otlp.endpoint`, naming the variable when the environment names the endpoint; `lablet check` loads no roots, so it doesn't refuse them.
 - The user information of an endpoint written without a scheme, such as `user:password@collector:4317`, to which the gRPC exporter gives one, is a secret, as the user information of a URL is: cut from every result, and its variable listed under `cut:`. It was shown whole in a refusal and cut nowhere.

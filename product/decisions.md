@@ -1169,3 +1169,7 @@ The panel named in "Four decisions after phase 6" read the phase's code, not its
 ## 2026-10-03 Phase 6, signed off
 
 The human ran both checks by hand in `lablet/examples/README.md`, against the compose example's collector (`otel/opentelemetry-collector-contrib:0.161.0`) and Jaeger (`jaegertracing/jaeger:2.21.0`). Exported live over gRPC, the two-turn run was found in Jaeger with one filter, the tag `lablet.turn=2`. Written to a file and replayed through the collector's OTLP JSON file receiver, the same kind of run reached Jaeger with no endpoint involved. Each trace held the root span `invoke_agent lablet`, two `chat scripted` spans and `execute_tool read_file`. So the file is the Collector's own format, read by the Collector and not only by lablet's reader, as the 2026-09-19 entry "One telemetry observer, pluggable exporters, OTLP/JSON file" chose, and phase 6's acceptance line holds whole.
+
+## 2026-10-03 The shutdown waits for a flush that gave up
+
+A flush that gives up on a destination leaves its thread, which holds the runs it took and makes their wide events once the destination answers. The shutdown didn't wait for that thread, so it could stop the destination's queues first and the wide event was lost, which a CI run on Linux caught. The shutdown now waits for each destination's leftover flush threads before it stops that destination's queues. It does so on its own thread, which the SDK's five-second caps bound, so the caller still waits no longer than the shutdown's bound.

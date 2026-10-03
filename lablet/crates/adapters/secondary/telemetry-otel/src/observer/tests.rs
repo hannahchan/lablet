@@ -896,7 +896,8 @@ async fn a_destination_that_does_not_answer_holds_a_flush_only_for_its_bound_and
     assert!(network.exports().is_empty());
 
     // Once the destination answers, the thread the flush left makes the
-    // run's wide event, and the shutdown exports it.
+    // run's wide event, and the shutdown waits for that thread before it
+    // stops the queues, so the event is exported however late it's made.
     network.release();
     observer.shutdown().await.unwrap();
     assert_eq!(network.exported_spans().len(), 4);

@@ -253,11 +253,13 @@ impl OtelObserverBuilder {
                 FileLogExporter::new(sink.clone()),
             ));
         }
-        let destinations = destinations
+        let destinations: Vec<Destination> = destinations
             .into_iter()
             .map(|make| make(&resource, &scope))
             .collect();
 
+        let destinations_flushing: Vec<Vec<thread::JoinHandle<()>>> =
+            destinations.iter().map(|_| Vec::new()).collect();
         Ok(OtelObserver {
             inner: Arc::new(Inner {
                 scope,
@@ -266,6 +268,7 @@ impl OtelObserverBuilder {
                 flush_timeout,
                 shutdown_timeout,
                 state: Mutex::new(State::default()),
+                flushing: Mutex::new(destinations_flushing),
             }),
         })
     }
@@ -329,6 +332,13 @@ struct Inner {
     flush_timeout: Duration,
     shutdown_timeout: Duration,
     state: Mutex<State>,
+    /// For each destination, the flush threads that may still be running:
+    /// a flush that gave up on a destination left its thread, which makes
+    /// the wide events of the runs it took once the destination answers.
+    /// A shutdown waits for them before it stops that destination's
+    /// queues, or a wide event made late would be emitted into a queue
+    /// already stopped.
+    flushing: Mutex<Vec<Vec<thread::JoinHandle<()>>>>,
 }
 
 /// The telemetry observer: it maps a run's events to OpenTelemetry spans
@@ -468,6 +478,10 @@ impl Inner {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    fn flushing(&self) -> MutexGuard<'_, Vec<Vec<thread::JoinHandle<()>>>> {
+        self.flushing.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Queues what an event gave rise to, at every destination, the
     /// records ahead of the span they're in the context of.
     fn queue(&self, trace: TraceId, signals: Signals) {
@@ -525,7 +539,12 @@ impl Inner {
                     let _ = done.send((index, inner.destinations[index].flush(&closed)));
                 });
             match started {
-                Ok(_) => waiting.push(index),
+                Ok(thread) => {
+                    let mut flushing = self.flushing();
+                    flushing[index].retain(|thread| !thread.is_finished());
+                    flushing[index].push(thread);
+                    waiting.push(index);
+                }
                 Err(error) => failures.push(format!(
                     "{}: the flush couldn't start: {error}",
                     destination.names.destination
@@ -593,13 +612,20 @@ impl Inner {
     fn stop(&self) -> Vec<String> {
         let closed = self.take_closed();
         let timeout = self.shutdown_timeout;
+        let flushing: Vec<_> = self.flushing().iter_mut().map(std::mem::take).collect();
         thread::scope(|scope| {
             let stopping: Vec<_> = self
                 .destinations
                 .iter()
-                .map(|destination| {
+                .zip(flushing)
+                .map(|(destination, flushing)| {
                     let closed = &closed;
                     scope.spawn(move || {
+                        // A flush thread's failures were said, or given up
+                        // on, by the flush that started it.
+                        for thread in flushing {
+                            let _ = thread.join();
+                        }
                         let mut failures = destination.flush(closed);
                         destination.stop(timeout, &mut failures);
                         failures
