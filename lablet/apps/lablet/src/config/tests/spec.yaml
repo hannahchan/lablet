@@ -77,4 +77,4 @@ telemetry:
     headers: {} # sent with every export, over any header the environment names; every value is a secret: cut everywhere and left out of the digest
   file:
     path: null # OTLP/JSON lines; file path, "-" for stderr, which implies --quiet; null means lablet-<run_id>.otlp.jsonl when the network exporter is off, and no file when it's on by either source
-  resource: {} # extra resource attributes
+  resource: {} # extra resource attributes, stated over OTEL_RESOURCE_ATTRIBUTES and winning a key both name; service.name and service.version are lablet's

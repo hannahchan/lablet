@@ -1,10 +1,13 @@
 //! The network exporter through the binary, with the `OTEL_*` environment
 //! a run inherits given to the process, against the in-process receiver on
 //! both transports: which endpoint turns the exporter on, whose headers go
-//! with it, and what turns it off. A test can't set a variable of its own
-//! process, so every case here is a process of its own.
+//! with it, what turns it off, and what the resource takes from the
+//! environment. A test can't set a variable of its own process, so every
+//! case here is a process of its own.
 
+use lablet_conformance::otlp::Exported;
 use lablet_conformance::receiver::{self, Mode, Received, Receiver};
+use lablet_telemetry_registry::attribute as key;
 use serde_json::{Value, json};
 
 use super::harness::{CONFIG, ENDS, Lab, PROMPT, Ran, ran};
@@ -233,6 +236,63 @@ async fn enabled_false_and_otel_traces_exporter_none_each_turn_the_exporter_off_
             1,
             "{what}: the file is written"
         );
+    }
+}
+
+/// O21: `OTEL_RESOURCE_ATTRIBUTES` gives every export the attributes it
+/// names beneath the config's `telemetry.resource`, which wins a key both
+/// name, and `service.name` stays lablet's whatever it and
+/// `OTEL_SERVICE_NAME` say, in the file and over the network alike.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_environments_resource_attributes_go_beneath_the_configs_and_the_service_stays_lablet()
+{
+    let receiver = Receiver::start(Mode::Answers).await;
+    let lab = Lab::new("otlp-resource-attributes");
+
+    completed(
+        &lab,
+        json!({ "telemetry": {
+            "otlp": { "endpoint": receiver.grpc_endpoint(), "protocol": "grpc" },
+            "resource": { "team": "b" },
+        } }),
+        &[
+            (
+                "OTEL_RESOURCE_ATTRIBUTES",
+                "deployment.environment=test,team=a,service.name=other",
+            ),
+            ("OTEL_SERVICE_NAME", "other"),
+        ],
+    );
+
+    received(&receiver, Over::Grpc);
+    let destinations: [(&str, Exported); 2] = [
+        ("the file", lab.exported()),
+        ("the receiver", receiver.exported().unwrap()),
+    ];
+    for (destination, exported) in destinations {
+        assert_eq!(exported.records_of("lablet.run").len(), 1, "{destination}");
+        let resources = exported
+            .spans
+            .iter()
+            .map(|span| &span.resource)
+            .chain(exported.records.iter().map(|record| &record.resource));
+        for resource in resources {
+            assert_eq!(
+                resource.get("deployment.environment"),
+                Some(&json!("test")),
+                "{destination}: {resource:?}"
+            );
+            assert_eq!(
+                resource.get("team"),
+                Some(&json!("b")),
+                "{destination}: the config's wins a key both name: {resource:?}"
+            );
+            assert_eq!(
+                resource.get(key::SERVICE_NAME),
+                Some(&json!("lablet")),
+                "{destination}: {resource:?}"
+            );
+        }
     }
 }
 

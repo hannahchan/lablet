@@ -19,6 +19,9 @@ pub struct Telemetry {
     /// The OTLP/JSON file exporter.
     pub file: TelemetryFile,
     /// The composer's own resource attributes, which every export carries.
+    /// They're stated over those `OTEL_RESOURCE_ATTRIBUTES` names, winning a
+    /// key both name, and `service.name` and `service.version` stay
+    /// lablet's whichever names them.
     pub resource: BTreeMap<String, String>,
 }
 

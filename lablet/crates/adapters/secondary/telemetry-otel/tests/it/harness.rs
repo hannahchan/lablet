@@ -204,6 +204,8 @@ pub struct Settings {
     pub target: Option<FileTarget>,
     /// The collector the observer exports to, when it exports to one.
     pub otlp: Option<OtlpSettings>,
+    /// The composer's resource attributes.
+    pub resource: Vec<(String, String)>,
     /// Whether the runs capture content.
     pub capture_content: bool,
     /// What the run request named the runs.
@@ -240,7 +242,8 @@ pub struct Settings {
 impl Settings {
     /// Runs that capture nothing, have no labels, retry three times, run
     /// one tool call at a time, and each have a file of their own in
-    /// `scratch`. Their tools are all built in and `bash` runs alone. They
+    /// `scratch`, whose resource the composer adds `team: evals` and
+    /// `deployment.environment.name: ci` to. Their tools are all built in and `bash` runs alone. They
     /// have nothing a run may be without: no cap on turns, no pricing, no
     /// transcript, no skills and no MCP servers. Nothing cancels them.
     pub fn in_scratch(scratch: &Scratch) -> Self {
@@ -249,6 +252,10 @@ impl Settings {
                 directory: scratch.path().to_owned(),
             }),
             otlp: None,
+            resource: vec![
+                ("team".to_owned(), "evals".to_owned()),
+                ("deployment.environment.name".to_owned(), "ci".to_owned()),
+            ],
             capture_content: false,
             labels: RunLabels::default(),
             max_retries: 3,
@@ -288,6 +295,7 @@ impl Harness {
         let Settings {
             target,
             otlp,
+            resource,
             capture_content,
             labels,
             max_retries,
@@ -306,10 +314,7 @@ impl Harness {
         } = settings;
         let provider = scripted(script);
         let tools = Arc::new(Tools::new(&bash_does, bash_concurrency, read_file_source));
-        let mut builder = OtelObserver::builder(VERSION).resource(vec![
-            ("team".to_owned(), "evals".to_owned()),
-            ("deployment.environment.name".to_owned(), "ci".to_owned()),
-        ]);
+        let mut builder = OtelObserver::builder(VERSION).resource(resource);
         if let Some(target) = target {
             builder = builder.file(target);
         }

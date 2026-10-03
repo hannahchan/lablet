@@ -783,7 +783,7 @@
             "type": "string"
           },
           "default": {},
-          "description": "The composer's own resource attributes, which every export carries.",
+          "description": "The composer's own resource attributes, which every export carries.\nThey're stated over those `OTEL_RESOURCE_ATTRIBUTES` names, winning a\nkey both name, and `service.name` and `service.version` stay\nlablet's whichever names them.",
           "type": "object"
         }
       },

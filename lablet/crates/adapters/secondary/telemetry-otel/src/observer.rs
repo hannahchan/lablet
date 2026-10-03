@@ -15,7 +15,7 @@ use opentelemetry::{InstrumentationScope, KeyValue};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
 use opentelemetry_sdk::logs::{LogExporter, SdkLogger, SdkLoggerProvider};
-use opentelemetry_sdk::resource::TelemetryResourceDetector;
+use opentelemetry_sdk::resource::{EnvResourceDetector, TelemetryResourceDetector};
 use opentelemetry_sdk::trace::SpanExporter;
 
 use crate::file::{FileLogExporter, FileSpanExporter, FileTarget, Sink};
@@ -122,7 +122,9 @@ impl std::fmt::Debug for OtelObserverBuilder {
 impl OtelObserverBuilder {
     /// The composer's own resource attributes, which every export carries
     /// beside `service.name`, `service.version` and what the SDK says of
-    /// itself. A key of lablet's own keeps lablet's value.
+    /// itself, over those `OTEL_RESOURCE_ATTRIBUTES` holds when it's set. A
+    /// key the environment names too takes the composer's value, and a key
+    /// of lablet's own keeps lablet's value whichever names it.
     #[must_use]
     pub fn resource(mut self, attributes: Vec<(String, String)>) -> Self {
         self.resource = attributes;
@@ -213,7 +215,14 @@ impl OtelObserverBuilder {
             .with_version(version.clone())
             .with_schema_url(SCHEMA_URL)
             .build();
+        // A later source wins a key an earlier one set. So the environment's
+        // attributes are defaults beneath the composer's, as every `OTEL_*`
+        // variable lablet inherits is, and what the SDK says of itself and
+        // lablet's own two keys come last, so neither source can rename the
+        // service or misstate the SDK. `OTEL_SERVICE_NAME` goes unread: the
+        // detector that reads it isn't one of these.
         let resource = Resource::builder_empty()
+            .with_detector(Box::new(EnvResourceDetector::new()))
             .with_attributes(
                 resource
                     .into_iter()

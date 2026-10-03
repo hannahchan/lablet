@@ -15,6 +15,8 @@ mod harness;
 #[cfg(test)]
 mod network;
 #[cfg(test)]
+mod resource;
+#[cfg(test)]
 mod spans;
 #[cfg(test)]
 mod wide;
