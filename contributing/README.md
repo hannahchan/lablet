@@ -101,7 +101,7 @@ CI runs on every pushed branch as a matrix of `cargo xtask ci` (the pre-push lis
 
 ## Shell scripts
 
-`cargo xtask lint-shell` runs shellcheck over every tracked shell script: `.sh` files and the git hooks, which have no extension and are found by their shebang. `product/research/` is left out, as Vale and dprint leave it out, because it's a frozen record, and so is the vendored `lablet/telemetry/deps/`.
+`cargo xtask lint-shell` runs shellcheck over every tracked shell script: `.sh` files and the git hooks, which have no extension and are found by their shebang. `product/research/` is left out, as Vale leaves it out, because it's a frozen record, and so is the vendored `lablet/telemetry/deps/`.
 
 ## Editor and agent setup
 
@@ -120,10 +120,11 @@ CI runs on every pushed branch as a matrix of `cargo xtask ci` (the pre-push lis
 A phase-end review is scaled to risk and has a budget.
 
 - Scaffolding, configuration, and generated code get the gates, the builder's own read of the diff, and one reviewer. Logic-heavy code (the loop, policy, exporters, adapters) gets two or three focused reviewers.
-- Each reviewer reports at most five findings, high and medium severity only.
+- Each reviewer reports at most five findings of high or medium severity, then any lows it found, which go to triage unverified.
 - The builder sorts the findings before anything is verified or fixed. A finding that isn't worth handling in a lightweight project is dropped, or the fix is to reject the input rather than to model it.
 - One verifier for each surviving finding, reasoning from the code first. Reproduce only when the claim is disputed or cheap to run.
-- Each phase states a review budget of about 20 percent of the build's token cost when it adds a security boundary or a public contract, and 10 to 15 percent otherwise. The phase report gives the actual figure.
+- A fix pass that adds a public item or changes a floor crate gets one reviewer before it lands on `main`, inside the review's budget.
+- Each phase states a review budget of about 35 percent of the build's token cost when it adds a security boundary or a public contract, and 10 to 15 percent otherwise. The phase report gives the actual figure.
 - Every gate or feature is exercised once with real input on a cold clone before the phase closes.
 - [reviews.md](reviews.md) holds what to look for, drawn from defects that reached `main` and were caught by a later review.
 
@@ -139,7 +140,7 @@ Lablet is dual licensed under MIT OR Apache-2.0. Every crate's `Cargo.toml` sets
 
 ## Git and pull requests
 
-- Work on a branch off `main`. When a logical piece is complete and `cargo xtask pre-push` passes locally, fast-forward `main` and push. No pull requests for now; this will be revisited as the process is learned.
+- Work on a branch off `main`. When a logical piece is complete and `cargo xtask pre-push` passes locally, fast-forward `main` and push. A landing that merges parallel streams, or closes a phase, is pushed as its branch first and fast-forwarded once that branch's CI is green, since only CI runs what's Linux-only. No pull requests for now; this will be revisited as the process is learned.
 - CI runs after the push. Check it; a red `main` is fixed forward before anything else lands.
 - One logical change per commit. Moves and content edits in separate commits.
 - A spec clarification (filling a gap, fixing an inconsistency, adding a missing test) goes in the same commit series with a note in the message.

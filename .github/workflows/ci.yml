@@ -3,7 +3,8 @@
 name: CI
 
 # No pull_request trigger: work is pushed to a branch and `main` is
-# fast-forwarded once the branch is green.
+# fast-forwarded, once the branch is green when the landing merges parallel
+# streams or closes a phase (CLAUDE.md).
 on:
   push:
     branches:
