@@ -1,6 +1,7 @@
 [Aa]ggregatab(?:le|ility)
 [Aa]llowlist
 [Aa]nthropic
+[Aa]ppenders?
 [Aa]rgs
 [Aa]sync
 [Aa]xum

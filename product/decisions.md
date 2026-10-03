@@ -40,6 +40,8 @@ Tool inputs and outputs are JSON by definition, so the domain needs a JSON value
 
 Every run ends with a single wide event carrying the whole run summary, emitted by every observer from one `RunSummary` the loop accumulates. Analysis over many runs should work from one row per run; spans are for drilling into a single run.
 
+**Partly superseded on 2026-10-03 by "The application and the adapters instrument with the OpenTelemetry API":** the composition root emits the wide event from the `RunSummary` the loop returns, not an observer. One wide event per run, from one summary, holds.
+
 ## 2026-09-18 Failure modes are distinct stop reasons
 
 Truncated output, context exhaustion, and token budget are their own stop reasons rather than folded into `provider_error` or `completed`. They're the findings a benchmark exists to surface.
@@ -134,6 +136,8 @@ The telemetry contract is its own phase so the Weaver templates can't stall the 
 
 The OTel observer opens the tool span on `ToolCallStarted`; the loop then asks the observer for that span's W3C trace context and places it on the `ToolCall`, and the MCP adapter injects it into `params._meta`. This keeps OpenTelemetry types out of the application layer and lets JSONL-only runs answer `None`.
 
+**Superseded on 2026-10-03 by "The application and the adapters instrument with the OpenTelemetry API":** the loop opens the tool span itself and runs the executor in its context, so an executor reads the span from the current context and nothing travels on the `ToolCall`.
+
 ## 2026-09-18 Small pull requests, human merges
 
 Work lands in small, reviewable PRs, each one logical unit with CI green, merged by a human. A phase is many PRs. The building agent may clarify the spec in a PR but must stop and ask before changing a recorded decision. Manual acceptance items are signed off by a human in the closing PR of the phase.
@@ -157,6 +161,8 @@ A Parquet or Arrow writer would help developers without a collector and fits as 
 ## 2026-09-19 One telemetry observer, pluggable exporters, OTLP/JSON file
 
 Supersedes the JSONL observer. `telemetry-otel` maps events to OTel spans and log records once; exporters below it are the SDK's pluggable traits. The file output is OTLP/JSON, the Collector's own file format, so the file and the network carry identical data including the full resource, the file can be replayed into a collector, and lablet maintains no envelope of its own. A flat lablet line format was rejected as a second rendering of the same contract. The Parquet exporter, if added, is a third exporter in the same slot. This withdraws the "fourth stable contract" clause of the raw-data entry: the file format is the Collector's, not lablet's, and the quality bar now reads "three contracts, one borrowed."
+
+**Partly superseded on 2026-10-03 by "The application and the adapters instrument with the OpenTelemetry API":** there is no observer; the loop instruments itself with the OpenTelemetry API. The exporters below it, the OTLP/JSON file as the Collector's format, and "three contracts, one borrowed" all hold.
 
 ## 2026-09-19 Composer resource attributes stay on the Resource
 
@@ -871,7 +877,7 @@ The items landed in another order than the plan's. The plan put the library befo
 
 What the builder decided on the way:
 
-- **Spans are built as finished data.** The loop measures when a call started and how long it took, and the event that ends a span carries both. So the observer makes each span whole when it ends and never opens one on a clock of its own, and it needs no tracer.
+- **Spans are built as finished data.** The loop measures when a call started and how long it took, and the event that ends a span carries both. So the observer makes each span whole when it ends and never opens one on a clock of its own, and it needs no tracer. _Partly superseded on 2026-10-03 by "The application and the adapters instrument with the OpenTelemetry API": the loop opens spans through a tracer, and gives each its start and end from what it measured, so a span is still timed on the run's clock._
 - **The wide event is made when the observer is flushed.** It counts the records the exporter lost, and the count is whole only once everything else of the run has been exported. It goes in an export of its own, so it's the last line of its run.
 - **The observer fills the wide event in one match over a generated enum.** The registry crate gains an enum of the wide event's keys and one of its template keys. The match has no wildcard arm, so a key the registry gains doesn't build until the observer says what it holds.
 - **`lablet.mcp.servers` is required only of a run that has servers.** It was always required, and a run without servers would have written an empty list beside no lifetime.
@@ -1188,3 +1194,15 @@ The owner asked whether what lablet writes could drift from what a collector rec
 - **The replay dropped long lines.** The collector's OTLP JSON file receiver drops a line over 1 MiB with no message, and one export of a long run's content records was 4.2 MB: replayed through collector 0.161.0, 26 of 27 log records were lost, and with the limit at 64 MiB all 27 arrived. The example collector raises it and uses the receiver's current name, and the release checklist replays such a run and reads its log records. The phase 6 sign-off read spans only.
 - **Three things are written into phase 7's plan, because phase 7 builds on them.** On Opus 5.5, Sonnet 5.5 and Fable 5.1, editing an earlier turn, including deleting an old tool result, invalidates every later thinking block: a 400 for accounts created on or after 2026-08-31, unchecked for older ones, and server-side context editing doesn't count. Phase 7a planned to mask inside lablet, and the parity matrix says the reference clears on the client, where the API guide says it keeps the prefix intact, so phase 7's capture settles it and 7a's route is the owner's call. The current models send thinking blocks with empty text unless asked, and reject a thinking budget, disabled thinking and `temperature`, so phase 7 adds the display setting a 2026-09-20 entry promised and decides how such a setting is refused. And `serde_json` sorts object keys, so the model's tool input goes back reordered, against two recorded premises; phase 7 decides the order and pins it.
 - **Before phase 10 and the release:** the GenAI conventions now have `gen_ai.skill.name`, which phase 10 had planned as `lablet.skill.name`, so the pin is refreshed first; the registry's `schema_url` takes the release's version.
+
+## 2026-10-03 The application and the adapters instrument with the OpenTelemetry API
+
+Decided by the owner. The rule that kept `opentelemetry` out of the application ring was a mistake. OpenTelemetry's guidance is that instrumented code depends on the API and only the application's owner installs the SDK, and lablet followed the first half too far: the loop reported to a `RunObserver` port, and `telemetry-otel` turned a vocabulary of events that mirrors the spans one for one into the spans. The events, the port, the fan-out, the conformance suite that checks observers, and the `trace_context` back-channel that MCP propagation needed all exist to keep the API out of the loop. The API holds no state, and with no SDK installed it does nothing, so that cost bought nothing.
+
+- **The domain uses neither the API nor the SDK.** It reads no clock and does no I/O, so it has nothing to instrument.
+- **The application and the adapters may use `opentelemetry`, the API, and nothing else of its family.** `opentelemetry_sdk`, `opentelemetry-otlp`, `opentelemetry-proto`, `opentelemetry-http` and `tracing-opentelemetry` stay out, except as dev-dependencies, which the layer lint already exempts, so a test can read what it emits from the SDK's in-memory exporters.
+- **The SDK lives in the composition root and in one export crate beside it.** What lablet adds to the SDK, the OTLP/JSON file exporter, the bounded queues that count lost records, and the network exporter's setup, implements the SDK's traits, so it can't do without the SDK. It isn't an adapter either: it implements no port of lablet's. It moves from `telemetry-otel` into a ring of its own, which only the composition root may depend on. Putting it in the composition root was considered and declined, since it would put about 1,300 lines of export machinery and their tests into the crate that wires.
+- **The wide event moves to the composition root.** It's `RunSummary` flattened, and the loop already returns that. What only the pipeline knows, the count of lost records and the flush that has to come before it, is the composition root's to ask for, as the observer's flush did. The root span goes with it, so the run's own span and its one row are made in one place, and the loop's spans are its children.
+- **Spans stay timed on the run's clock.** The API takes a span's start and end, so the loop gives it the times it measured, as the events carried them, and an exporter's work still never counts in a call's latency.
+
+Phase 6a builds it before phase 7, since the Anthropic adapter and MCP would otherwise be built on the observer. Its plan names four questions this entry leaves open: how the loop emits log records, since the API's logs half is a bridge for appenders with no object-safe or global logger; where the registry's constants live, since the application ring can't depend on the adapter shared kernel that holds them today; what a library caller plugs in where it registered an observer; and whether lablet still samples every span when `OTEL_TRACES_SAMPLER` says otherwise.
