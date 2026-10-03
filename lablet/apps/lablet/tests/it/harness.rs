@@ -5,7 +5,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use lablet::{Config, EventKind, Format, Lablet, RunEvent, RunObserver, RunRequest};
+use lablet::{
+    BuildError, Config, EventKind, Format, Lablet, RunEvent, RunObserver, RunRequest, Unsupported,
+};
 use lablet_conformance::otlp::{Exported, LogRecord, Span};
 use lablet_test_support::Scratch;
 use serde_json::{Value, json};
@@ -115,6 +117,24 @@ pub fn read(tree: &Value) -> Config {
 
 pub fn request() -> RunRequest {
     RunRequest::new(PROMPT).unwrap()
+}
+
+/// What `build` refuses `config` with, which `check` refuses it with too.
+/// Two refusals are a build's alone: a provider this lablet has no adapter
+/// for yet, which the check passes since it stops before the provider is
+/// selected, and what only making the network exporter finds, which no
+/// config given here reaches.
+pub async fn refusal(config: Config) -> BuildError {
+    let checked = lablet::check(&config).await.map(drop);
+    let built = lablet::build(config).await.map(drop).unwrap_err();
+    match &built {
+        BuildError::Unsupported {
+            kind: Unsupported::Anthropic | Unsupported::Openai,
+            ..
+        } => assert_eq!(checked, Ok(()), "the check passes a provider: {built:?}"),
+        _ => assert_eq!(checked, Err(built.clone()), "check and build refuse alike"),
+    }
+    built
 }
 
 /// Keeps every event it's told, in order.
