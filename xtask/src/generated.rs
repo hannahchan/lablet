@@ -18,6 +18,10 @@ const FIX: &str = "fix with: cargo xtask weaver generate";
 /// One generated directory. Every file in it is generated.
 struct Output {
     target: &'static str,
+    /// For a crate's module, the registry folder it's rendered from, which
+    /// is the crate's path below `lablet/crates`, or below `lablet` for an
+    /// app; `None` for the pages.
+    crate_dir: Option<&'static str>,
     /// Weaver looks under it for `registry/<target>/weaver.yaml`, then for
     /// `<target>/weaver.yaml`, which is how upstream lays out the pages.
     templates: &'static str,
@@ -37,12 +41,14 @@ const RUST_TEMPLATES: &str = "lablet/telemetry/templates";
 /// The typed module of one crate: the signals its registry folder declares,
 /// using lablet's hand-written telemetry where `params` say.
 const fn module(
+    crate_dir: &'static str,
     params: &'static [&'static str],
     staged: &'static str,
     tree: &'static str,
 ) -> Output {
     Output {
         target: "rust-crate",
+        crate_dir: Some(crate_dir),
         templates: RUST_TEMPLATES,
         params,
         staged,
@@ -54,6 +60,7 @@ const fn module(
 const OUTPUTS: [Output; 3] = [
     // The loop's signals, and the `Join` struct every module uses.
     module(
+        "application/run",
         &[
             "--param",
             "crate_dir=application/run",
@@ -67,6 +74,7 @@ const OUTPUTS: [Output; 3] = [
     ),
     // The composition root's signals, the root span and the wide event.
     module(
+        "apps/lablet",
         &[
             "--param",
             "crate_dir=apps/lablet",
@@ -80,6 +88,7 @@ const OUTPUTS: [Output; 3] = [
     ),
     Output {
         target: "markdown",
+        crate_dir: None,
         templates: "lablet/telemetry/deps/weaver-packages/templates/docs",
         // The pages link to one another from the repository root, as GitHub
         // resolves a link that starts with a slash.
@@ -169,11 +178,125 @@ fn edition(workspace: &Workspace) -> Result<String, Error> {
         .map_err(Error::parse(&workspace.root.join("Cargo.toml")))
 }
 
-/// Replaces the generated directories of the tree.
+/// Replaces the generated directories of the tree, once the registry's
+/// folders and the modules match: a write removes no directory of its own
+/// accord, so one left over is named rather than kept quietly.
 pub fn write() -> CheckResult {
-    let stage = Stage::render()?;
-    install(&stage.0, &repo_root())?;
+    write_in(&repo_root(), Stage::render)
+}
+
+/// [`write()`] for the repository at `root`, with `render` in place of
+/// rendering the registry, which a refusal never reaches.
+fn write_in(root: &Path, render: impl FnOnce() -> Result<Stage, Error>) -> CheckResult {
+    let unrouted = routing(root)?;
+    if !unrouted.is_empty() {
+        return Err(listed(
+            "the registry's folders and the generated modules don't match:",
+            &unrouted,
+            "fix OUTPUTS in xtask/src/generated.rs, or the folders, then generate again",
+        ));
+    }
+    let stage = render()?;
+    install(&stage.0, root)?;
     Ok(None)
+}
+
+/// A verdict of `heading`, one line for each of `lines`, and `fix`.
+fn listed(heading: &str, lines: &[String], fix: &str) -> Failure {
+    let mut message = format!("{heading}\n");
+    for line in lines {
+        let _ = writeln!(message, "  {line}");
+    }
+    let _ = write!(message, "{fix}");
+    Failure::Verdict(message)
+}
+
+/// Where the registry's folders and the generated modules part, one line
+/// each: a folder that holds registry files and that no module is rendered
+/// from, a module whose folder holds none, and a generated directory in
+/// a crate that no module writes. `shared/` and the registry's root hold
+/// what the signals refer to and generate nothing, so neither is a module's.
+fn routing(root: &Path) -> Result<Vec<String>, Error> {
+    let registry = root.join(REGISTRY);
+    let mut folders = std::collections::BTreeSet::new();
+    for file in walk(&registry, &|_| false)? {
+        let Ok(relative) = file.strip_prefix(&registry) else {
+            continue;
+        };
+        let folder = relative.parent().map(slashed).unwrap_or_default();
+        let is_yaml = file
+            .extension()
+            .is_some_and(|extension| extension == "yaml");
+        if is_yaml && !folder.is_empty() && folder != "shared" && !folder.starts_with("shared/") {
+            folders.insert(folder);
+        }
+    }
+    let crate_dirs: Vec<&str> = OUTPUTS
+        .iter()
+        .filter_map(|output| output.crate_dir)
+        .collect();
+
+    let mut lines = Vec::new();
+    for folder in &folders {
+        if !crate_dirs.contains(&folder.as_str()) {
+            lines.push(format!(
+                "{REGISTRY}/{folder} holds registry files that no module is rendered from: add one to OUTPUTS"
+            ));
+        }
+    }
+    for crate_dir in &crate_dirs {
+        if !folders.contains(*crate_dir) {
+            lines.push(format!(
+                "{REGISTRY}/{crate_dir} holds no registry file, and a module is rendered from it: remove it from OUTPUTS"
+            ));
+        }
+    }
+    let trees: Vec<&str> = OUTPUTS.iter().map(|output| output.tree).collect();
+    for crates in ["lablet/crates", "lablet/apps"] {
+        let generated = walk(&root.join(crates), &|directory| {
+            directory.ends_with("src/telemetry/generated")
+        })?;
+        for directory in generated.iter().filter(|path| path.is_dir()) {
+            let relative = directory
+                .strip_prefix(root)
+                .map(slashed)
+                .unwrap_or_default();
+            if !trees.contains(&relative.as_str()) {
+                lines.push(format!("{relative} is no module's: remove it"));
+            }
+        }
+    }
+    Ok(lines)
+}
+
+/// A path with `/` between its parts, whatever the platform writes.
+fn slashed(path: &Path) -> String {
+    path.components()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Under `directory`, every file, and every directory `wanted` keeps, which
+/// is then not looked into. A `target` directory is a build's, and skipped;
+/// a directory that doesn't exist holds nothing.
+fn walk(directory: &Path, wanted: &dyn Fn(&Path) -> bool) -> Result<Vec<PathBuf>, Error> {
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(Error::file(Verb::Read, directory)(e)),
+    };
+    let mut found = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(Error::file(Verb::Read, directory))?.path();
+        if !path.is_dir() || wanted(&path) {
+            found.push(path);
+        } else if !path.ends_with("target") {
+            found.extend(walk(&path, wanted)?);
+        }
+    }
+    found.sort();
+    Ok(found)
 }
 
 /// Moves each rendering in `stage` over the directory it replaces under
@@ -200,13 +323,17 @@ fn install(stage: &Path, root: &Path) -> Result<(), Error> {
 /// Fails when the tree differs from what the registry renders to. It writes
 /// only under `lablet/target`.
 pub fn check() -> CheckResult {
+    let root = repo_root();
+    let unrouted = routing(&root)?;
     let stage = Stage::render()?;
-    compare(&stage.0, &repo_root())
+    compare(&stage.0, &root, unrouted)
 }
 
-/// Fails when a directory under `root` differs from its rendering in `stage`.
-fn compare(stage: &Path, root: &Path) -> CheckResult {
-    let mut found = Vec::new();
+/// Fails when a directory under `root` differs from its rendering in `stage`,
+/// or when `unrouted` names where the registry's folders and the modules
+/// part.
+fn compare(stage: &Path, root: &Path, unrouted: Vec<String>) -> CheckResult {
+    let mut found = unrouted;
     for output in &OUTPUTS {
         let rendered = stage.join(output.staged);
         found.extend(differences(
@@ -218,12 +345,11 @@ fn compare(stage: &Path, root: &Path) -> CheckResult {
     if found.is_empty() {
         return Ok(None);
     }
-    let mut message = "the generated files differ from what the registry renders to:\n".to_owned();
-    for line in &found {
-        let _ = writeln!(message, "  {line}");
-    }
-    let _ = write!(message, "{FIX}");
-    Err(Failure::Verdict(message))
+    Err(listed(
+        "the generated files differ from what the registry renders to:",
+        &found,
+        FIX,
+    ))
 }
 
 /// One line for each file that differs between `rendered` and `tree`, naming
@@ -360,13 +486,16 @@ mod tests {
     #[test]
     fn a_check_fails_when_any_output_differs_from_its_rendering_and_names_each_file() {
         let (stage, root) = (staged(), up_to_date());
-        assert_eq!(compare(stage.path(), root.path()).unwrap(), None);
+        assert_eq!(
+            compare(stage.path(), root.path(), Vec::new()).unwrap(),
+            None
+        );
 
         root.write(&format!("{RUN_MODULE}/mod.rs"), "pub mod old;\n");
         root.write(&format!("{ROOT_MODULE}/spans.rs"), "struct Gone;\n");
         root.write(&format!("{REFERENCE}/spans.md"), "spans\n");
         assert_eq!(
-            compare(stage.path(), root.path())
+            compare(stage.path(), root.path(), Vec::new())
                 .unwrap_err()
                 .into_verdict(),
             format!(
@@ -634,19 +763,111 @@ mod tests {
             ]
         );
         for output in &OUTPUTS[..2] {
-            let folder = params(output)[0]
-                .trim_start_matches("crate_dir=")
-                .to_owned();
+            let crate_dir = output.crate_dir.unwrap();
+            assert_eq!(params(output)[0], format!("crate_dir={crate_dir}"));
+            // A folder is its crate's path below `lablet/crates`, or below
+            // `lablet` for an app.
+            let crate_path = if crate_dir.starts_with("apps/") {
+                format!("lablet/{crate_dir}")
+            } else {
+                format!("lablet/crates/{crate_dir}")
+            };
+            assert_eq!(output.tree, format!("{crate_path}/src/telemetry/generated"));
             assert!(
-                repo_root().join(REGISTRY).join(&folder).is_dir(),
-                "{folder} isn't a registry folder"
-            );
-            assert!(
-                output.tree.ends_with("/src/telemetry/generated"),
-                "{}",
-                output.tree
+                repo_root().join(REGISTRY).join(crate_dir).is_dir(),
+                "{crate_dir} isn't a registry folder"
             );
         }
+        assert_eq!(OUTPUTS[2].crate_dir, None);
+    }
+
+    /// A registry and crates in which every folder of registry files has
+    /// its module, and every module its folder.
+    fn routed() -> TempDir {
+        let root = TempDir::new("routing");
+        root.write(&format!("{REGISTRY}/manifest.yaml"), "");
+        root.write(&format!("{REGISTRY}/shared/attributes.yaml"), "");
+        for output in &OUTPUTS {
+            if let Some(crate_dir) = output.crate_dir {
+                root.write(&format!("{REGISTRY}/{crate_dir}/spans.yaml"), "");
+                root.write(&format!("{}/mod.rs", output.tree), "");
+            }
+        }
+        root
+    }
+
+    #[test]
+    fn the_tree_s_registry_folders_and_modules_match() {
+        assert_eq!(routing(&repo_root()).unwrap(), Vec::<String>::new());
+        assert_eq!(routing(routed().path()).unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_folder_no_module_is_rendered_from_a_module_without_a_folder_and_a_leftover_module_are_each_named()
+     {
+        let root = routed();
+        root.write(&format!("{REGISTRY}/adapters/tools-mcp/spans.yaml"), "");
+        root.write(&format!("{REGISTRY}/shared/more/groups.yaml"), "");
+        let run = OUTPUTS[0].crate_dir.unwrap();
+        std::fs::remove_dir_all(root.path().join(REGISTRY).join(run)).unwrap();
+        root.write(
+            "lablet/crates/adapters/secondary/tools-mcp/src/telemetry/generated/mod.rs",
+            "",
+        );
+        root.write(
+            "lablet/apps/lablet/target/src/telemetry/generated/mod.rs",
+            "",
+        );
+
+        let lines = routing(root.path()).unwrap();
+        assert_eq!(
+            lines,
+            [
+                format!(
+                    "{REGISTRY}/adapters/tools-mcp holds registry files that no module is \
+                     rendered from: add one to OUTPUTS"
+                ),
+                format!(
+                    "{REGISTRY}/{run} holds no registry file, and a module is rendered from it: \
+                     remove it from OUTPUTS"
+                ),
+                "lablet/crates/adapters/secondary/tools-mcp/src/telemetry/generated is no \
+                 module's: remove it"
+                    .to_owned(),
+            ]
+        );
+        let (stage, tree) = (staged(), up_to_date());
+        let verdict = compare(stage.path(), tree.path(), lines.clone())
+            .unwrap_err()
+            .into_verdict();
+        for line in &lines {
+            assert!(verdict.contains(line), "{verdict}");
+        }
+    }
+
+    #[test]
+    fn a_write_into_a_tree_whose_folders_and_modules_part_is_refused_before_anything_is_rendered() {
+        let root = routed();
+        root.write(&format!("{REGISTRY}/adapters/tools-mcp/spans.yaml"), "");
+        let mut rendered = false;
+
+        let verdict = write_in(root.path(), || {
+            rendered = true;
+            Err(Error::Failed {
+                command: Invocation::new(root.path(), "weaver", &[]),
+                stderr: "rendered".to_owned(),
+            })
+        })
+        .unwrap_err()
+        .into_verdict();
+
+        assert!(!rendered);
+        assert!(
+            verdict.contains(&format!(
+                "{REGISTRY}/adapters/tools-mcp holds registry files"
+            )),
+            "{verdict}"
+        );
     }
 
     #[test]

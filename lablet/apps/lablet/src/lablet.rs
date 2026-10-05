@@ -170,6 +170,10 @@ pub struct Lablet {
     telemetry: Telemetry,
     cancellation: Arc<RunCancellation>,
     fixed: Fixed,
+    /// Whether a run began and its telemetry wasn't flushed: its future was
+    /// dropped before it ended, and the spans it had open were queued,
+    /// unfilled, as they were dropped.
+    unflushed: bool,
 }
 
 #[expect(
@@ -204,6 +208,7 @@ impl Lablet {
             telemetry,
             cancellation,
             fixed,
+            unflushed: false,
         }
     }
 
@@ -219,11 +224,22 @@ impl Lablet {
     /// The run has the id the request names, or a fresh ULID. It's a trace
     /// of its own, whatever span the caller has open: the root span is
     /// opened from the empty context, and the loop runs in it. Once the loop
-    /// has returned, the root span ends with the run's measured duration,
-    /// the telemetry is flushed, which makes the run's wide event the last
-    /// line of its file, and then the run's transcript is written, when the
-    /// config names a place for it. So the telemetry file is whole when
-    /// this returns.
+    /// has returned, the root span ends with the run's measured duration
+    /// and the run's wide event is filled; the run's transcript is written,
+    /// when the config names a place for it, and then the telemetry is
+    /// flushed, so the wide event is the last thing the run produces and
+    /// the last line of its file, and the transcript it names is whole, or
+    /// its failure logged, when it arrives. Both are whole when this
+    /// returns.
+    ///
+    /// A run is stopped through its [`CancelHandle`]. Dropping the future
+    /// abandons it with no outcome. Dropped before the loop returns, it
+    /// leaves no transcript or wide event either; dropped once the
+    /// transcript write or the flush has begun, it may still leave both,
+    /// since neither stops part-way. The spans it had open are exported
+    /// unfilled, to its own destination, when this `Lablet`'s next run
+    /// starts, which waits up to one flush bound for them before it reads
+    /// the clock.
     ///
     /// Never fails: every way a run can go wrong is a stop reason of its
     /// outcome. A transcript that can't be written and telemetry that can't
@@ -236,6 +252,19 @@ impl Lablet {
             labels,
             cancellation,
         } = request;
+        if self.unflushed {
+            // What a dropped run left is queued, and the sink still names
+            // that run's destination until the next run names its own. It
+            // goes before the clock is read, since the loop's offsets count
+            // from its own reading after this, and the run's times would
+            // otherwise be early by the wait.
+            if let Err(error) = self.telemetry.flush_leftovers().await {
+                tracing::warn!(
+                    failures = ?error.failures(),
+                    "an abandoned run's telemetry wasn't exported whole"
+                );
+            }
+        }
         // One reading of the clock, so a fresh id holds the time its run
         // started.
         let started = SystemTime::now();
@@ -254,6 +283,7 @@ impl Lablet {
         };
 
         self.telemetry.begin_run(&context.run_id);
+        self.unflushed = true;
         self.provider.begin_run();
         let task_prompt = task.task().to_owned();
         let prompts = task.with_system(self.fixed.system.as_str());
@@ -263,8 +293,8 @@ impl Lablet {
 
         // From the empty context, never the caller's current one, so a run
         // is a trace of its own whatever span its caller is in. The span
-        // goes into the context by value, as a local span: a child of a
-        // remote span context would be marked as having a remote parent.
+        // goes into the context by value so that, once the loop has
+        // returned, it can be read back from there to be filled and ended.
         let root = self
             .tracer
             .span_builder(root_span::name())
@@ -291,6 +321,10 @@ impl Lablet {
         // Everything but each destination's own count of what it lost, which
         // the destination fills once it has flushed.
         let filled = wide::wide_event(&context, summary);
+        if let Some((file, shown)) = transcript {
+            self.write_transcript(file, &shown, context, task_prompt, &finished)
+                .await;
+        }
         let flushed = self
             .telemetry
             .flush(Box::new(move |lost| {
@@ -308,11 +342,7 @@ impl Lablet {
                 "the run's telemetry wasn't exported whole"
             );
         }
-
-        if let Some((file, shown)) = transcript {
-            self.write_transcript(file, &shown, context, task_prompt, &finished)
-                .await;
-        }
+        self.unflushed = false;
         finished
     }
 
@@ -393,3 +423,6 @@ fn unix_ms(time: SystemTime) -> u64 {
 fn at(started_unix_ms: u64, offset_ms: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_millis(started_unix_ms.saturating_add(offset_ms))
 }
+
+#[cfg(test)]
+mod tests;

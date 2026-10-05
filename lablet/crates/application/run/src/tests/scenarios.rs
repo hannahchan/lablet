@@ -1159,7 +1159,7 @@ async fn a_run_cancelled_during_a_provider_attempt_drops_it_and_makes_no_other()
         "a dropped attempt reported nothing"
     );
     assert!(dropped.events.is_empty(), "no retry was decided");
-    assert_declared(dropped, &CHAT_REQUIRED, &CHAT_KEYS);
+    assert_declared(dropped, key::LABLET_CHAT_REQUIRED, key::LABLET_CHAT_KEYS);
     assert_eq!(
         run.exceptions().len(),
         1,
@@ -1306,7 +1306,11 @@ async fn a_run_cancelled_during_a_tool_call_stops_it_and_starts_no_later_group()
         (0, 250),
         "the call was stopped when the run was cancelled"
     );
-    assert_declared(stopped, &TOOL_REQUIRED, &TOOL_KEYS);
+    assert_declared(
+        stopped,
+        key::LABLET_EXECUTE_TOOL_REQUIRED,
+        key::LABLET_EXECUTE_TOOL_KEYS,
+    );
     let summary = &run.finished.summary;
     assert_eq!(
         summary.outcome.tool_calls, 1,
@@ -2350,6 +2354,12 @@ async fn the_span_of_a_call_is_in_the_executor_s_current_context() {
     assert_eq!(
         found, exported,
         "each call found the span it was exported as"
+    );
+    let mut found_again = tools.found_again();
+    found_again.sort_by(|one, other| one.0.cmp(&other.0));
+    assert_eq!(
+        found_again, exported,
+        "each call found its own span again once it had yielded"
     );
     assert_eq!(found.len(), 2);
     for (call, context) in &found {
@@ -5119,63 +5129,6 @@ async fn the_secrets_a_run_holds_reach_the_executor_and_are_cut_out_of_the_loop_
 // The spans and records, one by one: what each says, read from the exporters
 // the loop emitted through, and the keys each carries.
 
-/// The join keys every signal carries.
-const JOIN: [&str; 3] = [
-    key::GEN_AI_CONVERSATION_ID,
-    key::LABLET_CONFIG_DIGEST,
-    key::SESSION_ID,
-];
-
-/// The join keys a run carries when its request named them.
-const LABELS: [&str; 3] = [
-    key::LABLET_EXPERIMENT_ID,
-    key::LABLET_TASK_ID,
-    key::LABLET_TRIAL,
-];
-
-/// What the registry requires of a chat span, beside the join.
-const CHAT_REQUIRED: [&str; 8] = [
-    key::GEN_AI_OPERATION_NAME,
-    key::GEN_AI_PROVIDER_NAME,
-    key::GEN_AI_REQUEST_MAX_TOKENS,
-    key::GEN_AI_REQUEST_MODEL,
-    key::LABLET_ATTEMPT,
-    key::LABLET_CHAT_PURPOSE,
-    key::LABLET_REQUEST_BYTES,
-    key::LABLET_TURN,
-];
-
-/// Every key the registry declares on a chat span, the required ones aside.
-const CHAT_KEYS: [&str; 14] = [
-    key::ERROR_TYPE,
-    key::GEN_AI_REQUEST_REASONING_LEVEL,
-    key::GEN_AI_REQUEST_SEED,
-    key::GEN_AI_REQUEST_TEMPERATURE,
-    key::GEN_AI_RESPONSE_FINISH_REASONS,
-    key::GEN_AI_RESPONSE_ID,
-    key::GEN_AI_RESPONSE_MODEL,
-    key::GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
-    key::GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
-    key::GEN_AI_USAGE_INPUT_TOKENS,
-    key::GEN_AI_USAGE_OUTPUT_TOKENS,
-    key::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
-    key::SERVER_ADDRESS,
-    key::SERVER_PORT,
-];
-
-/// What the registry requires of a tool span, beside the join.
-const TOOL_REQUIRED: [&str; 9] = [
-    key::GEN_AI_OPERATION_NAME,
-    key::GEN_AI_TOOL_CALL_ID,
-    key::GEN_AI_TOOL_NAME,
-    key::LABLET_TOOL_INPUT_BYTES,
-    key::LABLET_TOOL_IS_ERROR,
-    key::LABLET_TOOL_OUTPUT_BYTES,
-    key::LABLET_TOOL_OUTPUT_TRUNCATED,
-    key::LABLET_TOOL_STATUS,
-    key::LABLET_TURN,
-];
-
 /// The attributes of a tool span that a call over MCP carries back.
 const OVER_MCP: [&str; 6] = [
     key::JSONRPC_REQUEST_ID,
@@ -5184,21 +5137,6 @@ const OVER_MCP: [&str; 6] = [
     key::MCP_SESSION_ID,
     key::NETWORK_TRANSPORT,
     key::RPC_RESPONSE_STATUS_CODE,
-];
-
-/// Every key the registry declares on a tool span, the required ones aside.
-const TOOL_KEYS: [&str; 11] = [
-    key::ERROR_TYPE,
-    key::GEN_AI_TOOL_DESCRIPTION,
-    key::GEN_AI_TOOL_TYPE,
-    key::LABLET_TOOL_OUTPUT_ORIGINAL_BYTES,
-    key::LABLET_TOOL_SOURCE,
-    OVER_MCP[0],
-    OVER_MCP[1],
-    OVER_MCP[2],
-    OVER_MCP[3],
-    OVER_MCP[4],
-    OVER_MCP[5],
 ];
 
 /// The keys that hold content, which no span carries.
@@ -5211,24 +5149,21 @@ const HOLD_CONTENT: [&str; 6] = [
     key::GEN_AI_TOOL_CALL_RESULT,
 ];
 
-/// `span` carries every key the registry requires of its kind, `required`
-/// beside the join, and no key the registry doesn't declare on it, which
-/// is `required`, `declared`, the join and the labels.
+/// `span` carries every key of `required`, which the registry requires of
+/// its kind, and no key that isn't one of `declared`, which it declares on
+/// it.
 fn assert_declared(span: &SpanData, required: &[&str], declared: &[&str]) {
     let keys: std::collections::BTreeSet<&str> = span
         .attributes
         .iter()
         .map(|attribute| attribute.key.as_str())
         .collect();
-    for key in JOIN.iter().chain(required) {
+    for key in required {
         assert!(keys.contains(key), "{key} is missing from {}", span.name);
     }
     for key in &keys {
         assert!(
-            JOIN.contains(key)
-                || LABELS.contains(key)
-                || required.contains(key)
-                || declared.contains(key),
+            declared.contains(key),
             "{key} isn't declared on {}",
             span.name
         );
@@ -5367,10 +5302,14 @@ async fn every_span_is_a_sampled_child_of_the_context_the_run_was_called_in() {
         ]
     );
     for chat in run.chats() {
-        assert_declared(&chat, &CHAT_REQUIRED, &CHAT_KEYS);
+        assert_declared(&chat, key::LABLET_CHAT_REQUIRED, key::LABLET_CHAT_KEYS);
     }
     for tool in run.tools() {
-        assert_declared(&tool, &TOOL_REQUIRED, &TOOL_KEYS);
+        assert_declared(
+            &tool,
+            key::LABLET_EXECUTE_TOOL_REQUIRED,
+            key::LABLET_EXECUTE_TOOL_KEYS,
+        );
     }
 }
 

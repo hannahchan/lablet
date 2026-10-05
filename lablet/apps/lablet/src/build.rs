@@ -580,6 +580,22 @@ fn unknown_tool(real: &Config, written: &Config, list: FilterList, name: &str) -
 }
 
 async fn build_in(config: Config, env: Env<'_>) -> Result<Lablet, BuildError> {
+    let prepared = prepare(&config, env).await?;
+    assemble(&config, env, prepared)
+}
+
+/// [`build`], with the telemetry file at `target` whatever the config says:
+/// the way to a directory of per-run files that isn't the working
+/// directory, which every test of the process shares.
+#[cfg(test)]
+pub(crate) async fn build_to(config: Config, target: FileTarget) -> Result<Lablet, BuildError> {
+    let mut prepared = prepare(&config, &environment).await?;
+    prepared.target = Some(target);
+    assemble(&config, &environment, prepared)
+}
+
+/// The `Lablet` a checked config comes to.
+fn assemble(config: &Config, env: Env<'_>, prepared: Prepared) -> Result<Lablet, BuildError> {
     let Prepared {
         real,
         settings,
@@ -589,7 +605,7 @@ async fn build_in(config: Config, env: Env<'_>) -> Result<Lablet, BuildError> {
         otlp,
         tools,
         secrets,
-    } = prepare(&config, env).await?;
+    } = prepared;
     let script = match provider {
         Ready::Fake(script) => script,
         Ready::Anthropic => return Err(Unsupported::Anthropic.into()),
@@ -614,7 +630,7 @@ async fn build_in(config: Config, env: Env<'_>) -> Result<Lablet, BuildError> {
     }
     let telemetry = telemetry
         .build()
-        .map_err(|error| otlp_refused(&config, env, endpoint_stated, error))?;
+        .map_err(|error| otlp_refused(config, env, endpoint_stated, error))?;
 
     let cancellation = Arc::new(RunCancellation::default());
     let service = RunService::new(

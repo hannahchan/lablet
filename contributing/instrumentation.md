@@ -33,7 +33,7 @@ The OpenTelemetry Rust project's guidance is to emit logs through `tracing` and 
 
 The domain has no clock and does no I/O, so it has nothing to instrument. The SDK is what a process installs, so only the composition root may hold it. `cargo xtask lint-layers` enforces the first two columns.
 
-**4. Time comes from the loop.** The loop measures every call on its injected `Clock`, and each span and record gets exactly those times: a span is opened with an explicit start time and ended with an explicit end time, and a record carries the time the thing it reports happened. Never let the SDK read the system clock for a span or record. This keeps lablet's own overhead out of the agent's measured latency, makes a span's duration equal the latency the transcript and the wide event report, lets tests drive time with a fake clock, and keeps a mid-run clock adjustment from skewing durations.
+**4. Time comes from the loop.** The loop measures every call on its injected `Clock`, and each span and record gets exactly those times: a span is opened with an explicit start time and ended with an explicit end time, and a record carries the time the thing it reports happened. Never let the SDK read the system clock for a span or record. This keeps lablet's own overhead out of the agent's measured latency, makes a span's duration equal the latency the transcript and the wide event report, lets tests drive time with a fake clock, and keeps a mid-run clock adjustment from skewing durations. [README.md](README.md#telemetry-is-contract-first) says what holds this and the next rule, and where each is a review convention.
 
 **5. No global state.** The tracer and lablet's logger are injected, never taken from OpenTelemetry's global providers, because one process may hold several `Lablet`s, each with its own destinations, and tests run in parallel. The root span starts from an empty context, so a run is a trace of its own even when a caller has a span open. Every trace is sampled, whatever `OTEL_TRACES_SAMPLER` says, because the wide event counts every span and a sampled-out span would make the record and the trace disagree.
 
@@ -63,12 +63,12 @@ An annotation goes on a signal or on one of its attribute references, never on a
 
 ## What the generator writes
 
-`cargo xtask weaver generate` writes a `src/telemetry/generated/` module into each crate that emits signals, from the templates in `lablet/telemetry/templates/registry/rust-crate/`. The generator writes every file there: don't edit them. Beside the structs, the module holds the enums its signals choose from (each with `ALL`, `as_str` and a conversion to an attribute value), a `key` module with a constant for each attribute name the module's signals use, which tests read, and `SCHEMA_URL`; `lablet-run`'s holds the `Join` struct, which the composition root's module uses from there. For each span and event it holds a struct:
+`cargo xtask weaver generate` writes a `src/telemetry/generated/` module into each crate that emits signals, from the templates in `lablet/telemetry/templates/registry/rust-crate/`. The generator writes every file there: don't edit them. Beside the structs, the module holds the enums its signals choose from (each with `ALL`, `as_str` and a conversion to an attribute value), a `key` module with a constant for each attribute name the module's signals use and, for each signal, the lists of its required keys, of all its keys and of its template keys (`LABLET_RUN_REQUIRED`, `LABLET_RUN_KEYS`, `LABLET_RUN_TEMPLATES`), which tests read, and `SCHEMA_URL`; `lablet-run`'s holds the `Join` struct, which the composition root's module uses from there. For each span and event it holds a struct:
 
 - A required attribute is a field of its own type, and any other is an `Option`, so a span can't be recorded without what the registry requires of it. An `int` is an `i64`, as the wire carries it, and a template attribute a map from suffix to value.
 - The six join keys are one `Join` field, built once per run from `RunContext`, so they can't differ between a run's signals.
 - A fixed value isn't a field at all but an associated constant, and a signal's own values are a closed enum named for the signal and the attribute.
-- An upstream enum a signal doesn't narrow is text, since generating every value the conventions list would leave code no test can reach.
+- An upstream enum a signal doesn't narrow is text, since generating every value the conventions list would leave code no test can reach. An enum whose members aren't all text has no Rust type, and the generator refuses it.
 - A span has its `KIND`, its `name()` as the registry builds it, and `record()`, which sets its attributes on a span; a record has its `NAME` and `SEVERITY` and `record()`, which makes the log record at a time in a span's context; a span event has its `NAME` and `add_to()`.
 
 The generated code is data, not logic. Each struct lists its attributes as pairs of key and value, with no branches, one to a line. The logic, leaving out an attribute with no value, cutting text to the length limit, turning a map into attributes, and building a span's attributes or a log record, is written by hand once in `lablet-run`'s `telemetry` module and shared by every struct; `spellings.rs` beside it converts the domain's enums to the generated ones, exhaustively, with tests over every variant. This is how the coverage and mutation floors cover generated code without excusing any: the ordinary tests that record a span reach its generated code, and the hand-written logic has tests of its own.
@@ -85,19 +85,22 @@ A call site fills a struct and hands it on; it never writes a key or calls an AP
 
 ## What holds it
 
-| Check                                 | When                     | What it catches                                                                       |
-| ------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------- |
-| `cargo xtask weaver check`            | pre-commit, pre-push, CI | a registry that breaks the conventions or lablet's policies, annotations included     |
-| `cargo xtask weaver generate --check` | pre-commit, pre-push, CI | generated code or reference pages that differ from what the registry renders to       |
-| The build                             | always                   | a call site that doesn't fill a field the registry added or now requires              |
-| `cargo xtask lint-layers`             | pre-commit, pre-push, CI | the API in the domain, the SDK outside the composition root                           |
-| The golden comparison                 | tests                    | a change in what a run emits, with ids, times and attribute order normalised          |
-| `cargo xtask weaver live-check`       | CI                       | an emitted attribute or record the registry doesn't declare, or one of the wrong type |
-| The coverage and mutation floors      | CI, daily                | generated or hand-written telemetry code that no test reaches or checks               |
+| Check                                 | When                     | What it catches                                                                                      |
+| ------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `cargo xtask weaver check`            | pre-commit, pre-push, CI | a registry that breaks the conventions or lablet's policies, annotations included                    |
+| `cargo xtask weaver generate --check` | pre-commit, pre-push, CI | generated code or reference pages that differ from what the registry renders to                      |
+| The build                             | always                   | a call site that doesn't fill a field the registry added or now requires                             |
+| `cargo xtask lint-layers`             | pre-commit, pre-push, CI | the API in the domain, the SDK outside the composition root                                          |
+| The golden comparison                 | tests                    | a change in what a run emits, with ids, times and attribute order normalised                         |
+| The policy tests in `xtask`           | tests                    | a rule of lablet's policies that no longer refuses the mistake it's there for                        |
+| `lablet-run`'s timing scenarios       | tests                    | a loop span or record timed off the run's clock                                                      |
+| The `hosts` tests                     | tests                    | a `Lablet` whose telemetry reaches a host's subscriber or tracer, or another `Lablet`'s destinations |
+| `cargo xtask weaver live-check`       | CI                       | an emitted attribute or record the registry doesn't declare, or one of the wrong type                |
+| The coverage and mutation floors      | CI, daily                | generated or hand-written telemetry code that no test reaches or checks                              |
 
 ## Further reading
 
-- `product/decisions.md`, the entries of 2026-10-03 to 2026-10-05, from "The application and the adapters instrument with the OpenTelemetry API" onward, record each choice above and what it replaced.
+- `product/decisions.md`, the entries of 2026-10-03 to 2026-10-06, from "The application and the adapters instrument with the OpenTelemetry API" onward, record each choice above and what it replaced.
 - `product/research/weaver/typed-codegen.md` holds the spike that tried the registry's layout and the generated code.
 - `product/spec.md`, §6, lists every span, record and attribute.
 - The OpenTelemetry Rust project's guidance: [`docs/traces.md`](https://github.com/open-telemetry/opentelemetry-rust/blob/main/docs/traces.md) and [`docs/logs.md`](https://github.com/open-telemetry/opentelemetry-rust/blob/main/docs/logs.md).

@@ -1,9 +1,11 @@
 //! The transcript a run leaves, when the config names a place for it.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lablet::{FinishedRun, RunId, RunLabels, StopReason};
+use lablet_conformance::receiver::{Mode, Receiver};
 use serde_json::{Value, json};
 
 use crate::harness::{Diagnostics, ENDS, Lab, MODEL, PROMPT, SYSTEM, Traced, json_of, request};
@@ -556,4 +558,56 @@ async fn a_config_that_names_no_place_writes_no_transcript() {
     for name in ["script.yaml", "telemetry.otlp.jsonl", "work"] {
         assert!(left.iter().any(|left| left == name), "{left:?}");
     }
+}
+
+/// Whether the file at `path` holds a whole transcript.
+fn whole_at(path: &str) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .is_some_and(|document| document["turns"].is_array())
+}
+
+#[tokio::test]
+async fn the_transcript_a_wide_event_names_is_whole_when_the_wide_event_arrives() {
+    let scratch = Lab::new("transcript-before-wide");
+    let transcript = scratch.at("transcript.json");
+    let found = Arc::new(Mutex::new(Vec::new()));
+    let finding = Arc::clone(&found);
+    let receiver = Receiver::watching(Mode::Answers, move |received| {
+        let exported = received.exported().unwrap();
+        for wide in exported.records_of(key::WIDE_EVENT) {
+            let named = wide.attributes[key::LABLET_RUN_TRANSCRIPT_PATH]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let whole = whole_at(&named);
+            finding.lock().unwrap().push((named, whole));
+        }
+    })
+    .await;
+    let config = scratch.config(
+        ENDS,
+        json!({
+            "run": { "transcript_path": transcript },
+            "telemetry": { "otlp": { "endpoint": receiver.grpc_endpoint() } },
+        }),
+    );
+    let mut lablet = lablet::build(config).await.unwrap();
+
+    lablet.run(request()).await;
+    lablet.shutdown().await;
+
+    assert_eq!(
+        *found.lock().unwrap(),
+        [(transcript.display().to_string(), true)],
+        "the wide event reached the collector once, after its transcript was written"
+    );
+    let exported = scratch.exported();
+    let last = exported.records.iter().max_by_key(|record| record.line);
+    assert_eq!(
+        last.map(|record| record.event_name.as_str()),
+        Some(key::WIDE_EVENT),
+        "and it's the last line of the file"
+    );
 }

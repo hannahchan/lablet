@@ -4,15 +4,15 @@ Lablet's telemetry is a contract. An [OpenTelemetry Weaver](https://github.com/o
 
 ## What a run emits
 
-| Signal                                                                                                          | Kind                | When                                        |
-| --------------------------------------------------------------------------------------------------------------- | ------------------- | ------------------------------------------- |
-| [`lablet.invoke_agent`](telemetry/lablet/spans.md#labletinvoke_agent)                                           | span, the root      | once for each run                           |
-| [`lablet.chat`](telemetry/lablet/spans.md#labletchat)                                                           | span, child of root | once for each attempt of a provider call    |
-| [`lablet.execute_tool`](telemetry/lablet/spans.md#labletexecute_tool)                                           | span, child of root | once for each tool call                     |
-| [`lablet.run`](telemetry/lablet/events.md#labletrun)                                                            | log record          | once, when the run ends: the wide event     |
-| [`lablet.retry`](telemetry/lablet/events.md#labletretry)                                                        | span event          | on the chat span of a failed provider call  |
-| [`gen_ai.client.operation.exception`](telemetry/gen-ai/events.md#gen_aiclientoperationexception)                | log record          | with each failed provider call              |
-| [`gen_ai.client.inference.operation.details`](telemetry/gen-ai/events.md#gen_aiclientinferenceoperationdetails) | log record          | only when `telemetry.capture_content` is on |
+| Signal                                                                                                          | Kind                | When                                                    |
+| --------------------------------------------------------------------------------------------------------------- | ------------------- | ------------------------------------------------------- |
+| [`lablet.invoke_agent`](telemetry/lablet/spans.md#labletinvoke_agent)                                           | span, the root      | once for each run                                       |
+| [`lablet.chat`](telemetry/lablet/spans.md#labletchat)                                                           | span, child of root | once for each attempt of a provider call                |
+| [`lablet.execute_tool`](telemetry/lablet/spans.md#labletexecute_tool)                                           | span, child of root | once for each tool call                                 |
+| [`lablet.run`](telemetry/lablet/events.md#labletrun)                                                            | log record          | once per destination, when the run ends: the wide event |
+| [`lablet.retry`](telemetry/lablet/events.md#labletretry)                                                        | span event          | on the chat span of a failed provider call              |
+| [`gen_ai.client.operation.exception`](telemetry/gen-ai/events.md#gen_aiclientoperationexception)                | log record          | with each failed provider call                          |
+| [`gen_ai.client.inference.operation.details`](telemetry/gen-ai/events.md#gen_aiclientinferenceoperationdetails) | log record          | only when `telemetry.capture_content` is on             |
 
 The resource carries [`service.name`, `service.version`](telemetry/service/entities.md), what the [OpenTelemetry SDK adds](telemetry/telemetry/entities.md), and the `telemetry.resource` attributes from the config. Those last ones have keys the composer chooses, so the registry can't declare them, and they appear on the resource only.
 
@@ -36,13 +36,13 @@ A rename in the conventions lablet depends on is a breaking change to this contr
 ## Adding or changing an attribute
 
 1. Look for a semantic-convention attribute first, in the vendored registries under `lablet/telemetry/deps/`.
-2. Edit the registry: a new `lablet.*` attribute goes in `attributes.yaml` with its justification, and every span or event that carries it refers to it with a requirement level.
+2. Edit the registry: a new `lablet.*` attribute goes in `shared/attributes.yaml` with its justification, and every span or event that carries it, in the folder of the crate that emits it (`application/run/` or `apps/lablet/`), refers to it with a requirement level.
 3. Run `cargo xtask weaver check`, then `cargo xtask weaver generate`, which writes the generated telemetry module of the crate that emits the signal, `lablet-run` for the chat and tool spans and their records and the composition root for the root span and the wide event, and the reference again. The struct of the signal gains a field.
-4. Fill the field where the crate builds the struct. The build fails until it's filled, which is the point: an attribute added to `lablet.run` is a field of the generated `LabletRun` the composition root must say the value of. Attribute names never appear as string literals; tests read them from the `key` module beside the struct.
+4. Fill the field where the crate builds the struct. The build fails until it's filled, which is the point: an attribute added to `lablet.run` is a field of the generated `LabletRun` the composition root must say the value of. Attribute names never appear as string literals; tests read them, and each signal's lists of required and declared keys, from the `key` module beside the struct.
 5. Add an entry under `Unreleased` in `CHANGELOG.md`.
 
 `cargo xtask pre-commit` runs the check and fails when the generated files are out of date.
 
 ## Running lablet as a library
 
-A host that runs lablet as a library owes it nothing: a `Lablet`'s telemetry goes to the destinations its own config names, and nothing plugs into it. The host's own `tracing` subscriber sees lablet's diagnostics, such as an export that failed, and none of its telemetry, which never passes through `tracing`. Two `Lablet`s in one process each write only their own runs.
+A host that runs lablet as a library owes it nothing: a `Lablet`'s telemetry goes to the destinations its own config names, and nothing plugs into it. The host's own `tracing` subscriber sees lablet's diagnostics, such as an export that failed, and none of its telemetry, which never passes through `tracing`. Two `Lablet`s in one process each write only their own runs. A run is stopped through its `CancelHandle`; dropping the future `Lablet::run` returns abandons it with no outcome. Dropped before the loop returns, it leaves no transcript or wide event either; dropped once the transcript write or the flush has begun, it may still leave both. The spans it had open are exported unfilled to its own destination when the next run starts.

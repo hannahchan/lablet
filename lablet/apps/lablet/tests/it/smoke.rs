@@ -8,10 +8,7 @@ use serde_json::json;
 
 use crate::harness::{Lab, MODEL, Traced, request};
 use crate::key;
-use crate::wide_checks::{
-    CHAT_KEYS, CHAT_REQUIRED, EXECUTE_TOOL_KEYS, EXECUTE_TOOL_REQUIRED, INVOKE_AGENT_KEYS,
-    INVOKE_AGENT_REQUIRED, RUN_KEYS, RUN_REQUIRED, RUN_TEMPLATES, assert_declared,
-};
+use crate::wide_checks::assert_declared;
 
 const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 
@@ -112,8 +109,8 @@ async fn a_run_completes_and_leaves_a_root_span_over_its_calls() {
     assert_declared(
         "the root span",
         &root.attributes,
-        INVOKE_AGENT_REQUIRED,
-        INVOKE_AGENT_KEYS,
+        key::LABLET_INVOKE_AGENT_REQUIRED,
+        key::LABLET_INVOKE_AGENT_KEYS,
         &[],
     );
     assert_eq!(
@@ -159,8 +156,8 @@ async fn every_attempt_of_a_provider_call_leaves_a_chat_span() {
         assert_declared(
             "a chat span",
             &chat.attributes,
-            CHAT_REQUIRED,
-            CHAT_KEYS,
+            key::LABLET_CHAT_REQUIRED,
+            key::LABLET_CHAT_KEYS,
             &[],
         );
         assert_eq!(chat.attributes[key::GEN_AI_PROVIDER_NAME], json!("fake"));
@@ -230,8 +227,8 @@ async fn every_tool_call_leaves_a_tool_span() {
         assert_declared(
             "a tool span",
             &tool.attributes,
-            EXECUTE_TOOL_REQUIRED,
-            EXECUTE_TOOL_KEYS,
+            key::LABLET_EXECUTE_TOOL_REQUIRED,
+            key::LABLET_EXECUTE_TOOL_KEYS,
             &[],
         );
         assert_eq!(tool.attributes[key::LABLET_TOOL_SOURCE], json!("builtin"));
@@ -265,9 +262,9 @@ async fn the_wide_event_is_the_last_line_of_the_run_and_holds_what_the_run_came_
     assert_declared(
         "the wide event",
         &wide.attributes,
-        RUN_REQUIRED,
-        RUN_KEYS,
-        RUN_TEMPLATES,
+        key::LABLET_RUN_REQUIRED,
+        key::LABLET_RUN_KEYS,
+        key::LABLET_RUN_TEMPLATES,
     );
     for (key, holds) in [
         (key::GEN_AI_CONVERSATION_ID, json!(RUN)),

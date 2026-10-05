@@ -112,9 +112,11 @@ pub use totals::{Latency, ProviderTotals, ToolCallTotals, ToolStats};
 pub use transcript::{Transcript, TranscriptParts, Turn, TurnParts, TurnRecord};
 pub use usage::{TokenCounts, Usage};
 
-/// Whole milliseconds, truncated. The one conversion from a `Duration` in the
-/// model, so every `*_ms` value is cut the same way.
-pub(crate) fn whole_ms(duration: std::time::Duration) -> u64 {
+/// Whole milliseconds, truncated. The one conversion from a `Duration` to
+/// milliseconds, in the model and in the loop, so every `*_ms` value is cut
+/// the same way and a span opens at the offset its record says.
+#[must_use]
+pub fn whole_ms(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 

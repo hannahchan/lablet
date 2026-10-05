@@ -466,6 +466,7 @@ pub struct FakeTools {
     hoarding: bool,
     kept: Mutex<Vec<u64>>,
     found: Mutex<Vec<(String, SpanContext)>>,
+    found_again: Mutex<Vec<(String, SpanContext)>>,
 }
 
 impl FakeTools {
@@ -483,6 +484,7 @@ impl FakeTools {
             hoarding: false,
             kept: Mutex::new(Vec::new()),
             found: Mutex::new(Vec::new()),
+            found_again: Mutex::new(Vec::new()),
         }
     }
 
@@ -491,6 +493,16 @@ impl FakeTools {
     /// executor: what an executor that propagates a span would send.
     pub fn found(&self) -> Vec<(String, SpanContext)> {
         self.found
+            .lock()
+            .expect("the fake executor isn't poisoned")
+            .clone()
+    }
+
+    /// As [`Self::found`], read again once the call has yielded part-way,
+    /// for an executor that yields: a call is polled more than once, and
+    /// each poll is to find its own span.
+    pub fn found_again(&self) -> Vec<(String, SpanContext)> {
+        self.found_again
             .lock()
             .expect("the fake executor isn't poisoned")
             .clone()
@@ -648,6 +660,10 @@ impl ToolExecutor for FakeTools {
         }
         if self.yielding {
             tokio::task::yield_now().await;
+            self.found_again
+                .lock()
+                .expect("the fake executor isn't poisoned")
+                .push((id.clone(), Context::current().span().span_context().clone()));
         }
         self.spans
             .lock()

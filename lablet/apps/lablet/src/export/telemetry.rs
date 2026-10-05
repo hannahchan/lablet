@@ -452,6 +452,12 @@ impl Telemetry {
     /// didn't answer in time is left to its thread, which still makes the
     /// wide event once the destination answers.
     ///
+    /// That thread can outlive the run: what the next run's queues turn
+    /// away while it waits is counted in its wide event rather than the
+    /// next run's, the next run's wide event can reach the destination
+    /// first, and with a directory of per-run files, what it still writes
+    /// goes to the next run's file.
+    ///
     /// # Errors
     ///
     /// Returns a [`FlushError`] that names each queue whose export failed,
@@ -460,6 +466,20 @@ impl Telemetry {
         let inner = Arc::clone(&self.inner);
         let wide = Arc::new(wide);
         blocking(move || inner.flush(Some(&wide))).await
+    }
+
+    /// Exports what the queues hold with no wide event, as [`Self::flush`]
+    /// does with one: what a run whose future was dropped left, its open
+    /// spans ended as they were dropped, to the destinations that run's
+    /// [`Self::begin_run`] named. It's bounded as [`Self::flush`] is, so the
+    /// run that calls it waits up to one flush bound for it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::flush`].
+    pub(crate) async fn flush_leftovers(&self) -> Result<(), FlushError> {
+        let inner = Arc::clone(&self.inner);
+        blocking(move || inner.flush(None)).await
     }
 
     /// Waits for the threads of the flushes that gave up, so that a wide

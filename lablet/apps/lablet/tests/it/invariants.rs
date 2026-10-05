@@ -5,12 +5,12 @@
 //! can't be written or can't be reached leaving the outcome what a good
 //! destination gives.
 
-use lablet::telemetry::generated::LabletRun;
 use lablet::{FinishedRun, OutcomeDocument, RunId, StopReason};
 use lablet_conformance::receiver::{Mode, Receiver};
 use serde_json::{Value, json};
 
-use crate::harness::{Lab, Traced, request};
+use crate::harness::{Diagnostics, Lab, Traced, request};
+use crate::key;
 use crate::wide_checks::{
     assert_hold_the_same_run, assert_the_wide_event_counts_the_tokens_the_run_returned,
     assert_the_wide_event_is_declared, assert_the_wide_event_sums_its_steps, the_wide_event,
@@ -105,7 +105,7 @@ async fn a_completed_run_and_a_failed_run_each_have_exactly_one_wide_event_in_th
         StopReason::ProviderError
     );
     let exported = lab.exported();
-    assert_eq!(exported.records_of(LabletRun::NAME).len(), 3);
+    assert_eq!(exported.records_of(key::WIDE_EVENT).len(), 3);
     for (run_id, finished) in [
         ("completed", &completed),
         ("completed-again", &again),
@@ -172,6 +172,7 @@ async fn an_endpoint_nothing_listens_on_leaves_the_outcome_what_a_good_destinati
     let unreachable = Lab::new("invariants-closed-endpoint");
 
     let expected = run(&good, REJECTS_THE_KEY, "good", json!({})).await;
+    let diagnostics = Diagnostics::capture();
     let refused = run(
         &unreachable,
         REJECTS_THE_KEY,
@@ -180,13 +181,21 @@ async fn an_endpoint_nothing_listens_on_leaves_the_outcome_what_a_good_destinati
     )
     .await;
 
+    let lines = diagnostics.lines();
+    assert!(
+        lines.iter().any(|line| {
+            line.contains("the run's telemetry wasn't exported whole") && line.contains("\"otlp")
+        }),
+        "the run's flush said the network destination failed: {lines:?}"
+    );
+
     assert_eq!(shared(&refused), shared(&expected));
     assert_eq!(
         refused.summary.outcome.stop_reason(),
         StopReason::ProviderError
     );
     assert_eq!(
-        unreachable.exported().records_of(LabletRun::NAME).len(),
+        unreachable.exported().records_of(key::WIDE_EVENT).len(),
         1,
         "the file is whole whatever the port did"
     );

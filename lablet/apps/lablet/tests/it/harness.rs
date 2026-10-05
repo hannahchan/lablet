@@ -189,7 +189,7 @@ impl<'a> Traced<'a> {
             .records
             .iter()
             .copied()
-            .filter(|record| record.event_name == lablet::telemetry::generated::LabletRun::NAME)
+            .filter(|record| record.event_name == crate::key::WIDE_EVENT)
             .collect();
         assert_eq!(wide.len(), 1, "a run has one wide event");
         wide[0]

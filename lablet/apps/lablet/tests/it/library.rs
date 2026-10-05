@@ -3,7 +3,6 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use lablet::telemetry::generated::{LabletInvokeAgent, LabletRun};
 use lablet::{BlankTask, OutcomeDocument, RunId, RunRequest, StopReason};
 use lablet_run::telemetry::generated::GenAiClientInferenceOperationDetails;
 use serde_json::{Value, json};
@@ -73,13 +72,8 @@ async fn two_runs_on_one_lablet_are_two_runs_with_one_outcome() {
     // One root span each, under the run's own id, and the same spans under
     // it: the second run made the first run's provider calls again.
     let exported = scratch.exported();
-    assert_eq!(
-        exported
-            .spans_of(LabletInvokeAgent::GEN_AI_OPERATION_NAME)
-            .len(),
-        2
-    );
-    assert_eq!(exported.records_of(LabletRun::NAME).len(), 2);
+    assert_eq!(exported.spans_of(key::INVOKE_AGENT).len(), 2);
+    assert_eq!(exported.records_of(key::WIDE_EVENT).len(), 2);
     for run_id in [&fresh, &named] {
         let traced = Traced::of(&exported, run_id.as_str());
         assert_eq!(traced.spans.len(), 4, "a root, two attempts and a call");

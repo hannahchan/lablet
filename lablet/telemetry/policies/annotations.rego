@@ -271,6 +271,24 @@ deny contains finding if {
 	}
 }
 
+# A join key's value is the run's, which the generator fills from the run
+# on every signal, so it's neither fixed on one nor chosen from a list.
+deny contains finding if {
+	some [_, signal] in spans_and_events
+	some attr in signal.attributes
+	annotations := lablet(attr)
+	"join" in object.keys(annotations)
+	some name in ["value", "values"]
+	name in object.keys(annotations)
+
+	finding := {
+		"id": "lablet_join_with_value",
+		"context": {"signal": named(signal), "attribute": attr.key, "annotation": name},
+		"message": sprintf("'%s' on '%s' is marked `join` and has `%s`; a join key is filled from the run, so it's neither fixed nor chosen from a list.", [attr.key, named(signal), name]),
+		"level": "violation",
+	}
+}
+
 # `join` is a mark, not a setting.
 deny contains finding if {
 	some [_, signal] in spans_and_events
@@ -314,6 +332,22 @@ deny contains finding if {
 		"id": "lablet_join_missing",
 		"context": {"signal": named(signal)},
 		"message": sprintf("'%s' carries no join key; every span and every record refers to the group `attributes.lablet.join`, whose references are each marked `join: true`.", [named(signal)]),
+		"level": "violation",
+	}
+}
+
+# A span event sits on a span that carries the run's keys already, and the
+# generator would write them onto that span a second time.
+deny contains finding if {
+	some [kind, signal] in spans_and_events
+	kind == "events"
+	not carries_the_run(kind, signal)
+	carries_a_join_key(signal)
+
+	finding := {
+		"id": "lablet_join_on_span_event",
+		"context": {"signal": named(signal)},
+		"message": sprintf("'%s' is a span event and carries join keys; a span event sits on a span that carries the run's keys already, so it refers to no key of the group `attributes.lablet.join`.", [named(signal)]),
 		"level": "violation",
 	}
 }
@@ -401,6 +435,22 @@ deny contains finding if {
 		"id": "lablet_severity_unknown",
 		"context": {"signal": named(signal), "severity": severity},
 		"message": sprintf("'%s' has `severity: %v`; a record's severity is trace, debug, info, warn, error, or fatal, and info when it says nothing.", [named(signal), severity]),
+		"level": "violation",
+	}
+}
+
+# Each crate's module is rendered from that crate's folder, and `shared/`
+# holds only what the crates' signals refer to, so a signal declared there
+# would be in no module: its spans or records could be documented and never
+# emitted.
+deny contains finding if {
+	some [_, signal] in spans_and_events
+	contains(signal.provenance.path, "/registry/shared/")
+
+	finding := {
+		"id": "lablet_signal_in_shared",
+		"context": {"signal": named(signal), "path": signal.provenance.path},
+		"message": sprintf("'%s' is declared in %s; `shared/` generates nothing, so a signal is declared in the folder of the crate that emits it.", [named(signal), signal.provenance.path]),
 		"level": "violation",
 	}
 }

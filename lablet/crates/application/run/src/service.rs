@@ -11,7 +11,7 @@ use lablet_model::{
     Answer, CacheScope, Cost, Effort, Endpoint, Final, FinishedRun, KeptOutput, Message, ModelRef,
     OutputCap, Pending, Progress, Prompts, ProviderErrorKind, ProviderResponse, Rates,
     RequestParams, Responded, Run, RunContext, RunId, RunSetup, Schedule, Secrets, StopReason,
-    ToolCallEnd, ToolCallStatus, ToolInput, ToolSource, ToolUse, Turn, Usage,
+    ToolCallEnd, ToolCallStatus, ToolInput, ToolSource, ToolUse, Turn, Usage, whole_ms,
 };
 use lablet_policy::{Pricing, RetryPolicy, StopPolicy};
 use opentelemetry::Context;
@@ -99,8 +99,8 @@ struct Running {
     capture: bool,
     /// The context `run` was called in: the parent of every span, and the
     /// context the record of the tools offered is written in. It's taken
-    /// once, because the calls of a group run on tasks of their own, whose
-    /// current context isn't the caller's.
+    /// once and named wherever a span opens, so that no span's parent
+    /// depends on what's current when its future is polled.
     parent: Context,
     /// The keys a consumer groups by, on every span and record of the run.
     join: Join,
@@ -250,13 +250,6 @@ impl OverMcp {
             },
         }
     }
-}
-
-/// `duration` in whole milliseconds, cut as the model cuts every offset and
-/// latency it records, so a span opens at the instant its record will say
-/// the call began.
-fn whole_ms(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// A call whose turn has come: the one reading of the clock it's timed

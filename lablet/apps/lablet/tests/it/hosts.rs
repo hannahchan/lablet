@@ -6,7 +6,6 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
-use lablet::telemetry::generated::{LabletInvokeAgent, LabletRun};
 use opentelemetry::Context as OtelContext;
 use opentelemetry::trace::{
     FutureExt as _, Span as _, TraceContextExt as _, Tracer as _, TracerProvider as _,
@@ -71,11 +70,24 @@ async fn two_lablets_in_one_process_each_write_their_own_runs_and_a_host_subscri
     let first = Lab::new("hosts-first");
     let second = Lab::new("hosts-second");
     let mut lablets = Vec::new();
-    for (lab, system) in [
-        (&first, "You answer tersely."),
-        (&second, "You answer at length."),
+    // The first `Lablet`'s transcripts can't be written, with a file where
+    // their directory would be, so its runs warn on the diagnostic log,
+    // which the host's subscriber is to hear.
+    let in_the_way = first.write("in-the-way", "");
+    for (lab, more) in [
+        (
+            &first,
+            json!({
+                "prompt": { "system": "You answer tersely." },
+                "run": { "transcript_path": in_the_way.join("run.json") },
+            }),
+        ),
+        (
+            &second,
+            json!({ "prompt": { "system": "You answer at length." } }),
+        ),
     ] {
-        let config = lab.config(ENDS, json!({ "prompt": { "system": system } }));
+        let config = lab.config(ENDS, more);
         lablets.push(lablet::build(config).await.unwrap());
     }
     let mut runs: Vec<Vec<String>> = Vec::new();
@@ -95,13 +107,8 @@ async fn two_lablets_in_one_process_each_write_their_own_runs_and_a_host_subscri
     // the other `Lablet`'s.
     for (lab, own) in [(&first, &runs[0]), (&second, &runs[1])] {
         let exported = lab.exported();
-        assert_eq!(
-            exported
-                .spans_of(LabletInvokeAgent::GEN_AI_OPERATION_NAME)
-                .len(),
-            2
-        );
-        assert_eq!(exported.records_of(LabletRun::NAME).len(), 2);
+        assert_eq!(exported.spans_of(key::INVOKE_AGENT).len(), 2);
+        assert_eq!(exported.records_of(key::WIDE_EVENT).len(), 2);
         let of_runs: BTreeSet<&str> = exported
             .spans
             .iter()
@@ -126,6 +133,17 @@ async fn two_lablets_in_one_process_each_write_their_own_runs_and_a_host_subscri
     // telemetry: no event whose target or field names a registry attribute
     // or signal.
     let heard = told.lock().unwrap().clone();
+    let warned: Vec<_> = heard
+        .iter()
+        .filter(|(target, fields)| {
+            target.starts_with("lablet") && fields.contains("run_id") && fields.contains("message")
+        })
+        .collect();
+    assert_eq!(
+        warned.len(),
+        2,
+        "the host's subscriber heard each unwritten transcript: {heard:?}"
+    );
     let telemetry: Vec<_> = heard
         .iter()
         .filter(|(target, fields)| {

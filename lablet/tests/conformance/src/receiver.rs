@@ -107,11 +107,25 @@ struct Kept {
     requests: Vec<Received>,
 }
 
+/// What a test is told of each request as it arrives, before it's
+/// answered.
+type Watch = Arc<dyn Fn(&Received) + Send + Sync>;
+
 /// What the listeners share.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Shared {
     mode: Mode,
     kept: Arc<Mutex<Kept>>,
+    watch: Option<Watch>,
+}
+
+impl std::fmt::Debug for Shared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Shared")
+            .field("mode", &self.mode)
+            .field("kept", &self.kept)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Shared {
@@ -127,16 +141,20 @@ impl Shared {
     ) {
         let mut line = must(serde_json::to_string(request), "writing a request as JSON");
         line.push('\n');
+        let received = Received {
+            transport,
+            signal,
+            headers,
+            line,
+        };
+        if let Some(watch) = &self.watch {
+            watch(&received);
+        }
         self.kept
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .requests
-            .push(Received {
-                transport,
-                signal,
-                headers,
-                line,
-            });
+            .push(received);
         if self.mode == Mode::NeverAnswers {
             std::future::pending::<()>().await;
         }
@@ -335,9 +353,25 @@ impl Receiver {
     /// Panics when a port can't be bound or the certificates can't be made,
     /// which is a fault of where the test runs.
     pub async fn start(mode: Mode) -> Self {
+        Self::serving(mode, None).await
+    }
+
+    /// As [`Self::start`], and `watch` is called with each request as it
+    /// arrives, before it's kept and answered: what holds at the moment a
+    /// signal reaches a collector.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::start`].
+    pub async fn watching(mode: Mode, watch: impl Fn(&Received) + Send + Sync + 'static) -> Self {
+        Self::serving(mode, Some(Arc::new(watch))).await
+    }
+
+    async fn serving(mode: Mode, watch: Option<Watch>) -> Self {
         let shared = Shared {
             mode,
             kept: Arc::default(),
+            watch,
         };
         let kept = Arc::clone(&shared.kept);
         let services = |transport| Services {

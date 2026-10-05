@@ -754,6 +754,9 @@ impl Failure {
 }
 
 #[cfg(test)]
+mod policies;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

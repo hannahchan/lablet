@@ -41,7 +41,9 @@ templates:
         def is_template: (.type | type) == "string" and (.type | startswith("template["));
         def named: .type // .name;
         def rust_type($signal): lablet as $a
-          | if $a.values then ($signal | pascal) + (.key | pascal)
+          | if is_enum and any(.type.members[]; (.value | type) != "string")
+              then error("no Rust type for the enum attribute " + .key + ", whose members aren't all text")
+            elif $a.values then ($signal | pascal) + (.key | pascal)
             elif is_enum and (.key | startswith("lablet.")) then (.key | pascal)
             elif is_enum then "String"
             else ({"int": "i64", "double": "f64", "boolean": "bool", "string": "String",
@@ -116,6 +118,13 @@ templates:
         join_fields: [$join_attributes[] | field("join")],
         keys: ([($signals[] | .attributes[] | select(is_join | not)), (if $join then $join_attributes[] else empty end)]
           | unique_by(.key) | map({const: (.key | const_name), key: .key, template: is_template, brief: $briefs[.key]})),
+        lists: [$signals[] | named as $name | {
+          name: $name,
+          const: ($name | const_name),
+          required: ([.attributes[] | select(is_template | not) | select(.requirement_level == "required") | .key] | sort),
+          keys: ([.attributes[] | select(is_template | not) | .key] | sort),
+          templates: ([.attributes[] | select(is_template) | .key] | sort)
+        }],
         spans: [$spans[] | signal + {
           kind: (.kind | capitalised),
           name_format: (.name.note | gsub("`"; "") | gsub("\\{[^}]+\\}"; "{}")),

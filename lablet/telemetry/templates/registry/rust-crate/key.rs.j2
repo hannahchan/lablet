@@ -2,7 +2,8 @@
 {{ m.header(ctx.crate_dir) }}
 
 //! The keys of every attribute this crate's signals carry, for the structs
-//! that write them and the tests that read them.
+//! that write them and the tests that read them, and for each signal the
+//! keys the registry requires of it and the keys it declares for it.
 
 {% for k in ctx.keys %}
 {% if k.template %}
@@ -12,4 +13,36 @@
 {% endif %}
 pub const {{ k.const }}: &str = "{{ k.key }}";
 
+{% endfor %}
+{% for s in ctx.lists %}
+/// The keys the registry requires of `{{ s.name }}`.
+pub const {{ s.const }}_REQUIRED: &[&str] = &[
+{% for k in s.required %}
+    "{{ k }}",
+{% endfor %}
+];
+
+{% if s.templates %}
+/// Every key the registry declares for `{{ s.name }}`, beside its templates.
+{% else %}
+/// Every key the registry declares for `{{ s.name }}`.
+{% endif %}
+pub const {{ s.const }}_KEYS: &[&str] = &[
+{% for k in s.keys %}
+    "{{ k }}",
+{% endfor %}
+];
+{% if s.templates %}
+
+/// The templates the registry declares for `{{ s.name }}`: each emitted key
+/// is one of these prefixes, a dot, and `<key>`.
+pub const {{ s.const }}_TEMPLATES: &[&str] = &[
+{% for k in s.templates %}
+    "{{ k }}",
+{% endfor %}
+];
+{% endif %}
+{% if not loop.last %}
+
+{% endif %}
 {% endfor %}

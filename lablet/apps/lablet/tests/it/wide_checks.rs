@@ -1,16 +1,9 @@
 //! What a run's exports are held to, whatever made them: the wide event
 //! against the spans beside it, against what the run returned, and against
 //! the registry; and two destinations against each other.
-//!
-//! The registry's key lists aren't in the generated modules, which hold a
-//! key as a struct field, so the required set and the declared set of each
-//! signal are held here as lists of the generated constants: a key the
-//! registry adds fails the build at the struct's call site and, once it's
-//! filled, these lists until they name it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use lablet::telemetry::generated::{LabletInvokeAgent, LabletRun};
 use lablet_conformance::otlp::{Attributes, Exported, LogRecord, Span};
 use lablet_model::RunSummary;
 use lablet_run::telemetry::generated::{LabletChat, LabletExecuteTool};
@@ -23,269 +16,6 @@ use crate::key;
 /// the loop measured, so the two agree exactly today; the slack is for a
 /// span timed on a clock of its own.
 const LATENCY_SLACK_MS: u64 = 5;
-
-/// The keys the registry requires of the root span.
-pub const INVOKE_AGENT_REQUIRED: &[&str] = &[
-    key::GEN_AI_AGENT_NAME,
-    key::GEN_AI_AGENT_VERSION,
-    key::GEN_AI_CONVERSATION_ID,
-    key::GEN_AI_OPERATION_NAME,
-    key::GEN_AI_REQUEST_MODEL,
-    key::GEN_AI_USAGE_INPUT_TOKENS,
-    key::GEN_AI_USAGE_OUTPUT_TOKENS,
-    key::LABLET_CONFIG_DIGEST,
-    key::LABLET_RUN_STOP_REASON,
-    key::LABLET_RUN_TURNS,
-    key::LABLET_TOOL_CALLS_TOTAL,
-    key::SESSION_ID,
-];
-
-/// Every key the registry declares for the root span.
-pub const INVOKE_AGENT_KEYS: &[&str] = &[
-    key::ERROR_TYPE,
-    key::GEN_AI_AGENT_NAME,
-    key::GEN_AI_AGENT_VERSION,
-    key::GEN_AI_CONVERSATION_ID,
-    key::GEN_AI_OPERATION_NAME,
-    key::GEN_AI_REQUEST_MODEL,
-    key::GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
-    key::GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
-    key::GEN_AI_USAGE_INPUT_TOKENS,
-    key::GEN_AI_USAGE_OUTPUT_TOKENS,
-    key::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
-    key::LABLET_CONFIG_DIGEST,
-    key::LABLET_EXPERIMENT_ID,
-    key::LABLET_RUN_COST_USD,
-    key::LABLET_RUN_STOP_REASON,
-    key::LABLET_RUN_TURNS,
-    key::LABLET_TASK_ID,
-    key::LABLET_TOOL_CALLS_TOTAL,
-    key::LABLET_TRIAL,
-    key::SESSION_ID,
-];
-
-/// The keys the registry requires of a chat span.
-pub const CHAT_REQUIRED: &[&str] = &[
-    key::GEN_AI_CONVERSATION_ID,
-    key::GEN_AI_OPERATION_NAME,
-    key::GEN_AI_PROVIDER_NAME,
-    key::GEN_AI_REQUEST_MAX_TOKENS,
-    key::GEN_AI_REQUEST_MODEL,
-    key::LABLET_ATTEMPT,
-    key::LABLET_CHAT_PURPOSE,
-    key::LABLET_CONFIG_DIGEST,
-    key::LABLET_REQUEST_BYTES,
-    key::LABLET_TURN,
-    key::SESSION_ID,
-];
-
-/// Every key the registry declares for a chat span.
-pub const CHAT_KEYS: &[&str] = &[
-    key::ERROR_TYPE,
-    key::GEN_AI_CONVERSATION_ID,
-    key::GEN_AI_OPERATION_NAME,
-    key::GEN_AI_PROVIDER_NAME,
-    key::GEN_AI_REQUEST_MAX_TOKENS,
-    key::GEN_AI_REQUEST_MODEL,
-    key::GEN_AI_REQUEST_REASONING_LEVEL,
-    key::GEN_AI_REQUEST_SEED,
-    key::GEN_AI_REQUEST_TEMPERATURE,
-    key::GEN_AI_RESPONSE_FINISH_REASONS,
-    key::GEN_AI_RESPONSE_ID,
-    key::GEN_AI_RESPONSE_MODEL,
-    key::GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
-    key::GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
-    key::GEN_AI_USAGE_INPUT_TOKENS,
-    key::GEN_AI_USAGE_OUTPUT_TOKENS,
-    key::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
-    key::LABLET_ATTEMPT,
-    key::LABLET_CHAT_PURPOSE,
-    key::LABLET_CONFIG_DIGEST,
-    key::LABLET_EXPERIMENT_ID,
-    key::LABLET_REQUEST_BYTES,
-    key::LABLET_TASK_ID,
-    key::LABLET_TRIAL,
-    key::LABLET_TURN,
-    key::SERVER_ADDRESS,
-    key::SERVER_PORT,
-    key::SESSION_ID,
-];
-
-/// The keys the registry requires of a tool span.
-pub const EXECUTE_TOOL_REQUIRED: &[&str] = &[
-    key::GEN_AI_CONVERSATION_ID,
-    key::GEN_AI_OPERATION_NAME,
-    key::GEN_AI_TOOL_CALL_ID,
-    key::GEN_AI_TOOL_NAME,
-    key::LABLET_CONFIG_DIGEST,
-    key::LABLET_TOOL_INPUT_BYTES,
-    key::LABLET_TOOL_IS_ERROR,
-    key::LABLET_TOOL_OUTPUT_BYTES,
-    key::LABLET_TOOL_OUTPUT_TRUNCATED,
-    key::LABLET_TOOL_STATUS,
-    key::LABLET_TURN,
-    key::SESSION_ID,
-];
-
-/// Every key the registry declares for a tool span.
-pub const EXECUTE_TOOL_KEYS: &[&str] = &[
-    key::ERROR_TYPE,
-    key::GEN_AI_CONVERSATION_ID,
-    key::GEN_AI_OPERATION_NAME,
-    key::GEN_AI_TOOL_CALL_ID,
-    key::GEN_AI_TOOL_DESCRIPTION,
-    key::GEN_AI_TOOL_NAME,
-    key::GEN_AI_TOOL_TYPE,
-    key::JSONRPC_REQUEST_ID,
-    key::LABLET_CONFIG_DIGEST,
-    key::LABLET_EXPERIMENT_ID,
-    key::LABLET_TASK_ID,
-    key::LABLET_TOOL_INPUT_BYTES,
-    key::LABLET_TOOL_IS_ERROR,
-    key::LABLET_TOOL_OUTPUT_BYTES,
-    key::LABLET_TOOL_OUTPUT_ORIGINAL_BYTES,
-    key::LABLET_TOOL_OUTPUT_TRUNCATED,
-    key::LABLET_TOOL_SOURCE,
-    key::LABLET_TOOL_STATUS,
-    key::LABLET_TRIAL,
-    key::LABLET_TURN,
-    key::MCP_METHOD_NAME,
-    key::MCP_PROTOCOL_VERSION,
-    key::MCP_SESSION_ID,
-    key::NETWORK_TRANSPORT,
-    key::RPC_RESPONSE_STATUS_CODE,
-    key::SESSION_ID,
-];
-
-/// The keys the registry requires of the wide event: the ones the generated
-/// struct has as fields of their own type, beside the join keys and the
-/// fixed agent name.
-pub const RUN_REQUIRED: &[&str] = &[
-    key::GEN_AI_AGENT_NAME,
-    key::GEN_AI_AGENT_VERSION,
-    key::GEN_AI_CONVERSATION_ID,
-    key::GEN_AI_PROVIDER_NAME,
-    key::GEN_AI_REQUEST_MAX_TOKENS,
-    key::GEN_AI_REQUEST_MODEL,
-    key::GEN_AI_RESPONSE_FINISH_REASONS,
-    key::GEN_AI_USAGE_INPUT_TOKENS,
-    key::GEN_AI_USAGE_OUTPUT_TOKENS,
-    key::LABLET_CONFIG_DIGEST,
-    key::LABLET_PROMPT_SYSTEM_BYTES,
-    key::LABLET_PROMPT_SYSTEM_DIGEST,
-    key::LABLET_PROMPT_TOOLS_BYTES,
-    key::LABLET_PROMPT_USER_BYTES,
-    key::LABLET_PROVIDER_LATENCY_MS_MAX,
-    key::LABLET_PROVIDER_LATENCY_MS_TOTAL,
-    key::LABLET_PROVIDER_RETRIES,
-    key::LABLET_REQUEST_API,
-    key::LABLET_REQUEST_CACHE_SCOPE,
-    key::LABLET_REQUEST_REASONING_REPLAYED,
-    key::LABLET_REQUEST_THINKING,
-    key::LABLET_RESULT_HAS_STRUCTURED,
-    key::LABLET_RESULT_TEXT_BYTES,
-    key::LABLET_RUN_COMPLETION_MODE,
-    key::LABLET_RUN_DURATION_MS,
-    key::LABLET_RUN_STOP_REASON,
-    key::LABLET_RUN_TIMEOUT_MS,
-    key::LABLET_RUN_TURNS,
-    key::LABLET_SKILLS_COUNT,
-    key::LABLET_TELEMETRY_DROPPED_RECORDS,
-    key::LABLET_TOOL_CALLS_ERRORS,
-    key::LABLET_TOOL_CALLS_INPUT_BYTES_TOTAL,
-    key::LABLET_TOOL_CALLS_LATENCY_MS_TOTAL,
-    key::LABLET_TOOL_CALLS_OUTPUT_BYTES_TOTAL,
-    key::LABLET_TOOL_CALLS_TOTAL,
-    key::LABLET_TOOL_CALLS_TRUNCATED,
-    key::LABLET_TOOL_CALLS_UNKNOWN,
-    key::LABLET_TOOLS_COUNT,
-    key::LABLET_TOOLS_DIGEST,
-    key::LABLET_TOOLS_NAMES,
-    key::SESSION_ID,
-];
-
-/// Every plain key the registry declares for the wide event; its three
-/// templates are [`RUN_TEMPLATES`].
-pub const RUN_KEYS: &[&str] = &[
-    key::ERROR_TYPE,
-    key::GEN_AI_AGENT_NAME,
-    key::GEN_AI_AGENT_VERSION,
-    key::GEN_AI_CONVERSATION_ID,
-    key::GEN_AI_PROVIDER_NAME,
-    key::GEN_AI_REQUEST_MAX_TOKENS,
-    key::GEN_AI_REQUEST_MODEL,
-    key::GEN_AI_REQUEST_REASONING_LEVEL,
-    key::GEN_AI_REQUEST_SEED,
-    key::GEN_AI_REQUEST_TEMPERATURE,
-    key::GEN_AI_RESPONSE_FINISH_REASONS,
-    key::GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
-    key::GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
-    key::GEN_AI_USAGE_INPUT_TOKENS,
-    key::GEN_AI_USAGE_OUTPUT_TOKENS,
-    key::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
-    key::LABLET_CONFIG_DIGEST,
-    key::LABLET_EXPERIMENT_ID,
-    key::LABLET_MCP_LIFETIME,
-    key::LABLET_MCP_SERVER_VERSIONS,
-    key::LABLET_MCP_SERVERS,
-    key::LABLET_PRICING_CACHE_READ_USD_PER_MTOK,
-    key::LABLET_PRICING_CACHE_WRITE_USD_PER_MTOK,
-    key::LABLET_PRICING_INPUT_USD_PER_MTOK,
-    key::LABLET_PRICING_OUTPUT_USD_PER_MTOK,
-    key::LABLET_PROMPT_SYSTEM_BYTES,
-    key::LABLET_PROMPT_SYSTEM_DIGEST,
-    key::LABLET_PROMPT_TOOLS_BYTES,
-    key::LABLET_PROMPT_USER_BYTES,
-    key::LABLET_PROVIDER_FAILED_CACHE_READ_INPUT_TOKENS,
-    key::LABLET_PROVIDER_FAILED_CACHE_WRITE_INPUT_TOKENS,
-    key::LABLET_PROVIDER_FAILED_INPUT_TOKENS,
-    key::LABLET_PROVIDER_FAILED_OUTPUT_TOKENS,
-    key::LABLET_PROVIDER_LATENCY_MS_MAX,
-    key::LABLET_PROVIDER_LATENCY_MS_TOTAL,
-    key::LABLET_PROVIDER_RETRIES,
-    key::LABLET_REQUEST_API,
-    key::LABLET_REQUEST_CACHE_SCOPE,
-    key::LABLET_REQUEST_REASONING_REPLAYED,
-    key::LABLET_REQUEST_THINKING,
-    key::LABLET_RESULT_HAS_STRUCTURED,
-    key::LABLET_RESULT_STRUCTURED,
-    key::LABLET_RESULT_TEXT,
-    key::LABLET_RESULT_TEXT_BYTES,
-    key::LABLET_RUN_COMPLETION_MODE,
-    key::LABLET_RUN_COST_USD,
-    key::LABLET_RUN_DURATION_MS,
-    key::LABLET_RUN_ERROR,
-    key::LABLET_RUN_MAX_TURNS,
-    key::LABLET_RUN_STOP_REASON,
-    key::LABLET_RUN_TIMEOUT_MS,
-    key::LABLET_RUN_TRANSCRIPT_PATH,
-    key::LABLET_RUN_TURNS,
-    key::LABLET_SKILLS_COUNT,
-    key::LABLET_TASK_ID,
-    key::LABLET_TELEMETRY_DROPPED_RECORDS,
-    key::LABLET_TOOL_CALLS_ERRORS,
-    key::LABLET_TOOL_CALLS_INPUT_BYTES_TOTAL,
-    key::LABLET_TOOL_CALLS_LATENCY_MS_TOTAL,
-    key::LABLET_TOOL_CALLS_OUTPUT_BYTES_TOTAL,
-    key::LABLET_TOOL_CALLS_TOTAL,
-    key::LABLET_TOOL_CALLS_TRUNCATED,
-    key::LABLET_TOOL_CALLS_UNKNOWN,
-    key::LABLET_TOOLS_COUNT,
-    key::LABLET_TOOLS_DIGEST,
-    key::LABLET_TOOLS_NAMES,
-    key::LABLET_TRIAL,
-    key::SERVER_ADDRESS,
-    key::SERVER_PORT,
-    key::SESSION_ID,
-];
-
-/// The wide event's per-tool templates, each a prefix a tool's name follows
-/// after a dot.
-pub const RUN_TEMPLATES: &[&str] = &[
-    key::LABLET_TOOL_CALLS,
-    key::LABLET_TOOL_ERRORS,
-    key::LABLET_TOOL_LATENCY_MS,
-];
 
 /// Holds `attributes` to the registry's lists for their signal: every key
 /// the signal always carries is there, and none is there that the signal
@@ -323,8 +53,8 @@ pub fn assert_declared(
 /// what bounds the keys.
 pub fn assert_the_wide_event_is_declared(wide: &LogRecord) {
     let attributes = &wide.attributes;
-    assert_eq!(wide.event_name, LabletRun::NAME);
-    let missing: Vec<_> = RUN_REQUIRED
+    assert_eq!(wide.event_name, key::WIDE_EVENT);
+    let missing: Vec<_> = key::LABLET_RUN_REQUIRED
         .iter()
         .filter(|key| !attributes.contains_key(**key))
         .collect();
@@ -341,7 +71,8 @@ pub fn assert_the_wide_event_is_declared(wide: &LogRecord) {
         .filter_map(Value::as_str)
         .collect();
     let declared = |key: &str| {
-        RUN_KEYS.contains(&key) || template_of(key).is_some_and(|(_, tool)| offered.contains(&tool))
+        key::LABLET_RUN_KEYS.contains(&key)
+            || template_of(key).is_some_and(|(_, tool)| offered.contains(&tool))
     };
     let undeclared: Vec<_> = attributes.keys().filter(|key| !declared(key)).collect();
     assert!(
@@ -449,7 +180,7 @@ fn of_the_run(attributes: &Attributes, run: &str) -> bool {
 /// The one wide event of the run `run` among `exported`.
 pub fn the_wide_event<'a>(exported: &'a Exported, run: &str) -> &'a LogRecord {
     let wide: Vec<_> = exported
-        .records_of(LabletRun::NAME)
+        .records_of(key::WIDE_EVENT)
         .into_iter()
         .filter(|wide| of_the_run(&wide.attributes, run))
         .collect();
@@ -523,7 +254,7 @@ fn names_an_offered_tool(tool: &Attributes) -> bool {
 
 /// The template `key` is a key of, and the suffix it has.
 fn template_of(key: &str) -> Option<(&'static str, &str)> {
-    RUN_TEMPLATES.iter().find_map(|template| {
+    key::LABLET_RUN_TEMPLATES.iter().find_map(|template| {
         key.strip_prefix(template)
             .and_then(|rest| rest.strip_prefix('.'))
             .map(|suffix| (*template, suffix))
@@ -584,7 +315,7 @@ impl<'a> Told<'a> {
     /// context of its one root span.
     fn of(exported: &'a Exported, run: &str) -> Self {
         let record = the_wide_event(exported, run);
-        let roots = spans_of(exported, LabletInvokeAgent::GEN_AI_OPERATION_NAME, run);
+        let roots = spans_of(exported, key::INVOKE_AGENT, run);
         assert_eq!(roots.len(), 1, "the run {run} has one root span");
         let root = roots[0];
         assert_eq!(
@@ -780,3 +511,6 @@ impl<'a> Told<'a> {
         );
     }
 }
+
+#[cfg(test)]
+mod tests;
