@@ -17,8 +17,8 @@ Sequencing rationale: the loop is proven against fakes before any real adapter e
 | 4     | Library and first traced run                        | Done, 2026-09-29 |
 | 5     | CLI and config surface                              | Done, 2026-09-30 |
 | 6     | OTLP network export and live-check                  | Done, 2026-10-02 |
-| 6a    | Direct instrumentation with the OpenTelemetry API   | Next             |
-| 7     | Anthropic, and the capture of the primary reference | Not started      |
+| 6a    | Direct instrumentation with the OpenTelemetry API   | Done, 2026-10-06 |
+| 7     | Anthropic, and the capture of the primary reference | Next             |
 | 7a    | Context management                                  | Not started      |
 | 8     | MCP, and the first transfer check                   | Not started      |
 | 9     | Second provider                                     | Not started      |
