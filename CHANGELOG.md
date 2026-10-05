@@ -10,6 +10,7 @@ An entry under `Unreleased` is mandatory for any change to one of these files, a
 - `lablet/telemetry/registry/`, the telemetry registry
 - `lablet/tests/fixtures/outcome.json`, the outcome JSON fixture
 - `lablet/tests/fixtures/transcript.json`, the transcript JSON fixture
+- `lablet/tests/fixtures/golden/`, the golden telemetry of three fake-provider runs
 
 ## [Unreleased]
 
@@ -63,6 +64,7 @@ An entry under `Unreleased` is mandatory for any change to one of these files, a
 
 ### Added
 
+- The golden telemetry: `lablet/tests/fixtures/golden/` holds the OTLP/JSON that three runs on the fake provider emit, the `init --provider fake` starter, `lablet/examples/two-turns` and a run that retries, captures content, runs two `read_file` calls as one group and is cancelled during a `bash` call, with ids, times, the order of attributes and the SDK's own version normalised. A test runs the same configs and compares, so a change in any span, record or attribute a run emits is a change to these files, which this changelog records.
 - `telemetry.otlp.enabled`, `true` by default: `false` turns the network exporter off whatever the environment says, and is refused beside a stated endpoint, which it would make a setting without effect.
 - The OTLP network exporter: `telemetry.otlp.endpoint` sends a run's spans and log records to a collector over gRPC or, with `protocol: http`, HTTP/protobuf, beside the file when `telemetry.file.path` is set and in its place when the path is null. The config's `headers` win over `OTEL_EXPORTER_OTLP_HEADERS` by name, and with the config's endpoint the environment's headers aren't sent. Each destination is flushed on its own and within a bound, so the file is whole whatever the collector does, and each gets its own wide event; `lablet.telemetry.dropped_records` in the registry now counts what that destination's exporters lost.
 - `lablet/schema.json`, the config's JSON Schema, which `lablet::schema` returns. It states every key, the values each takes, and each default, from the types a config is read into.

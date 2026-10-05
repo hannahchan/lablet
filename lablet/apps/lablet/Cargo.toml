@@ -41,6 +41,7 @@ lablet-conformance.workspace = true
 lablet-telemetry-registry.workspace = true
 lablet-test-support.workspace = true
 nix.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [[test]]
 name = "it"

@@ -1,0 +1,251 @@
+{
+  "records": [
+    {
+      "attributes": {
+        "gen_ai.agent.name": "lablet",
+        "gen_ai.agent.version": "0.1.0",
+        "gen_ai.conversation.id": "golden-two-turns",
+        "gen_ai.provider.name": "fake",
+        "gen_ai.request.max_tokens": 32000,
+        "gen_ai.request.model": "scripted",
+        "gen_ai.response.finish_reasons": [
+          "tool_use",
+          "end_turn"
+        ],
+        "gen_ai.usage.input_tokens": 350,
+        "gen_ai.usage.output_tokens": 42,
+        "lablet.config.digest": "961503b2eeb9472a7ba76372acb90ec73e10db87c0f5a0d95961d77af34e6456",
+        "lablet.prompt.system_bytes": 58,
+        "lablet.prompt.system_digest": "5b867631ba121bd65363b27f2404b8f81f1b3a8aa98437106cd144a88df658f4",
+        "lablet.prompt.tools_bytes": 970,
+        "lablet.prompt.user_bytes": 36,
+        "lablet.provider.latency_ms.max": 0,
+        "lablet.provider.latency_ms.total": 0,
+        "lablet.provider.retries": 0,
+        "lablet.request.api": "script",
+        "lablet.request.cache_scope": "shared",
+        "lablet.request.reasoning_replayed": false,
+        "lablet.request.thinking": "provider_default",
+        "lablet.result.has_structured": false,
+        "lablet.result.text_bytes": 60,
+        "lablet.run.completion_mode": "natural",
+        "lablet.run.duration_ms": 0,
+        "lablet.run.stop_reason": "completed",
+        "lablet.run.timeout_ms": 600000,
+        "lablet.run.turns": 2,
+        "lablet.skills.count": 0,
+        "lablet.telemetry.dropped_records": 0,
+        "lablet.tool.calls.read_file": 1,
+        "lablet.tool.errors.read_file": 0,
+        "lablet.tool.latency_ms.read_file": 0,
+        "lablet.tool_calls.errors": 0,
+        "lablet.tool_calls.input_bytes.total": 19,
+        "lablet.tool_calls.latency_ms.total": 0,
+        "lablet.tool_calls.output_bytes.total": 47,
+        "lablet.tool_calls.total": 1,
+        "lablet.tool_calls.truncated": 0,
+        "lablet.tool_calls.unknown": 0,
+        "lablet.tools.count": 1,
+        "lablet.tools.digest": "2392bd8742b99f7cb96d23556bd5ece01694db6f9a493245385da1d60c5b76ac",
+        "lablet.tools.names": [
+          "read_file"
+        ],
+        "session.id": "golden-two-turns"
+      },
+      "body": null,
+      "event_name": "lablet.run",
+      "flags": 1,
+      "observed_time_ms": 0,
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "severity_number": 9,
+      "severity_text": "INFO",
+      "span_id": "span-1",
+      "time_ms": 0,
+      "trace_id": "trace-1"
+    }
+  ],
+  "spans": [
+    {
+      "attributes": {
+        "gen_ai.agent.name": "lablet",
+        "gen_ai.agent.version": "0.1.0",
+        "gen_ai.conversation.id": "golden-two-turns",
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.request.model": "scripted",
+        "gen_ai.usage.input_tokens": 350,
+        "gen_ai.usage.output_tokens": 42,
+        "lablet.config.digest": "961503b2eeb9472a7ba76372acb90ec73e10db87c0f5a0d95961d77af34e6456",
+        "lablet.run.stop_reason": "completed",
+        "lablet.run.turns": 2,
+        "lablet.tool_calls.total": 1,
+        "session.id": "golden-two-turns"
+      },
+      "end_ms": 0,
+      "events": [],
+      "flags": 257,
+      "kind": "internal",
+      "name": "invoke_agent lablet",
+      "parent_span_id": null,
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "span_id": "span-1",
+      "start_ms": 0,
+      "status": {
+        "code": "unset"
+      },
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "gen_ai.conversation.id": "golden-two-turns",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "fake",
+        "gen_ai.request.max_tokens": 32000,
+        "gen_ai.request.model": "scripted",
+        "gen_ai.response.finish_reasons": [
+          "end_turn"
+        ],
+        "gen_ai.usage.input_tokens": 210,
+        "gen_ai.usage.output_tokens": 18,
+        "lablet.attempt": 1,
+        "lablet.chat.purpose": "turn",
+        "lablet.config.digest": "961503b2eeb9472a7ba76372acb90ec73e10db87c0f5a0d95961d77af34e6456",
+        "lablet.request.bytes": 1400,
+        "lablet.turn": 2,
+        "session.id": "golden-two-turns"
+      },
+      "end_ms": 0,
+      "events": [],
+      "flags": 257,
+      "kind": "client",
+      "name": "chat scripted",
+      "parent_span_id": "span-1",
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "span_id": "span-2",
+      "start_ms": 0,
+      "status": {
+        "code": "unset"
+      },
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "gen_ai.conversation.id": "golden-two-turns",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "fake",
+        "gen_ai.request.max_tokens": 32000,
+        "gen_ai.request.model": "scripted",
+        "gen_ai.response.finish_reasons": [
+          "tool_use"
+        ],
+        "gen_ai.usage.input_tokens": 140,
+        "gen_ai.usage.output_tokens": 24,
+        "lablet.attempt": 1,
+        "lablet.chat.purpose": "turn",
+        "lablet.config.digest": "961503b2eeb9472a7ba76372acb90ec73e10db87c0f5a0d95961d77af34e6456",
+        "lablet.request.bytes": 1114,
+        "lablet.turn": 1,
+        "session.id": "golden-two-turns"
+      },
+      "end_ms": 0,
+      "events": [],
+      "flags": 257,
+      "kind": "client",
+      "name": "chat scripted",
+      "parent_span_id": "span-1",
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "span_id": "span-3",
+      "start_ms": 0,
+      "status": {
+        "code": "unset"
+      },
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "gen_ai.conversation.id": "golden-two-turns",
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.call.id": "call_1",
+        "gen_ai.tool.description": "Returns the text of a file. A path that isn't absolute starts at the run's root directory, which is where `bash` starts, and a path that leads outside that directory once symbolic links are followed is refused. `offset` and `limit` choose lines, so a file too long to be returned whole can be read in parts: `offset` is how many lines to skip, and `limit` is how many to return after them. Bytes that aren't UTF-8 are returned as U+FFFD. A call that takes longer than 120s is stopped.",
+        "gen_ai.tool.name": "read_file",
+        "gen_ai.tool.type": "function",
+        "lablet.config.digest": "961503b2eeb9472a7ba76372acb90ec73e10db87c0f5a0d95961d77af34e6456",
+        "lablet.tool.input.bytes": 19,
+        "lablet.tool.is_error": false,
+        "lablet.tool.output.bytes": 47,
+        "lablet.tool.output.truncated": false,
+        "lablet.tool.source": "builtin",
+        "lablet.tool.status": "ok",
+        "lablet.turn": 1,
+        "session.id": "golden-two-turns"
+      },
+      "end_ms": 0,
+      "events": [],
+      "flags": 257,
+      "kind": "internal",
+      "name": "execute_tool read_file",
+      "parent_span_id": "span-1",
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "span_id": "span-4",
+      "start_ms": 0,
+      "status": {
+        "code": "unset"
+      },
+      "trace_id": "trace-1"
+    }
+  ]
+}

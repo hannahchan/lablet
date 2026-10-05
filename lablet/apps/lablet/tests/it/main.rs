@@ -14,6 +14,8 @@ mod digests;
 #[cfg(test)]
 mod failures;
 #[cfg(test)]
+mod golden;
+#[cfg(test)]
 mod harness;
 #[cfg(test)]
 mod labels;

@@ -441,6 +441,59 @@ fn a_kind_or_a_status_no_span_has_is_refused() {
 }
 
 #[test]
+fn what_the_reader_does_not_carry_is_refused_and_named() {
+    let link =
+        json!({ "traceId": "abababababababababababababababab", "spanId": "0101010101010101" });
+    let attribute = json!([{ "key": "lablet.turn", "value": { "intValue": "1" } }]);
+    let mut of_the_scope: Value =
+        serde_json::from_str(line_of_spans(&[span(&json!({}))]).trim_end()).unwrap();
+    of_the_scope["resourceSpans"][0]["scopeSpans"][0]["scope"]["attributes"] = attribute;
+
+    for (text, what) in [
+        (
+            line_of_spans(&[span(&json!({ "links": [link] }))]),
+            "the span `chat scripted-1` has links",
+        ),
+        (
+            line_of_spans(&[span(&json!({ "traceState": "lablet=1" }))]),
+            "the span `chat scripted-1` has a trace state",
+        ),
+        (
+            line_of_spans(&[span(&json!({ "droppedAttributesCount": 1 }))]),
+            "the span `chat scripted-1` has a count of dropped attributes",
+        ),
+        (
+            line_of_spans(&[span(&json!({ "droppedEventsCount": 1 }))]),
+            "the span `chat scripted-1` has a count of dropped events",
+        ),
+        (
+            line_of_spans(&[span(&json!({ "droppedLinksCount": 1 }))]),
+            "the span `chat scripted-1` has a count of dropped links",
+        ),
+        (
+            line_of_spans(&[span(
+                &json!({ "events": [{ "name": "lablet.retry", "droppedAttributesCount": 1 }] }),
+            )]),
+            "the event `lablet.retry` has a count of dropped attributes",
+        ),
+        (
+            line_of_records(&[json!({ "eventName": "lablet.run", "droppedAttributesCount": 1 })]),
+            "the record `lablet.run` has a count of dropped attributes",
+        ),
+        (
+            format!("{of_the_scope}\n"),
+            "the scope `lablet` has attributes",
+        ),
+    ] {
+        assert_eq!(
+            fault(&text),
+            format!("line 1: {what}, which the reader doesn't carry"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
 fn a_value_that_refers_to_a_table_of_strings_is_refused() {
     let text = line_of_records(&[json!({
         "attributes": [{ "key": "text", "value": { "stringValueStrindex": 3 } }],

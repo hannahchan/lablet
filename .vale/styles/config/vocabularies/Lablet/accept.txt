@@ -65,6 +65,7 @@ Parquet
 PRs
 Pydantic
 Rego
+[Rr]ebased
 [Rr]epo
 [Rr]eqwest
 [Rr]etryable
@@ -95,6 +96,7 @@ TOML
 [Tt]ypestate
 ULID
 [Uu]ncached
+[Uu]ngrouped
 [Uu]ngrouping
 [Uu]nprefixed
 [Uu]nrepresentable

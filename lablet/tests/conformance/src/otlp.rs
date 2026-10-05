@@ -10,6 +10,11 @@
 //! What's read is flattened: each span and each record holds the resource
 //! and the scope of the export it came in, and the number of its line, so
 //! a test can say what was exported with what and in what order.
+//!
+//! What the reader doesn't carry, it refuses: a span's links and trace
+//! state, a scope's attributes, and every count of what the SDK dropped.
+//! Lablet emits none of them, and a reader that read past one would let a
+//! change to that pass every test unseen, the golden comparison among them.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -18,7 +23,7 @@ use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, InstrumentationScope, KeyValue, any_value};
 use opentelemetry_proto::tonic::resource::v1::Resource;
-use opentelemetry_proto::tonic::trace::v1::{span, status};
+use opentelemetry_proto::tonic::trace::v1::{self as trace, span, status};
 use serde_json::Value;
 
 /// The key of a line of spans.
@@ -211,8 +216,11 @@ impl Exported {
     /// export: a line that's empty or isn't a JSON object, that holds any
     /// key but the one that says what it exports, that doesn't read as the
     /// request its key names, or that gives a span, a record, an event, a
-    /// resource or a nested value one key twice. The last line ends in a
-    /// newline like the rest, so text that ends elsewhere was cut short.
+    /// resource or a nested value one key twice, or that holds what the
+    /// reader doesn't carry: a span's links or trace state, a scope's
+    /// attributes, or a count of what the SDK dropped. The last line ends
+    /// in a newline like the rest, so text that ends elsewhere was cut
+    /// short.
     pub fn parse(text: &str) -> Result<Self, ReadError> {
         let mut exported = Self::default();
         let mut rest = text;
@@ -255,12 +263,16 @@ impl Exported {
         for of_resource in request.resource_spans {
             let resource = resource(of_resource.resource)?;
             for of_scope in of_resource.scope_spans {
-                let scope = scope(of_scope.scope, of_scope.schema_url);
+                let scope = scope(of_scope.scope, of_scope.schema_url)?;
                 for span in of_scope.spans {
+                    whole_span(&span)?;
                     let events = span
                         .events
                         .into_iter()
                         .map(|event| {
+                            if event.dropped_attributes_count != 0 {
+                                return Err(not_carried("event", &event.name, DROPPED_ATTRIBUTES));
+                            }
                             Ok(SpanEvent {
                                 name: event.name,
                                 time_unix_nano: event.time_unix_nano,
@@ -299,8 +311,15 @@ impl Exported {
         for of_resource in request.resource_logs {
             let resource = resource(of_resource.resource)?;
             for of_scope in of_resource.scope_logs {
-                let scope = scope(of_scope.scope, of_scope.schema_url);
+                let scope = scope(of_scope.scope, of_scope.schema_url)?;
                 for record in of_scope.log_records {
+                    if record.dropped_attributes_count != 0 {
+                        return Err(not_carried(
+                            "record",
+                            &record.event_name,
+                            DROPPED_ATTRIBUTES,
+                        ));
+                    }
                     self.records.push(LogRecord {
                         line,
                         resource: resource.clone(),
@@ -406,15 +425,43 @@ fn resource(resource: Option<Resource>) -> Result<Attributes, String> {
     )
 }
 
-fn scope(scope: Option<InstrumentationScope>, schema_url: String) -> Scope {
-    let (name, version) = scope
-        .map(|scope| (scope.name, scope.version))
-        .unwrap_or_default();
-    Scope {
+fn scope(scope: Option<InstrumentationScope>, schema_url: String) -> Result<Scope, String> {
+    let (name, version) = match scope {
+        Some(scope) if !scope.attributes.is_empty() => {
+            return Err(not_carried("scope", &scope.name, "attributes"));
+        }
+        Some(scope) if scope.dropped_attributes_count != 0 => {
+            return Err(not_carried("scope", &scope.name, DROPPED_ATTRIBUTES));
+        }
+        Some(scope) => (scope.name, scope.version),
+        None => <(String, String)>::default(),
+    };
+    Ok(Scope {
         name,
         version,
         schema_url,
+    })
+}
+
+const DROPPED_ATTRIBUTES: &str = "a count of dropped attributes";
+
+/// Refuses a span that holds what [`Span`] doesn't carry.
+fn whole_span(span: &trace::Span) -> Result<(), String> {
+    let has = [
+        (!span.links.is_empty(), "links"),
+        (!span.trace_state.is_empty(), "a trace state"),
+        (span.dropped_attributes_count != 0, DROPPED_ATTRIBUTES),
+        (span.dropped_events_count != 0, "a count of dropped events"),
+        (span.dropped_links_count != 0, "a count of dropped links"),
+    ];
+    match has.iter().find(|(held, _)| *held) {
+        Some((_, what)) => Err(not_carried("span", &span.name, what)),
+        None => Ok(()),
     }
+}
+
+fn not_carried(signal: &str, name: &str, what: &str) -> String {
+    format!("the {signal} `{name}` has {what}, which the reader doesn't carry")
 }
 
 fn kind(kind: i32) -> Result<SpanKind, String> {

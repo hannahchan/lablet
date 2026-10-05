@@ -1,0 +1,158 @@
+{
+  "records": [
+    {
+      "attributes": {
+        "gen_ai.agent.name": "lablet",
+        "gen_ai.agent.version": "0.1.0",
+        "gen_ai.conversation.id": "golden-starter",
+        "gen_ai.provider.name": "fake",
+        "gen_ai.request.max_tokens": 32000,
+        "gen_ai.request.model": "scripted",
+        "gen_ai.response.finish_reasons": [
+          "end_turn"
+        ],
+        "gen_ai.usage.input_tokens": 120,
+        "gen_ai.usage.output_tokens": 16,
+        "lablet.config.digest": "d1ec1f808d87a82ebc9e659d4ed8f0a3c36a1f6bf2d895870bc3616b76f0f370",
+        "lablet.prompt.system_bytes": 58,
+        "lablet.prompt.system_digest": "5b867631ba121bd65363b27f2404b8f81f1b3a8aa98437106cd144a88df658f4",
+        "lablet.prompt.tools_bytes": 0,
+        "lablet.prompt.user_bytes": 10,
+        "lablet.provider.latency_ms.max": 0,
+        "lablet.provider.latency_ms.total": 0,
+        "lablet.provider.retries": 0,
+        "lablet.request.api": "script",
+        "lablet.request.cache_scope": "shared",
+        "lablet.request.reasoning_replayed": false,
+        "lablet.request.thinking": "provider_default",
+        "lablet.result.has_structured": false,
+        "lablet.result.text_bytes": 71,
+        "lablet.run.completion_mode": "natural",
+        "lablet.run.duration_ms": 0,
+        "lablet.run.stop_reason": "completed",
+        "lablet.run.timeout_ms": 600000,
+        "lablet.run.turns": 1,
+        "lablet.skills.count": 0,
+        "lablet.telemetry.dropped_records": 0,
+        "lablet.tool_calls.errors": 0,
+        "lablet.tool_calls.input_bytes.total": 0,
+        "lablet.tool_calls.latency_ms.total": 0,
+        "lablet.tool_calls.output_bytes.total": 0,
+        "lablet.tool_calls.total": 0,
+        "lablet.tool_calls.truncated": 0,
+        "lablet.tool_calls.unknown": 0,
+        "lablet.tools.count": 0,
+        "lablet.tools.digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "lablet.tools.names": [],
+        "session.id": "golden-starter"
+      },
+      "body": null,
+      "event_name": "lablet.run",
+      "flags": 1,
+      "observed_time_ms": 0,
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "severity_number": 9,
+      "severity_text": "INFO",
+      "span_id": "span-1",
+      "time_ms": 0,
+      "trace_id": "trace-1"
+    }
+  ],
+  "spans": [
+    {
+      "attributes": {
+        "gen_ai.agent.name": "lablet",
+        "gen_ai.agent.version": "0.1.0",
+        "gen_ai.conversation.id": "golden-starter",
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.request.model": "scripted",
+        "gen_ai.usage.input_tokens": 120,
+        "gen_ai.usage.output_tokens": 16,
+        "lablet.config.digest": "d1ec1f808d87a82ebc9e659d4ed8f0a3c36a1f6bf2d895870bc3616b76f0f370",
+        "lablet.run.stop_reason": "completed",
+        "lablet.run.turns": 1,
+        "lablet.tool_calls.total": 0,
+        "session.id": "golden-starter"
+      },
+      "end_ms": 0,
+      "events": [],
+      "flags": 257,
+      "kind": "internal",
+      "name": "invoke_agent lablet",
+      "parent_span_id": null,
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "span_id": "span-1",
+      "start_ms": 0,
+      "status": {
+        "code": "unset"
+      },
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "gen_ai.conversation.id": "golden-starter",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "fake",
+        "gen_ai.request.max_tokens": 32000,
+        "gen_ai.request.model": "scripted",
+        "gen_ai.response.finish_reasons": [
+          "end_turn"
+        ],
+        "gen_ai.usage.input_tokens": 120,
+        "gen_ai.usage.output_tokens": 16,
+        "lablet.attempt": 1,
+        "lablet.chat.purpose": "turn",
+        "lablet.config.digest": "d1ec1f808d87a82ebc9e659d4ed8f0a3c36a1f6bf2d895870bc3616b76f0f370",
+        "lablet.request.bytes": 118,
+        "lablet.turn": 1,
+        "session.id": "golden-starter"
+      },
+      "end_ms": 0,
+      "events": [],
+      "flags": 257,
+      "kind": "client",
+      "name": "chat scripted",
+      "parent_span_id": "span-1",
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "span_id": "span-2",
+      "start_ms": 0,
+      "status": {
+        "code": "unset"
+      },
+      "trace_id": "trace-1"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+# The config of the golden run that retries, captures content, runs two
+# read_file calls as one group and is cancelled during a bash call. A relative
+# path starts at the directory lablet runs in; the golden test rebases these
+# on this directory.
+model:
+  provider: fake
+  script: lablet-script.yaml
+  name: scripted
+prompt:
+  system: You are a careful coding agent. Say what you did, and why.
+tools:
+  builtin:
+    root: work
+    enabled: [bash, read_file]
+telemetry:
+  capture_content: true

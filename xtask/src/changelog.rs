@@ -1,7 +1,8 @@
 //! The changelog gate (spec §8). The config schema, the telemetry registry,
-//! and the outcome JSON are lablet's public contract, and the transcript JSON
-//! is what a grader parses, so a change to any of them must come with an
-//! entry under `## [Unreleased]` in `CHANGELOG.md`. The comparison runs from
+//! and the outcome JSON are lablet's public contract, the transcript JSON is
+//! what a grader parses, and the golden telemetry fixtures are what a run
+//! emits, so a change to any of them must come with an entry under
+//! `## [Unreleased]` in `CHANGELOG.md`. The comparison runs from
 //! a base commit to the working tree, so it judges what is committed on the
 //! branch and what is about to be.
 
@@ -16,11 +17,12 @@ use crate::workspace::repo_root;
 
 /// The contract files, relative to the repository root. An entry ending in
 /// `/` is a directory and covers everything under it.
-const CONTRACT_PATHS: [&str; 4] = [
+const CONTRACT_PATHS: [&str; 5] = [
     "lablet/schema.json",
     "lablet/telemetry/registry/",
     "lablet/tests/fixtures/outcome.json",
     "lablet/tests/fixtures/transcript.json",
+    "lablet/tests/fixtures/golden/",
 ];
 
 const CHANGELOG: &str = "CHANGELOG.md";
@@ -251,8 +253,8 @@ fn failure(paths: &[String], since: &str, missing: &str) -> String {
     let _ = write!(
         message,
         "\nThe config schema, the telemetry registry, and the outcome and transcript JSON are \
-         what lablet's users parse (spec §8).\nAdd an entry under `{UNRELEASED_HEADING}` in \
-         {CHANGELOG} that says what changed for users."
+         what lablet's users parse, and the golden telemetry is what a run emits (spec §8).\nAdd \
+         an entry under `{UNRELEASED_HEADING}` in {CHANGELOG} that says what changed for users."
     );
     message
 }
@@ -286,13 +288,16 @@ mod tests {
     }
 
     #[test]
-    fn the_contract_is_the_schema_the_registry_tree_and_the_two_document_fixtures() {
+    fn the_contract_is_the_schema_the_registry_tree_the_two_document_fixtures_and_the_golden_tree()
+    {
         for path in [
             "lablet/schema.json",
             "lablet/telemetry/registry/manifest.yaml",
             "lablet/telemetry/registry/spans/chat.yaml",
             "lablet/tests/fixtures/outcome.json",
             "lablet/tests/fixtures/transcript.json",
+            "lablet/tests/fixtures/golden/starter/expected.json",
+            "lablet/tests/fixtures/golden/cancelled/work/notes.md",
         ] {
             assert!(is_contract_path(path), "{path}");
         }
@@ -304,6 +309,8 @@ mod tests {
             "lablet/tests/fixtures/outcome.json/nested",
             "lablet/tests/fixtures/transcript.json.bak",
             "lablet/tests/fixtures/other.json",
+            "lablet/tests/fixtures/golden.json",
+            "lablet/tests/fixtures/golden-notes.md",
             "lablet/crates/adapters/secondary/transcript-json/src/lib.rs",
             "schema.json",
             "CHANGELOG.md",
@@ -426,8 +433,9 @@ mod tests {
     fn a_contract_change_the_changelog_does_not_record_fails_the_step() {
         let schema = || paths(&["lablet/schema.json"]);
         let why = "\n\n  lablet/schema.json\n\nThe config schema, the telemetry registry, and the \
-                   outcome and transcript JSON are what lablet's users parse (spec §8).\nAdd an \
-                   entry under `## [Unreleased]` in CHANGELOG.md that says what changed for users.";
+                   outcome and transcript JSON are what lablet's users parse, and the golden \
+                   telemetry is what a run emits (spec §8).\nAdd an entry under `## [Unreleased]` \
+                   in CHANGELOG.md that says what changed for users.";
         // Whether the base is HEAD changes only the note of a pass.
         for base_is_head in [false, true] {
             assert_eq!(

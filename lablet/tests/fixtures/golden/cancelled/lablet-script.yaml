@@ -1,0 +1,17 @@
+# What the scripted model answers: the first attempt fails and is retried,
+# and the second answers with two reads, which run together, and a command
+# the run is cancelled during.
+- error:
+    kind: retryable
+    message: 529 overloaded
+    usage: { input_tokens: 300 }
+    latency: 40ms
+- response:
+    content:
+      - text: I'll read the notes and the plan, then run the build.
+      - tool_use: { id: call_1, name: read_file, input: { json: { path: notes.md } } }
+      - tool_use: { id: call_2, name: read_file, input: { json: { path: plan.md } } }
+      - tool_use: { id: call_3, name: bash, input: { json: { command: sleep 30 } } }
+    finish: tool_use
+    usage: { input_tokens: 320, output_tokens: 60, cache_read_tokens: 200 }
+    latency: 250ms

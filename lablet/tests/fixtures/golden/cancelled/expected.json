@@ -1,0 +1,592 @@
+{
+  "records": [
+    {
+      "attributes": {
+        "gen_ai.conversation.id": "golden-cancelled",
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.tool.definitions": "[{\"description\":\"Runs a command with `bash -c` and returns what it wrote: standard output and standard error together, in the order they were written, then one line with the exit code, as `exit code: 0`. A command that exits with another code is a result like any other. Every command is a new process that starts in the run's root directory, so a working directory, a variable or a function that one command set isn't there for the next: write `cd dir && command` as one command. The call returns when the command has exited and nothing it started holds its output open, so send the output of a process that's to stay in the background somewhere else, as in `server > server.log 2>&1 &`. A command that runs for as long as a call may take is killed, with every process it started. A call that takes longer than 120s is stopped.\",\"name\":\"bash\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"command\":{\"description\":\"The command line, as it would be typed at a bash prompt.\",\"type\":\"string\"}},\"required\":[\"command\"],\"type\":\"object\"},\"type\":\"function\"},{\"description\":\"Returns the text of a file. A path that isn't absolute starts at the run's root directory, which is where `bash` starts, and a path that leads outside that directory once symbolic links are followed is refused. `offset` and `limit` choose lines, so a file too long to be returned whole can be read in parts: `offset` is how many lines to skip, and `limit` is how many to return after them. Bytes that aren't UTF-8 are returned as U+FFFD. A call that takes longer than 120s is stopped.\",\"name\":\"read_file\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"limit\":{\"description\":\"The most lines to return. Every line after the offset when left out.\",\"minimum\":1,\"type\":\"integer\"},\"offset\":{\"description\":\"How many lines to skip from the start of the file. None when left out.\",\"minimum\":0,\"type\":\"integer\"},\"path\":{\"description\":\"The file to read.\",\"type\":\"string\"}},\"required\":[\"path\"],\"type\":\"object\"},\"type\":\"function\"}]",
+        "lablet.config.digest": "92068da5a766228d5a22712d6f08251ecc91d9d12ea6a1d428b2d7edc496a17f",
+        "session.id": "golden-cancelled"
+      },
+      "body": null,
+      "event_name": "gen_ai.client.inference.operation.details",
+      "flags": 1,
+      "observed_time_ms": 0,
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "severity_number": 9,
+      "severity_text": "INFO",
+      "span_id": "span-1",
+      "time_ms": 0,
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "gen_ai.conversation.id": "golden-cancelled",
+        "gen_ai.input.messages": "[{\"parts\":[{\"content\":\"Read the notes and the plan, then run the build.\",\"type\":\"text\"}],\"role\":\"user\"}]",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.system_instructions": "[{\"content\":\"You are a careful coding agent. Say what you did, and why.\",\"type\":\"text\"}]",
+        "lablet.config.digest": "92068da5a766228d5a22712d6f08251ecc91d9d12ea6a1d428b2d7edc496a17f",
+        "lablet.turn": 1,
+        "session.id": "golden-cancelled"
+      },
+      "body": null,
+      "event_name": "gen_ai.client.inference.operation.details",
+      "flags": 1,
+      "observed_time_ms": 40,
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "severity_number": 9,
+      "severity_text": "INFO",
+      "span_id": "span-2",
+      "time_ms": 40,
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "exception.message": "529 overloaded",
+        "exception.type": "retryable",
+        "gen_ai.conversation.id": "golden-cancelled",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "fake",
+        "gen_ai.request.model": "scripted",
+        "lablet.attempt": 1,
+        "lablet.config.digest": "92068da5a766228d5a22712d6f08251ecc91d9d12ea6a1d428b2d7edc496a17f",
+        "lablet.turn": 1,
+        "session.id": "golden-cancelled"
+      },
+      "body": null,
+      "event_name": "gen_ai.client.operation.exception",
+      "flags": 1,
+      "observed_time_ms": 40,
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "severity_number": 13,
+      "severity_text": "WARN",
+      "span_id": "span-2",
+      "time_ms": 40,
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "gen_ai.conversation.id": "golden-cancelled",
+        "gen_ai.input.messages": "[{\"parts\":[{\"content\":\"Read the notes and the plan, then run the build.\",\"type\":\"text\"}],\"role\":\"user\"}]",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.output.messages": "[{\"parts\":[{\"content\":\"I'll read the notes and the plan, then run the build.\",\"type\":\"text\"},{\"arguments\":{\"path\":\"notes.md\"},\"id\":\"call_1\",\"name\":\"read_file\",\"type\":\"tool_call\"},{\"arguments\":{\"path\":\"plan.md\"},\"id\":\"call_2\",\"name\":\"read_file\",\"type\":\"tool_call\"},{\"arguments\":{\"command\":\"sleep 30\"},\"id\":\"call_3\",\"name\":\"bash\",\"type\":\"tool_call\"}],\"role\":\"assistant\"}]",
+        "gen_ai.system_instructions": "[{\"content\":\"You are a careful coding agent. Say what you did, and why.\",\"type\":\"text\"}]",
+        "lablet.config.digest": "92068da5a766228d5a22712d6f08251ecc91d9d12ea6a1d428b2d7edc496a17f",
+        "lablet.turn": 1,
+        "session.id": "golden-cancelled"
+      },
+      "body": null,
+      "event_name": "gen_ai.client.inference.operation.details",
+      "flags": 1,
+      "observed_time_ms": 903,
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "severity_number": 9,
+      "severity_text": "INFO",
+      "span_id": "span-3",
+      "time_ms": 903,
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "gen_ai.conversation.id": "golden-cancelled",
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.call.arguments": "{\"path\":\"notes.md\"}",
+        "gen_ai.tool.call.id": "call_1",
+        "gen_ai.tool.call.result": "{\"content\":[{\"text\":\"The parser is off by one at the end of a line.\\n\",\"type\":\"text\"}],\"isError\":false}",
+        "gen_ai.tool.name": "read_file",
+        "lablet.config.digest": "92068da5a766228d5a22712d6f08251ecc91d9d12ea6a1d428b2d7edc496a17f",
+        "lablet.turn": 1,
+        "session.id": "golden-cancelled"
+      },
+      "body": null,
+      "event_name": "gen_ai.client.inference.operation.details",
+      "flags": 1,
+      "observed_time_ms": 903,
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "severity_number": 9,
+      "severity_text": "INFO",
+      "span_id": "span-4",
+      "time_ms": 903,
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "gen_ai.conversation.id": "golden-cancelled",
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.call.arguments": "{\"path\":\"plan.md\"}",
+        "gen_ai.tool.call.id": "call_2",
+        "gen_ai.tool.call.result": "{\"content\":[{\"text\":\"Fix the parser, then run the build.\\n\",\"type\":\"text\"}],\"isError\":false}",
+        "gen_ai.tool.name": "read_file",
+        "lablet.config.digest": "92068da5a766228d5a22712d6f08251ecc91d9d12ea6a1d428b2d7edc496a17f",
+        "lablet.turn": 1,
+        "session.id": "golden-cancelled"
+      },
+      "body": null,
+      "event_name": "gen_ai.client.inference.operation.details",
+      "flags": 1,
+      "observed_time_ms": 903,
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "severity_number": 9,
+      "severity_text": "INFO",
+      "span_id": "span-5",
+      "time_ms": 903,
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "gen_ai.conversation.id": "golden-cancelled",
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.call.arguments": "{\"command\":\"sleep 30\"}",
+        "gen_ai.tool.call.id": "call_3",
+        "gen_ai.tool.call.result": "{\"content\":[{\"text\":\"the run was cancelled while this call ran, and the call was stopped\",\"type\":\"text\"}],\"isError\":true}",
+        "gen_ai.tool.name": "bash",
+        "lablet.config.digest": "92068da5a766228d5a22712d6f08251ecc91d9d12ea6a1d428b2d7edc496a17f",
+        "lablet.turn": 1,
+        "session.id": "golden-cancelled"
+      },
+      "body": null,
+      "event_name": "gen_ai.client.inference.operation.details",
+      "flags": 1,
+      "observed_time_ms": 10000,
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "severity_number": 9,
+      "severity_text": "INFO",
+      "span_id": "span-6",
+      "time_ms": 10000,
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "error.type": "cancelled",
+        "gen_ai.agent.name": "lablet",
+        "gen_ai.agent.version": "0.1.0",
+        "gen_ai.conversation.id": "golden-cancelled",
+        "gen_ai.provider.name": "fake",
+        "gen_ai.request.max_tokens": 32000,
+        "gen_ai.request.model": "scripted",
+        "gen_ai.response.finish_reasons": [
+          "tool_use"
+        ],
+        "gen_ai.usage.cache_read.input_tokens": 200,
+        "gen_ai.usage.input_tokens": 320,
+        "gen_ai.usage.output_tokens": 60,
+        "lablet.config.digest": "92068da5a766228d5a22712d6f08251ecc91d9d12ea6a1d428b2d7edc496a17f",
+        "lablet.prompt.system_bytes": 58,
+        "lablet.prompt.system_digest": "5b867631ba121bd65363b27f2404b8f81f1b3a8aa98437106cd144a88df658f4",
+        "lablet.prompt.tools_bytes": 2059,
+        "lablet.prompt.user_bytes": 48,
+        "lablet.provider.failed.input_tokens": 300,
+        "lablet.provider.failed.output_tokens": 0,
+        "lablet.provider.latency_ms.max": 250,
+        "lablet.provider.latency_ms.total": 290,
+        "lablet.provider.retries": 1,
+        "lablet.request.api": "script",
+        "lablet.request.cache_scope": "shared",
+        "lablet.request.reasoning_replayed": false,
+        "lablet.request.thinking": "provider_default",
+        "lablet.result.has_structured": false,
+        "lablet.result.text": "I'll read the notes and the plan, then run the build.",
+        "lablet.result.text_bytes": 53,
+        "lablet.run.completion_mode": "natural",
+        "lablet.run.duration_ms": 10000,
+        "lablet.run.stop_reason": "cancelled",
+        "lablet.run.timeout_ms": 600000,
+        "lablet.run.turns": 1,
+        "lablet.skills.count": 0,
+        "lablet.telemetry.dropped_records": 0,
+        "lablet.tool.calls.bash": 1,
+        "lablet.tool.calls.read_file": 2,
+        "lablet.tool.errors.bash": 1,
+        "lablet.tool.errors.read_file": 0,
+        "lablet.tool.latency_ms.bash": 9097,
+        "lablet.tool.latency_ms.read_file": 0,
+        "lablet.tool_calls.errors": 1,
+        "lablet.tool_calls.input_bytes.total": 59,
+        "lablet.tool_calls.latency_ms.total": 9097,
+        "lablet.tool_calls.output_bytes.total": 150,
+        "lablet.tool_calls.total": 3,
+        "lablet.tool_calls.truncated": 0,
+        "lablet.tool_calls.unknown": 0,
+        "lablet.tools.count": 2,
+        "lablet.tools.digest": "d055565b268d87823500e62d3c2c7a9b2ad9fc66f81b6b7cc9a22e8e883c1a30",
+        "lablet.tools.names": [
+          "bash",
+          "read_file"
+        ],
+        "session.id": "golden-cancelled"
+      },
+      "body": null,
+      "event_name": "lablet.run",
+      "flags": 1,
+      "observed_time_ms": 10000,
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "severity_number": 9,
+      "severity_text": "INFO",
+      "span_id": "span-1",
+      "time_ms": 10000,
+      "trace_id": "trace-1"
+    }
+  ],
+  "spans": [
+    {
+      "attributes": {
+        "error.type": "cancelled",
+        "gen_ai.agent.name": "lablet",
+        "gen_ai.agent.version": "0.1.0",
+        "gen_ai.conversation.id": "golden-cancelled",
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.request.model": "scripted",
+        "gen_ai.usage.cache_read.input_tokens": 200,
+        "gen_ai.usage.input_tokens": 320,
+        "gen_ai.usage.output_tokens": 60,
+        "lablet.config.digest": "92068da5a766228d5a22712d6f08251ecc91d9d12ea6a1d428b2d7edc496a17f",
+        "lablet.run.stop_reason": "cancelled",
+        "lablet.run.turns": 1,
+        "lablet.tool_calls.total": 3,
+        "session.id": "golden-cancelled"
+      },
+      "end_ms": 10000,
+      "events": [],
+      "flags": 257,
+      "kind": "internal",
+      "name": "invoke_agent lablet",
+      "parent_span_id": null,
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "span_id": "span-1",
+      "start_ms": 0,
+      "status": {
+        "code": "error",
+        "description": ""
+      },
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "error.type": "retryable",
+        "gen_ai.conversation.id": "golden-cancelled",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "fake",
+        "gen_ai.request.max_tokens": 32000,
+        "gen_ai.request.model": "scripted",
+        "gen_ai.usage.input_tokens": 300,
+        "gen_ai.usage.output_tokens": 0,
+        "lablet.attempt": 1,
+        "lablet.chat.purpose": "turn",
+        "lablet.config.digest": "92068da5a766228d5a22712d6f08251ecc91d9d12ea6a1d428b2d7edc496a17f",
+        "lablet.request.bytes": 2215,
+        "lablet.turn": 1,
+        "session.id": "golden-cancelled"
+      },
+      "end_ms": 40,
+      "events": [
+        {
+          "attributes": {
+            "lablet.attempt": 1,
+            "lablet.retry.backoff_ms": 612,
+            "lablet.retry.will_retry": true
+          },
+          "name": "lablet.retry",
+          "time_ms": 40
+        }
+      ],
+      "flags": 257,
+      "kind": "client",
+      "name": "chat scripted",
+      "parent_span_id": "span-1",
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "span_id": "span-2",
+      "start_ms": 0,
+      "status": {
+        "code": "error",
+        "description": "529 overloaded"
+      },
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "gen_ai.conversation.id": "golden-cancelled",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "fake",
+        "gen_ai.request.max_tokens": 32000,
+        "gen_ai.request.model": "scripted",
+        "gen_ai.response.finish_reasons": [
+          "tool_use"
+        ],
+        "gen_ai.usage.cache_read.input_tokens": 200,
+        "gen_ai.usage.input_tokens": 320,
+        "gen_ai.usage.output_tokens": 60,
+        "lablet.attempt": 2,
+        "lablet.chat.purpose": "turn",
+        "lablet.config.digest": "92068da5a766228d5a22712d6f08251ecc91d9d12ea6a1d428b2d7edc496a17f",
+        "lablet.request.bytes": 2215,
+        "lablet.turn": 1,
+        "session.id": "golden-cancelled"
+      },
+      "end_ms": 903,
+      "events": [],
+      "flags": 257,
+      "kind": "client",
+      "name": "chat scripted",
+      "parent_span_id": "span-1",
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "span_id": "span-3",
+      "start_ms": 653,
+      "status": {
+        "code": "unset"
+      },
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "gen_ai.conversation.id": "golden-cancelled",
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.call.id": "call_1",
+        "gen_ai.tool.description": "Returns the text of a file. A path that isn't absolute starts at the run's root directory, which is where `bash` starts, and a path that leads outside that directory once symbolic links are followed is refused. `offset` and `limit` choose lines, so a file too long to be returned whole can be read in parts: `offset` is how many lines to skip, and `limit` is how many to return after them. Bytes that aren't UTF-8 are returned as U+FFFD. A call that takes longer than 120s is stopped.",
+        "gen_ai.tool.name": "read_file",
+        "gen_ai.tool.type": "function",
+        "lablet.config.digest": "92068da5a766228d5a22712d6f08251ecc91d9d12ea6a1d428b2d7edc496a17f",
+        "lablet.tool.input.bytes": 19,
+        "lablet.tool.is_error": false,
+        "lablet.tool.output.bytes": 47,
+        "lablet.tool.output.truncated": false,
+        "lablet.tool.source": "builtin",
+        "lablet.tool.status": "ok",
+        "lablet.turn": 1,
+        "session.id": "golden-cancelled"
+      },
+      "end_ms": 903,
+      "events": [],
+      "flags": 257,
+      "kind": "internal",
+      "name": "execute_tool read_file",
+      "parent_span_id": "span-1",
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "span_id": "span-4",
+      "start_ms": 903,
+      "status": {
+        "code": "unset"
+      },
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "gen_ai.conversation.id": "golden-cancelled",
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.call.id": "call_2",
+        "gen_ai.tool.description": "Returns the text of a file. A path that isn't absolute starts at the run's root directory, which is where `bash` starts, and a path that leads outside that directory once symbolic links are followed is refused. `offset` and `limit` choose lines, so a file too long to be returned whole can be read in parts: `offset` is how many lines to skip, and `limit` is how many to return after them. Bytes that aren't UTF-8 are returned as U+FFFD. A call that takes longer than 120s is stopped.",
+        "gen_ai.tool.name": "read_file",
+        "gen_ai.tool.type": "function",
+        "lablet.config.digest": "92068da5a766228d5a22712d6f08251ecc91d9d12ea6a1d428b2d7edc496a17f",
+        "lablet.tool.input.bytes": 18,
+        "lablet.tool.is_error": false,
+        "lablet.tool.output.bytes": 36,
+        "lablet.tool.output.truncated": false,
+        "lablet.tool.source": "builtin",
+        "lablet.tool.status": "ok",
+        "lablet.turn": 1,
+        "session.id": "golden-cancelled"
+      },
+      "end_ms": 903,
+      "events": [],
+      "flags": 257,
+      "kind": "internal",
+      "name": "execute_tool read_file",
+      "parent_span_id": "span-1",
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "span_id": "span-5",
+      "start_ms": 903,
+      "status": {
+        "code": "unset"
+      },
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "error.type": "cancelled",
+        "gen_ai.conversation.id": "golden-cancelled",
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.call.id": "call_3",
+        "gen_ai.tool.description": "Runs a command with `bash -c` and returns what it wrote: standard output and standard error together, in the order they were written, then one line with the exit code, as `exit code: 0`. A command that exits with another code is a result like any other. Every command is a new process that starts in the run's root directory, so a working directory, a variable or a function that one command set isn't there for the next: write `cd dir && command` as one command. The call returns when the command has exited and nothing it started holds its output open, so send the output of a process that's to stay in the background somewhere else, as in `server > server.log 2>&1 &`. A command that runs for as long as a call may take is killed, with every process it started. A call that takes longer than 120s is stopped.",
+        "gen_ai.tool.name": "bash",
+        "gen_ai.tool.type": "function",
+        "lablet.config.digest": "92068da5a766228d5a22712d6f08251ecc91d9d12ea6a1d428b2d7edc496a17f",
+        "lablet.tool.input.bytes": 22,
+        "lablet.tool.is_error": true,
+        "lablet.tool.output.bytes": 67,
+        "lablet.tool.output.truncated": false,
+        "lablet.tool.source": "builtin",
+        "lablet.tool.status": "cancelled",
+        "lablet.turn": 1,
+        "session.id": "golden-cancelled"
+      },
+      "end_ms": 10000,
+      "events": [],
+      "flags": 257,
+      "kind": "internal",
+      "name": "execute_tool bash",
+      "parent_span_id": "span-1",
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
+      "span_id": "span-6",
+      "start_ms": 903,
+      "status": {
+        "code": "error",
+        "description": ""
+      },
+      "trace_id": "trace-1"
+    }
+  ]
+}
