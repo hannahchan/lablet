@@ -14,7 +14,7 @@ Explicit architecture: a ring is a directory prefix, and directory `foo/bar/` is
 | `crates/application/run`                                                                                                                                    | Application           | domain                                            |
 | `crates/adapters/secondary/*` (`provider-anthropic`, `provider-openai`, `provider-fake`, `tools-builtin`, `tools-mcp`, `telemetry-otel`, `transcript-json`) | Secondary adapters    | application, domain, the adapter shared kernel    |
 | `crates/adapters/secondary/shared/*` (`documents`, `telemetry-registry`)                                                                                    | Adapter shared kernel | application, domain, other adapter shared kernels |
-| `crates/export/*` (none yet; `otlp` lands in phase 6a)                                                                                                      | Export                | application, domain                               |
+| `crates/export/*` (`otlp`)                                                                                                                                  | Export                | application, domain                               |
 | `apps/lablet`                                                                                                                                               | Composition root      | everything except test support                    |
 | `tests/conformance` (`lablet-conformance`), `tests/mcp-server` (`lablet-test-mcp-server`), `tests/test-support` (`lablet-test-support`)                     | Test support          | anything; used as dev-dependencies only           |
 
