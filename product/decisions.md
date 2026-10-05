@@ -1253,3 +1253,12 @@ Decided by the owner. In the spike every call site filled in what the registry h
 - **A signal's own values of an open attribute are an annotation too** (`lablet: {values: [retryable, auth, ...]}`). The generator makes a closed enum for that signal, so a value that isn't listed doesn't compile, and the classes are in the contract rather than in a brief.
 - **The join keys are one generated struct.** Resolution doesn't keep the join group, so every reference the group holds carries `lablet: {join: true}`, which reaches every signal that refers to the group. The generator collects them into a `Join` struct, built once for each run from `RunContext`, which every span and event holds in their place.
 - **Policies hold the annotations.** `weaver check` refuses a fixed value the attribute's type doesn't allow, a list of values on a signal without the attribute, and a reference in the join group without `join: true`.
+
+## 2026-10-05 The registry is organised by crate
+
+Decided by the owner, settling the last two questions of phase 6a's plan. The spike found that weaver loads the folders inside a registry, keeps each signal's source file in the resolved schema, and renders the telemetry pages as before.
+
+- **A signal is declared in the folder of the crate that emits it**: `application/run/` and `apps/lablet/` today, and a folder for an adapter when it first emits a signal of its own. What several crates share, the attributes, the resource and the join group, is in `shared/`, which generates nothing of its own.
+- **Each crate gets a generated module**, `src/telemetry/generated/`, holding only what its own signals use. `lablet-telemetry-registry` goes, and tests read the keys from the module of the crate that emits them.
+- **No layer rule changes.** The generated code is in the crate that emits the signal and uses the API alone, which the application and the adapters may use, and the domain emits nothing.
+- **`tracing-subscriber` gets no rule of its own.** It was proposed while records went through `tracing`, when an adapter that installed a subscriber would have taken them. They don't, and only `main.rs` installs one.
