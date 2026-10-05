@@ -127,8 +127,9 @@ rmcp = { version = "=3.4.0", default-features = false, features = [
 # hand-written fixtures (build-plan.md, phase 11), since every other check of the
 # file reads it with the same opentelemetry-proto code that writes it.
 
-# Span and log record API for telemetry-otel. `internal-logs`, here and below, sends
-# SDK export failures to `tracing`; without it the batch threads drop them.
+# The API every emitting crate instruments with, and the tracer and logger for the
+# loop to hold. `internal-logs`, here and below, sends SDK export failures to
+# `tracing`; without it the batch threads drop them.
 opentelemetry = { version = "=0.33.0", default-features = false, features = [
   "trace",
   "logs",

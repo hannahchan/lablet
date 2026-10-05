@@ -10,6 +10,7 @@ mod observer;
 mod provider;
 mod service;
 mod shown;
+pub mod telemetry;
 mod tool;
 mod toolset;
 mod trace;
