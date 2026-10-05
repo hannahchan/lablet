@@ -1267,3 +1267,7 @@ Decided by the owner, settling the last two questions of phase 6a's plan. The sp
 ## 2026-10-05 Attribute order isn't part of the telemetry contract
 
 Phase 6a's review found that the generated structs list attributes in another order than the observer built them, and that the golden comparison would fail on it alone. OTLP carries attributes as a list, but the specification treats them as a map keyed by name, and no collector, backend or `weaver live-check` reads meaning into the order. So the order is free to change, the golden comparison sorts each signal's attributes by key before it compares, and a template may order fields as reads best.
+
+## 2026-10-05 A third document in `contributing/`
+
+Amends "A second document in `contributing/`": it now holds three, `README.md` for the rules, `reviews.md` for what to look for in a review, and `instrumentation.md` for how lablet's telemetry is produced and why. Asked for by the owner, for a reader new to the code. The rules stay in `README.md`, where each is a gate or a labelled review convention; the new page explains the approach behind them, which the decisions of 2026-10-03 to 2026-10-05 spread over seven entries. It describes the design phase 6a builds, and says so until that phase's design commit.

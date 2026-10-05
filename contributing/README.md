@@ -1,6 +1,6 @@
 # Contributing
 
-How to work in this repository. The what and why live in [../product/](../product/). What to look for in a review lives in [reviews.md](reviews.md).
+How to work in this repository. The what and why live in [../product/](../product/). What to look for in a review lives in [reviews.md](reviews.md). How lablet's telemetry is produced, and why, lives in [instrumentation.md](instrumentation.md).
 
 ## Layout
 
