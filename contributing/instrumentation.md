@@ -2,7 +2,7 @@
 
 How lablet produces its telemetry, and how to add to it. [README.md](README.md) holds the rules the gates enforce; this page explains the approach behind them, for someone new to the code.
 
-Status: this is the design phase 6a builds ([build plan](../product/build-plan.md)). Until that phase lands, the code still reports to a `RunObserver` that the `telemetry-otel` adapter turns into spans and records, and the registry's constants live in `lablet-telemetry-registry`. The phase's design commit removes this paragraph.
+Status: phase 6a is building this. Until the phase closes, the code still reports to a `RunObserver` that the `telemetry-otel` adapter turns into spans and records, the registry's constants live in `lablet-telemetry-registry`, and the adapter ring may still hold the SDK, since `telemetry-otel` does, so the lint's rule for adapters lands with its removal; the phase's last landing removes this paragraph.
 
 ## What lablet emits, and why it matters
 
@@ -34,7 +34,7 @@ The OpenTelemetry Rust project's guidance is to emit logs through `tracing` and 
 | Export (`crates/export/otlp`)           | yes               | yes               | yes                     |
 | Composition root (`apps/lablet`)        | yes               | yes               | yes                     |
 
-The domain has no clock and does no I/O, so it has nothing to instrument. The SDK is what a process installs, so only the composition root, and the export crate it alone depends on, may hold it. `cargo xtask lint-layers` enforces the first two columns.
+The domain has no clock and does no I/O, so it has nothing to instrument. The SDK is what a process installs, so only the composition root, and the export crate it alone depends on, may hold it. `cargo xtask lint-layers` enforces the first two columns, the adapter row's SDK cell aside until phase 6a closes.
 
 **4. Time comes from the loop.** The loop measures every call on its injected `Clock`, and each span and record gets exactly those times: a span is opened with an explicit start time and ended with an explicit end time, and a record carries the time the thing it reports happened. Never let the SDK read the system clock for a span or record. This keeps lablet's own overhead out of the agent's measured latency, makes a span's duration equal the latency the transcript and the wide event report, lets tests drive time with a fake clock, and keeps a mid-run clock adjustment from skewing durations.
 
@@ -46,9 +46,9 @@ The domain has no clock and does no I/O, so it has nothing to instrument. The SD
 
 The registry is organised by crate. A signal is declared in the folder of the crate that emits it, and that crate's generated module holds it:
 
-- **`shared/`** holds the attributes and the join group several crates use. It generates nothing of its own.
+- **`shared/`** holds the attributes, the resource and the join group several crates use. It generates nothing of its own.
 - **`application/run/`** holds what the loop emits: the chat and tool spans, the failed-attempt and content records, and the retry event.
-- **`apps/lablet/`** holds what the composition root emits: the root span, the wide event, and the resource.
+- **`apps/lablet/`** holds what the composition root emits: the root span and the wide event.
 
 An adapter gets a folder when it first emits a signal of its own.
 
@@ -85,15 +85,15 @@ A call site fills a struct and hands it on; it never writes a key or calls an AP
 
 ## What holds it
 
-| Check                                 | When                     | What it catches                                                                       |
-| ------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------- |
-| `cargo xtask weaver check`            | pre-commit, pre-push, CI | a registry that breaks the conventions or lablet's policies, annotations included     |
-| `cargo xtask weaver generate --check` | pre-commit, pre-push, CI | generated code or reference pages that differ from what the registry renders to       |
-| The build                             | always                   | a call site that doesn't fill a field the registry added or now requires              |
-| `cargo xtask lint-layers`             | pre-commit, pre-push, CI | the API in the domain, the SDK outside the composition root and export crate          |
-| The golden comparison                 | tests                    | a change in what a run emits, with ids, times and attribute order normalised          |
-| `cargo xtask weaver live-check`       | CI                       | an emitted attribute or record the registry doesn't declare, or one of the wrong type |
-| The coverage and mutation floors      | CI, daily                | generated or hand-written telemetry code that no test reaches or checks               |
+| Check                                 | When                     | What it catches                                                                                                       |
+| ------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `cargo xtask weaver check`            | pre-commit, pre-push, CI | a registry that breaks the conventions or lablet's policies, annotations included                                     |
+| `cargo xtask weaver generate --check` | pre-commit, pre-push, CI | generated code or reference pages that differ from what the registry renders to                                       |
+| The build                             | always                   | a call site that doesn't fill a field the registry added or now requires                                              |
+| `cargo xtask lint-layers`             | pre-commit, pre-push, CI | the API in the domain, the SDK outside the composition root and export crate (the adapter ring from phase 6a's close) |
+| The golden comparison                 | tests                    | a change in what a run emits, with ids, times and attribute order normalised                                          |
+| `cargo xtask weaver live-check`       | CI                       | an emitted attribute or record the registry doesn't declare, or one of the wrong type                                 |
+| The coverage and mutation floors      | CI, daily                | generated or hand-written telemetry code that no test reaches or checks                                               |
 
 ## Further reading
 

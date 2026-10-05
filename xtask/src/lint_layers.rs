@@ -1,6 +1,12 @@
 //! Layer rules over the workspace (spec §2, contributing "Architecture
 //! rules"). A crate's ring is read from its path, and its dependencies, dev
-//! ones aside, are checked against what that ring may reach.
+//! ones aside, are checked against what that ring may reach. The export ring,
+//! `crates/export/*`, is reached only from the composition root, `tests/`
+//! crates aside, and a
+//! forbidden family may let through the one crate named like the family: the
+//! application ring forbids the `opentelemetry` family and allows
+//! `opentelemetry` itself, the API, since instrumented code depends on the API
+//! and only the process that runs it installs the SDK.
 //!
 //! `lint-manifests` makes every dependency of a member an inherited entry of
 //! `[workspace.dependencies]`, so that table is where a crate's real name and
@@ -19,6 +25,11 @@ pub enum Ring {
     Application,
     /// `crates/adapters/secondary/*`: driven adapters and their shared kernels.
     SecondaryAdapter,
+    /// `crates/export/*`: the OpenTelemetry SDK and what lablet adds to it,
+    /// which implements the SDK's traits and no port, so it is neither an
+    /// adapter nor part of the composition root, the only ring that may reach it
+    /// in `[dependencies]`, `tests/` crates aside.
+    Export,
     /// `apps/*`: the composition root.
     CompositionRoot,
     /// `tests/*`: test support, reached only through `[dev-dependencies]`.
@@ -31,10 +42,18 @@ impl fmt::Display for Ring {
             Self::Domain => "Domain",
             Self::Application => "Application",
             Self::SecondaryAdapter => "Secondary Adapter",
+            Self::Export => "Export",
             Self::CompositionRoot => "Composition Root",
             Self::TestSupport => "Test Support",
         })
     }
+}
+
+/// Whether the crate named exactly like a forbidden family is let through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Namesake {
+    Forbidden,
+    Allowed,
 }
 
 /// The prefixes are disjoint, so a member falls in at most one ring; one that
@@ -44,6 +63,7 @@ const RINGS: &[(&str, Ring)] = &[
     ("crates/domain/", Ring::Domain),
     ("crates/application/", Ring::Application),
     ("crates/adapters/secondary/", Ring::SecondaryAdapter),
+    ("crates/export/", Ring::Export),
     ("apps/", Ring::CompositionRoot),
     ("tests/", Ring::TestSupport),
 ];
@@ -53,17 +73,19 @@ impl Ring {
     const fn may_depend_on(self) -> &'static [Self] {
         match self {
             Self::Domain | Self::Application => &[Self::Domain],
-            Self::SecondaryAdapter => &[Self::Application, Self::Domain],
+            Self::SecondaryAdapter | Self::Export => &[Self::Application, Self::Domain],
             Self::CompositionRoot => &[
                 Self::Domain,
                 Self::Application,
                 Self::SecondaryAdapter,
+                Self::Export,
                 Self::CompositionRoot,
             ],
             Self::TestSupport => &[
                 Self::Domain,
                 Self::Application,
                 Self::SecondaryAdapter,
+                Self::Export,
                 Self::CompositionRoot,
                 Self::TestSupport,
             ],
@@ -76,31 +98,59 @@ impl Ring {
 
     /// External crate families this ring may not use: the runtime, transport,
     /// and telemetry frameworks belong to adapters and the composition root.
-    /// `serde` and `serde_json` are allowed everywhere (decisions.md, "serde
-    /// derives allowed in the domain").
-    const fn forbidden_families(self) -> &'static [&'static str] {
+    /// The application may name the OpenTelemetry API, `opentelemetry` itself,
+    /// and no other member of its family, so the loop instruments itself while
+    /// the SDK stays in the composition root and the export ring. `serde` and
+    /// `serde_json` are allowed everywhere (decisions.md, "serde derives
+    /// allowed in the domain").
+    const fn forbidden_families(self) -> &'static [(&'static str, Namesake)] {
         match self {
             Self::Domain => &[
-                "tokio",
-                "reqwest",
-                "tracing",
-                "opentelemetry",
-                "rmcp",
-                "tonic",
-                "axum",
-                "hyper",
+                ("tokio", Namesake::Forbidden),
+                ("reqwest", Namesake::Forbidden),
+                ("tracing", Namesake::Forbidden),
+                ("opentelemetry", Namesake::Forbidden),
+                ("rmcp", Namesake::Forbidden),
+                ("tonic", Namesake::Forbidden),
+                ("axum", Namesake::Forbidden),
+                ("hyper", Namesake::Forbidden),
             ],
             Self::Application => &[
-                "tokio",
-                "reqwest",
-                "opentelemetry",
-                "rmcp",
-                "tonic",
-                "axum",
-                "hyper",
+                ("tokio", Namesake::Forbidden),
+                ("reqwest", Namesake::Forbidden),
+                ("rmcp", Namesake::Forbidden),
+                ("tonic", Namesake::Forbidden),
+                ("axum", Namesake::Forbidden),
+                ("hyper", Namesake::Forbidden),
+                ("opentelemetry", Namesake::Allowed),
             ],
-            Self::SecondaryAdapter | Self::CompositionRoot | Self::TestSupport => &[],
+            Self::SecondaryAdapter | Self::Export | Self::CompositionRoot | Self::TestSupport => {
+                &[]
+            }
         }
+    }
+
+    /// The rule a finding quotes, naming what the ring may not use and the
+    /// namesake it may.
+    fn forbidden_rule(self) -> String {
+        let mut whole = Vec::new();
+        let mut excepted = Vec::new();
+        for (family, namesake) in self.forbidden_families() {
+            match namesake {
+                Namesake::Forbidden => whole.push((*family).to_owned()),
+                Namesake::Allowed => {
+                    excepted.push(format!(
+                        "any member of the {family} family but {family} itself"
+                    ));
+                }
+            }
+        }
+        let excepted = if excepted.is_empty() {
+            String::new()
+        } else {
+            format!(", or {}", excepted.join(", or "))
+        };
+        format!("{self} may not use {}{excepted}", whole.join(", "))
     }
 }
 
@@ -128,6 +178,11 @@ fn edge_rule(from: Ring, to: Ring) -> String {
     if to == Ring::TestSupport {
         return "only tests/ crates and [dev-dependencies] may depend on a tests/ crate".to_owned();
     }
+    if to == Ring::Export {
+        return "only the composition root may depend on an export crate, tests/ crates and \
+                [dev-dependencies] aside"
+            .to_owned();
+    }
     if from.is_adapter() && to == from {
         return "an adapter may not depend on a sibling adapter; code two adapters share \
                 belongs in a shared kernel under shared/"
@@ -148,13 +203,17 @@ fn edge_rule(from: Ring, to: Ring) -> String {
 
 /// A crate belongs to a family when any `-` or `_` separated part of its name
 /// is the family name, so `opentelemetry` covers `opentelemetry_sdk` and
-/// `tracing-opentelemetry` alike.
+/// `tracing-opentelemetry` alike. A family whose namesake is allowed lets
+/// through the crate whose whole name is the family's, and nothing else.
 fn forbidden_family(ring: Ring, name: &str) -> Option<&'static str> {
     let normalised = normalise(name);
     ring.forbidden_families()
         .iter()
-        .find(|family| normalised.split('_').any(|part| part == **family))
-        .copied()
+        .find(|(family, namesake)| {
+            normalised.split('_').any(|part| part == *family)
+                && !(*namesake == Namesake::Allowed && normalised == *family)
+        })
+        .map(|(family, _)| *family)
 }
 
 /// Every finding in the workspace, in member order, one line each.
@@ -205,8 +264,8 @@ pub fn lint(workspace: &Workspace) -> Vec<String> {
                             };
                             report(format!(
                                 "{header} depends on {name}{declared}, of the `{family}` \
-                                 family. Rule: {ring} may not use {}",
-                                ring.forbidden_families().join(", ")
+                                 family. Rule: {}",
+                                ring.forbidden_rule()
                             ));
                         }
                     }
@@ -277,6 +336,7 @@ mod tests {
     const FAKE: &str = "crates/adapters/secondary/provider-fake";
     const OTEL: &str = "crates/adapters/secondary/telemetry-otel";
     const REGISTRY: &str = "crates/adapters/secondary/shared/telemetry-registry";
+    const EXPORT: &str = "crates/export/otlp";
 
     /// Declares `ALL_RINGS` beside a match with an arm for each ring it
     /// names and for nothing else, so a ring the enum gains doesn't compile
@@ -296,6 +356,7 @@ mod tests {
         Domain,
         Application,
         SecondaryAdapter,
+        Export,
         CompositionRoot,
         TestSupport
     );
@@ -308,6 +369,7 @@ mod tests {
             (FAKE, Some(Ring::SecondaryAdapter)),
             // A shared kernel classifies into its ring like any sibling.
             (REGISTRY, Some(Ring::SecondaryAdapter)),
+            (EXPORT, Some(Ring::Export)),
             ("apps/lablet", Some(Ring::CompositionRoot)),
             ("tests/mcp-server", Some(Ring::TestSupport)),
             ("xtask", None),
@@ -333,11 +395,19 @@ mod tests {
 
     #[test]
     fn edges_point_inward_and_a_kernel_opens_only_its_own_adapter_ring() {
-        let reachable = |from| match from {
-            Ring::Domain | Ring::Application => &ALL_RINGS[..1],
-            Ring::SecondaryAdapter => &ALL_RINGS[..2],
-            Ring::CompositionRoot => &ALL_RINGS[..4],
-            Ring::TestSupport => &ALL_RINGS[..],
+        let reachable = |from| -> &[Ring] {
+            match from {
+                Ring::Domain | Ring::Application => &[Ring::Domain],
+                Ring::SecondaryAdapter | Ring::Export => &[Ring::Domain, Ring::Application],
+                Ring::CompositionRoot => &[
+                    Ring::Domain,
+                    Ring::Application,
+                    Ring::SecondaryAdapter,
+                    Ring::Export,
+                    Ring::CompositionRoot,
+                ],
+                Ring::TestSupport => &ALL_RINGS[..],
+            }
         };
         for from in ALL_RINGS {
             for to in ALL_RINGS {
@@ -351,6 +421,20 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn only_the_composition_root_and_test_support_reach_the_export_ring() {
+        let into_export: Vec<Ring> = ALL_RINGS
+            .into_iter()
+            .filter(|from| edge_permitted(*from, Ring::Export, false))
+            .collect();
+        assert_eq!(into_export, [Ring::CompositionRoot, Ring::TestSupport]);
+        let from_export: Vec<Ring> = ALL_RINGS
+            .into_iter()
+            .filter(|to| edge_permitted(Ring::Export, *to, false))
+            .collect();
+        assert_eq!(from_export, [Ring::Domain, Ring::Application]);
     }
 
     #[test]
@@ -368,12 +452,25 @@ mod tests {
             edge_rule(Ring::SecondaryAdapter, Ring::SecondaryAdapter)
                 .starts_with("an adapter may not depend on a sibling adapter"),
         );
+        for from in [Ring::Application, Ring::SecondaryAdapter, Ring::Export] {
+            assert_eq!(
+                edge_rule(from, Ring::Export),
+                "only the composition root may depend on an export crate, tests/ crates and \
+                 [dev-dependencies] aside",
+                "{from}"
+            );
+        }
+        assert_eq!(
+            edge_rule(Ring::Export, Ring::SecondaryAdapter),
+            "Export may depend only on Application, Domain"
+        );
     }
 
     #[test]
     fn a_family_covers_both_spellings_and_every_member_crate() {
+        // In the domain `tracing-opentelemetry` is of the `tracing` family
+        // first, so the application, which allows `tracing`, shows the match.
         for name in [
-            "opentelemetry",
             "opentelemetry_sdk",
             "opentelemetry-otlp",
             "tracing-opentelemetry",
@@ -384,12 +481,45 @@ mod tests {
                 "{name}"
             );
         }
+        assert_eq!(
+            forbidden_family(Ring::Domain, "opentelemetry"),
+            Some("opentelemetry")
+        );
         assert_eq!(forbidden_family(Ring::Domain, "tokio-util"), Some("tokio"));
         assert_eq!(forbidden_family(Ring::Domain, "hyper_util"), Some("hyper"));
         // A name that only contains a family name is not in the family.
         for name in ["hyperloglog", "axum2", "thiserror", "async-trait", "tower"] {
             assert_eq!(forbidden_family(Ring::Domain, name), None, "{name}");
         }
+    }
+
+    #[test]
+    fn the_application_may_name_the_opentelemetry_api_and_no_other_member_of_its_family() {
+        assert_eq!(forbidden_family(Ring::Application, "opentelemetry"), None);
+        for name in [
+            "opentelemetry_sdk",
+            "opentelemetry-otlp",
+            "opentelemetry-proto",
+            "opentelemetry-http",
+            "opentelemetry-appender-tracing",
+            "tracing-opentelemetry",
+        ] {
+            assert_eq!(
+                forbidden_family(Ring::Application, name),
+                Some("opentelemetry"),
+                "{name}"
+            );
+        }
+        // The namesake is let through only where the ring says so.
+        assert_eq!(
+            forbidden_family(Ring::Domain, "opentelemetry"),
+            Some("opentelemetry")
+        );
+        assert_eq!(
+            Ring::Application.forbidden_rule(),
+            "Application may not use tokio, reqwest, rmcp, tonic, axum, hyper, or any member of \
+             the opentelemetry family but opentelemetry itself"
+        );
     }
 
     #[test]
@@ -409,7 +539,10 @@ tokio = "=1.0.0"
 tracing = "=0.1.0"
 tonic-build = "=0.14.0"
 otel = { package = "opentelemetry", version = "=0.30.0" }
+otel-sdk = { package = "opentelemetry_sdk", version = "=0.30.0" }
+opentelemetry = { package = "opentelemetry_sdk", version = "=0.30.0" }
 lablet-model = { path = "crates/domain/model", version = "0.1.0" }
+lablet-otlp = { path = "crates/export/otlp", version = "0.1.0" }
 lablet-run = { path = "crates/application/run", version = "0.1.0" }
 lablet-provider-fake = { path = "crates/adapters/secondary/provider-fake", version = "0.1.0" }
 lablet-telemetry-registry = { path = "crates/adapters/secondary/shared/telemetry-registry", version = "0.1.0" }
@@ -480,21 +613,87 @@ lablet-test-mcp-server = { path = "tests/mcp-server", version = "0.1.0" }
     }
 
     #[test]
-    fn an_application_crate_may_use_tracing_and_none_of_the_other_families() {
+    fn an_application_crate_may_use_tracing_and_the_otel_api_and_none_of_the_other_families() {
         let workspace = base()
             .member(
                 "crates/application/x",
                 "lablet-x",
-                &inherit("dependencies", &["tracing", "tokio"]),
+                &inherit("dependencies", &["tracing", "otel", "otel-sdk", "tokio"]),
             )
             .load();
         assert_findings(
             &lint(&workspace),
             &[
+                "lablet-x (crates/application/x, Application): [dependencies] depends on \
+                 opentelemetry_sdk (declared as `otel-sdk`), of the `opentelemetry` family. \
+                 Rule: Application may not use tokio, reqwest, rmcp, tonic, axum, hyper, or any \
+                 member of the opentelemetry family but opentelemetry itself",
                 "lablet-x (crates/application/x, Application): [dependencies] depends on tokio, \
-                 of the `tokio` family. Rule: Application may not use tokio, reqwest, \
-                 opentelemetry, rmcp, tonic, axum, hyper",
+                 of the `tokio` family. Rule: Application may not use tokio, reqwest, rmcp, \
+                 tonic, axum, hyper, or any member of the opentelemetry family but \
+                 opentelemetry itself",
             ],
+        );
+    }
+
+    #[test]
+    fn the_application_exception_is_on_the_real_name_and_not_the_manifest_key() {
+        // The key is the family's own name; the package behind it is the SDK.
+        let workspace = base()
+            .member(
+                "crates/application/x",
+                "lablet-x",
+                &inherit("dependencies", &["opentelemetry"]),
+            )
+            .load();
+        assert_findings(
+            &lint(&workspace),
+            &[
+                "lablet-x (crates/application/x, Application): [dependencies] depends on \
+               opentelemetry_sdk (declared as `opentelemetry`), of the `opentelemetry` family",
+            ],
+        );
+    }
+
+    #[test]
+    fn only_the_composition_root_may_depend_on_an_export_crate() {
+        let export = |otlp: &[&str], fake: &[&str], run: &[&str], app: &[&str]| {
+            let workspace = FixtureWorkspace::new(ENTRIES)
+                .member(MODEL, "lablet-model", "")
+                .member(RUN, "lablet-run", &inherit("dependencies", run))
+                .member(FAKE, "lablet-provider-fake", &inherit("dependencies", fake))
+                .member(EXPORT, "lablet-otlp", &inherit("dependencies", otlp))
+                .member("apps/lablet", "lablet", &inherit("dependencies", app))
+                .load();
+            lint(&workspace)
+        };
+        // The export crate holds the SDK and reaches the application and the
+        // domain; the composition root is the one crate that reaches it.
+        assert_findings(
+            &export(
+                &["otel-sdk", "lablet-run", "lablet-model"],
+                &["lablet-run"],
+                &["lablet-model"],
+                &["lablet-otlp", "lablet-provider-fake", "lablet-run"],
+            ),
+            &[],
+        );
+        let rule = "depends on lablet-otlp (crates/export/otlp, Export). Rule: only the \
+                    composition root may depend on an export crate, tests/ crates and \
+                    [dev-dependencies] aside";
+        assert_findings(
+            &export(&[], &["lablet-otlp"], &["lablet-otlp"], &[]),
+            &[
+                &format!("lablet-run ({RUN}, Application): [dependencies] {rule}"),
+                &format!("lablet-provider-fake ({FAKE}, Secondary Adapter): [dependencies] {rule}"),
+            ],
+        );
+        assert_findings(
+            &export(&["lablet-provider-fake"], &[], &[], &[]),
+            &[&format!(
+                "lablet-otlp ({EXPORT}, Export): [dependencies] depends on lablet-provider-fake \
+                 ({FAKE}, Secondary Adapter). Rule: Export may depend only on Application, Domain"
+            )],
         );
     }
 
