@@ -9,9 +9,13 @@ use std::sync::Arc;
 
 use lablet_model::{RunOutcome, StopReason, ToolSpec};
 use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
+use lablet_run::telemetry::Bridge;
 use lablet_run::{FilterList, RunObserver, RunService, ToolExecutor, ToolSet, ToolSetError};
 use lablet_telemetry_otel::{FileTarget, OtelBuildError, OtelObserver, OtlpSettings};
 use lablet_tools_builtin::{BuiltinTools, SettingsError};
+use opentelemetry::global::BoxedTracer;
+use opentelemetry::logs::{LoggerProvider as _, NoopLoggerProvider};
+use opentelemetry::trace::noop::NoopTracer;
 
 use crate::cancel::RunCancellation;
 use crate::clock::TokioClock;
@@ -627,10 +631,15 @@ async fn build_in(
     told.extend(observers);
 
     let cancellation = Arc::new(RunCancellation::default());
+    // The run's telemetry still comes from the observer, so what the loop
+    // emits itself goes nowhere until the export crate's providers take the
+    // observer's place.
     let service = RunService::new(
         Arc::clone(&provider) as _,
         Arc::clone(&tools),
         Arc::new(FanOut::new(told)),
+        BoxedTracer::new(Box::new(NoopTracer::new())),
+        Box::new(Bridge::new(NoopLoggerProvider::new().logger("lablet"))),
         Arc::new(TokioClock),
         Arc::clone(&cancellation) as _,
         settings.stop,

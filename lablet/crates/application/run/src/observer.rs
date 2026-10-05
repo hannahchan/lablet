@@ -149,9 +149,9 @@ pub enum EventKind {
         /// What became of it, which is never
         /// [`ToolCallStatus::NotRun`]: no event reports such a call.
         status: ToolCallStatus,
-        /// When the call began, in whole milliseconds since the run started.
-        /// The call began once the observer had been told of it, so only
-        /// the event that ends the call can say when that was.
+        /// When the call began, in whole milliseconds since the run started:
+        /// the one reading of the clock the call is timed from, taken when
+        /// its turn came, which only the event that ends the call reports.
         started_ms: u64,
         /// How long it took, in whole milliseconds.
         latency_ms: u64,

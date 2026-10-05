@@ -2,7 +2,7 @@
 
 How lablet produces its telemetry, and how to add to it. [README.md](README.md) holds the rules the gates enforce; this page explains the approach behind them, for someone new to the code.
 
-Status: phase 6a is building this. Until the phase closes, the code still reports to a `RunObserver` that the `telemetry-otel` adapter turns into spans and records, the registry's constants live in `lablet-telemetry-registry` beside the generated modules, of which the composition root's is checked in but not declared until the last landing, and the adapter ring may still hold the SDK, since `telemetry-otel` does, so the lint's rule for adapters lands with its removal; the phase's last landing removes this paragraph.
+Status: phase 6a is building this. The loop now emits its spans and records through the OpenTelemetry API and lablet's logger, filling the structs generated into `lablet-run`, and its scenarios read them from the SDK's in-memory exporters. Until the phase's last landing, the composition root still exports through the `RunObserver` that the `telemetry-otel` adapter turns into spans and records, and hands the loop a no-op tracer and logger, so what a run exports doesn't change yet; the registry's constants still live in `lablet-telemetry-registry` beside the generated modules, of which the composition root's is checked in but not declared until that landing; and the adapter ring may still hold the SDK, since `telemetry-otel` does, so the lint's rule for adapters lands with its removal. The last landing removes this paragraph.
 
 ## What lablet emits, and why it matters
 

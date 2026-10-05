@@ -1095,6 +1095,7 @@ dependencies = [
  "lablet-tools-builtin",
  "lablet-transcript-json",
  "nix",
+ "opentelemetry",
  "schemars",
  "serde",
  "serde-saphyr",
@@ -1263,6 +1264,7 @@ dependencies = [
  "lablet-policy",
  "lablet-provider-fake",
  "lablet-run",
+ "opentelemetry",
  "tokio",
 ]
 

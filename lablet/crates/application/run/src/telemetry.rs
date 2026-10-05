@@ -12,9 +12,12 @@
 //! object-safe logger for the loop to hold beside its tracer.
 //!
 //! [`generated`] is the module `cargo xtask weaver generate` writes from the
-//! registry folder `lablet/telemetry/registry/application/run/`, and
-//! [`spellings`] holds the domain's enums to its enums.
+//! registry folder `lablet/telemetry/registry/application/run/`,
+//! [`spellings`] holds the domain's enums to its enums, and the crate's own
+//! `conversation` module rebuilds the content the records carry from what
+//! the loop saw.
 
+pub(crate) mod conversation;
 pub mod generated;
 pub mod spellings;
 

@@ -14,6 +14,7 @@ lablet-model.workspace = true
 lablet-policy.workspace = true
 lablet-provider-fake.workspace = true
 lablet-run.workspace = true
+opentelemetry.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

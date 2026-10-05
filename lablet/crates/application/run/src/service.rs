@@ -5,17 +5,31 @@ use std::num::NonZeroU32;
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::Poll;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lablet_model::{
-    Answer, CacheScope, Cost, Final, FinishedRun, KeptOutput, Message, OutputCap, Pending,
-    Progress, Prompts, ProviderErrorKind, ProviderResponse, Rates, RequestParams, Responded, Run,
-    RunContext, RunId, RunSetup, Schedule, Secrets, StopReason, ToolCallEnd, ToolCallStatus,
-    ToolInput, ToolSource, ToolUse, Turn, Usage,
+    Answer, CacheScope, Cost, Effort, Endpoint, Final, FinishedRun, KeptOutput, Message, ModelRef,
+    OutputCap, Pending, Progress, Prompts, ProviderErrorKind, ProviderResponse, Rates,
+    RequestParams, Responded, Run, RunContext, RunId, RunSetup, Schedule, Secrets, StopReason,
+    ToolCallEnd, ToolCallStatus, ToolInput, ToolSource, ToolUse, Turn, Usage,
 };
 use lablet_policy::{Pricing, RetryPolicy, StopPolicy};
+use opentelemetry::Context;
+use opentelemetry::global::{BoxedSpan, BoxedTracer};
+use opentelemetry::trace::{
+    FutureExt as _, Span as _, SpanKind, Status, TraceContextExt as _, Tracer as _,
+};
 
 use crate::shown::{OfferedSpecs, system_prompt_digest};
+use crate::telemetry::conversation::{Conversation, Exchange, tool_definitions, tool_result};
+use crate::telemetry::generated::{
+    GenAiClientInferenceOperationDetails,
+    GenAiClientInferenceOperationDetailsGenAiOperationName as Operation,
+    GenAiClientOperationException, Join, LabletChat, LabletChatErrorType, LabletExecuteTool,
+    LabletExecuteToolNetworkTransport, LabletRetry,
+};
+use crate::telemetry::spellings::tool_error_type;
+use crate::telemetry::{Logger, count_of};
 use crate::{
     Cancellation, Clock, EventKind, McpCallMeta, ModelProvider, ProviderError, ProviderRequest,
     RunEvent, RunObserver, ToolCall, ToolSet, bounded,
@@ -50,6 +64,12 @@ pub struct RunService {
     provider: Arc<dyn ModelProvider>,
     tools: Arc<ToolSet>,
     observer: Arc<dyn RunObserver>,
+    /// What every span of a run is opened through. Never the global tracer:
+    /// one process may hold several loops, each with its own destinations,
+    /// and tests run in parallel.
+    tracer: BoxedTracer,
+    /// What every record of a run goes through, for the same reason.
+    logger: Box<dyn Logger>,
     clock: Arc<dyn Clock>,
     cancel: Arc<dyn Cancellation>,
     stop: StopPolicy,
@@ -62,29 +82,233 @@ pub struct RunService {
     secrets: Arc<Secrets>,
 }
 
-/// A provider call that answered, with the timing of the attempt that did.
-struct Answered {
-    response: ProviderResponse,
-    began: Duration,
-    latency: Duration,
+/// What the status of a chat span says when the run was cancelled while
+/// the attempt was in flight. Nothing failed, so there's no error message
+/// to carry.
+const CANCELLED_IN_FLIGHT: &str = "the run was cancelled while the attempt was in flight";
+
+/// What every signal of one run shares, fixed when the run starts.
+struct Running {
+    run_id: RunId,
+    /// The reading of the clock the run started at, which every offset is
+    /// measured from.
+    started: Instant,
+    /// When the run started on the wall clock, which every span and record
+    /// is timed from.
+    started_unix_ms: u64,
+    /// Whether the run's content goes into the content records.
+    capture: bool,
+    /// The context `run` was called in: the parent of every span, and the
+    /// context the record of the tools offered is written in. It's taken
+    /// once, because the calls of a group run on tasks of their own, whose
+    /// current context isn't the caller's.
+    parent: Context,
+    /// The keys a consumer groups by, on every span and record of the run.
+    join: Join,
+    /// What every chat span says the run's provider calls asked for.
+    asked: Asked,
 }
 
-/// When a call began: a reading of the clock taken once an observer has been
-/// told of the call, so that nothing measured from it holds the time the
-/// observer took.
+impl Running {
+    /// The instant `offset_ms` into the run.
+    ///
+    /// The sum is of milliseconds in a `u64`, and the clocks of the
+    /// platforms lablet runs on count seconds in an `i64`, so every instant
+    /// this can name is one the clock can say.
+    fn at(&self, offset_ms: u64) -> SystemTime {
+        UNIX_EPOCH + Duration::from_millis(self.started_unix_ms.saturating_add(offset_ms))
+    }
+
+    /// How far into the run the reading `at` is.
+    fn offset(&self, at: Instant) -> Duration {
+        at.saturating_duration_since(self.started)
+    }
+
+    /// The chat span of the attempt `attempt` of the turn `turn`, as far as
+    /// what it asked for says it; what it got comes when the attempt ends.
+    fn chat(&self, turn: u32, attempt: u32, request_bytes: u64) -> LabletChat {
+        let asked = &self.asked;
+        LabletChat {
+            join: self.join.clone(),
+            gen_ai_provider_name: asked.provider_name.clone(),
+            gen_ai_request_max_tokens: asked.max_tokens,
+            gen_ai_request_model: asked.model.clone(),
+            lablet_attempt: i64::from(attempt),
+            lablet_request_bytes: count_of(request_bytes),
+            lablet_turn: i64::from(turn),
+            error_type: None,
+            gen_ai_request_reasoning_level: asked.reasoning_level.clone(),
+            gen_ai_request_seed: asked.seed,
+            gen_ai_request_temperature: asked.temperature,
+            gen_ai_response_finish_reasons: None,
+            gen_ai_response_id: None,
+            gen_ai_response_model: None,
+            gen_ai_usage_cache_read_input_tokens: None,
+            gen_ai_usage_cache_write_input_tokens: None,
+            gen_ai_usage_input_tokens: None,
+            gen_ai_usage_output_tokens: None,
+            gen_ai_usage_reasoning_output_tokens: None,
+            server_address: asked.server_address.clone(),
+            server_port: asked.server_port,
+        }
+    }
+
+    /// A content record that belongs to a span of the turn `turn`, or to
+    /// the run when there's no turn yet, with nothing in it but the run's
+    /// keys and its operation.
+    fn content(
+        &self,
+        operation: Operation,
+        turn: Option<u32>,
+    ) -> GenAiClientInferenceOperationDetails {
+        GenAiClientInferenceOperationDetails {
+            join: self.join.clone(),
+            gen_ai_operation_name: operation,
+            gen_ai_input_messages: None,
+            gen_ai_output_messages: None,
+            gen_ai_system_instructions: None,
+            gen_ai_tool_call_arguments: None,
+            gen_ai_tool_call_id: None,
+            gen_ai_tool_call_result: None,
+            gen_ai_tool_definitions: None,
+            gen_ai_tool_name: None,
+            lablet_turn: turn.map(i64::from),
+        }
+    }
+}
+
+/// What every provider call of a run asks for, as its chat span says it.
+struct Asked {
+    provider_name: String,
+    model: String,
+    max_tokens: i64,
+    temperature: Option<f64>,
+    seed: Option<i64>,
+    reasoning_level: Option<String>,
+    server_address: Option<String>,
+    server_port: Option<i64>,
+}
+
+impl Asked {
+    /// What calls to `model` at `endpoint` ask for with `request`.
+    fn of(model: &ModelRef, endpoint: Option<Endpoint>, request: &RequestParams) -> Self {
+        let (server_address, server_port) = match endpoint {
+            Some(Endpoint { host, port }) => (Some(host), Some(i64::from(port))),
+            None => (None, None),
+        };
+        Self {
+            provider_name: model.api.provider().as_str().to_owned(),
+            model: model.name.clone(),
+            max_tokens: i64::from(request.max_tokens),
+            temperature: request.temperature,
+            seed: request.seed,
+            reasoning_level: request.effort.map(Effort::as_str).map(str::to_owned),
+            server_address,
+            server_port,
+        }
+    }
+}
+
+/// Sets what the provider said the attempt used on `chat`. A count the
+/// provider didn't report stays off the span.
+fn spent(chat: &mut LabletChat, usage: &Usage) {
+    chat.gen_ai_usage_input_tokens = Some(count_of(usage.input_tokens));
+    chat.gen_ai_usage_output_tokens = Some(count_of(usage.output_tokens));
+    chat.gen_ai_usage_reasoning_output_tokens = usage.reasoning_output_tokens.map(count_of);
+    chat.gen_ai_usage_cache_read_input_tokens = usage.cache_read_tokens.map(count_of);
+    chat.gen_ai_usage_cache_write_input_tokens = usage.cache_write_tokens.map(count_of);
+}
+
+/// The `mcp.*`, `jsonrpc`, `rpc` and `network.transport` attributes of a
+/// tool span, which a call over MCP carries back and any other call lacks.
+struct OverMcp {
+    method: Option<String>,
+    session_id: Option<String>,
+    protocol_version: Option<String>,
+    jsonrpc_request_id: Option<String>,
+    rpc_status_code: Option<String>,
+    transport: Option<LabletExecuteToolNetworkTransport>,
+}
+
+impl OverMcp {
+    fn of(mcp: Option<&McpCallMeta>) -> Self {
+        match mcp {
+            Some(mcp) => Self {
+                method: Some(mcp.method.clone()),
+                session_id: mcp.session_id.clone(),
+                protocol_version: mcp.protocol_version.clone(),
+                jsonrpc_request_id: mcp.jsonrpc_request_id.clone(),
+                rpc_status_code: mcp.rpc_status_code.clone(),
+                transport: Some(mcp.transport.into()),
+            },
+            None => Self {
+                method: None,
+                session_id: None,
+                protocol_version: None,
+                jsonrpc_request_id: None,
+                rpc_status_code: None,
+                transport: None,
+            },
+        }
+    }
+}
+
+/// `duration` in whole milliseconds, cut as the model cuts every offset and
+/// latency it records, so a span opens at the instant its record will say
+/// the call began.
+fn whole_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// A call whose turn has come: the one reading of the clock it's timed
+/// from, how far into the run that is, and the time the run has left at it,
+/// which the check that admitted the call found to be some.
 struct Began {
-    /// The reading, which the call's latency is measured from.
     at: Instant,
-    /// How far into the run the call began.
     offset: Duration,
-    /// The time the run has left for the call, and none when the observer
-    /// took the last of what the run had when the call's turn came.
     left: Duration,
 }
 
+/// A chat span opened for an attempt, and what it's filled from when the
+/// attempt ends: the struct that named it, which says what the attempt
+/// asked for and gains what it got, which attempt of which turn it was, and
+/// the reading it's timed from.
+struct Opened {
+    span: BoxedSpan,
+    chat: LabletChat,
+    turn: u32,
+    attempt: u32,
+    began: Began,
+}
+
+/// A provider call that answered, with how long the attempt that did took
+/// and the span it answered in.
+struct Answered {
+    response: ProviderResponse,
+    latency: Duration,
+    opened: Opened,
+}
+
+/// A tool call that's run: the call, its turn, where its tool comes from
+/// and its arguments when they parsed, which the span and the record of
+/// the call are filled from.
+struct Called<'a> {
+    call: &'a ToolUse,
+    turn: u32,
+    source: Option<ToolSource>,
+    input: Option<&'a serde_json::Value>,
+}
+
+/// A tool call that's never run: how far into the run its turn came, and
+/// why nothing was started for it.
+struct Unstarted {
+    offset: Duration,
+    why: &'static str,
+}
+
 /// What became of one tool call. The loop is the only hop between an executor
-/// and an observer, so the call's transport metadata travels with its result
-/// or the `mcp.*` attributes have no way to be set.
+/// and the call's span, so the call's transport metadata travels with its
+/// result or the `mcp.*` attributes have no way to be set.
 struct Settled {
     status: ToolCallStatus,
     output: KeptOutput,
@@ -156,7 +380,7 @@ impl Ending {
 }
 
 impl RunService {
-    /// A loop built from its ports and its policies.
+    /// A loop built from its ports, its telemetry and its policies.
     #[must_use]
     #[expect(
         clippy::too_many_arguments,
@@ -166,6 +390,8 @@ impl RunService {
         provider: Arc<dyn ModelProvider>,
         tools: Arc<ToolSet>,
         observer: Arc<dyn RunObserver>,
+        tracer: BoxedTracer,
+        logger: Box<dyn Logger>,
         clock: Arc<dyn Clock>,
         cancel: Arc<dyn Cancellation>,
         stop: StopPolicy,
@@ -179,6 +405,8 @@ impl RunService {
             provider,
             tools,
             observer,
+            tracer,
+            logger,
             clock,
             cancel,
             stop,
@@ -195,8 +423,12 @@ impl RunService {
     /// Never fails: every way a run can go wrong is a stop reason on the
     /// outcome, so a caller always gets a `FinishedRun` and telemetry always
     /// agrees with what came back.
+    ///
+    /// Every span of the run is a child of the context this is called in,
+    /// which is the root span's when the composition root runs the loop.
     pub async fn run(&mut self, context: RunContext, prompts: Prompts) -> FinishedRun {
         let started = self.clock.now();
+        let parent = Context::current();
         let capture = context.capture_content;
         let run_id = context.run_id.clone();
 
@@ -216,6 +448,15 @@ impl RunService {
             timeout: self.stop.timeout,
             request: self.request.clone(),
         };
+        let running = Running {
+            run_id: run_id.clone(),
+            started,
+            started_unix_ms: context.started_unix_ms,
+            capture,
+            parent,
+            join: Join::from(&context),
+            asked: Asked::of(&setup.model, setup.endpoint.clone(), &self.request),
+        };
 
         self.emit(
             &run_id,
@@ -231,12 +472,26 @@ impl RunService {
         )
         .await;
 
+        // The tools offered are content, so their record is written only
+        // when the run captures it, in the context the run was called in.
+        let mut conversation = if capture {
+            let offered = GenAiClientInferenceOperationDetails {
+                gen_ai_tool_definitions: Some(tool_definitions(self.tools.specs())),
+                ..running.content(Operation::InvokeAgent, None)
+            };
+            self.logger
+                .emit(offered.record(running.at(0), running.parent.span().span_context()));
+            Some(Conversation::opening(prompts.system(), prompts.task()))
+        } else {
+            None
+        };
+
         let run = Run::start(setup, prompts);
-        let (ending, stopped) = self.drive(&run_id, run, bytes, started, capture).await;
+        let (ending, stopped) = self.drive(&running, run, bytes, &mut conversation).await;
 
         let rates = self.pricing.as_ref().map(Pricing::rates);
         let cost = self.pricing.as_ref().and_then(|p| p.cost(&ending.spent()));
-        let finished = ending.finish(stopped, self.elapsed(started), rates, cost);
+        let finished = ending.finish(stopped, self.elapsed(&running), rates, cost);
 
         self.emit(
             &run_id,
@@ -253,32 +508,41 @@ impl RunService {
     /// happens here.
     async fn drive(
         &self,
-        run_id: &RunId,
+        running: &Running,
         mut run: Run,
         mut bytes: RequestBytes,
-        started: Instant,
-        capture: bool,
+        conversation: &mut Option<Conversation>,
     ) -> (Ending, Stopped) {
         let mode = self.tools.completion();
         loop {
-            if let Some(stopped) = self.before_call(&run, started) {
-                return (Ending::Waiting(run), stopped);
-            }
+            let began = match self.admit(&run, running) {
+                Ok(began) => began,
+                Err(stopped) => return (Ending::Waiting(run), stopped),
+            };
 
             let turn = u32::try_from(run.transcript().turns().len())
                 .unwrap_or(u32::MAX)
                 .saturating_add(1);
-            self.emit(run_id, EventKind::TurnStarted { turn }).await;
+            self.emit(&running.run_id, EventKind::TurnStarted { turn })
+                .await;
 
-            let answered = match self.call(run_id, &mut run, &mut bytes, turn, started).await {
+            let answered = match self
+                .call(running, &mut run, &mut bytes, turn, began, conversation)
+                .await
+            {
                 Ok(answered) => answered,
                 Err(stopped) => return (Ending::Waiting(run), stopped),
             };
+            let Answered {
+                response,
+                latency,
+                opened,
+            } = answered;
 
-            let pending = match run.responded(answered.response, answered.began, answered.latency) {
+            let pending = match run.responded(response, opened.began.offset, latency) {
                 Responded::Final(done) => {
                     let reason = self.stop.after_final(&done.turn().record().finish, mode);
-                    self.report_response(run_id, turn, done.turn(), capture)
+                    self.response_came(running, done.turn(), opened, conversation)
                         .await;
                     return (Ending::Final(done), Stopped::just(reason));
                 }
@@ -289,7 +553,7 @@ impl RunService {
                 mode,
                 pending.calls(mode),
             );
-            self.report_response(run_id, turn, pending.turn(), capture)
+            self.response_came(running, pending.turn(), opened, conversation)
                 .await;
             if let Some(reason) = reason {
                 let stopped = Stopped {
@@ -302,83 +566,125 @@ impl RunService {
             // Point R reads only the response, so it lets a run go on whose
             // time the response used up. No tool starts in such a run: its
             // calls stay unanswered, as at any stop ahead of a tool phase.
-            if self.stop.time_left(self.elapsed(started)).is_none() {
+            if self.stop.time_left(self.elapsed(running)).is_none() {
                 return (Ending::Pending(pending), Stopped::just(StopReason::Timeout));
             }
 
-            run = self
-                .run_tools(run_id, pending, turn, started, capture)
-                .await;
+            run = self.run_tools(running, pending, turn).await;
+            // The calls of a group end in any order, so the conversation
+            // learns their results here, in call order, from the turn that
+            // holds every outcome. A call that was never run is in the
+            // transcript and nowhere else, so the conversation isn't told of
+            // it, as the observer never was.
+            if let Some(conversation) = conversation.as_mut() {
+                let outcomes = run.transcript().turns().last().map(Turn::tool_calls);
+                for outcome in outcomes.unwrap_or_default() {
+                    if outcome.status.was_started() {
+                        conversation.answered(
+                            &outcome.call_id,
+                            &outcome.content,
+                            outcome.status.is_error(),
+                        );
+                    }
+                }
+            }
 
             if self.cancel.is_cancelled() {
                 return (Ending::Waiting(run), Stopped::just(StopReason::Cancelled));
             }
-            if let Some(reason) = self.stop.after_tools(&self.progress(&run, started)) {
+            if let Some(reason) = self.stop.after_tools(&self.progress(&run, running)) {
                 return (Ending::Waiting(run), Stopped::just(reason));
             }
         }
     }
 
-    /// Tells the observer what the provider call behind `recorded` returned.
-    async fn report_response(&self, run_id: &RunId, turn: u32, recorded: &Turn, capture: bool) {
+    /// The provider call behind `recorded` returned: tells the observer, and
+    /// fills and ends the attempt's span from the turn's record, which is
+    /// the one place that holds the attempt's timing, its usage and its
+    /// finish together.
+    async fn response_came(
+        &self,
+        running: &Running,
+        recorded: &Turn,
+        opened: Opened,
+        conversation: &mut Option<Conversation>,
+    ) {
         let record = recorded.record();
         self.emit(
-            run_id,
+            &running.run_id,
             EventKind::ProviderCallFinished {
-                turn,
+                turn: opened.turn,
                 attempt: record.attempts,
                 record: Box::new(record.clone()),
-                response: capture.then(|| recorded.response().to_vec()),
+                response: running.capture.then(|| recorded.response().to_vec()),
             },
         )
         .await;
+
+        let mut opened = opened;
+        let chat = &mut opened.chat;
+        chat.gen_ai_response_finish_reasons = Some(vec![record.finish.as_str().to_owned()]);
+        chat.gen_ai_response_id.clone_from(&record.response_id);
+        chat.gen_ai_response_model
+            .clone_from(&record.response_model);
+        spent(chat, &record.usage);
+        let end = running.at(record.started_ms.saturating_add(record.latency_ms));
+        let exchange = conversation
+            .as_mut()
+            .map(|conversation| conversation.responded(recorded.response()));
+        self.end_chat(running, opened, Status::Unset, exchange, end);
     }
 
-    /// Point A: why the run makes no provider call now, if it makes none.
+    /// Point A: whether the run makes a provider call now, and what the
+    /// call is timed from when it does.
     ///
-    /// Cancellation is polled first, because the policy never sees it.
-    fn before_call(&self, run: &Run, started: Instant) -> Option<Stopped> {
+    /// One reading of the clock serves the check and the call alike: the
+    /// call's start and its latency are measured from it, and its deadline
+    /// is the time the run has left at it. Cancellation is polled first,
+    /// because the policy never sees it, and the time left is read before
+    /// the policy is asked, so that a call the policy admits is one the run
+    /// has time for and the deadline is that time.
+    fn admit(&self, run: &Run, running: &Running) -> Result<Began, Stopped> {
+        let at = self.clock.now();
+        let offset = running.offset(at);
         if self.cancel.is_cancelled() {
-            return Some(Stopped::just(StopReason::Cancelled));
+            return Err(Stopped::just(StopReason::Cancelled));
         }
-        self.stop
-            .before_call(&self.progress(run, started))
-            .map(Stopped::just)
+        let Some(left) = self.stop.time_left(offset) else {
+            return Err(Stopped::just(StopReason::Timeout));
+        };
+        match self.stop.before_call(&run.progress(offset)) {
+            Some(reason) => Err(Stopped::just(reason)),
+            None => Ok(Began { at, offset, left }),
+        }
     }
 
-    /// One provider call, with its retries.
+    /// One provider call, with its retries, the first attempt of which point
+    /// A admitted at `began`.
     ///
     /// The attempt's own timing comes back with the response, because the
     /// turn records when the attempt began and how long it took, and only
     /// this function is in a position to know either.
     ///
     /// A retry is a provider call, so point A is asked before each one as it
-    /// was before the first attempt, once the wait is over.
-    ///
-    /// Point A reads the clock ahead of the attempt, and an observer is told
-    /// of things between the two, which takes time. So the clock is read
-    /// again when the attempt's turn comes, and an attempt whose turn comes
-    /// when the run's time has gone isn't made: nothing is announced, the
-    /// provider isn't called, and the run stops for its time, as a tool call
-    /// in the same state is never run.
+    /// was before the first attempt, once the wait is over, and the reading
+    /// that admits it is the reading the retry is timed from.
     async fn call(
         &self,
-        run_id: &RunId,
+        running: &Running,
         run: &mut Run,
         bytes: &mut RequestBytes,
         turn: u32,
-        started: Instant,
+        mut began: Began,
+        conversation: &mut Option<Conversation>,
     ) -> Result<Answered, Stopped> {
         let mut attempt = 1;
         loop {
-            if self.stop.time_left(self.elapsed(started)).is_none() {
-                return Err(Stopped::just(StopReason::Timeout));
-            }
-            let (began, result) = {
+            let (opened, result) = {
                 let messages = run.messages();
                 let request_bytes = bytes.measure(&messages);
                 self.emit(
-                    run_id,
+                    &running.run_id,
                     EventKind::ProviderCallStarted {
                         turn,
                         attempt,
@@ -386,7 +692,10 @@ impl RunService {
                     },
                 )
                 .await;
-                let began = self.begin(started);
+                // The struct names the span as the registry does, and is kept
+                // to be filled with what the attempt got when it ends.
+                let chat = running.chat(turn, attempt, request_bytes);
+                let span = self.open(running, chat.name(), LabletChat::KIND, &began);
                 let result = self
                     .unless_cancelled(self.provider.complete(ProviderRequest {
                         system: run.transcript().system(),
@@ -397,57 +706,39 @@ impl RunService {
                         thinking: self.request.thinking,
                         effort: self.request.effort,
                         seed: self.request.seed,
-                        cache_key: self.cache_key(run_id),
+                        cache_key: self.cache_key(&running.run_id),
                         deadline: began.left.min(self.calls.provider_timeout),
                     }))
                     .await;
-                (began, result)
+                let opened = Opened {
+                    span,
+                    chat,
+                    turn,
+                    attempt,
+                    began,
+                };
+                (opened, result)
             };
-            let latency = self.clock.now().saturating_duration_since(began.at);
+            let latency = self.clock.now().saturating_duration_since(opened.began.at);
 
             let error = match result {
                 Some(Ok(response)) => {
                     return Ok(Answered {
                         response,
-                        began: began.offset,
                         latency,
+                        opened,
                     });
                 }
                 Some(Err(error)) => error,
-                // The attempt was dropped where it was. It took its time and
-                // it was an attempt, so the run counts it as one that failed,
-                // and its span ends with the event that says why.
                 None => {
-                    let dropped = run.failed_attempt(began.offset, latency, None);
-                    self.emit(
-                        run_id,
-                        EventKind::ProviderCallCancelled {
-                            turn,
-                            attempt,
-                            started_ms: dropped.started_ms,
-                            latency_ms: dropped.latency_ms,
-                        },
-                    )
-                    .await;
+                    self.attempt_dropped(running, run, opened, latency, conversation)
+                        .await;
                     return Err(Stopped::just(StopReason::Cancelled));
                 }
             };
-            let failed = run.failed_attempt(began.offset, latency, error.usage);
-
-            let next =
-                self.after_failure(run, &error, run_id.salt(turn, attempt), attempt, started);
-            self.emit(
-                run_id,
-                EventKind::ProviderCallFailed {
-                    turn,
-                    attempt,
-                    error,
-                    started_ms: failed.started_ms,
-                    latency_ms: failed.latency_ms,
-                    retry: next.as_ref().ok().copied(),
-                },
-            )
-            .await;
+            let next = self
+                .attempt_failed(running, run, opened, latency, error, conversation)
+                .await;
 
             // A wait the run was cancelled during is over then: a retry is a
             // provider call, which a cancelled run never makes.
@@ -458,11 +749,161 @@ impl RunService {
             {
                 return Err(Stopped::just(StopReason::Cancelled));
             }
-            if let Some(stopped) = self.before_call(run, started) {
-                return Err(stopped);
-            }
+            began = self.admit(run, running)?;
             attempt += 1;
         }
+    }
+
+    /// The attempt in `opened` failed with `error` after `latency`: the run
+    /// counts it, point A and the retry policy say what follows, the span
+    /// and the records say how it failed and what was decided, and the
+    /// observer is told. What follows is the wait before the next attempt,
+    /// or why there's none.
+    async fn attempt_failed(
+        &self,
+        running: &Running,
+        run: &mut Run,
+        opened: Opened,
+        latency: Duration,
+        error: ProviderError,
+        conversation: &mut Option<Conversation>,
+    ) -> Result<Duration, Stopped> {
+        let mut opened = opened;
+        let (turn, attempt) = (opened.turn, opened.attempt);
+        let failed = run.failed_attempt(opened.began.offset, latency, error.usage);
+        let next = self.after_failure(
+            run,
+            running,
+            &error,
+            running.run_id.salt(turn, attempt),
+            attempt,
+        );
+
+        opened.chat.error_type = Some(error.kind.into());
+        if let Some(usage) = &error.usage {
+            spent(&mut opened.chat, usage);
+        }
+        let end = running.at(failed.started_ms.saturating_add(failed.latency_ms));
+        // The retry event and the exception record carry the attempt's
+        // number and the span's end time: they say what was decided when
+        // the attempt ended.
+        LabletRetry {
+            lablet_attempt: i64::from(attempt),
+            lablet_retry_will_retry: next.is_ok(),
+            lablet_retry_backoff_ms: next.as_ref().ok().copied().map(whole_ms).map(count_of),
+        }
+        .add_to(&mut opened.span, end);
+        let exception = GenAiClientOperationException {
+            join: running.join.clone(),
+            exception_message: error.message().to_owned(),
+            exception_type: error.kind.into(),
+            gen_ai_provider_name: running.asked.provider_name.clone(),
+            gen_ai_request_model: running.asked.model.clone(),
+            lablet_attempt: i64::from(attempt),
+            lablet_turn: i64::from(turn),
+        };
+        self.logger
+            .emit(exception.record(end, opened.span.span_context()));
+        let exchange = conversation.as_mut().map(Conversation::unanswered);
+        self.end_chat(
+            running,
+            opened,
+            Status::error(error.message().to_owned()),
+            exchange,
+            end,
+        );
+
+        self.emit(
+            &running.run_id,
+            EventKind::ProviderCallFailed {
+                turn,
+                attempt,
+                error,
+                started_ms: failed.started_ms,
+                latency_ms: failed.latency_ms,
+                retry: next.as_ref().ok().copied(),
+            },
+        )
+        .await;
+        next
+    }
+
+    /// The attempt in `opened` was dropped where it was after `latency`,
+    /// because the run was cancelled. It took its time and it was an
+    /// attempt, so the run counts it as one that failed, and its span ends
+    /// saying why; nothing failed, so there's no retry and no exception.
+    async fn attempt_dropped(
+        &self,
+        running: &Running,
+        run: &mut Run,
+        opened: Opened,
+        latency: Duration,
+        conversation: &mut Option<Conversation>,
+    ) {
+        let dropped = run.failed_attempt(opened.began.offset, latency, None);
+        self.emit(
+            &running.run_id,
+            EventKind::ProviderCallCancelled {
+                turn: opened.turn,
+                attempt: opened.attempt,
+                started_ms: dropped.started_ms,
+                latency_ms: dropped.latency_ms,
+            },
+        )
+        .await;
+        let mut opened = opened;
+        opened.chat.error_type = Some(LabletChatErrorType::Cancelled);
+        let end = running.at(dropped.started_ms.saturating_add(dropped.latency_ms));
+        let exchange = conversation.as_mut().map(Conversation::unanswered);
+        self.end_chat(
+            running,
+            opened,
+            Status::error(CANCELLED_IN_FLIGHT),
+            exchange,
+            end,
+        );
+    }
+
+    /// A span of the run, opened through the tracer under the context the
+    /// run was called in, at the instant the call it's for began.
+    fn open(&self, running: &Running, name: String, kind: SpanKind, began: &Began) -> BoxedSpan {
+        self.tracer
+            .span_builder(name)
+            .with_kind(kind)
+            .with_start_time(running.at(whole_ms(began.offset)))
+            .start_with_context(&self.tracer, &running.parent)
+    }
+
+    /// Fills the span of `opened` from its struct, gives it `status`, writes
+    /// the record of `exchange` in its context when the run captured one,
+    /// and ends it at `end`. The one way a chat span ends, so every way an
+    /// attempt can end leaves the same shape behind.
+    fn end_chat(
+        &self,
+        running: &Running,
+        opened: Opened,
+        status: Status,
+        exchange: Option<Exchange>,
+        end: SystemTime,
+    ) {
+        let Opened {
+            mut span,
+            chat,
+            turn,
+            ..
+        } = opened;
+        chat.record(&mut span);
+        span.set_status(status);
+        if let Some(exchange) = exchange {
+            let content = GenAiClientInferenceOperationDetails {
+                gen_ai_input_messages: Some(exchange.input),
+                gen_ai_output_messages: exchange.output,
+                gen_ai_system_instructions: Some(exchange.system),
+                ..running.content(Operation::Chat, Some(turn))
+            };
+            self.logger.emit(content.record(end, span.span_context()));
+        }
+        span.end_with_timestamp(end);
     }
 
     /// `work` to its end, or `None` when the run is cancelled first, and
@@ -493,26 +934,6 @@ impl RunService {
         }
     }
 
-    /// Reads the clock for a call an observer has just been told of, which
-    /// is when the call begins.
-    ///
-    /// The call's turn came on a reading taken before the observer was told,
-    /// and that reading decided that the call is made at all. Its start, its
-    /// latency and its deadline are taken from this one: the first two so
-    /// that neither counts the observer's time as the call's, and the
-    /// deadline so that the call isn't given time the observer has used. An
-    /// observer that used all the run had left leaves a deadline of zero,
-    /// which a call has reached before it starts.
-    fn begin(&self, started: Instant) -> Began {
-        let at = self.clock.now();
-        let offset = at.saturating_duration_since(started);
-        Began {
-            at,
-            offset,
-            left: self.stop.time_left(offset).unwrap_or(Duration::ZERO),
-        }
-    }
-
     /// What follows a failed attempt: the wait before the next one, or why
     /// there won't be one.
     ///
@@ -524,13 +945,13 @@ impl RunService {
     fn after_failure(
         &self,
         run: &Run,
+        running: &Running,
         error: &ProviderError,
         salt: u64,
         attempt: u32,
-        started: Instant,
     ) -> Result<Duration, Stopped> {
         if error.kind.is_retryable()
-            && let Some(stopped) = self.before_call(run, started)
+            && let Err(stopped) = self.admit(run, running)
         {
             return Err(stopped);
         }
@@ -538,7 +959,7 @@ impl RunService {
             .retry
             .next(attempt, error.kind, error.retry_after, salt)
         {
-            Some(wait) if self.stop.allows_wait(self.elapsed(started), wait) => Ok(wait),
+            Some(wait) if self.stop.allows_wait(self.elapsed(running), wait) => Ok(wait),
             // A wait that would carry the run past its own timeout isn't
             // taken: the run stops now rather than sleeping up to a limit
             // it's known to reach.
@@ -553,118 +974,210 @@ impl RunService {
     /// The tool phase of one turn: every call answered, in the groups the
     /// tools' concurrency sets, and the run back waiting for its next
     /// response.
-    async fn run_tools(
-        &self,
-        run_id: &RunId,
-        pending: Pending,
-        turn: u32,
-        started: Instant,
-        capture: bool,
-    ) -> Run {
+    async fn run_tools(&self, running: &Running, pending: Pending, turn: u32) -> Run {
         let concurrency = |call: &ToolUse| self.tools.concurrency(call);
         let schedule = Schedule {
             max_concurrent: self.calls.max_concurrent_tool_calls,
             concurrency: &concurrency,
         };
         pending
-            .answer(schedule, |call| {
-                self.answer(run_id, call, turn, started, capture)
-            })
+            .answer(schedule, |call| self.answer(running, call, turn))
             .await
     }
 
-    /// One tool call, from the event that opens it to the event that closes
-    /// it, or a call that's never run because its turn came when the run
-    /// had been cancelled or had no time left.
+    /// One tool call, from the span that opens it to the span's end, or a
+    /// call that's never run because its turn came when the run had been
+    /// cancelled or had no time left.
     ///
-    /// A call the run is cancelled during is dropped where it is, and the
-    /// event that closes it still comes, so its span ends. The calls whose
-    /// turn comes after that are never run, so a cancelled tool phase
-    /// starts no later group, and the turn has an outcome for every call.
+    /// A call the run is cancelled during is dropped where it is, and its
+    /// span still ends. The calls whose turn comes after that are never
+    /// run, so a cancelled tool phase starts no later group, and the turn
+    /// has an outcome for every call.
     ///
-    /// The clock is read when the call's turn comes, which for a call of a
-    /// later group is after the groups ahead of it, and that reading decides
-    /// whether the call is run. It's read again once the observer has been
-    /// told of the call ([`RunService::begin`]), and the call's start, its
-    /// latency and its deadline are taken from there, so the deadline is
-    /// the time the run had left when the call is said to have started.
-    ///
-    /// Nothing is started for a call that's never run, so an observer isn't
-    /// told of it and the output cap, which cuts what a call wrote, has
-    /// nothing of it to cut.
-    async fn answer(
-        &self,
-        run_id: &RunId,
-        call: ToolUse,
-        turn: u32,
-        started: Instant,
-        capture: bool,
-    ) -> Answer {
-        let turned = self.elapsed(started);
-        // Cancellation comes first, as it does at points A and B.
-        let unstarted = if self.cancel.is_cancelled() {
-            Some("the run was cancelled before this call started")
-        } else if self.stop.time_left(turned).is_none() {
-            Some("the run reached its timeout before this call started")
-        } else {
-            None
+    /// Nothing is started for a call that's never run, so it has no span
+    /// and the output cap, which cuts what a call wrote, has nothing of it
+    /// to cut.
+    async fn answer(&self, running: &Running, call: ToolUse, turn: u32) -> Answer {
+        let began = match self.tool_turn(running) {
+            Ok(began) => began,
+            Err(Unstarted { offset, why }) => {
+                return Answer::measured(
+                    ToolCallStatus::NotRun,
+                    self.whole(why),
+                    None,
+                    offset,
+                    Duration::ZERO,
+                );
+            }
         };
-        if let Some(why) = unstarted {
-            return Answer::measured(
-                ToolCallStatus::NotRun,
-                self.whole(why),
-                None,
-                turned,
-                Duration::ZERO,
-            );
-        }
 
-        let source = self.tools.source(&call.name).cloned();
-        let input = match &call.input {
-            ToolInput::Json(value) => Some(value),
-            ToolInput::Unparsed(_) => None,
+        let called = Called {
+            call: &call,
+            turn,
+            source: self.tools.source(&call.name).cloned(),
+            input: match &call.input {
+                ToolInput::Json(value) => Some(value),
+                ToolInput::Unparsed(_) => None,
+            },
         };
         self.emit(
-            run_id,
+            &running.run_id,
             EventKind::ToolCallStarted {
                 turn,
                 call_id: call.id.clone(),
                 name: call.name.clone(),
-                source: source.clone(),
+                source: called.source.clone(),
                 input_bytes: call.input_bytes(),
-                input: capture.then(|| input.cloned()).flatten(),
+                input: running.capture.then(|| called.input.cloned()).flatten(),
             },
         )
         .await;
 
-        let trace_context = self.observer.trace_context(&call.id);
-        let began = self.begin(started);
-        let settled = self.settle(&call, source, began.left, trace_context).await;
-        let latency = self.clock.now().saturating_duration_since(began.at);
-
-        let answer = Answer::measured(
-            settled.status,
-            settled.output,
-            self.calls.output_cap,
-            began.offset,
-            latency,
+        let span = self.open(
+            running,
+            format!("{} {}", LabletExecuteTool::GEN_AI_OPERATION_NAME, call.name),
+            LabletExecuteTool::KIND,
+            &began,
         );
+        let trace_context = self.observer.trace_context(&call.id);
+        // The span stays here, where it's filled and ended with what the
+        // loop measured, since the generated struct records onto an owned
+        // span and a context's `SpanRef` can't take it. The call runs under
+        // a context that holds the span's context alone, so `Context::current()`
+        // inside the executor names this call's span, which is what a
+        // propagator needs of it.
+        let within = running
+            .parent
+            .with_remote_span_context(span.span_context().clone());
+        let settled = self
+            .settle(
+                &call,
+                called.source.clone(),
+                began.left,
+                trace_context,
+                &within,
+            )
+            .await;
+        let latency = self.clock.now().saturating_duration_since(began.at);
+        let Settled {
+            status,
+            output,
+            mcp,
+        } = settled;
+
+        let answer = Answer::measured(status, output, self.calls.output_cap, began.offset, latency);
+        self.tool_span(running, span, &called, &answer, mcp.as_ref());
         self.emit(
-            run_id,
+            &running.run_id,
             EventKind::ToolCallFinished {
                 turn,
-                call_id: call.id,
+                call_id: call.id.clone(),
                 status: answer.status().clone(),
                 started_ms: answer.started_ms(),
                 latency_ms: answer.latency_ms(),
                 output_bytes: answer.output_bytes(),
                 truncated_from_bytes: answer.truncated_from_bytes(),
-                mcp: settled.mcp,
-                output: capture.then(|| answer.content().to_vec()),
+                mcp,
+                output: running.capture.then(|| answer.content().to_vec()),
             },
         )
         .await;
         answer
+    }
+
+    /// A tool call's turn has come: the one reading of the clock the call
+    /// is timed from, when the call is run, or why it isn't. The clock is
+    /// read once, which for a call of a later group is after the groups
+    /// ahead of it, and that reading decides whether the call is run and
+    /// gives the call its start, its latency and its deadline.
+    ///
+    /// Cancellation comes first, as it does at points A and B.
+    fn tool_turn(&self, running: &Running) -> Result<Began, Unstarted> {
+        let at = self.clock.now();
+        let offset = running.offset(at);
+        let left = if self.cancel.is_cancelled() {
+            Err("the run was cancelled before this call started")
+        } else {
+            self.stop
+                .time_left(offset)
+                .ok_or("the run reached its timeout before this call started")
+        };
+        match left {
+            Ok(left) => Ok(Began { at, offset, left }),
+            Err(why) => Err(Unstarted { offset, why }),
+        }
+    }
+
+    /// Fills `span` from what `answer` says of `called`, and from what the
+    /// call carried back over MCP when it did, writes the record of the
+    /// call's content when the run captures it, and ends the span when the
+    /// call ended.
+    fn tool_span(
+        &self,
+        running: &Running,
+        mut span: BoxedSpan,
+        called: &Called<'_>,
+        answer: &Answer,
+        mcp: Option<&McpCallMeta>,
+    ) {
+        let Called {
+            call,
+            turn,
+            source,
+            input,
+        } = called;
+        let end = running.at(answer.started_ms().saturating_add(answer.latency_ms()));
+        let failed = answer.status().is_error();
+        let over_mcp = OverMcp::of(mcp);
+        LabletExecuteTool {
+            join: running.join.clone(),
+            gen_ai_tool_call_id: call.id.as_str().to_owned(),
+            gen_ai_tool_name: call.name.as_str().to_owned(),
+            lablet_tool_input_bytes: count_of(call.input_bytes()),
+            lablet_tool_is_error: failed,
+            lablet_tool_output_bytes: count_of(answer.output_bytes()),
+            lablet_tool_output_truncated: answer.truncated_from_bytes().is_some(),
+            lablet_tool_status: answer.status().into(),
+            lablet_turn: i64::from(*turn),
+            error_type: tool_error_type(answer.status()),
+            gen_ai_tool_description: self.description(&call.name),
+            gen_ai_tool_type: source.as_ref().map(Into::into),
+            jsonrpc_request_id: over_mcp.jsonrpc_request_id,
+            lablet_tool_output_original_bytes: answer.truncated_from_bytes().map(count_of),
+            lablet_tool_source: source.as_ref().map(Into::into),
+            mcp_method_name: over_mcp.method,
+            mcp_protocol_version: over_mcp.protocol_version,
+            mcp_session_id: over_mcp.session_id,
+            network_transport: over_mcp.transport,
+            rpc_response_status_code: over_mcp.rpc_status_code,
+        }
+        .record(&mut span);
+        // What a tool said of its failure is content, so the span says that
+        // the call failed and its record, if there is one, says how.
+        if failed {
+            span.set_status(Status::error(""));
+        }
+        if running.capture {
+            let content = GenAiClientInferenceOperationDetails {
+                gen_ai_tool_call_arguments: input.map(ToString::to_string),
+                gen_ai_tool_call_id: Some(call.id.as_str().to_owned()),
+                gen_ai_tool_call_result: Some(tool_result(answer.content(), failed).to_string()),
+                gen_ai_tool_name: Some(call.name.as_str().to_owned()),
+                ..running.content(Operation::ExecuteTool, Some(*turn))
+            };
+            self.logger.emit(content.record(end, span.span_context()));
+        }
+        span.end_with_timestamp(end);
+    }
+
+    /// What the model was told the tool `name` does, for a tool the run
+    /// offered; a name no tool has was described to no one.
+    fn description(&self, name: &lablet_model::ToolName) -> Option<String> {
+        self.tools
+            .specs()
+            .iter()
+            .find(|spec| spec.name == *name)
+            .map(|spec| spec.description.clone())
     }
 
     /// A result the loop wrote itself, held whole, with the run's secrets cut
@@ -687,7 +1200,8 @@ impl RunService {
     }
 
     /// What became of one call that has `left` to run in, and what the model
-    /// is sent back.
+    /// is sent back. The executor runs under `within`, the call's span's
+    /// context.
     ///
     /// The name is resolved before the arguments are read, so a call to a
     /// name this run doesn't offer is `Unknown` whether or not its arguments
@@ -704,6 +1218,7 @@ impl RunService {
         source: Option<ToolSource>,
         left: Duration,
         trace_context: Option<crate::TraceContext>,
+        within: &Context,
     ) -> Settled {
         let Some(source) = source else {
             return Settled::local(
@@ -741,15 +1256,19 @@ impl RunService {
         };
 
         let executed = self
-            .unless_cancelled(self.tools.execute(ToolCall {
-                id: call.id.clone(),
-                name: call.name.clone(),
-                input,
-                deadline: left,
-                keep: self.calls.output_cap.map(OutputCap::keeps),
-                secrets: Arc::clone(&self.secrets),
-                trace_context,
-            }))
+            .unless_cancelled(
+                self.tools
+                    .execute(ToolCall {
+                        id: call.id.clone(),
+                        name: call.name.clone(),
+                        input,
+                        deadline: left,
+                        keep: self.calls.output_cap.map(OutputCap::keeps),
+                        secrets: Arc::clone(&self.secrets),
+                        trace_context,
+                    })
+                    .with_context(within.clone()),
+            )
             .await;
         let Some(executed) = executed else {
             // Whatever the call had written went with it, and the transport
@@ -785,12 +1304,12 @@ impl RunService {
         }
     }
 
-    fn progress(&self, run: &Run, started: Instant) -> Progress {
-        run.progress(self.elapsed(started))
+    fn progress(&self, run: &Run, running: &Running) -> Progress {
+        run.progress(self.elapsed(running))
     }
 
-    fn elapsed(&self, started: Instant) -> Duration {
-        self.clock.now().saturating_duration_since(started)
+    fn elapsed(&self, running: &Running) -> Duration {
+        running.offset(self.clock.now())
     }
 
     async fn emit(&self, run_id: &RunId, kind: EventKind) {

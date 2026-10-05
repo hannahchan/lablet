@@ -488,7 +488,7 @@ pub mod telemetry {
     pub enum Value { ... }                                               // what one attribute holds; a list is an Array on a span and a ListAny on a record
     pub struct Attribute { ... }                                         // a key, a constant of a generated module or a template's prefix and a suffix, and the Value it holds if any; a generated struct lists every field as one
     pub fn span_attributes(attributes) -> Vec<KeyValue>;                 // leaves out an attribute with no value and cuts text to the attribute length limit (§6); every generated struct records itself through it
-    pub struct Conversation { ... }                                      // rebuilds each request's history from what the loop saw, for the content records
+    pub(crate) struct Conversation { ... }                               // rebuilds each request's history from what the loop saw, for the content records; the loop's own, so nothing outside the crate reads it
     pub mod generated;                                                   // written by cargo xtask weaver generate from the registry's application/run/ folder (§6): a struct for each span and event, a closed enum for each annotated value set, Join, the schema URL, and a constant for each key
 }
 

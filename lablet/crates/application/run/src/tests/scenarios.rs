@@ -1,21 +1,44 @@
-//! The loop, driven end to end against fakes.
+//! The loop, driven end to end against fakes, and read back from the spans
+//! and records it emits through the SDK's in-memory exporters.
+//!
+//! What a run's spans and records don't carry has no scenario here: the
+//! whole `RunContext` of a run's start, the request's `api`, `thinking` and
+//! `cache_scope`, the name of an MCP tool's server and the wait a server
+//! asked for are all read from the summary a run returns, which the
+//! summary's own scenarios hold, since no signal of the loop's is the place
+//! for them. The run's own span and its one row are the composition root's.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use lablet_model::{
-    CacheScope, CompletionMode, ContentBlock, Endpoint, FinishReason, ModelRef, OutputCap,
+    CacheScope, CompletionMode, ContentBlock, Effort, Endpoint, FinishReason, ModelRef, OutputCap,
     OutputCut, OutputKeep, Prompts, ProviderApi, ProviderErrorKind, ProviderResponse, Rates,
     RequestParams, RunContext, RunId, RunLabels, RunSummary, StopReason, Thinking, TokenCounts,
     ToolCallEnd, ToolCallId, ToolCallStatus, ToolConcurrency, ToolInput, ToolName,
     ToolResultContent, ToolSource, ToolSpec, ToolUse, Usage,
 };
 use lablet_policy::{Pricing, RetryPolicy, RetrySettings, StopPolicy};
-
-use super::fakes::{Answer, Answers, FakeCancel, FakeClock, FakeProvider, FakeTools, Recorder};
-use crate::{
-    CallLimits, ERROR_MESSAGE_MAX_BYTES, EventKind, ProviderError, RunService, ToolFilter, ToolSet,
+use opentelemetry::global::BoxedTracer;
+use opentelemetry::logs::{AnyValue, LoggerProvider as _};
+use opentelemetry::trace::noop::NoopTracer;
+use opentelemetry::trace::{
+    FutureExt as _, SpanContext, SpanKind, Status, TraceContextExt as _, Tracer as _,
+    TracerProvider as _,
 };
+use opentelemetry::{Array, Context, StringValue, Value};
+use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLogRecord, SdkLoggerProvider};
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
+use serde_json::json;
+
+use super::fakes::{Answer, Answers, FakeCancel, FakeClock, FakeProvider, FakeTools, Told};
+use crate::telemetry::Bridge;
+use crate::telemetry::generated::{
+    GenAiClientInferenceOperationDetails, GenAiClientOperationException, LabletChat,
+    LabletExecuteTool, LabletRetry, key,
+};
+use crate::{CallLimits, ERROR_MESSAGE_MAX_BYTES, ProviderError, RunService, ToolFilter, ToolSet};
 
 const fn ms(millis: u64) -> Duration {
     Duration::from_millis(millis)
@@ -45,12 +68,21 @@ fn mcp(server: &str) -> ToolSource {
     }
 }
 
+/// The id of every run here, unless a test gives its run another.
+const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
+
+/// When every run here started, in milliseconds since the Unix epoch.
+const STARTED_UNIX_MS: u64 = 1_790_000_000_000;
+
+/// The digest every run's context gives its config.
+const CONFIG_DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
 fn context() -> RunContext {
     RunContext {
-        run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").expect("a valid run id"),
+        run_id: RunId::new(RUN).expect("a valid run id"),
         labels: RunLabels::default(),
-        started_unix_ms: 1_790_000_000_000,
-        config_digest: lablet_model::ConfigDigest::new("0".repeat(64)).expect("a digest"),
+        started_unix_ms: STARTED_UNIX_MS,
+        config_digest: lablet_model::ConfigDigest::new(CONFIG_DIGEST).expect("a digest"),
         agent_version: "0.1.0".to_owned(),
         transcript_path: None,
         skills_count: 0,
@@ -163,7 +195,7 @@ fn output_cap(max_bytes: u64, cut: OutputCut) -> OutputCap {
 struct Harness {
     clock: Arc<FakeClock>,
     provider: Arc<FakeProvider>,
-    observer: Arc<Recorder>,
+    observer: Arc<Told>,
     cancel: Arc<FakeCancel>,
     tools: Vec<Arc<dyn crate::ToolExecutor>>,
     filter: ToolFilter,
@@ -176,6 +208,10 @@ struct Harness {
     completion: CompletionMode,
     request: RequestParams,
     prompts: Prompts,
+    /// Whether the loop is handed the API's no-op tracer in place of the
+    /// SDK's and run in the empty context, as a host that installs no
+    /// tracing runs it.
+    noop_tracer: bool,
 }
 
 impl Harness {
@@ -192,7 +228,7 @@ impl Harness {
             ))],
             clock,
             provider,
-            observer: Arc::new(Recorder::new()),
+            observer: Arc::new(Told::new()),
             cancel: Arc::new(FakeCancel::never()),
             filter: ToolFilter::default(),
             stop: StopPolicy {
@@ -213,17 +249,40 @@ impl Harness {
             completion: CompletionMode::Natural,
             request: request(),
             prompts: prompts(),
+            noop_tracer: false,
         }
     }
 
+    /// Runs the loop inside a root span of the test's own, as the
+    /// composition root runs it inside the run's, so every span has the
+    /// parent a real run's has, and keeps what the loop emitted.
+    ///
+    /// The span's context is read from the context the loop ran in, and
+    /// the root span itself is dropped with it: the SDK ends and exports a
+    /// dropped span, so `spans` leaves it out by its id.
     async fn run(self) -> Run {
         let tools = ToolSet::build(self.tools, &self.filter, self.completion, None)
             .await
             .expect("these fakes serve distinct names");
+        let spans = InMemorySpanExporter::default();
+        let records = InMemoryLogExporter::default();
+        let trace_provider = SdkTracerProvider::builder()
+            .with_simple_exporter(spans.clone())
+            .build();
+        let log_provider = SdkLoggerProvider::builder()
+            .with_simple_exporter(records.clone())
+            .build();
+        let tracer = if self.noop_tracer {
+            BoxedTracer::new(Box::new(NoopTracer::new()))
+        } else {
+            BoxedTracer::new(Box::new(trace_provider.tracer("lablet")))
+        };
         let mut service = RunService::new(
             Arc::clone(&self.provider) as Arc<dyn crate::ModelProvider>,
             Arc::new(tools),
             Arc::clone(&self.observer) as Arc<dyn crate::RunObserver>,
+            tracer,
+            Box::new(Bridge::new(log_provider.logger("lablet"))),
             Arc::clone(&self.clock) as Arc<dyn crate::Clock>,
             Arc::clone(&self.cancel) as Arc<dyn crate::Cancellation>,
             self.stop,
@@ -233,12 +292,27 @@ impl Harness {
             self.calls,
             self.secrets,
         );
-        let finished = movable(service.run(self.context, self.prompts)).await;
+        // A host with no tracing calls the loop in no span's context either.
+        let within = if self.noop_tracer {
+            Context::new()
+        } else {
+            Context::current_with_span(trace_provider.tracer("lablet").start("invoke_agent test"))
+        };
+        let finished = movable(
+            service
+                .run(self.context, self.prompts)
+                .with_context(within.clone()),
+        )
+        .await;
         Run {
             finished,
-            observer: self.observer,
             provider: self.provider,
+            observer: self.observer,
             clock: self.clock,
+            root: within.span().span_context().clone(),
+            spans,
+            records,
+            _providers: (trace_provider, log_provider),
         }
     }
 }
@@ -252,27 +326,22 @@ const fn movable<F: Future + Send>(future: F) -> F {
 
 struct Run {
     finished: lablet_model::FinishedRun,
-    observer: Arc<Recorder>,
     provider: Arc<FakeProvider>,
+    observer: Arc<Told>,
     clock: Arc<FakeClock>,
+    /// The span the loop ran inside, which every span of the run is a
+    /// child of.
+    root: SpanContext,
+    spans: InMemorySpanExporter,
+    records: InMemoryLogExporter,
+    /// The providers the loop emitted through, held because an in-memory
+    /// exporter forgets everything when its provider shuts down.
+    _providers: (SdkTracerProvider, SdkLoggerProvider),
 }
 
 impl Run {
     fn stop_reason(&self) -> StopReason {
         self.finished.summary.outcome.stop_reason()
-    }
-
-    /// The error of each failed attempt and the wait the loop said would
-    /// follow it, in order.
-    fn failures(&self) -> Vec<(ProviderError, Option<Duration>)> {
-        self.observer
-            .events()
-            .into_iter()
-            .filter_map(|event| match event.kind {
-                EventKind::ProviderCallFailed { error, retry, .. } => Some((error, retry)),
-                _ => None,
-            })
-            .collect()
     }
 
     fn error(&self) -> Option<&str> {
@@ -282,6 +351,298 @@ impl Run {
     fn turns(&self) -> u32 {
         self.finished.summary.outcome.turns
     }
+
+    /// Every span the loop ended, in the order they ended; the test's own
+    /// root span, which ends after the run, isn't the loop's.
+    fn spans(&self) -> Vec<SpanData> {
+        self.spans
+            .get_finished_spans()
+            .expect("the exporter holds its spans")
+            .into_iter()
+            .filter(|span| span.span_context.span_id() != self.root.span_id())
+            .collect()
+    }
+
+    /// The spans whose `gen_ai.operation.name` is `operation`, in the order
+    /// they ended.
+    fn operation(&self, operation: &str) -> Vec<SpanData> {
+        self.spans()
+            .into_iter()
+            .filter(|span| text(span, key::GEN_AI_OPERATION_NAME) == operation)
+            .collect()
+    }
+
+    /// The chat spans, in the order the attempts ended.
+    fn chats(&self) -> Vec<SpanData> {
+        self.operation(LabletChat::GEN_AI_OPERATION_NAME)
+    }
+
+    /// The tool spans, in the order the calls ended.
+    fn tools(&self) -> Vec<SpanData> {
+        self.operation(LabletExecuteTool::GEN_AI_OPERATION_NAME)
+    }
+
+    /// Every record the loop wrote, in order.
+    fn records(&self) -> Vec<SdkLogRecord> {
+        self.records
+            .get_emitted_logs()
+            .expect("the exporter holds its records")
+            .into_iter()
+            .map(|log| log.record)
+            .collect()
+    }
+
+    /// The records named `name`, in order.
+    fn records_of(&self, name: &str) -> Vec<SdkLogRecord> {
+        self.records()
+            .into_iter()
+            .filter(|record| record.event_name() == Some(name))
+            .collect()
+    }
+
+    /// The content records, in order.
+    fn content(&self) -> Vec<SdkLogRecord> {
+        self.records_of(GenAiClientInferenceOperationDetails::NAME)
+    }
+
+    /// The exception records, in order.
+    fn exceptions(&self) -> Vec<SdkLogRecord> {
+        self.records_of(GenAiClientOperationException::NAME)
+    }
+}
+
+/// The value of the attribute `key` of `span`, when it has one.
+fn attribute<'a>(span: &'a SpanData, key: &str) -> Option<&'a Value> {
+    span.attributes
+        .iter()
+        .find(|attribute| attribute.key.as_str() == key)
+        .map(|attribute| &attribute.value)
+}
+
+/// The text the attribute `key` of `span` holds.
+fn text<'a>(span: &'a SpanData, key: &str) -> &'a str {
+    match attribute(span, key) {
+        Some(Value::String(text)) => text.as_str(),
+        other => panic!("{key} of {} is {other:?}, not text", span.name),
+    }
+}
+
+/// The count the attribute `key` of `span` holds.
+fn count(span: &SpanData, key: &str) -> i64 {
+    match attribute(span, key) {
+        Some(Value::I64(count)) => *count,
+        other => panic!("{key} of {} is {other:?}, not a count", span.name),
+    }
+}
+
+/// The text the attribute `key` of `span` holds, when it holds one.
+fn maybe_text(span: &SpanData, key: &str) -> Option<String> {
+    attribute(span, key).map(|value| match value {
+        Value::String(text) => text.as_str().to_owned(),
+        other => panic!("{key} of {} is {other:?}, not text", span.name),
+    })
+}
+
+/// A span's attributes by key, each as JSON, since the order isn't part of
+/// the contract.
+fn attributes(span: &SpanData) -> BTreeMap<String, serde_json::Value> {
+    span.attributes
+        .iter()
+        .map(|attribute| (attribute.key.as_str().to_owned(), as_json(&attribute.value)))
+        .collect()
+}
+
+fn as_json(value: &Value) -> serde_json::Value {
+    match value {
+        Value::Bool(flag) => json!(flag),
+        Value::I64(count) => json!(count),
+        Value::F64(number) => json!(number),
+        Value::String(text) => json!(text.as_str()),
+        Value::Array(Array::String(texts)) => {
+            json!(texts.iter().map(StringValue::as_str).collect::<Vec<_>>())
+        }
+        other => panic!("no attribute of the loop's is {other:?}"),
+    }
+}
+
+/// A record's attributes by key, each as JSON.
+fn record_attributes(record: &SdkLogRecord) -> BTreeMap<String, serde_json::Value> {
+    record
+        .attributes_iter()
+        .map(|(key, value)| {
+            let value = match value {
+                AnyValue::String(text) => json!(text.as_str()),
+                AnyValue::Int(count) => json!(count),
+                AnyValue::Boolean(flag) => json!(flag),
+                other => panic!("no attribute of a record of the loop's is {other:?}"),
+            };
+            (key.as_str().to_owned(), value)
+        })
+        .collect()
+}
+
+/// The text the attribute `key` of `record` holds.
+fn record_text(record: &SdkLogRecord, key: &str) -> String {
+    match record_attributes(record).remove(key) {
+        Some(serde_json::Value::String(text)) => text,
+        other => panic!("{key} of the record is {other:?}, not text"),
+    }
+}
+
+/// The JSON the attribute `key` of `record` holds as text.
+fn record_json(record: &SdkLogRecord, key: &str) -> serde_json::Value {
+    serde_json::from_str(&record_text(record, key)).expect("the record holds JSON")
+}
+
+/// How far into the run `at` is, in whole milliseconds.
+fn offset_ms(at: std::time::SystemTime) -> u64 {
+    let since_epoch = at
+        .duration_since(UNIX_EPOCH)
+        .expect("the run started after the epoch");
+    u64::try_from(since_epoch.as_millis()).expect("a time within the epoch") - STARTED_UNIX_MS
+}
+
+/// When `span` started and how long it lasted, in milliseconds into the run.
+fn timing(span: &SpanData) -> (u64, u64) {
+    let started = offset_ms(span.start_time);
+    (started, offset_ms(span.end_time) - started)
+}
+
+/// The turn and the attempt of a chat span.
+fn numbered(span: &SpanData) -> (i64, i64) {
+    (
+        count(span, key::LABLET_TURN),
+        count(span, key::LABLET_ATTEMPT),
+    )
+}
+
+/// The call id of a tool span.
+fn call_id(span: &SpanData) -> String {
+    text(span, key::GEN_AI_TOOL_CALL_ID).to_owned()
+}
+
+/// The shape of a run's chat spans: each attempt's turn, number and
+/// `error.type`, in the order the attempts ended.
+fn chat_shape(run: &Run) -> Vec<(i64, i64, Option<String>)> {
+    run.chats()
+        .iter()
+        .map(|chat| {
+            let (turn, attempt) = numbered(chat);
+            (turn, attempt, maybe_text(chat, key::ERROR_TYPE))
+        })
+        .collect()
+}
+
+/// The shape of a run's tool spans: each call's turn, id and status, in the
+/// order the calls ended.
+fn tool_shape(run: &Run) -> Vec<(i64, String, String)> {
+    run.tools()
+        .iter()
+        .map(|tool| {
+            (
+                count(tool, key::LABLET_TURN),
+                call_id(tool),
+                text(tool, key::LABLET_TOOL_STATUS).to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// The id of each call that has a span, in the order the calls ended.
+fn announced(run: &Run) -> Vec<String> {
+    run.tools().iter().map(call_id).collect()
+}
+
+/// What the chat span of a failed attempt says of the failure and of what
+/// the loop did next.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Failed {
+    error_type: String,
+    message: String,
+    will_retry: bool,
+    backoff_ms: Option<i64>,
+}
+
+/// The `lablet.retry` event of a failed attempt's span, and what it says.
+fn retry(span: &SpanData) -> (bool, Option<i64>) {
+    let [event] = span.events.events.as_slice() else {
+        panic!("a failed attempt's span has one event: {:?}", span.events);
+    };
+    assert_eq!(event.name, LabletRetry::NAME);
+    assert_eq!(
+        event.timestamp, span.end_time,
+        "the retry is decided as the attempt ends"
+    );
+    let value = |key: &str| {
+        event
+            .attributes
+            .iter()
+            .find(|attribute| attribute.key.as_str() == key)
+            .map(|attribute| attribute.value.clone())
+    };
+    let Some(Value::Bool(will_retry)) = value(key::LABLET_RETRY_WILL_RETRY) else {
+        panic!("the retry event says whether the loop retries");
+    };
+    let backoff_ms = value(key::LABLET_RETRY_BACKOFF_MS).map(|value| match value {
+        Value::I64(backoff_ms) => backoff_ms,
+        other => panic!("{other:?} isn't a count of milliseconds"),
+    });
+    (will_retry, backoff_ms)
+}
+
+/// Each failed attempt's span, read: its error type, its status message,
+/// and the retry its event announced, in order.
+fn failures(run: &Run) -> Vec<Failed> {
+    run.chats()
+        .iter()
+        .filter(|chat| attribute(chat, key::ERROR_TYPE).is_some())
+        .map(|chat| {
+            let Status::Error { description } = &chat.status else {
+                panic!(
+                    "a failed attempt's span has an error status: {:?}",
+                    chat.status
+                );
+            };
+            let (will_retry, backoff_ms) = retry(chat);
+            Failed {
+                error_type: text(chat, key::ERROR_TYPE).to_owned(),
+                message: description.to_string(),
+                will_retry,
+                backoff_ms,
+            }
+        })
+        .collect()
+}
+
+/// The size of the request of each attempt, in the order the attempts ended.
+fn request_bytes(run: &Run) -> Vec<u64> {
+    run.chats()
+        .iter()
+        .map(|chat| u64::try_from(count(chat, key::LABLET_REQUEST_BYTES)).expect("a size"))
+        .collect()
+}
+
+/// When each attempt began and how long it took, as its span says, with
+/// how it ended, in the order the attempts ended.
+fn attempts(run: &Run) -> Vec<(&'static str, u64, u64)> {
+    run.chats()
+        .iter()
+        .map(|chat| {
+            let ended = match &chat.status {
+                Status::Unset => "answered",
+                Status::Error { .. } => "failed",
+                Status::Ok => panic!("no span of the loop's is marked ok"),
+            };
+            let (started_ms, latency_ms) = timing(chat);
+            (ended, started_ms, latency_ms)
+        })
+        .collect()
+}
+
+/// When each call began and how long it took, as its span says, in the
+/// order the calls ended.
+fn tool_timings(run: &Run) -> Vec<(u64, u64)> {
+    run.tools().iter().map(timing).collect()
 }
 
 // L1: a natural-mode run that calls one tool and then answers.
@@ -427,8 +788,8 @@ async fn a_truncated_response_stops_the_run_and_none_of_its_tool_calls_run() {
     );
     assert!(run.finished.transcript.turns()[0].tool_calls().is_empty());
     assert!(
-        !run.observer.names().contains(&"ToolCallStarted"),
-        "a call that never runs is never announced either"
+        run.tools().is_empty(),
+        "a call that never runs has no span either"
     );
 }
 
@@ -468,9 +829,9 @@ async fn a_response_cut_short_at_the_context_window_fails_the_run() {
         "a failure always carries an error, even when the loop had none to give"
     );
     assert_eq!(
-        run.observer.names().last(),
-        Some(&"RunFinished"),
-        "a failed run still publishes its wide event"
+        chat_shape(&run),
+        [(1, 1, None)],
+        "the attempt answered, so its span says nothing went wrong"
     );
 }
 
@@ -688,16 +1049,6 @@ async fn a_call_to_a_name_the_run_does_not_offer_is_an_error_result_and_gets_no_
 // C8: cancellation stops what's in flight, runs nothing after it, and the
 // run still returns whole.
 
-/// The event of each kind, by name, in the order the loop emitted them.
-fn named(run: &Run, name: &str) -> Vec<EventKind> {
-    run.observer
-        .events()
-        .into_iter()
-        .filter(|event| event.kind.name() == name)
-        .map(|event| event.kind)
-        .collect()
-}
-
 /// What the model would have been sent for each call of each turn.
 fn contents(run: &Run) -> Vec<Vec<String>> {
     run.finished
@@ -746,16 +1097,10 @@ async fn a_run_cancelled_once_its_response_came_starts_none_of_the_response_s_ca
             "the run was cancelled before this call started".to_owned()
         ]]
     );
-    assert_eq!(
-        run.observer.names(),
-        [
-            "RunStarted",
-            "TurnStarted",
-            "ProviderCallStarted",
-            "ProviderCallFinished",
-            "RunFinished",
-        ],
-        "nothing was started for the call, so nothing reports it"
+    assert_eq!(chat_shape(&run), [(1, 1, None)]);
+    assert!(
+        run.tools().is_empty(),
+        "nothing was started for the call, so no span reports it"
     );
     assert_eq!(run.finished.summary.outcome.tool_calls, 0);
 }
@@ -791,37 +1136,39 @@ async fn a_run_cancelled_during_a_provider_attempt_drops_it_and_makes_no_other()
     assert_eq!(run.turns(), 1, "the first turn is whole");
     assert_eq!(statuses(&run), [vec!["ok"]]);
     assert_eq!(
-        run.observer.names(),
+        chat_shape(&run),
         [
-            "RunStarted",
-            "TurnStarted",
-            "ProviderCallStarted",
-            "ProviderCallFinished",
-            "ToolCallStarted",
-            "ToolCallFinished",
-            "TurnStarted",
-            "ProviderCallStarted",
-            "ProviderCallFailed",
-            "ProviderCallStarted",
-            "ProviderCallCancelled",
-            "RunFinished",
+            (1, 1, None),
+            (2, 1, Some("retryable".to_owned())),
+            (2, 2, Some("cancelled".to_owned())),
         ],
-        "every attempt that started has an event that ends it"
+        "every attempt that started has a span that ends it"
     );
-    let [dropped] = named(&run, "ProviderCallCancelled")
-        .try_into()
-        .expect("one attempt was dropped");
-    assert!(
-        matches!(
-            dropped,
-            EventKind::ProviderCallCancelled {
-                turn: 2,
-                attempt: 2,
-                started_ms: 390,
-                latency_ms: 70,
-            }
-        ),
-        "{dropped:?}"
+    assert_eq!(
+        tool_shape(&run),
+        [(1, "call_0".to_owned(), "ok".to_owned())]
+    );
+    let dropped = &run.chats()[2];
+    assert_eq!(
+        timing(dropped),
+        (390, 70),
+        "the attempt began after the backoff and was dropped when the run was cancelled"
+    );
+    assert_eq!(
+        dropped.status,
+        Status::error("the run was cancelled while the attempt was in flight")
+    );
+    assert_eq!(
+        attribute(dropped, key::GEN_AI_USAGE_INPUT_TOKENS),
+        None,
+        "a dropped attempt reported nothing"
+    );
+    assert!(dropped.events.is_empty(), "no retry was decided");
+    assert_declared(dropped, &CHAT_REQUIRED, &CHAT_KEYS);
+    assert_eq!(
+        run.exceptions().len(),
+        1,
+        "only the attempt that failed raised an exception"
     );
     let summary = &run.finished.summary;
     assert_eq!(
@@ -856,16 +1203,8 @@ async fn a_run_cancelled_during_its_first_provider_attempt_has_no_turn() {
     assert_eq!(run.stop_reason(), StopReason::Cancelled);
     assert_eq!(run.provider.calls(), 1);
     assert_eq!(run.turns(), 0);
-    assert_eq!(
-        run.observer.names(),
-        [
-            "RunStarted",
-            "TurnStarted",
-            "ProviderCallStarted",
-            "ProviderCallCancelled",
-            "RunFinished",
-        ]
-    );
+    assert_eq!(chat_shape(&run), [(1, 1, Some("cancelled".to_owned()))]);
+    assert!(run.tools().is_empty());
     let summary = &run.finished.summary;
     assert_eq!(
         summary.provider.retries, 0,
@@ -897,21 +1236,12 @@ async fn a_run_cancelled_during_a_backoff_stops_waiting_and_makes_no_further_att
         "and stopped 30 ms into it rather than at its end"
     );
     assert_eq!(run.turns(), 0);
+    assert_eq!(chat_shape(&run), [(1, 1, Some("retryable".to_owned()))]);
+    let [failed] = failures(&run).try_into().expect("one attempt failed");
     assert_eq!(
-        run.observer.names(),
-        [
-            "RunStarted",
-            "TurnStarted",
-            "ProviderCallStarted",
-            "ProviderCallFailed",
-            "RunFinished",
-        ]
-    );
-    let [(_, retry)] = run.failures().try_into().expect("one attempt failed");
-    assert_eq!(
-        retry,
-        Some(ms(100)),
-        "the failure reported the wait the loop began"
+        (failed.will_retry, failed.backoff_ms),
+        (true, Some(100)),
+        "the failure's span announced the wait the loop began"
     );
     assert_eq!(run.finished.summary.provider.retries, 0);
 }
@@ -967,36 +1297,21 @@ async fn a_run_cancelled_during_a_tool_call_stops_it_and_starts_no_later_group()
         ["+call_0", "xcall_0"],
         "the call in flight was dropped, and the later group reached no executor"
     );
+    assert_eq!(chat_shape(&run), [(1, 1, None)]);
     assert_eq!(
-        run.observer.names(),
-        [
-            "RunStarted",
-            "TurnStarted",
-            "ProviderCallStarted",
-            "ProviderCallFinished",
-            "ToolCallStarted",
-            "ToolCallFinished",
-            "RunFinished",
-        ]
+        tool_shape(&run),
+        [(1, "call_0".to_owned(), "cancelled".to_owned())],
+        "the call in flight has a span, and the call after it never started"
     );
-    let [stopped] = named(&run, "ToolCallFinished")
-        .try_into()
-        .expect("one call ended");
-    assert!(
-        matches!(
-            &stopped,
-            EventKind::ToolCallFinished {
-                call_id,
-                status: ToolCallStatus::Ran {
-                    ended: ToolCallEnd::Cancelled,
-                    ..
-                },
-                latency_ms: 250,
-                ..
-            } if call_id.as_str() == "call_0"
-        ),
-        "{stopped:?}"
+    let stopped = &run.tools()[0];
+    assert_eq!(text(stopped, key::ERROR_TYPE), "cancelled");
+    assert_eq!(stopped.status, Status::error(""));
+    assert_eq!(
+        timing(stopped),
+        (0, 250),
+        "the call was stopped when the run was cancelled"
     );
+    assert_declared(stopped, &TOOL_REQUIRED, &TOOL_KEYS);
     let summary = &run.finished.summary;
     assert_eq!(
         summary.outcome.tool_calls, 1,
@@ -1061,23 +1376,16 @@ async fn a_run_cancelled_while_a_shared_group_runs_stops_every_call_in_flight() 
         ["+call_0", "+call_1", "xcall_0", "xcall_1"],
         "both calls were dropped, and bash reached no executor"
     );
-    let names = run.observer.names();
+    let mut stopped = tool_shape(&run);
+    stopped.sort();
     assert_eq!(
-        names
-            .iter()
-            .filter(|name| **name == "ToolCallStarted")
-            .count(),
-        2
+        stopped,
+        [
+            (1, "call_0".to_owned(), "cancelled".to_owned()),
+            (1, "call_1".to_owned(), "cancelled".to_owned()),
+        ],
+        "every call that started has a span, and it ended"
     );
-    assert_eq!(
-        names
-            .iter()
-            .filter(|name| **name == "ToolCallFinished")
-            .count(),
-        2,
-        "every call that started ended"
-    );
-    assert_eq!(names.last(), Some(&"RunFinished"));
     let latencies: Vec<u64> = run.finished.transcript.turns()[0]
         .tool_calls()
         .iter()
@@ -1091,6 +1399,9 @@ async fn a_run_cancelled_while_a_shared_group_runs_stops_every_call_in_flight() 
     assert_eq!(run.finished.summary.outcome.tool_calls, 2);
 }
 
+/// `bash` takes the rest of the run's time and then cancels the run, as a
+/// Ctrl-C at the deadline would, so when `read_file`'s turn comes the run
+/// is both cancelled and out of time.
 #[tokio::test]
 async fn a_call_whose_turn_comes_once_the_run_is_cancelled_and_out_of_time_is_said_to_be_cancelled()
 {
@@ -1110,27 +1421,53 @@ async fn a_call_whose_turn_comes_once_the_run_is_cancelled_and_out_of_time_is_sa
         )
         .answers(
             "bash",
-            Answers::Cancelling(Arc::clone(&cancel), "bash ran".to_owned()),
+            Answers::Stalls(Some(Arc::clone(&cancel)), harness.stop.timeout),
         ),
     )];
     harness.cancel = cancel;
-    // The observer takes the rest of the run's time over the end of `bash`,
-    // so when `read_file`'s turn comes the run is both cancelled and out of
-    // time.
-    harness.observer = Arc::new(super::fakes::Recorder::slow_over(
-        Arc::clone(&harness.clock),
-        "ToolCallFinished",
-        harness.stop.timeout,
-    ));
+    harness.context.capture_content = true;
+    let timeout = u64::try_from(harness.stop.timeout.as_millis()).expect("fits");
 
     let run = harness.run().await;
 
     assert_eq!(run.stop_reason(), StopReason::Cancelled);
-    assert_eq!(statuses(&run), [vec!["ok", "not_run"]]);
+    assert_eq!(
+        run.finished.summary.outcome.duration_ms, timeout,
+        "the run's time had gone when the second call's turn came"
+    );
+    assert_eq!(statuses(&run), [vec!["cancelled", "not_run"]]);
     assert_eq!(
         contents(&run)[0][1],
         "the run was cancelled before this call started",
         "cancellation comes before the timeout, as it does at points A and B"
+    );
+    assert_eq!(
+        announced(&run),
+        ["call_0"],
+        "the call whose turn came too late has no span"
+    );
+    let spans = run.spans();
+    let recorded_in: Vec<_> = run
+        .content()
+        .iter()
+        .map(|record| {
+            let context = record.trace_context().expect("in a span's context");
+            spans
+                .iter()
+                .find(|span| span.span_context.span_id() == context.span_id)
+                .map_or("the context the run was called in", |span| {
+                    span.name.as_ref()
+                })
+        })
+        .collect();
+    assert_eq!(
+        recorded_in,
+        [
+            "the context the run was called in",
+            "chat fake-1",
+            "execute_tool bash"
+        ],
+        "a call that was never run is in the transcript and nowhere else"
     );
 }
 
@@ -1300,7 +1637,7 @@ async fn an_output_over_the_cap_is_cut_to_its_start_and_one_that_fits_is_sent_wh
 /// The line is added on top of the cap, so the size that was sent is more
 /// than the cap allows of the tool's own text.
 #[tokio::test]
-async fn an_observer_is_told_what_was_sent_of_each_output_and_how_large_a_cut_one_was() {
+async fn the_tool_spans_say_what_was_sent_of_each_output_and_how_large_a_cut_one_was() {
     let mut harness = Harness::new(vec![
         Answer::now(says("One.", &["bash", "read_file"], FinishReason::ToolUse)),
         Answer::now(says("Done.", &[], FinishReason::EndTurn)),
@@ -1323,31 +1660,43 @@ async fn an_observer_is_told_what_was_sent_of_each_output_and_how_large_a_cut_on
     let run = harness.run().await;
 
     let line = "[truncated: the first 10 of 16 bytes]";
-    let text = |text: &str| lablet_model::ToolResultContent::Text(text.to_owned());
+    let sent = |text: &str| json!({ "type": "text", "text": text });
     let told: Vec<_> = run
-        .observer
-        .events()
-        .into_iter()
-        .filter_map(|event| match event.kind {
-            EventKind::ToolCallFinished {
-                output_bytes,
-                truncated_from_bytes,
-                output,
-                ..
-            } => Some((output_bytes, truncated_from_bytes, output)),
-            _ => None,
+        .tools()
+        .iter()
+        .map(|tool| {
+            (
+                count(tool, key::LABLET_TOOL_OUTPUT_BYTES),
+                attribute(tool, key::LABLET_TOOL_OUTPUT_TRUNCATED).cloned(),
+                attribute(tool, key::LABLET_TOOL_OUTPUT_ORIGINAL_BYTES).cloned(),
+            )
         })
         .collect();
+    let line_bytes = i64::try_from(line.len()).expect("a short line");
     assert_eq!(
         told,
         [
             (
-                10 + line.len() as u64,
-                Some(16),
-                Some(vec![text(TEN_BYTES), text(line)])
+                10 + line_bytes,
+                Some(Value::Bool(true)),
+                Some(Value::I64(16))
             ),
-            (10, None, Some(vec![text(TEN_BYTES)])),
+            (10, Some(Value::Bool(false)), None),
         ]
+    );
+    let results: Vec<_> = run
+        .content()
+        .iter()
+        .filter(|record| record_attributes(record).contains_key(key::GEN_AI_TOOL_CALL_RESULT))
+        .map(|record| record_json(record, key::GEN_AI_TOOL_CALL_RESULT))
+        .collect();
+    assert_eq!(
+        results,
+        [
+            json!({ "content": [sent(TEN_BYTES), sent(line)], "isError": false }),
+            json!({ "content": [sent(TEN_BYTES)], "isError": false }),
+        ],
+        "the record of each call holds what the model was sent"
     );
     assert_eq!(
         run.finished.summary.tool_calls.output_bytes,
@@ -1567,10 +1916,44 @@ async fn an_executor_that_keeps_what_its_call_says_to_gives_the_results_of_one_t
     }
 }
 
-// The event stream, and the summary that closes it.
+// The spans and records of a run.
 
 #[tokio::test]
-async fn the_event_stream_of_a_scripted_run_is_exactly_this() {
+async fn the_spans_and_records_of_a_scripted_run_are_exactly_these() {
+    let run = Harness::new(vec![
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::now(says("On it.", &["bash"], FinishReason::ToolUse)),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ])
+    .run()
+    .await;
+
+    assert_eq!(
+        chat_shape(&run),
+        [
+            (1, 1, Some("retryable".to_owned())),
+            (1, 2, None),
+            (2, 1, None)
+        ],
+        "a span for each attempt, in the order they ended"
+    );
+    assert_eq!(
+        tool_shape(&run),
+        [(1, "call_0".to_owned(), "ok".to_owned())]
+    );
+    assert_eq!(run.spans().len(), 4);
+    let events: Vec<_> = run.records().iter().map(SdkLogRecord::event_name).collect();
+    assert_eq!(
+        events,
+        [Some(GenAiClientOperationException::NAME)],
+        "content is off, so the one record is the failure's"
+    );
+}
+
+/// The composition root still exports through the observer, so the loop
+/// tells it of every event it did before the spans were its own.
+#[tokio::test]
+async fn the_observer_is_still_told_of_every_event_beside_the_spans() {
     let run = Harness::new(vec![
         Answer::fails(ProviderErrorKind::Retryable),
         Answer::now(says("On it.", &["bash"], FinishReason::ToolUse)),
@@ -1596,27 +1979,62 @@ async fn the_event_stream_of_a_scripted_run_is_exactly_this() {
             "RunFinished",
         ]
     );
+    let cancelled = Arc::new(FakeCancel::never());
+    let mut harness = Harness::new(vec![Answer::Cancels(Arc::clone(&cancelled), ms(70))]);
+    harness.cancel = cancelled;
+
+    let run = harness.run().await;
+
+    assert_eq!(
+        run.observer.names(),
+        [
+            "RunStarted",
+            "TurnStarted",
+            "ProviderCallStarted",
+            "ProviderCallCancelled",
+            "RunFinished",
+        ]
+    );
 }
 
 #[tokio::test]
-async fn every_event_carries_the_run_id_and_the_summary_closes_the_stream() {
-    let run = Harness::new(vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))])
-        .run()
-        .await;
+async fn every_span_and_record_carries_the_run_id() {
+    let mut harness = Harness::new(vec![
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::now(says("On it.", &["bash"], FinishReason::ToolUse)),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.context.capture_content = true;
 
-    let events = run.observer.events();
-    assert!(events.iter().all(|event| event.run_id == context().run_id));
-    let Some(EventKind::RunFinished { summary, .. }) = events.last().map(|e| &e.kind) else {
-        panic!("the last event is RunFinished");
-    };
-    assert_eq!(**summary, run.finished.summary);
+    let run = harness.run().await;
+
+    let spans = run.spans();
+    let records = run.records();
+    assert_eq!(
+        (spans.len(), records.len()),
+        (4, 1 + 1 + 3 + 1),
+        "the tools offered, the exception, a record of each attempt and of the call"
+    );
+    for span in &spans {
+        assert_eq!(
+            text(span, key::GEN_AI_CONVERSATION_ID),
+            RUN,
+            "{}",
+            span.name
+        );
+        assert_eq!(text(span, key::SESSION_ID), RUN, "{}", span.name);
+    }
+    for record in &records {
+        let attributes = record_attributes(record);
+        assert_eq!(attributes[key::GEN_AI_CONVERSATION_ID], json!(RUN));
+        assert_eq!(attributes[key::SESSION_ID], json!(RUN));
+    }
 }
 
-/// Every content-bearing field of every event, on a run that calls a tool, so
-/// the prompts aren't standing in for the response and the tool call beside
-/// them.
+/// Every content record of a run that calls a tool, so the prompts aren't
+/// standing in for the response and the tool call beside them.
 #[tokio::test]
-async fn content_reaches_an_observer_only_when_the_run_captures_it() {
+async fn content_reaches_the_records_only_when_the_run_captures_it() {
     let script = || {
         vec![
             Answer::now(says("On it.", &["bash"], FinishReason::ToolUse)),
@@ -1628,71 +2046,53 @@ async fn content_reaches_an_observer_only_when_the_run_captures_it() {
     loud.context.capture_content = true;
     let loud = loud.run().await;
 
-    for (run, captured) in [(&quiet, false), (&loud, true)] {
-        let events = run.observer.events();
-        let Some(EventKind::RunStarted {
-            system_prompt,
-            prompt,
-            ..
-        }) = events.first().map(|e| e.kind.clone())
-        else {
-            panic!("the first event is RunStarted");
-        };
-        assert_eq!(
-            system_prompt,
-            captured.then(|| "You fix tests.".to_owned()),
-            "the system prompt, with capture {captured}"
-        );
-        assert_eq!(
-            prompt,
-            captured.then(|| "Fix the failing test.".to_owned()),
-            "the task prompt, with capture {captured}"
-        );
-
-        let responses: Vec<Option<Vec<ContentBlock>>> = events
-            .iter()
-            .filter_map(|event| match &event.kind {
-                EventKind::ProviderCallFinished { response, .. } => Some(response.clone()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            responses,
-            [
-                captured.then(|| {
-                    says("On it.", &["bash"], FinishReason::ToolUse)
-                        .content()
-                        .to_vec()
-                }),
-                captured.then(|| says("Done.", &[], FinishReason::EndTurn).content().to_vec()),
-            ],
-            "the responses, with capture {captured}"
-        );
-        let inputs: Vec<Option<serde_json::Value>> = events
-            .iter()
-            .filter_map(|event| match &event.kind {
-                EventKind::ToolCallStarted { input, .. } => Some(input.clone()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            inputs,
-            [captured.then(|| serde_json::json!({ "n": 0 }))],
-            "the call's arguments, with capture {captured}"
-        );
-        let outputs: Vec<Option<Vec<ToolResultContent>>> = events
-            .iter()
-            .filter_map(|event| match &event.kind {
-                EventKind::ToolCallFinished { output, .. } => Some(output.clone()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            outputs,
-            [captured.then(|| vec![ToolResultContent::Text("bash ran".to_owned())])],
-            "what the model was sent back, with capture {captured}"
-        );
+    assert!(
+        quiet.records().is_empty(),
+        "nothing is written for a run that captures no content"
+    );
+    for span in quiet.spans().into_iter().chain(loud.spans()) {
+        for key in HOLD_CONTENT {
+            assert_eq!(attribute(&span, key), None, "{key} is on {}", span.name);
+        }
     }
+    let content = loud.content();
+    assert_eq!(
+        content.len(),
+        1 + 2 + 1,
+        "the tools offered, each attempt, and the call"
+    );
+    let offered = record_json(&content[0], key::GEN_AI_TOOL_DEFINITIONS);
+    assert_eq!(offered[0]["name"], "bash");
+    assert_eq!(offered[1]["name"], "read_file");
+    assert_eq!(
+        record_json(&content[1], key::GEN_AI_SYSTEM_INSTRUCTIONS),
+        json!([{ "type": "text", "content": "You fix tests." }])
+    );
+    assert_eq!(
+        record_json(&content[1], key::GEN_AI_INPUT_MESSAGES),
+        json!([{ "role": "user", "parts": [{ "type": "text", "content": "Fix the failing test." }] }])
+    );
+    assert_eq!(
+        record_json(&content[1], key::GEN_AI_OUTPUT_MESSAGES),
+        json!([{ "role": "assistant", "parts": [
+            { "type": "text", "content": "On it." },
+            { "type": "tool_call", "id": "call_0", "name": "bash", "arguments": { "n": 0 } },
+        ] }])
+    );
+    assert_eq!(
+        record_json(&content[2], key::GEN_AI_TOOL_CALL_ARGUMENTS),
+        json!({ "n": 0 }),
+        "the call's arguments"
+    );
+    assert_eq!(
+        record_json(&content[2], key::GEN_AI_TOOL_CALL_RESULT),
+        json!({ "content": [{ "type": "text", "text": "bash ran" }], "isError": false }),
+        "what the model was sent back"
+    );
+    assert_eq!(
+        record_json(&content[3], key::GEN_AI_OUTPUT_MESSAGES),
+        json!([{ "role": "assistant", "parts": [{ "type": "text", "content": "Done." }] }])
+    );
 }
 
 // Pricing, and what the summary reports about the run it measured.
@@ -1799,7 +2199,7 @@ async fn a_run_whose_provider_reported_no_cache_count_is_priced_on_its_whole_inp
 
 /// Several servers answer to one provider name and report different things,
 /// and so can the calls of one run. The run's totals hold a count when any
-/// call reported it, and the observer is told what the caller is handed.
+/// call reported it, and each span holds what its own call reported.
 #[tokio::test]
 async fn a_run_reports_a_count_when_any_of_its_calls_reported_it() {
     let first = TokenCounts {
@@ -1835,11 +2235,16 @@ async fn a_run_reports_a_count_when_any_of_its_calls_reported_it() {
     let turns = run.finished.transcript.turns();
     assert_eq!(turns[0].record().usage, Usage::from_inclusive(first));
     assert_eq!(turns[1].record().usage, Usage::from_inclusive(second));
-    let events = run.observer.events();
-    let Some(EventKind::RunFinished { summary, .. }) = events.last().map(|e| &e.kind) else {
-        panic!("the run's last event is RunFinished");
-    };
-    assert_eq!(summary.outcome.usage, reported);
+    let cached: Vec<_> = run
+        .chats()
+        .iter()
+        .map(|chat| attribute(chat, key::GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS).cloned())
+        .collect();
+    assert_eq!(
+        cached,
+        [Some(Value::I64(40)), None],
+        "each span says what its own call reported, and no more"
+    );
 }
 
 #[tokio::test]
@@ -1887,17 +2292,6 @@ async fn the_summary_reports_the_limits_the_run_actually_enforced() {
 }
 
 // Request bytes: what the loop measures, and that it measures each message once.
-
-fn request_bytes(run: &Run) -> Vec<u64> {
-    run.observer
-        .events()
-        .iter()
-        .filter_map(|event| match event.kind {
-            EventKind::ProviderCallStarted { request_bytes, .. } => Some(request_bytes),
-            _ => None,
-        })
-        .collect()
-}
 
 /// The measure is the system prompt, every tool spec, and every message, as
 /// the model's own serde form. A test that only asserted "it grows" would
@@ -1970,47 +2364,55 @@ async fn a_retried_call_measures_the_same_request_again() {
     );
 }
 
-/// The loop asks the observer for the span it opened and puts it on the call,
-/// which is how an MCP executor gets something to propagate.
+/// O24: the loop runs each call under its span's context, which is how an
+/// MCP executor gets something to propagate, and the two calls of a
+/// concurrent group each find their own.
 #[tokio::test]
-async fn the_span_an_observer_opens_reaches_the_executor() {
+async fn the_span_of_a_call_is_in_the_executor_s_current_context() {
     let mut harness = Harness::new(vec![
-        Answer::now(says("On it.", &["bash"], FinishReason::ToolUse)),
+        Answer::now(says(
+            "On it.",
+            &["read_file", "read_file"],
+            FinishReason::ToolUse,
+        )),
         Answer::now(says("Done.", &[], FinishReason::EndTurn)),
     ]);
-    let tools = Arc::new(FakeTools::new(
-        Arc::clone(&harness.clock),
-        vec![spec("bash", ToolSource::Builtin)],
-    ));
-    harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
-    let tracing: Arc<dyn crate::RunObserver> = Arc::new(super::fakes::Tracer);
-
-    let set = ToolSet::build(harness.tools, &harness.filter, harness.completion, None)
-        .await
-        .expect("distinct names");
-    let mut service = RunService::new(
-        Arc::clone(&harness.provider) as Arc<dyn crate::ModelProvider>,
-        Arc::new(set),
-        tracing,
-        Arc::clone(&harness.clock) as Arc<dyn crate::Clock>,
-        Arc::clone(&harness.cancel) as Arc<dyn crate::Cancellation>,
-        harness.stop,
-        harness.retry,
-        harness.request,
-        None,
-        harness.calls,
-        harness.secrets,
+    let tools = Arc::new(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![ToolSpec {
+                concurrency: ToolConcurrency::Shared,
+                ..spec("read_file", ToolSource::Builtin)
+            }],
+        )
+        .yielding(),
     );
-    service.run(harness.context, harness.prompts).await;
+    harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
 
-    let taken = tools.taken();
-    assert_eq!(taken.len(), 1);
+    let run = harness.run().await;
+
+    let mut found = tools.found();
+    found.sort_by(|one, other| one.0.cmp(&other.0));
+    let mut exported: Vec<_> = run
+        .tools()
+        .iter()
+        .map(|tool| (call_id(tool), tool.span_context.clone()))
+        .collect();
+    exported.sort_by(|one, other| one.0.cmp(&other.0));
     assert_eq!(
-        taken[0]
-            .trace_context
-            .as_ref()
-            .map(|c| c.traceparent.as_str()),
-        Some("00-trace-call_0-01")
+        found, exported,
+        "each call found the span it was exported as"
+    );
+    assert_eq!(found.len(), 2);
+    for (call, context) in &found {
+        assert!(context.is_valid(), "{call}");
+        assert!(context.is_sampled(), "{call}");
+        assert_eq!(context.trace_id(), run.root.trace_id(), "{call}");
+    }
+    assert_ne!(
+        found[0].1.span_id(),
+        found[1].1.span_id(),
+        "the two calls of the group each found their own"
     );
 }
 
@@ -2039,8 +2441,11 @@ async fn a_tool_that_takes_time_is_reported_as_taking_it() {
     assert_eq!(run.finished.summary.tool_calls.latency_ms, 250);
 }
 
+/// A host that installs no tracing hands the loop the API's no-op tracer
+/// and calls it in no span's context, and an executor then finds no span to
+/// propagate.
 #[tokio::test]
-async fn an_observer_that_keeps_no_spans_hands_the_executor_nothing() {
+async fn a_run_with_a_no_op_tracer_hands_the_executor_no_span() {
     let mut harness = Harness::new(vec![
         Answer::now(says("On it.", &["bash"], FinishReason::ToolUse)),
         Answer::now(says("Done.", &[], FinishReason::EndTurn)),
@@ -2050,13 +2455,18 @@ async fn an_observer_that_keeps_no_spans_hands_the_executor_nothing() {
         vec![spec("bash", ToolSource::Builtin)],
     ));
     harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
+    harness.noop_tracer = true;
 
-    harness.run().await;
+    let run = harness.run().await;
 
-    assert_eq!(tools.taken()[0].trace_context, None);
+    let [(call, found)] = tools.found().try_into().expect("one call");
+    assert_eq!(call, "call_0");
+    assert!(!found.is_valid(), "{found:?}");
+    assert!(run.spans().is_empty(), "the no-op tracer exports nothing");
+    assert_eq!(run.stop_reason(), StopReason::Completed);
 }
 
-// L2: the intercepted call is never started, so an observer never sees it.
+// L2: the intercepted call is never started, so it has no span.
 
 #[tokio::test]
 async fn the_intercepted_completion_call_is_never_started() {
@@ -2071,8 +2481,8 @@ async fn the_intercepted_completion_call_is_never_started() {
 
     assert_eq!(run.finished.summary.outcome.tool_calls, 0);
     assert!(
-        !run.observer.names().contains(&"ToolCallStarted"),
-        "the loop intercepts it rather than running it"
+        run.tools().is_empty(),
+        "the loop intercepts it rather than running it, so it has no span"
     );
 }
 
@@ -2116,10 +2526,7 @@ async fn a_truncated_response_that_called_task_complete_does_not_complete_the_ru
         run.finished.summary.outcome.tool_calls, 0,
         "the cut-off completion call doesn't run either"
     );
-    assert!(
-        !run.observer.names().contains(&"ToolCallStarted"),
-        "and isn't announced"
-    );
+    assert!(run.tools().is_empty(), "and has no span");
 }
 
 // L9: both spellings of a refusal, and the turn that records it.
@@ -2347,10 +2754,15 @@ async fn a_failure_reports_the_providers_own_words() {
         Some("prompt is 205000 tokens, over the 200000 limit"),
         "lablet's own sentence is for a failure that came without one"
     );
+    let [failed] = failures(&run).try_into().expect("one attempt failed");
     assert_eq!(
-        run.observer.names().last(),
-        Some(&"RunFinished"),
-        "a failed run still publishes its wide event"
+        failed.message, "prompt is 205000 tokens, over the 200000 limit",
+        "and so does the span's status"
+    );
+    assert_eq!(
+        record_text(&run.exceptions()[0], key::EXCEPTION_MESSAGE),
+        "prompt is 205000 tokens, over the 200000 limit",
+        "and the exception record"
     );
 }
 
@@ -2537,7 +2949,6 @@ async fn the_third_invalid_turn_in_a_row_stops_the_run_and_no_provider_call_foll
         ],
         "every call was answered, the third turn's among them"
     );
-    assert_eq!(run.observer.names().last(), Some(&"RunFinished"));
 }
 
 #[tokio::test]
@@ -2683,13 +3094,10 @@ async fn a_run_without_a_turn_cap_goes_on_until_the_model_ends_it() {
     assert_eq!(run.provider.calls(), 41);
     assert_eq!(run.finished.summary.outcome.tool_calls, 40);
     assert_eq!(run.finished.summary.max_turns, None);
-    let events = run.observer.events();
-    let Some(EventKind::RunFinished { summary, .. }) = events.last().map(|e| &e.kind) else {
-        panic!("the run's last event is RunFinished");
-    };
     assert_eq!(
-        summary.max_turns, None,
-        "what an observer is handed holds no cap either"
+        run.chats().len(),
+        41,
+        "a span for every attempt, however many"
     );
 }
 
@@ -2748,29 +3156,9 @@ async fn provider_latency_counts_the_failed_attempts_too() {
     );
 }
 
-/// When each attempt of the run began and how long it took, as the event
-/// that ended the attempt says, in order.
-fn attempts(run: &Run) -> Vec<(&'static str, u64, u64)> {
-    run.observer
-        .events()
-        .iter()
-        .filter_map(|event| match &event.kind {
-            EventKind::ProviderCallFailed {
-                started_ms,
-                latency_ms,
-                ..
-            } => Some((event.kind.name(), *started_ms, *latency_ms)),
-            EventKind::ProviderCallFinished { record, .. } => {
-                Some((event.kind.name(), record.started_ms, record.latency_ms))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// The summary's provider latencies count the failed attempts, so an
-/// observer can account for them only when the failed attempts say how long
-/// they took. The slowest attempt of the first run is one that failed, and
+/// The summary's provider latencies count the failed attempts, so the spans
+/// account for them only when a failed attempt's span lasts as long as the
+/// attempt did. The slowest attempt of the first run is one that failed, and
 /// the second run has no attempt but one that failed.
 #[tokio::test]
 async fn the_latencies_of_a_run_s_attempts_sum_to_the_summary_s_total_and_the_longest_is_its_max() {
@@ -2792,19 +3180,15 @@ async fn the_latencies_of_a_run_s_attempts_sum_to_the_summary_s_total_and_the_lo
         (
             failing_twice_and_then_once,
             vec![
-                ("ProviderCallFailed", 0, 90),
-                ("ProviderCallFailed", 190, 250),
-                ("ProviderCallFinished", 640, 60),
-                ("ProviderCallFailed", 700, 30),
-                ("ProviderCallFinished", 830, 120),
+                ("failed", 0, 90),
+                ("failed", 190, 250),
+                ("answered", 640, 60),
+                ("failed", 700, 30),
+                ("answered", 830, 120),
             ],
             (550, 250),
         ),
-        (
-            failing_for_good,
-            vec![("ProviderCallFailed", 0, 70)],
-            (70, 70),
-        ),
+        (failing_for_good, vec![("failed", 0, 70)], (70, 70)),
     ];
     for (script, attempted, (total, max)) in runs {
         let run = Harness::new(script).run().await;
@@ -2831,8 +3215,8 @@ async fn the_latencies_of_a_run_s_attempts_sum_to_the_summary_s_total_and_the_lo
     }
 }
 
-/// The retry field is the whole answer: a wait means another attempt follows,
-/// and its absence means the call is over.
+/// The retry event is the whole answer: `will_retry` with a backoff means
+/// another attempt follows, and without one the call is over.
 #[tokio::test]
 async fn a_failed_attempt_reports_the_wait_before_the_attempt_that_follows() {
     let run = Harness::new(vec![
@@ -2845,17 +3229,12 @@ async fn a_failed_attempt_reports_the_wait_before_the_attempt_that_follows() {
     .run()
     .await;
 
-    let waits: Vec<Option<Duration>> = run
-        .observer
-        .events()
-        .into_iter()
-        .filter_map(|event| match event.kind {
-            EventKind::ProviderCallFailed { retry, .. } => Some(retry),
-            _ => None,
-        })
-        .collect();
-
-    assert_eq!(waits, [Some(ms(100))], "the policy's first backoff");
+    let [failed] = failures(&run).try_into().expect("one attempt failed");
+    assert_eq!(
+        (failed.will_retry, failed.backoff_ms),
+        (true, Some(100)),
+        "the policy's first backoff"
+    );
 }
 
 #[tokio::test]
@@ -2867,24 +3246,19 @@ async fn the_last_failed_attempt_reports_no_wait() {
     .run()
     .await;
 
-    let waits: Vec<Option<Duration>> = run
-        .observer
-        .events()
-        .into_iter()
-        .filter_map(|event| match event.kind {
-            EventKind::ProviderCallFailed { retry, .. } => Some(retry),
-            _ => None,
-        })
-        .collect();
-
-    assert_eq!(waits, [None], "a fatal failure is never tried again");
+    let [failed] = failures(&run).try_into().expect("one attempt failed");
+    assert_eq!(
+        (failed.will_retry, failed.backoff_ms),
+        (false, None),
+        "a fatal failure is never tried again"
+    );
     assert_eq!(run.stop_reason(), StopReason::ProviderError);
 }
 
-/// The loop is the only hop between an executor and an observer, so anything
-/// it drops here can never become an `mcp.*` attribute.
+/// The loop is the only hop between an executor and the call's span, so
+/// anything it drops here can never become an `mcp.*` attribute.
 #[tokio::test]
-async fn what_a_tool_carried_back_over_mcp_reaches_the_observer() {
+async fn what_a_tool_carried_back_over_mcp_reaches_the_tool_span() {
     let meta = crate::McpCallMeta {
         method: "tools/call".to_owned(),
         session_id: Some("session-7".to_owned()),
@@ -2899,25 +3273,21 @@ async fn what_a_tool_carried_back_over_mcp_reaches_the_observer() {
         Answer::now(says("Done.", &[], FinishReason::EndTurn)),
     ]);
     harness.tools = vec![Arc::new(
-        FakeTools::new(Arc::clone(&clock), vec![spec("search", mcp("docs"))]).answers(
-            "search",
-            Answers::OverMcp("found it".to_owned(), meta.clone()),
-        ),
+        FakeTools::new(Arc::clone(&clock), vec![spec("search", mcp("docs"))])
+            .answers("search", Answers::OverMcp("found it".to_owned(), meta)),
     )];
 
     let run = harness.run().await;
 
-    let carried: Vec<Option<crate::McpCallMeta>> = run
-        .observer
-        .events()
-        .into_iter()
-        .filter_map(|event| match event.kind {
-            EventKind::ToolCallFinished { mcp, .. } => Some(mcp),
-            _ => None,
-        })
-        .collect();
-
-    assert_eq!(carried, [Some(meta)]);
+    let [tool] = run.tools().try_into().expect("one call");
+    let carried = attributes(&tool);
+    assert_eq!(carried[key::MCP_METHOD_NAME], json!("tools/call"));
+    assert_eq!(carried[key::MCP_SESSION_ID], json!("session-7"));
+    assert_eq!(carried[key::MCP_PROTOCOL_VERSION], json!("2025-06-18"));
+    assert_eq!(carried[key::JSONRPC_REQUEST_ID], json!("3"));
+    assert_eq!(carried.get(key::RPC_RESPONSE_STATUS_CODE), None);
+    assert_eq!(carried[key::NETWORK_TRANSPORT], json!("pipe"));
+    assert_eq!(carried[key::LABLET_TOOL_STATUS], json!("ok"));
 }
 
 /// A call that failed still has a span, so its metadata comes back too.
@@ -2942,31 +3312,32 @@ async fn a_tool_that_failed_over_mcp_still_reports_how_it_was_reached() {
             Answers::FailsOverMcp(
                 crate::ToolErrorKind::Failed,
                 "the server gave up".to_owned(),
-                meta.clone(),
+                meta,
             ),
         ),
     )];
 
     let run = harness.run().await;
 
-    let carried: Vec<Option<crate::McpCallMeta>> = run
-        .observer
-        .events()
-        .into_iter()
-        .filter_map(|event| match event.kind {
-            EventKind::ToolCallFinished { mcp, .. } => Some(mcp),
-            _ => None,
-        })
-        .collect();
-
-    assert_eq!(carried, [Some(meta)]);
+    let [tool] = run.tools().try_into().expect("one call");
+    let carried = attributes(&tool);
+    assert_eq!(carried[key::MCP_METHOD_NAME], json!("tools/call"));
+    assert_eq!(carried.get(key::MCP_SESSION_ID), None);
+    assert_eq!(carried.get(key::MCP_PROTOCOL_VERSION), None);
+    assert_eq!(carried[key::JSONRPC_REQUEST_ID], json!("4"));
+    assert_eq!(carried[key::RPC_RESPONSE_STATUS_CODE], json!("-32603"));
+    assert_eq!(carried[key::NETWORK_TRANSPORT], json!("tcp"));
+    assert_eq!(carried[key::LABLET_TOOL_STATUS], json!("failed"));
+    assert_eq!(carried[key::ERROR_TYPE], json!("failed"));
 }
 
 /// The tool set is the one place a call's source comes from, and the loop
-/// carries it to the call's record and to the event that opens the call's
-/// span, whether the call succeeded or failed.
+/// carries it to the call's record and to the call's span, whether the call
+/// succeeded or failed. The span names the source and not the server, which
+/// the record holds.
 #[tokio::test]
-async fn a_call_to_a_tool_served_over_mcp_is_recorded_and_announced_with_its_server() {
+async fn a_call_to_a_tool_served_over_mcp_is_recorded_with_its_server_and_its_span_names_the_source()
+ {
     let mut harness = Harness::new(vec![
         Answer::now(says(
             "On it.",
@@ -3005,21 +3376,25 @@ async fn a_call_to_a_tool_served_over_mcp_is_recorded_and_announced_with_its_ser
             &ToolCallStatus::ran(mcp("docs"), ToolCallEnd::Failed),
         ]
     );
-    let announced: Vec<Option<ToolSource>> = run
-        .observer
-        .events()
-        .into_iter()
-        .filter_map(|event| match event.kind {
-            EventKind::ToolCallStarted { source, .. } => Some(source),
-            _ => None,
+    let sources: Vec<_> = run
+        .tools()
+        .iter()
+        .map(|tool| {
+            (
+                call_id(tool),
+                maybe_text(tool, key::LABLET_TOOL_SOURCE),
+                maybe_text(tool, key::GEN_AI_TOOL_TYPE),
+            )
         })
         .collect();
+    let builtin = (Some("builtin".to_owned()), Some("function".to_owned()));
+    let served = (Some("mcp".to_owned()), Some("extension".to_owned()));
     assert_eq!(
-        announced,
+        sources,
         [
-            Some(ToolSource::Builtin),
-            Some(mcp("docs")),
-            Some(mcp("docs")),
+            ("call_0".to_owned(), builtin.0, builtin.1),
+            ("call_1".to_owned(), served.0.clone(), served.1.clone()),
+            ("call_2".to_owned(), served.0, served.1),
         ]
     );
 }
@@ -3035,17 +3410,11 @@ async fn a_call_the_loop_answered_itself_carries_no_transport() {
     .run()
     .await;
 
-    let carried: Vec<Option<crate::McpCallMeta>> = run
-        .observer
-        .events()
-        .into_iter()
-        .filter_map(|event| match event.kind {
-            EventKind::ToolCallFinished { mcp, .. } => Some(mcp),
-            _ => None,
-        })
-        .collect();
-
-    assert_eq!(carried, [None]);
+    let [tool] = run.tools().try_into().expect("one call");
+    for key in OVER_MCP {
+        assert_eq!(attribute(&tool, key), None, "{key}");
+    }
+    assert_eq!(text(&tool, key::LABLET_TOOL_STATUS), "unknown");
 }
 
 /// Point A is the only place these can be read, because every later point
@@ -3060,10 +3429,9 @@ async fn a_zero_timeout_stops_the_run_before_its_first_provider_call() {
     assert_eq!(run.stop_reason(), StopReason::Timeout);
     assert_eq!(run.turns(), 0);
     assert_eq!(run.provider.calls(), 0, "nothing was bought");
-    assert_eq!(
-        run.observer.names(),
-        ["RunStarted", "RunFinished"],
-        "the stop is read before a turn is announced, so no turn began"
+    assert!(
+        run.spans().is_empty() && run.records().is_empty(),
+        "the stop is read before an attempt is admitted, so nothing began"
     );
 }
 
@@ -3380,64 +3748,50 @@ async fn the_model_is_sent_the_rejection_as_an_error_result_beside_the_other_res
     );
 }
 
-/// A rejected call is a call the loop answered, so an observer sees it begin
-/// and end as it sees a call to an unknown name. Only the call that completes
-/// the run is never announced. Every call runs alone here, because the events
-/// of calls that run together come in no order a test may rely on.
+/// A rejected call is a call the loop answered, so it has a span as a call
+/// to an unknown name has. Only the call that completes the run has none.
+/// Every call runs alone here, because the spans of calls that run together
+/// end in no order a test may rely on.
 #[tokio::test]
-async fn a_rejected_call_is_announced_and_the_intercepted_one_is_not() {
+async fn a_rejected_call_has_a_span_and_the_intercepted_one_has_none() {
     let (mut harness, _) = explicit_with_write_file(completing_beside_other_calls());
     harness.calls.max_concurrent_tool_calls = nz(1);
 
     let run = harness.run().await;
 
-    let events = run.observer.events();
-    let started: Vec<(u32, &str, &str, Option<&ToolSource>)> = events
+    let spans: Vec<(i64, String, String, Option<String>, String, bool)> = run
+        .tools()
         .iter()
-        .filter_map(|event| match &event.kind {
-            EventKind::ToolCallStarted {
-                turn,
-                call_id,
-                name,
-                source,
-                ..
-            } => Some((*turn, call_id.as_str(), name.as_str(), source.as_ref())),
-            _ => None,
+        .map(|tool| {
+            (
+                count(tool, key::LABLET_TURN),
+                call_id(tool),
+                text(tool, key::GEN_AI_TOOL_NAME).to_owned(),
+                maybe_text(tool, key::LABLET_TOOL_SOURCE),
+                text(tool, key::LABLET_TOOL_STATUS).to_owned(),
+                attribute(tool, key::MCP_METHOD_NAME).is_some(),
+            )
         })
         .collect();
-    let finished: Vec<(u32, &str, &str, bool)> = events
-        .iter()
-        .filter_map(|event| match &event.kind {
-            EventKind::ToolCallFinished {
-                turn,
-                call_id,
-                status,
-                mcp,
-                ..
-            } => Some((*turn, call_id.as_str(), status.as_str(), mcp.is_some())),
-            _ => None,
-        })
-        .collect();
-
-    let builtin = Some(&ToolSource::Builtin);
+    let span = |turn, call: &str, name: &str, status: &str| {
+        (
+            turn,
+            call.to_owned(),
+            name.to_owned(),
+            Some("builtin".to_owned()),
+            status.to_owned(),
+            false,
+        )
+    };
     assert_eq!(
-        started,
+        spans,
         [
-            (1, "call_0", "write_file", builtin),
-            (1, "call_1", "task_complete", builtin),
-            (2, "call_0", "task_complete", builtin),
-            (2, "call_1", "task_complete", builtin),
+            span(1, "call_0", "write_file", "ok"),
+            span(1, "call_1", "task_complete", "rejected"),
+            span(2, "call_0", "task_complete", "rejected"),
+            span(2, "call_1", "task_complete", "rejected"),
         ],
         "turn 3's call completed the run, so it never began"
-    );
-    assert_eq!(
-        finished,
-        [
-            (1, "call_0", "ok", false),
-            (1, "call_1", "rejected", false),
-            (2, "call_0", "rejected", false),
-            (2, "call_1", "rejected", false),
-        ]
     );
 }
 
@@ -3649,31 +4003,16 @@ async fn consecutive_reads_run_together_and_a_write_runs_alone() {
     assert_eq!(ids, ["call_0", "call_1", "call_2", "call_3"]);
 }
 
-/// Every event a run emitted, each named, with the call id of a tool call's.
-fn stream(run: &Run) -> Vec<String> {
-    run.observer
-        .events()
-        .iter()
-        .map(|event| match &event.kind {
-            EventKind::ToolCallStarted { call_id, .. }
-            | EventKind::ToolCallFinished { call_id, .. } => {
-                format!("{} {}", event.kind.name(), call_id.as_str())
-            }
-            kind => kind.name().to_owned(),
-        })
-        .collect()
-}
-
 /// A cap of 1 is the loop before calls could run together, which is what a
-/// test that asserts events exactly relies on. Each run has a clock of its
+/// test that asserts spans exactly relies on. Each run has a clock of its
 /// own, and nothing in either run takes any time, so every offset and
 /// latency is 0 in both and the transcripts can be equal whole. Calls that
 /// took time couldn't be: two that overlap don't start and end when the
 /// same calls run one after the other do.
 #[tokio::test]
-async fn a_cap_of_one_gives_the_sequential_event_stream_and_the_same_transcript() {
+async fn a_cap_of_one_ends_the_spans_in_call_order_and_gives_the_same_transcript() {
     let (alone, spans) = grouped(1).await;
-    let (together, _) = grouped(10).await;
+    let (together, overlapping) = grouped(10).await;
 
     assert_eq!(
         spans,
@@ -3682,47 +4021,25 @@ async fn a_cap_of_one_gives_the_sequential_event_stream_and_the_same_transcript(
         ]
     );
     assert_eq!(
-        stream(&alone),
-        [
-            "RunStarted",
-            "TurnStarted",
-            "ProviderCallStarted",
-            "ProviderCallFinished",
-            "ToolCallStarted call_0",
-            "ToolCallFinished call_0",
-            "ToolCallStarted call_1",
-            "ToolCallFinished call_1",
-            "ToolCallStarted call_2",
-            "ToolCallFinished call_2",
-            "ToolCallStarted call_3",
-            "ToolCallFinished call_3",
-            "TurnStarted",
-            "ProviderCallStarted",
-            "ProviderCallFinished",
-            "RunFinished",
-        ],
-        "each call's events close before the next call's open"
+        announced(&alone),
+        ["call_0", "call_1", "call_2", "call_3"],
+        "each call's span ends before the next call's opens"
     );
     let held = |run: &Run| {
-        let mut events: Vec<String> = run
-            .observer
-            .events()
+        let mut spans: Vec<String> = run
+            .spans()
             .iter()
-            .map(|event| format!("{event:?}"))
+            .map(|span| format!("{:?}", attributes(span)))
             .collect();
-        events.sort();
-        events
+        spans.sort();
+        spans
     };
     assert_eq!(
         held(&alone),
         held(&together),
-        "a cap changes the order of the events and nothing that they hold"
+        "a cap changes the order the spans end in and nothing that they hold"
     );
-    assert_ne!(
-        stream(&alone),
-        stream(&together),
-        "with 10 the first two reads overlap"
-    );
+    assert_ne!(spans, overlapping, "with 10 the first two reads overlap");
     assert_eq!(alone.finished.transcript, together.finished.transcript);
     let ids: Vec<&str> = alone.finished.transcript.turns()[0]
         .tool_calls()
@@ -3750,20 +4067,10 @@ async fn a_run_cancelled_as_a_backoff_ends_makes_no_further_attempt() {
     assert_eq!(run.provider.calls(), 1, "no attempt after the backoff");
     assert_eq!(run.clock.sleeps(), [ms(100)]);
     assert_eq!(run.turns(), 0);
-    // The failure reported the decision to retry, made before the wait; the
-    // run's end says why the retry never came.
-    let events = run.observer.events();
-    let [.., failed, finished] = events.as_slice() else {
-        panic!("a run that failed once has at least two events");
-    };
-    assert!(matches!(
-        failed.kind,
-        EventKind::ProviderCallFailed {
-            retry: Some(wait),
-            ..
-        } if wait == ms(100)
-    ));
-    assert!(matches!(finished.kind, EventKind::RunFinished { .. }));
+    // The failure's span announced the retry, decided before the wait; the
+    // run's outcome says why the retry never came.
+    let [failed] = failures(&run).try_into().expect("one attempt failed");
+    assert_eq!((failed.will_retry, failed.backoff_ms), (true, Some(100)));
 }
 
 #[tokio::test]
@@ -3780,8 +4087,11 @@ async fn a_run_cancelled_while_an_attempt_was_failing_stops_before_the_wait() {
     assert_eq!(run.stop_reason(), StopReason::Cancelled);
     assert_eq!(run.provider.calls(), 1);
     assert_eq!(run.clock.sleeps(), [], "a cancelled run waits for nothing");
-    let [(_, retry)] = run.failures().try_into().expect("one attempt failed");
-    assert_eq!(retry, None, "the call was over when the attempt failed");
+    let [failed] = failures(&run).try_into().expect("one attempt failed");
+    assert!(
+        !failed.will_retry,
+        "the call was over when the attempt failed"
+    );
 }
 
 // E13: the server's hint.
@@ -3797,9 +4107,8 @@ async fn a_retry_waits_as_long_as_the_server_asked_when_that_is_longer_than_the_
 
     assert_eq!(run.stop_reason(), StopReason::Completed);
     assert_eq!(run.clock.sleeps(), [Duration::from_secs(5)]);
-    let [(error, retry)] = run.failures().try_into().expect("one attempt failed");
-    assert_eq!(error.retry_after, Some(Duration::from_secs(5)));
-    assert_eq!(retry, Some(Duration::from_secs(5)));
+    let [failed] = failures(&run).try_into().expect("one attempt failed");
+    assert_eq!((failed.will_retry, failed.backoff_ms), (true, Some(5_000)));
     assert_eq!(
         run.finished.transcript.turns()[0].record().started_ms,
         5_000,
@@ -3838,8 +4147,8 @@ async fn a_hint_longer_than_the_cap_on_hints_exhausts_the_retries_without_waitin
     assert_eq!(run.provider.calls(), 1, "three retries were left");
     assert_eq!(run.clock.sleeps(), [], "lablet won't make the wait");
     assert_eq!(run.finished.summary.provider.retries, 0);
-    let [(_, retry)] = run.failures().try_into().expect("one attempt failed");
-    assert_eq!(retry, None);
+    let [failed] = failures(&run).try_into().expect("one attempt failed");
+    assert_eq!((failed.will_retry, failed.backoff_ms), (false, None));
 }
 
 // E14: what a failed attempt was billed.
@@ -3870,8 +4179,16 @@ async fn what_a_failed_attempt_used_is_kept_apart_from_the_usage_and_priced_with
         tokens(100, 20),
         "a turn's usage is that of the attempt that answered"
     );
-    let [(error, _)] = run.failures().try_into().expect("one attempt failed");
-    assert_eq!(error.usage, Some(tokens(70, 5)));
+    let failed = &run.chats()[0];
+    assert_eq!(text(failed, key::ERROR_TYPE), "retryable");
+    assert_eq!(
+        (
+            count(failed, key::GEN_AI_USAGE_INPUT_TOKENS),
+            count(failed, key::GEN_AI_USAGE_OUTPUT_TOKENS),
+        ),
+        (70, 5),
+        "the failed attempt's span holds what it used"
+    );
 }
 
 #[tokio::test]
@@ -3932,13 +4249,12 @@ async fn a_rejected_key_fails_the_run_at_once_and_the_failed_attempt_says_auth()
     assert_eq!(run.clock.sleeps(), [], "nothing was waited for");
     assert_eq!(run.finished.summary.provider.retries, 0);
     assert_eq!(run.turns(), 0);
-    let [(error, retry)] = run.failures().try_into().expect("one attempt failed");
-    assert_eq!(error.kind, ProviderErrorKind::Auth);
-    assert_eq!(retry, None);
+    let [failed] = failures(&run).try_into().expect("one attempt failed");
+    assert_eq!(failed.error_type, "auth");
+    assert_eq!((failed.will_retry, failed.backoff_ms), (false, None));
     assert_eq!(
-        run.observer.names().last(),
-        Some(&"RunFinished"),
-        "a run the provider turned away is still a run, with its wide event"
+        record_text(&run.exceptions()[0], key::EXCEPTION_TYPE),
+        "auth"
     );
 }
 
@@ -3962,12 +4278,19 @@ async fn spread(run_id: &str) -> Vec<Duration> {
     let run = harness.run().await;
 
     assert_eq!(run.stop_reason(), StopReason::Completed);
-    let waits: Vec<Duration> = run
-        .failures()
+    let waits = run.clock.sleeps();
+    let announced: Vec<Option<i64>> = failures(&run)
         .into_iter()
-        .filter_map(|(_, retry)| retry)
+        .map(|failed| failed.backoff_ms)
         .collect();
-    assert_eq!(run.clock.sleeps(), waits, "the loop waits what it reported");
+    let whole: Vec<Option<i64>> = waits
+        .iter()
+        .map(|wait| Some(i64::try_from(wait.as_millis()).expect("a wait of some ms")))
+        .collect();
+    assert_eq!(
+        announced, whole,
+        "each span announces the wait the loop took, in whole milliseconds"
+    );
     waits
 }
 
@@ -4080,8 +4403,8 @@ async fn a_failed_attempt_that_used_up_the_run_s_time_is_a_timeout_with_a_retry_
         assert_eq!(run.error(), None, "{max_retries}");
         assert_eq!(run.provider.calls(), 1, "{max_retries}");
         assert_eq!(run.clock.sleeps(), [], "{max_retries}");
-        let [(_, retry)] = run.failures().try_into().expect("one attempt failed");
-        assert_eq!(retry, None, "{max_retries}");
+        let [failed] = failures(&run).try_into().expect("one attempt failed");
+        assert!(!failed.will_retry, "{max_retries}");
     }
 }
 
@@ -4109,8 +4432,8 @@ async fn a_failed_attempt_whose_usage_reaches_the_token_budget_is_the_last_attem
         assert_eq!(run.clock.sleeps(), [], "{max_retries}");
         assert_eq!(run.finished.summary.failed_usage, Some(tokens(140, 10)));
         assert_eq!(run.finished.summary.outcome.usage, Usage::default());
-        let [(_, retry)] = run.failures().try_into().expect("one attempt failed");
-        assert_eq!(retry, None, "{max_retries}");
+        let [failed] = failures(&run).try_into().expect("one attempt failed");
+        assert!(!failed.will_retry, "{max_retries}");
     }
 }
 
@@ -4185,21 +4508,6 @@ fn deadlines(tools: &FakeTools) -> Vec<(String, Duration)> {
         .collect()
 }
 
-/// The id of the call each tool event is about, in order.
-fn announced(run: &Run) -> Vec<(&'static str, String)> {
-    run.observer
-        .events()
-        .iter()
-        .filter_map(|event| match &event.kind {
-            EventKind::ToolCallStarted { call_id, .. }
-            | EventKind::ToolCallFinished { call_id, .. } => {
-                Some((event.kind.name(), call_id.as_str().to_owned()))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 #[tokio::test]
 async fn a_call_whose_turn_comes_when_the_run_s_time_has_gone_is_never_run() {
     let (run, tools) = two_calls_nine_seconds_in("bash", ToolConcurrency::Exclusive, secs(1)).await;
@@ -4240,27 +4548,14 @@ async fn a_call_whose_turn_comes_when_the_run_s_time_has_gone_is_never_run() {
 }
 
 #[tokio::test]
-async fn a_call_that_was_never_run_reaches_no_observer_and_no_total() {
+async fn a_call_that_was_never_run_has_no_span_and_no_total() {
     let (run, _) = two_calls_nine_seconds_in("bash", ToolConcurrency::Exclusive, secs(1)).await;
 
+    assert_eq!(chat_shape(&run), [(1, 1, None)]);
     assert_eq!(
-        run.observer.names(),
-        [
-            "RunStarted",
-            "TurnStarted",
-            "ProviderCallStarted",
-            "ProviderCallFinished",
-            "ToolCallStarted",
-            "ToolCallFinished",
-            "RunFinished",
-        ]
-    );
-    assert_eq!(
-        announced(&run),
-        [
-            ("ToolCallStarted", "call_0".to_owned()),
-            ("ToolCallFinished", "call_0".to_owned()),
-        ]
+        tool_shape(&run),
+        [(1, "call_0".to_owned(), "timeout".to_owned())],
+        "the call that ran has a span, and the one that never started has none"
     );
     let summary = &run.finished.summary;
     assert_eq!(summary.outcome.tool_calls, 1);
@@ -4382,61 +4677,11 @@ async fn no_tool_starts_in_a_run_whose_response_used_up_its_time() {
     assert_eq!(run.turns(), 1);
     assert_eq!(run.provider.calls(), 1);
     assert_eq!(tools.taken(), [], "no executor was reached");
-    assert_eq!(announced(&run), [], "and no call was announced");
+    assert!(run.tools().is_empty(), "and no call has a span");
     let turn = &run.finished.transcript.turns()[0];
     assert_eq!(turn.tool_uses().count(), 1);
     assert_eq!(turn.tool_calls(), [], "the call stays unanswered");
     assert_eq!(run.finished.summary.outcome.tool_calls, 0);
-}
-
-/// The observer takes a second over each call's end, which is what lets
-/// time pass between two calls the loop answers itself. The third turn's
-/// response arrives 9 s in, its first call is answered by 10 s, and the
-/// second call's turn comes then.
-#[tokio::test]
-async fn a_turn_the_timeout_cut_short_is_not_an_invalid_turn_so_the_run_stops_for_its_time() {
-    let mut harness = Harness::new(vec![
-        Answer::now(calling(&[("invented", parsed())])),
-        Answer::now(calling(&[("bash", unparsed())])),
-        Answer::Responds(
-            Box::new(calling(&[("invented", parsed()), ("bash", parsed())])),
-            secs(7),
-        ),
-        Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
-    ]);
-    harness.observer = Arc::new(Recorder::slow_over(
-        Arc::clone(&harness.clock),
-        "ToolCallFinished",
-        secs(1),
-    ));
-    let tools = Arc::new(FakeTools::new(
-        Arc::clone(&harness.clock),
-        vec![spec("bash", ToolSource::Builtin)],
-    ));
-    harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
-    harness.stop.timeout = secs(10);
-    harness.stop.max_consecutive_invalid_turns = Some(nz(3));
-
-    let run = harness.run().await;
-
-    assert_eq!(
-        statuses(&run),
-        [
-            vec!["unknown"],
-            vec!["malformed_input"],
-            vec!["unknown", "not_run"]
-        ]
-    );
-    assert_eq!(
-        run.stop_reason(),
-        StopReason::Timeout,
-        "the third turn in a row that reached no tool isn't a third invalid turn"
-    );
-    assert_eq!(run.error(), None);
-    assert_eq!(run.provider.calls(), 3);
-    assert_eq!(tools.taken(), []);
-    assert_eq!(run.finished.summary.outcome.tool_calls, 3);
-    assert_eq!(run.finished.summary.tool_calls.unknown, 2);
 }
 
 /// Each attempt's deadline is taken when the attempt begins, a retry's
@@ -4461,191 +4706,8 @@ async fn a_provider_attempt_is_given_the_shorter_of_the_provider_timeout_and_the
     assert_eq!(run.provider.deadlines(), [secs(60), secs(60), ms(54_900)]);
 }
 
-/// Point A reads the clock ahead of the attempt, and here the observer
-/// takes the run's whole time between the two. The attempt's turn comes when
-/// the time has gone, so it's never made: the response the script holds
-/// would have completed the run, and nothing asks for it.
-#[tokio::test]
-async fn an_attempt_whose_turn_comes_when_the_run_s_time_has_gone_is_never_made() {
-    let mut harness = Harness::new(vec![Answer::now(says(
-        "Never reached.",
-        &[],
-        FinishReason::EndTurn,
-    ))]);
-    harness.observer = Arc::new(Recorder::slow_over(
-        Arc::clone(&harness.clock),
-        "TurnStarted",
-        secs(10),
-    ));
-    harness.stop.timeout = secs(10);
-
-    let run = harness.run().await;
-
-    assert_eq!(run.stop_reason(), StopReason::Timeout);
-    assert_eq!(run.error(), None);
-    assert_eq!(run.provider.calls(), 0, "the provider is never called");
-    assert_eq!(
-        run.observer.names(),
-        ["RunStarted", "TurnStarted", "RunFinished"],
-        "and no attempt is announced"
-    );
-    assert_eq!(run.turns(), 0);
-    assert_eq!(run.finished.summary.provider.latency.total_ms(), 0);
-    assert_eq!(run.finished.summary.outcome.duration_ms, 10_000);
-}
-
-/// The observer takes two seconds over being told of each attempt, and
-/// they're the observer's: an attempt begins once the observer has been
-/// told, takes what the provider took, and is given what the run has left
-/// then. The first attempt's turn comes at 0 s and the second's at 2.19 s,
-/// after the first has failed and the backoff has passed.
-#[tokio::test]
-async fn the_time_an_observer_takes_over_the_start_of_an_attempt_is_not_the_attempt_s() {
-    let mut harness = Harness::new(vec![
-        Answer::Fails(overloaded(), ms(90)),
-        Answer::Responds(Box::new(says("Done.", &[], FinishReason::EndTurn)), ms(400)),
-    ]);
-    harness.observer = Arc::new(Recorder::slow_over(
-        Arc::clone(&harness.clock),
-        "ProviderCallStarted",
-        secs(2),
-    ));
-    harness.stop.timeout = secs(10);
-    harness.calls.provider_timeout = secs(60);
-
-    let run = harness.run().await;
-
-    assert_eq!(run.stop_reason(), StopReason::Completed);
-    assert_eq!(
-        run.provider.deadlines(),
-        [secs(8), ms(5_810)],
-        "what the run had left when each attempt's turn came, less the observer's 2 s"
-    );
-    assert_eq!(
-        attempts(&run),
-        [
-            ("ProviderCallFailed", 2_000, 90),
-            ("ProviderCallFinished", 4_190, 400),
-        ]
-    );
-    let record = run.finished.transcript.turns()[0].record();
-    assert_eq!((record.started_ms, record.latency_ms), (4_190, 400));
-    assert_eq!(run.finished.summary.provider.latency.total_ms(), 490);
-    assert_eq!(run.finished.summary.provider.latency.max_ms(), 400);
-}
-
-/// The attempt's turn came with the whole of the run's time left, so it's
-/// made, and the observer took all of it over being told. A deadline is
-/// never less than none: the attempt is given zero, which an adapter reports
-/// as a deadline reached. The fake's script answers whatever the deadline,
-/// and a response that ends the run completes it.
-#[tokio::test]
-async fn an_attempt_whose_observer_took_the_last_of_the_run_s_time_is_given_none() {
-    let mut harness = Harness::new(vec![Answer::now(says("Done.", &[], FinishReason::EndTurn))]);
-    harness.observer = Arc::new(Recorder::slow_over(
-        Arc::clone(&harness.clock),
-        "ProviderCallStarted",
-        secs(11),
-    ));
-    harness.stop.timeout = secs(10);
-
-    let run = harness.run().await;
-
-    assert_eq!(run.provider.deadlines(), [Duration::ZERO]);
-    assert_eq!(attempts(&run), [("ProviderCallFinished", 11_000, 0)]);
-    assert_eq!(run.stop_reason(), StopReason::Completed);
-}
-
-/// What the observer was told of each call's end, in order: when the call
-/// began and how long it took.
-fn tool_timings(run: &Run) -> Vec<(u64, u64)> {
-    run.observer
-        .events()
-        .iter()
-        .filter_map(|event| match &event.kind {
-            EventKind::ToolCallFinished {
-                started_ms,
-                latency_ms,
-                ..
-            } => Some((*started_ms, *latency_ms)),
-            _ => None,
-        })
-        .collect()
-}
-
-/// A run with a timeout of 10 s whose first response arrives 3 s in and
-/// calls `bash`, which takes a second, and whose observer takes `taking`
-/// over being told that the call began; and the executor.
-async fn told_of_a_call_s_start_over(taking: Duration) -> (Run, Arc<FakeTools>) {
-    let mut harness = Harness::new(vec![
-        Answer::Responds(
-            Box::new(says("On it.", &["bash"], FinishReason::ToolUse)),
-            secs(3),
-        ),
-        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
-    ]);
-    harness.observer = Arc::new(Recorder::slow_over(
-        Arc::clone(&harness.clock),
-        "ToolCallStarted",
-        taking,
-    ));
-    let tools = Arc::new(
-        FakeTools::new(
-            Arc::clone(&harness.clock),
-            vec![spec("bash", ToolSource::Builtin)],
-        )
-        .taking(secs(1)),
-    );
-    harness.tools = vec![Arc::clone(&tools) as Arc<dyn crate::ToolExecutor>];
-    harness.stop.timeout = secs(10);
-    (harness.run().await, tools)
-}
-
-/// The observer's two seconds are in neither the call's start nor its
-/// latency, and the call isn't given them as time to run in.
-#[tokio::test]
-async fn the_time_an_observer_takes_over_the_start_of_a_tool_call_is_not_the_call_s() {
-    let (run, tools) = told_of_a_call_s_start_over(secs(2)).await;
-
-    assert_eq!(
-        deadlines(&tools),
-        [("call_0".to_owned(), secs(5))],
-        "the 7 s the run had left when the call's turn came, less the observer's 2 s"
-    );
-    let outcome = &run.finished.transcript.turns()[0].tool_calls()[0];
-    assert_eq!(outcome.status.as_str(), "ok");
-    assert_eq!((outcome.started_ms, outcome.latency_ms), (5_000, 1_000));
-    assert_eq!(
-        tool_timings(&run),
-        [(5_000, 1_000)],
-        "the observer is told what the transcript holds"
-    );
-    assert_eq!(run.finished.summary.tool_calls.latency_ms, 1_000);
-    assert_eq!(run.stop_reason(), StopReason::Completed);
-}
-
-/// The call's turn came with 7 s left, so it's announced and handed to the
-/// executor, and the observer took 8 s over the announcement. The call is
-/// given no time, which the executor reports as a deadline reached, and
-/// point B stops the run.
-#[tokio::test]
-async fn a_tool_call_whose_observer_took_the_last_of_the_run_s_time_is_given_none() {
-    let (run, tools) = told_of_a_call_s_start_over(secs(8)).await;
-
-    assert_eq!(deadlines(&tools), [("call_0".to_owned(), Duration::ZERO)]);
-    let outcome = &run.finished.transcript.turns()[0].tool_calls()[0];
-    assert_eq!(
-        outcome.status,
-        ToolCallStatus::ran(ToolSource::Builtin, ToolCallEnd::Timeout)
-    );
-    assert_eq!((outcome.started_ms, outcome.latency_ms), (11_000, 0));
-    assert_eq!(tool_timings(&run), [(11_000, 0)]);
-    assert_eq!(run.stop_reason(), StopReason::Timeout);
-    assert_eq!(run.provider.calls(), 1);
-}
-
-// O11: the labels a run was asked for under. An observer reads them from the
-// context of each event, and the outcome holds a copy.
+// O11: the labels a run was asked for under. Every span and record carries
+// them, and the outcome holds a copy.
 
 fn labelled() -> RunLabels {
     RunLabels {
@@ -4653,27 +4715,6 @@ fn labelled() -> RunLabels {
         experiment: Some("terse-tool-descriptions".to_owned()),
         trial: Some("3".to_owned()),
     }
-}
-
-/// The context the run started with and the one it finished with, as an
-/// observer was handed them.
-fn contexts(run: &Run) -> (RunContext, RunContext) {
-    let events = run.observer.events();
-    let (
-        Some(EventKind::RunStarted {
-            context: started, ..
-        }),
-        Some(EventKind::RunFinished {
-            context: finished, ..
-        }),
-    ) = (
-        events.first().map(|event| event.kind.clone()),
-        events.last().map(|event| event.kind.clone()),
-    )
-    else {
-        panic!("a run's events open with RunStarted and close with RunFinished");
-    };
-    (*started, *finished)
 }
 
 /// A run that answers at once, and one whose only provider call fails, so
@@ -4685,8 +4726,29 @@ fn a_short_run_and_a_failed_one() -> [Vec<Answer>; 2] {
     ]
 }
 
+/// The labels every span and every record of `run` carries, by key, one
+/// map for each signal.
+fn labels_on(run: &Run) -> Vec<BTreeMap<String, serde_json::Value>> {
+    let labels = [
+        key::LABLET_TASK_ID,
+        key::LABLET_EXPERIMENT_ID,
+        key::LABLET_TRIAL,
+    ];
+    run.spans()
+        .iter()
+        .map(attributes)
+        .chain(run.records().iter().map(record_attributes))
+        .map(|attributes| {
+            attributes
+                .into_iter()
+                .filter(|(key, _)| labels.contains(&key.as_str()))
+                .collect()
+        })
+        .collect()
+}
+
 #[tokio::test]
-async fn the_labels_of_the_context_are_in_the_outcome_and_on_both_of_the_run_s_own_events() {
+async fn the_labels_of_the_context_are_in_the_outcome_and_on_every_span_and_record() {
     let partly = RunLabels {
         experiment: None,
         ..labelled()
@@ -4695,15 +4757,27 @@ async fn the_labels_of_the_context_are_in_the_outcome_and_on_both_of_the_run_s_o
         for script in a_short_run_and_a_failed_one() {
             let mut harness = Harness::new(script);
             harness.context.labels = labels.clone();
+            harness.context.capture_content = true;
 
             let run = harness.run().await;
 
             assert_eq!(run.finished.summary.outcome.labels, labels);
-            let expected = RunContext {
-                labels: labels.clone(),
-                ..context()
-            };
-            assert_eq!(contexts(&run), (expected.clone(), expected));
+            let expected: BTreeMap<String, serde_json::Value> = [
+                (key::LABLET_TASK_ID, &labels.task),
+                (key::LABLET_EXPERIMENT_ID, &labels.experiment),
+                (key::LABLET_TRIAL, &labels.trial),
+            ]
+            .into_iter()
+            .filter_map(|(key, value)| Some((key.to_owned(), json!(value.as_ref()?))))
+            .collect();
+            let signals = labels_on(&run);
+            assert!(
+                signals.len() >= 3,
+                "a span and two records at least: {signals:?}"
+            );
+            for on in signals {
+                assert_eq!(on, expected);
+            }
         }
     }
 }
@@ -4711,15 +4785,19 @@ async fn the_labels_of_the_context_are_in_the_outcome_and_on_both_of_the_run_s_o
 /// How an outcome without labels is written down is the outcome document's
 /// to hold, which the loop doesn't know.
 #[tokio::test]
-async fn a_run_asked_for_under_no_label_has_none_in_its_outcome_or_on_its_events() {
+async fn a_run_asked_for_under_no_label_has_none_in_its_outcome_or_on_its_signals() {
     for script in a_short_run_and_a_failed_one() {
-        let run = Harness::new(script).run().await;
+        let mut harness = Harness::new(script);
+        harness.context.capture_content = true;
 
-        let outcome = &run.finished.summary.outcome;
-        assert_eq!(outcome.labels, RunLabels::default());
-        let (started, finished) = contexts(&run);
-        assert_eq!(started.labels, RunLabels::default());
-        assert_eq!(finished.labels, RunLabels::default());
+        let run = harness.run().await;
+
+        assert_eq!(run.finished.summary.outcome.labels, RunLabels::default());
+        let signals = labels_on(&run);
+        assert!(signals.len() >= 3, "{signals:?}");
+        for on in signals {
+            assert_eq!(on, BTreeMap::new());
+        }
     }
 }
 
@@ -5007,19 +5085,13 @@ async fn the_summary_names_the_api_whether_reasoning_is_sent_back_and_the_cache_
 
     assert_eq!(summary(&run).model, reached);
     assert_eq!(summary(&run).request, asked);
-    let Some(EventKind::RunStarted { model, request, .. }) = run
-        .observer
-        .events()
-        .first()
-        .map(|event| event.kind.clone())
-    else {
-        panic!("the first event is RunStarted");
-    };
-    assert_eq!(model, reached);
+    let [chat] = run.chats().try_into().expect("one attempt");
     assert_eq!(
-        request, asked,
-        "an observer reports the parameters on each call, before there's a summary to read"
+        text(&chat, key::GEN_AI_PROVIDER_NAME),
+        "openai",
+        "the span names the provider the API belongs to"
     );
+    assert_eq!(text(&chat, key::GEN_AI_REQUEST_MODEL), "qwen3");
 }
 
 #[tokio::test]
@@ -5094,4 +5166,674 @@ async fn the_secrets_a_run_holds_reach_the_executor_and_are_cut_out_of_the_loop_
         Arc::ptr_eq(&taken[0].secrets, &secrets),
         "the executor was handed the run's secrets"
     );
+}
+
+// The spans and records, one by one: what each says, read from the exporters
+// the loop emitted through, and the keys each carries.
+
+/// The join keys every signal carries.
+const JOIN: [&str; 3] = [
+    key::GEN_AI_CONVERSATION_ID,
+    key::LABLET_CONFIG_DIGEST,
+    key::SESSION_ID,
+];
+
+/// The join keys a run carries when its request named them.
+const LABELS: [&str; 3] = [
+    key::LABLET_EXPERIMENT_ID,
+    key::LABLET_TASK_ID,
+    key::LABLET_TRIAL,
+];
+
+/// What the registry requires of a chat span, beside the join.
+const CHAT_REQUIRED: [&str; 8] = [
+    key::GEN_AI_OPERATION_NAME,
+    key::GEN_AI_PROVIDER_NAME,
+    key::GEN_AI_REQUEST_MAX_TOKENS,
+    key::GEN_AI_REQUEST_MODEL,
+    key::LABLET_ATTEMPT,
+    key::LABLET_CHAT_PURPOSE,
+    key::LABLET_REQUEST_BYTES,
+    key::LABLET_TURN,
+];
+
+/// Every key the registry declares on a chat span, the required ones aside.
+const CHAT_KEYS: [&str; 14] = [
+    key::ERROR_TYPE,
+    key::GEN_AI_REQUEST_REASONING_LEVEL,
+    key::GEN_AI_REQUEST_SEED,
+    key::GEN_AI_REQUEST_TEMPERATURE,
+    key::GEN_AI_RESPONSE_FINISH_REASONS,
+    key::GEN_AI_RESPONSE_ID,
+    key::GEN_AI_RESPONSE_MODEL,
+    key::GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+    key::GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS,
+    key::GEN_AI_USAGE_INPUT_TOKENS,
+    key::GEN_AI_USAGE_OUTPUT_TOKENS,
+    key::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+    key::SERVER_ADDRESS,
+    key::SERVER_PORT,
+];
+
+/// What the registry requires of a tool span, beside the join.
+const TOOL_REQUIRED: [&str; 9] = [
+    key::GEN_AI_OPERATION_NAME,
+    key::GEN_AI_TOOL_CALL_ID,
+    key::GEN_AI_TOOL_NAME,
+    key::LABLET_TOOL_INPUT_BYTES,
+    key::LABLET_TOOL_IS_ERROR,
+    key::LABLET_TOOL_OUTPUT_BYTES,
+    key::LABLET_TOOL_OUTPUT_TRUNCATED,
+    key::LABLET_TOOL_STATUS,
+    key::LABLET_TURN,
+];
+
+/// The attributes of a tool span that a call over MCP carries back.
+const OVER_MCP: [&str; 6] = [
+    key::JSONRPC_REQUEST_ID,
+    key::MCP_METHOD_NAME,
+    key::MCP_PROTOCOL_VERSION,
+    key::MCP_SESSION_ID,
+    key::NETWORK_TRANSPORT,
+    key::RPC_RESPONSE_STATUS_CODE,
+];
+
+/// Every key the registry declares on a tool span, the required ones aside.
+const TOOL_KEYS: [&str; 11] = [
+    key::ERROR_TYPE,
+    key::GEN_AI_TOOL_DESCRIPTION,
+    key::GEN_AI_TOOL_TYPE,
+    key::LABLET_TOOL_OUTPUT_ORIGINAL_BYTES,
+    key::LABLET_TOOL_SOURCE,
+    OVER_MCP[0],
+    OVER_MCP[1],
+    OVER_MCP[2],
+    OVER_MCP[3],
+    OVER_MCP[4],
+    OVER_MCP[5],
+];
+
+/// The keys that hold content, which no span carries.
+const HOLD_CONTENT: [&str; 6] = [
+    key::GEN_AI_SYSTEM_INSTRUCTIONS,
+    key::GEN_AI_INPUT_MESSAGES,
+    key::GEN_AI_OUTPUT_MESSAGES,
+    key::GEN_AI_TOOL_DEFINITIONS,
+    key::GEN_AI_TOOL_CALL_ARGUMENTS,
+    key::GEN_AI_TOOL_CALL_RESULT,
+];
+
+/// `span` carries every key the registry requires of its kind, `required`
+/// beside the join, and no key the registry doesn't declare on it, which
+/// is `required`, `declared`, the join and the labels.
+fn assert_declared(span: &SpanData, required: &[&str], declared: &[&str]) {
+    let keys: std::collections::BTreeSet<&str> = span
+        .attributes
+        .iter()
+        .map(|attribute| attribute.key.as_str())
+        .collect();
+    for key in JOIN.iter().chain(required) {
+        assert!(keys.contains(key), "{key} is missing from {}", span.name);
+    }
+    for key in &keys {
+        assert!(
+            JOIN.contains(key)
+                || LABELS.contains(key)
+                || required.contains(key)
+                || declared.contains(key),
+            "{key} isn't declared on {}",
+            span.name
+        );
+    }
+}
+
+/// The attributes `run` writes on every span and record, as JSON by key.
+fn joined(run: &Run) -> Vec<(&'static str, serde_json::Value)> {
+    vec![
+        (key::GEN_AI_CONVERSATION_ID, json!(RUN)),
+        (key::SESSION_ID, json!(RUN)),
+        (key::LABLET_CONFIG_DIGEST, json!(CONFIG_DIGEST)),
+        (key::LABLET_TASK_ID, json!("fix-failing-test")),
+        (key::LABLET_EXPERIMENT_ID, json!("terse-tool-descriptions")),
+        (key::LABLET_TRIAL, json!("3")),
+    ]
+    .into_iter()
+    .filter(|_| run.finished.summary.outcome.labels == labelled())
+    .collect()
+}
+
+/// A map of attributes from `pairs`, for an exact comparison.
+fn map(pairs: Vec<(&str, serde_json::Value)>) -> BTreeMap<String, serde_json::Value> {
+    pairs
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect()
+}
+
+/// A run that fails once with usage, answers with a response that names its
+/// id and model and calls `bash`, which takes a second, and `invented`, and
+/// then ends; asked for with every request parameter set, from a provider
+/// reached over the network, under every label, with every call running
+/// alone, so the spans end in call order.
+fn fully_described() -> Harness {
+    let answered = ProviderResponse::new(
+        says("On it.", &["bash", "invented"], FinishReason::ToolUse)
+            .content()
+            .to_vec(),
+        Usage {
+            input_tokens: 1_000,
+            output_tokens: 50,
+            reasoning_output_tokens: Some(5),
+            cache_read_tokens: Some(200),
+            cache_write_tokens: Some(30),
+        },
+        FinishReason::ToolUse,
+        Some("msg_01".to_owned()),
+        Some("fake-2026-09".to_owned()),
+    )
+    .expect("distinct call ids");
+    let mut harness = Harness::new(Vec::new());
+    harness.provider = Arc::new(
+        FakeProvider::new(
+            model(),
+            Arc::clone(&harness.clock),
+            vec![
+                Answer::Fails(
+                    overloaded().with_usage(Usage {
+                        input_tokens: 800,
+                        output_tokens: 0,
+                        reasoning_output_tokens: None,
+                        cache_read_tokens: Some(600),
+                        cache_write_tokens: None,
+                    }),
+                    ms(40),
+                ),
+                Answer::Responds(Box::new(answered), ms(250)),
+                Answer::Responds(Box::new(says("Done.", &[], FinishReason::EndTurn)), ms(120)),
+            ],
+        )
+        .at(Endpoint {
+            host: "localhost".to_owned(),
+            port: 11434,
+        }),
+    );
+    harness.request.temperature = Some(0.2);
+    harness.request.seed = Some(7);
+    harness.request.effort = Some(Effort::High);
+    harness.context.labels = labelled();
+    harness.calls.max_concurrent_tool_calls = nz(1);
+    harness.tools = vec![Arc::new(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![
+                spec("bash", ToolSource::Builtin),
+                spec("read_file", ToolSource::Builtin),
+            ],
+        )
+        .answers("bash", Answers::Text("ok".to_owned()))
+        .taking(ms(1_000)),
+    )];
+    harness
+}
+
+/// What every chat span of [`fully_described`] says the run asked for.
+fn asked() -> Vec<(&'static str, serde_json::Value)> {
+    vec![
+        (key::GEN_AI_OPERATION_NAME, json!("chat")),
+        (key::LABLET_CHAT_PURPOSE, json!("turn")),
+        (key::GEN_AI_PROVIDER_NAME, json!("fake")),
+        (key::GEN_AI_REQUEST_MODEL, json!("fake-1")),
+        (key::GEN_AI_REQUEST_MAX_TOKENS, json!(4_096)),
+        (key::GEN_AI_REQUEST_TEMPERATURE, json!(0.2)),
+        (key::GEN_AI_REQUEST_SEED, json!(7)),
+        (key::GEN_AI_REQUEST_REASONING_LEVEL, json!("high")),
+        (key::SERVER_ADDRESS, json!("localhost")),
+        (key::SERVER_PORT, json!(11_434)),
+    ]
+}
+
+#[tokio::test]
+async fn every_span_is_a_sampled_child_of_the_context_the_run_was_called_in() {
+    let run = fully_described().run().await;
+
+    let spans = run.spans();
+    assert_eq!(spans.len(), 3 + 2);
+    for span in &spans {
+        assert_eq!(span.parent_span_id, run.root.span_id(), "{}", span.name);
+        assert_eq!(span.span_context.trace_id(), run.root.trace_id());
+        assert!(span.span_context.is_sampled(), "{}", span.name);
+        assert!(span.span_context.is_valid());
+    }
+    let named: Vec<_> = spans
+        .iter()
+        .map(|span| (span.name.as_ref(), span.span_kind.clone()))
+        .collect();
+    assert_eq!(
+        named,
+        [
+            ("chat fake-1", SpanKind::Client),
+            ("chat fake-1", SpanKind::Client),
+            ("execute_tool bash", SpanKind::Internal),
+            ("execute_tool invented", SpanKind::Internal),
+            ("chat fake-1", SpanKind::Client),
+        ]
+    );
+    for chat in run.chats() {
+        assert_declared(&chat, &CHAT_REQUIRED, &CHAT_KEYS);
+    }
+    for tool in run.tools() {
+        assert_declared(&tool, &TOOL_REQUIRED, &TOOL_KEYS);
+    }
+}
+
+/// The fake's latencies are a fraction over a whole millisecond, so a span
+/// timed from the loop's own `Duration`s would differ from the record.
+#[tokio::test]
+async fn a_span_starts_and_ends_at_the_run_s_start_plus_the_model_s_whole_millisecond_offsets() {
+    let mut harness = Harness::new(vec![
+        Answer::Responds(
+            Box::new(says("On it.", &["bash"], FinishReason::ToolUse)),
+            ms(400) + Duration::from_micros(600),
+        ),
+        Answer::Responds(Box::new(says("Done.", &[], FinishReason::EndTurn)), ms(150)),
+    ]);
+    harness.tools = vec![Arc::new(
+        FakeTools::new(
+            Arc::clone(&harness.clock),
+            vec![spec("bash", ToolSource::Builtin)],
+        )
+        .taking(ms(250) + Duration::from_micros(900)),
+    )];
+
+    let run = harness.run().await;
+
+    let at = |offset_ms: u64| UNIX_EPOCH + Duration::from_millis(STARTED_UNIX_MS + offset_ms);
+    let turns = run.finished.transcript.turns();
+    let chats = run.chats();
+    for (chat, turn) in chats.iter().zip(turns) {
+        let record = turn.record();
+        assert_eq!(chat.start_time, at(record.started_ms), "{record:?}");
+        assert_eq!(
+            chat.end_time,
+            at(record.started_ms + record.latency_ms),
+            "{record:?}"
+        );
+    }
+    assert_eq!(
+        chats.iter().map(timing).collect::<Vec<_>>(),
+        [(0, 400), (651, 150)],
+        "the fractions are cut, not rounded, and the second attempt began at 651.5 ms"
+    );
+    let [tool] = run.tools().try_into().expect("one call");
+    let outcome = &turns[0].tool_calls()[0];
+    assert_eq!(tool.start_time, at(outcome.started_ms));
+    assert_eq!(tool.end_time, at(outcome.started_ms + outcome.latency_ms));
+    assert_eq!(timing(&tool), (400, 250));
+}
+
+#[tokio::test]
+async fn a_chat_span_says_what_the_attempt_was_asked_and_what_it_answered() {
+    let run = fully_described().run().await;
+
+    let answered = &run.chats()[1];
+    let mut expected = joined(&run);
+    expected.extend(asked());
+    expected.extend([
+        (key::LABLET_TURN, json!(1)),
+        (key::LABLET_ATTEMPT, json!(2)),
+        (key::LABLET_REQUEST_BYTES, json!(request_bytes(&run)[1])),
+        (key::GEN_AI_RESPONSE_ID, json!("msg_01")),
+        (key::GEN_AI_RESPONSE_MODEL, json!("fake-2026-09")),
+        (key::GEN_AI_RESPONSE_FINISH_REASONS, json!(["tool_use"])),
+        (key::GEN_AI_USAGE_INPUT_TOKENS, json!(1_000)),
+        (key::GEN_AI_USAGE_OUTPUT_TOKENS, json!(50)),
+        (key::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS, json!(5)),
+        (key::GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, json!(200)),
+        (key::GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS, json!(30)),
+    ]);
+    assert_eq!(attributes(answered), map(expected));
+    assert_eq!(answered.status, Status::Unset);
+    assert!(answered.events.is_empty());
+    assert_eq!(answered.name, "chat fake-1");
+    assert_eq!(
+        timing(answered),
+        (140, 250),
+        "the attempt began after the backoff"
+    );
+    let bytes = request_bytes(&run);
+    assert_eq!(
+        bytes[0], bytes[1],
+        "a retry sends what the attempt before it sent"
+    );
+    assert!(bytes[1] < bytes[2], "{bytes:?}");
+}
+
+#[tokio::test]
+async fn the_span_of_a_failed_attempt_says_how_it_failed_and_what_the_loop_did_next() {
+    let run = fully_described().run().await;
+
+    let failed = &run.chats()[0];
+    let mut expected = joined(&run);
+    expected.extend(asked());
+    expected.extend([
+        (key::LABLET_TURN, json!(1)),
+        (key::LABLET_ATTEMPT, json!(1)),
+        (key::LABLET_REQUEST_BYTES, json!(request_bytes(&run)[0])),
+        (key::ERROR_TYPE, json!("retryable")),
+        (key::GEN_AI_USAGE_INPUT_TOKENS, json!(800)),
+        (key::GEN_AI_USAGE_OUTPUT_TOKENS, json!(0)),
+        (key::GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, json!(600)),
+    ]);
+    assert_eq!(attributes(failed), map(expected));
+    assert_eq!(failed.status, Status::error("529 overloaded"));
+    assert_eq!(timing(failed), (0, 40));
+    let [event] = failed.events.events.as_slice() else {
+        panic!("one event: {:?}", failed.events);
+    };
+    assert_eq!(event.name, LabletRetry::NAME);
+    assert_eq!(event.timestamp, failed.end_time);
+    let retry: BTreeMap<_, _> = event
+        .attributes
+        .iter()
+        .map(|attribute| (attribute.key.as_str().to_owned(), as_json(&attribute.value)))
+        .collect();
+    assert_eq!(
+        retry,
+        map(vec![
+            (key::LABLET_ATTEMPT, json!(1)),
+            (key::LABLET_RETRY_WILL_RETRY, json!(true)),
+            (key::LABLET_RETRY_BACKOFF_MS, json!(100)),
+        ])
+    );
+
+    let [exception] = run.exceptions().try_into().expect("one exception");
+    let context = exception.trace_context().expect("in the span's context");
+    assert_eq!(context.trace_id, failed.span_context.trace_id());
+    assert_eq!(context.span_id, failed.span_context.span_id());
+    assert_eq!(context.trace_flags, Some(failed.span_context.trace_flags()));
+    assert_eq!(exception.timestamp(), Some(failed.end_time));
+    assert_eq!(exception.observed_timestamp(), Some(failed.end_time));
+    assert_eq!(
+        exception.severity_number(),
+        Some(opentelemetry::logs::Severity::Warn)
+    );
+    assert_eq!(exception.severity_text(), Some("WARN"));
+    let mut expected = joined(&run);
+    expected.extend([
+        (key::GEN_AI_OPERATION_NAME, json!("chat")),
+        (key::EXCEPTION_TYPE, json!("retryable")),
+        (key::EXCEPTION_MESSAGE, json!("529 overloaded")),
+        (key::GEN_AI_PROVIDER_NAME, json!("fake")),
+        (key::GEN_AI_REQUEST_MODEL, json!("fake-1")),
+        (key::LABLET_TURN, json!(1)),
+        (key::LABLET_ATTEMPT, json!(1)),
+    ]);
+    assert_eq!(record_attributes(&exception), map(expected));
+}
+
+#[tokio::test]
+async fn a_tool_span_says_what_was_called_and_what_became_of_the_call() {
+    let run = fully_described().run().await;
+
+    let tools = run.tools();
+    let mut expected = joined(&run);
+    expected.extend([
+        (key::GEN_AI_OPERATION_NAME, json!("execute_tool")),
+        (key::GEN_AI_TOOL_NAME, json!("bash")),
+        (key::GEN_AI_TOOL_CALL_ID, json!("call_0")),
+        (key::GEN_AI_TOOL_TYPE, json!("function")),
+        (key::GEN_AI_TOOL_DESCRIPTION, json!("The bash tool.")),
+        (key::LABLET_TOOL_SOURCE, json!("builtin")),
+        (key::LABLET_TURN, json!(1)),
+        (key::LABLET_TOOL_STATUS, json!("ok")),
+        (key::LABLET_TOOL_INPUT_BYTES, json!(7)),
+        (key::LABLET_TOOL_OUTPUT_BYTES, json!(2)),
+        (key::LABLET_TOOL_OUTPUT_TRUNCATED, json!(false)),
+        (key::LABLET_TOOL_IS_ERROR, json!(false)),
+    ]);
+    assert_eq!(attributes(&tools[0]), map(expected));
+    assert_eq!(tools[0].status, Status::Unset);
+    assert_eq!(tools[0].name, "execute_tool bash");
+    assert_eq!(
+        timing(&tools[0]),
+        (390, 1_000),
+        "the call began when the response came and took the tool's second"
+    );
+
+    let unknown = &tools[1];
+    assert_eq!(text(unknown, key::ERROR_TYPE), "unknown");
+    assert_eq!(text(unknown, key::LABLET_TOOL_STATUS), "unknown");
+    assert_eq!(
+        attribute(unknown, key::LABLET_TOOL_IS_ERROR),
+        Some(&Value::Bool(true))
+    );
+    assert_eq!(count(unknown, key::LABLET_TURN), 1);
+    for key in [
+        key::GEN_AI_TOOL_TYPE,
+        key::GEN_AI_TOOL_DESCRIPTION,
+        key::LABLET_TOOL_SOURCE,
+    ] {
+        assert_eq!(attribute(unknown, key), None, "{key}");
+    }
+    assert_eq!(unknown.status, Status::error(""));
+    assert_eq!(timing(unknown), (1_390, 0));
+    assert_eq!(unknown.name, "execute_tool invented");
+}
+
+#[tokio::test]
+async fn a_tool_span_says_where_its_tool_comes_from() {
+    let mut harness = Harness::new(vec![
+        Answer::now(says(
+            "On it.",
+            &["bash", "search", "invented"],
+            FinishReason::ToolUse,
+        )),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.tools.push(Arc::new(FakeTools::new(
+        Arc::clone(&harness.clock),
+        vec![spec("search", mcp("docs"))],
+    )));
+
+    let run = harness.run().await;
+
+    let sources: Vec<_> = run
+        .tools()
+        .iter()
+        .map(|tool| {
+            (
+                text(tool, key::GEN_AI_TOOL_NAME).to_owned(),
+                maybe_text(tool, key::GEN_AI_TOOL_TYPE),
+                maybe_text(tool, key::LABLET_TOOL_SOURCE),
+                maybe_text(tool, key::GEN_AI_TOOL_DESCRIPTION),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sources,
+        [
+            (
+                "bash".to_owned(),
+                Some("function".to_owned()),
+                Some("builtin".to_owned()),
+                Some("The bash tool.".to_owned()),
+            ),
+            (
+                "search".to_owned(),
+                Some("extension".to_owned()),
+                Some("mcp".to_owned()),
+                Some("The search tool.".to_owned()),
+            ),
+            ("invented".to_owned(), None, None, None),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn each_record_of_content_is_in_the_context_of_the_span_the_content_belongs_to() {
+    let mut harness = fully_described();
+    harness.context.capture_content = true;
+
+    let run = harness.run().await;
+
+    let spans = run.spans();
+    let belongs: Vec<_> = run
+        .content()
+        .iter()
+        .map(|record| {
+            let context = record.trace_context().expect("in a span's context");
+            let attributes = record_attributes(record);
+            let held: Vec<_> = HOLD_CONTENT
+                .into_iter()
+                .filter(|key| attributes.contains_key(*key))
+                .collect();
+            if context.span_id == run.root.span_id() {
+                assert_eq!(context.trace_id, run.root.trace_id());
+                assert_eq!(record.timestamp(), Some(UNIX_EPOCH + ms(STARTED_UNIX_MS)));
+                assert_eq!(attributes.get(key::LABLET_TURN), None);
+                return ("the context the run was called in", held);
+            }
+            let span = spans
+                .iter()
+                .find(|span| span.span_context.span_id() == context.span_id)
+                .expect("a span of the run");
+            assert_eq!(context.trace_id, span.span_context.trace_id());
+            assert_eq!(context.trace_flags, Some(span.span_context.trace_flags()));
+            assert_eq!(record.timestamp(), Some(span.end_time), "{}", span.name);
+            assert_eq!(record.observed_timestamp(), Some(span.end_time));
+            assert_eq!(
+                attributes[key::GEN_AI_OPERATION_NAME],
+                json!(text(span, key::GEN_AI_OPERATION_NAME))
+            );
+            assert_eq!(
+                attributes[key::LABLET_TURN],
+                json!(count(span, key::LABLET_TURN))
+            );
+            (span.name.as_ref(), held)
+        })
+        .collect();
+
+    let chat = "chat fake-1";
+    let sent = vec![key::GEN_AI_SYSTEM_INSTRUCTIONS, key::GEN_AI_INPUT_MESSAGES];
+    let exchanged = vec![
+        key::GEN_AI_SYSTEM_INSTRUCTIONS,
+        key::GEN_AI_INPUT_MESSAGES,
+        key::GEN_AI_OUTPUT_MESSAGES,
+    ];
+    let called = vec![
+        key::GEN_AI_TOOL_CALL_ARGUMENTS,
+        key::GEN_AI_TOOL_CALL_RESULT,
+    ];
+    assert_eq!(
+        belongs,
+        [
+            (
+                "the context the run was called in",
+                vec![key::GEN_AI_TOOL_DEFINITIONS]
+            ),
+            (chat, sent),
+            (chat, exchanged.clone()),
+            ("execute_tool bash", called.clone()),
+            ("execute_tool invented", called),
+            (chat, exchanged),
+        ]
+    );
+    for span in &spans {
+        for key in HOLD_CONTENT {
+            assert_eq!(attribute(span, key), None, "{key} is on {}", span.name);
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_records_of_a_run_hold_the_conversation_as_the_model_was_sent_it() {
+    let mut harness = fully_described();
+    harness.context.capture_content = true;
+
+    let run = harness.run().await;
+
+    let records = run.content();
+    assert_eq!(
+        record_json(&records[0], key::GEN_AI_TOOL_DEFINITIONS),
+        json!([
+            { "type": "function", "name": "bash", "description": "The bash tool.", "parameters": { "type": "object" } },
+            { "type": "function", "name": "read_file", "description": "The read_file tool.", "parameters": { "type": "object" } },
+        ])
+    );
+    let text = |text: &str| json!({ "type": "text", "content": text });
+    let result = |text: &str, failed: bool| json!({ "content": [{ "type": "text", "text": text }], "isError": failed });
+    let failed = &records[1];
+    assert_eq!(
+        record_json(failed, key::GEN_AI_SYSTEM_INSTRUCTIONS),
+        json!([text("You fix tests.")])
+    );
+    assert_eq!(
+        record_json(failed, key::GEN_AI_INPUT_MESSAGES),
+        json!([{ "role": "user", "parts": [text("Fix the failing test.")] }])
+    );
+    assert_eq!(
+        record_attributes(failed).get(key::GEN_AI_OUTPUT_MESSAGES),
+        None,
+        "a failed attempt answered nothing"
+    );
+    let last = records.last().expect("the last attempt's record");
+    assert_eq!(
+        record_json(last, key::GEN_AI_INPUT_MESSAGES),
+        json!([
+            { "role": "user", "parts": [text("Fix the failing test.")] },
+            { "role": "assistant", "parts": [
+                text("On it."),
+                { "type": "tool_call", "id": "call_0", "name": "bash", "arguments": { "n": 0 } },
+                { "type": "tool_call", "id": "call_1", "name": "invented", "arguments": { "n": 1 } },
+            ] },
+            { "role": "tool", "parts": [
+                { "type": "tool_call_response", "id": "call_0", "response": result("ok", false) },
+                { "type": "tool_call_response", "id": "call_1", "response": result("no tool named invented is offered by this run", true) },
+            ] },
+        ])
+    );
+    assert_eq!(
+        record_json(last, key::GEN_AI_OUTPUT_MESSAGES),
+        json!([{ "role": "assistant", "parts": [text("Done.")] }])
+    );
+    let of_bash = &records[3];
+    assert_eq!(record_text(of_bash, key::GEN_AI_TOOL_NAME), "bash");
+    assert_eq!(record_text(of_bash, key::GEN_AI_TOOL_CALL_ID), "call_0");
+    assert_eq!(
+        record_json(of_bash, key::GEN_AI_TOOL_CALL_ARGUMENTS),
+        json!({ "n": 0 })
+    );
+    assert_eq!(
+        record_json(of_bash, key::GEN_AI_TOOL_CALL_RESULT),
+        result("ok", false)
+    );
+    let of_invented = &records[4];
+    assert_eq!(
+        record_json(of_invented, key::GEN_AI_TOOL_CALL_RESULT),
+        result("no tool named invented is offered by this run", true)
+    );
+}
+
+/// A call whose arguments didn't parse has no arguments to record, and a
+/// record of its result all the same.
+#[tokio::test]
+async fn the_record_of_a_call_whose_arguments_did_not_parse_holds_no_arguments() {
+    let mut harness = Harness::new(vec![
+        Answer::now(calls_with_unparsed_input("bash", "{\"cmd\": ")),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.context.capture_content = true;
+
+    let run = harness.run().await;
+
+    let records = run.content();
+    let of_bash = &records[2];
+    assert_eq!(record_text(of_bash, key::GEN_AI_TOOL_CALL_ID), "call_0");
+    assert_eq!(
+        record_attributes(of_bash).get(key::GEN_AI_TOOL_CALL_ARGUMENTS),
+        None
+    );
+    let result = record_json(of_bash, key::GEN_AI_TOOL_CALL_RESULT);
+    assert_eq!(result["isError"], true);
+    assert_eq!(statuses(&run), [vec!["malformed_input"], vec![]]);
 }

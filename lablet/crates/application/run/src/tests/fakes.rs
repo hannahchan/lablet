@@ -15,6 +15,8 @@ use std::time::{Duration, Instant};
 use lablet_model::{
     Endpoint, KeptOutput, ModelRef, ProviderErrorKind, ProviderResponse, ToolName, ToolSpec,
 };
+use opentelemetry::Context;
+use opentelemetry::trace::{SpanContext, TraceContextExt as _};
 
 use crate::{
     Cancellation, Clock, ModelProvider, ProviderError, ProviderRequest, RunEvent, RunObserver,
@@ -463,6 +465,7 @@ pub struct FakeTools {
     spans: Mutex<Vec<String>>,
     hoarding: bool,
     kept: Mutex<Vec<u64>>,
+    found: Mutex<Vec<(String, SpanContext)>>,
 }
 
 impl FakeTools {
@@ -479,7 +482,18 @@ impl FakeTools {
             spans: Mutex::new(Vec::new()),
             hoarding: false,
             kept: Mutex::new(Vec::new()),
+            found: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The span each call found in the current context when it was
+    /// executed, by the call's id, in the order the calls reached the
+    /// executor: what an executor that propagates a span would send.
+    pub fn found(&self) -> Vec<(String, SpanContext)> {
+        self.found
+            .lock()
+            .expect("the fake executor isn't poisoned")
+            .clone()
     }
 
     /// Every call's output is held whole, whatever the call says to keep,
@@ -606,6 +620,10 @@ impl ToolExecutor for FakeTools {
             ));
         }
         let id = call.id.as_str().to_owned();
+        self.found
+            .lock()
+            .expect("the fake executor isn't poisoned")
+            .push((id.clone(), Context::current().span().span_context().clone()));
         self.spans
             .lock()
             .expect("the fake executor isn't poisoned")
@@ -693,87 +711,37 @@ impl ToolExecutor for FakeTools {
     }
 }
 
-/// An observer that keeps every event it was handed.
-pub struct Recorder {
-    events: Mutex<Vec<RunEvent>>,
-    slow: Option<Slow>,
+/// An observer that keeps the name of each event it's told of, and nothing
+/// else. The loop still tells one of every event, and what these tests
+/// read is the spans and records the loop emits itself; the names hold
+/// that the events it still emits are the ones it emitted before.
+pub struct Told {
+    names: Mutex<Vec<&'static str>>,
 }
 
-/// The events an observer takes time over. The loop waits for an observer,
-/// so time can pass in one, and this is how a test makes it pass between
-/// two things the loop does that take none themselves.
-struct Slow {
-    clock: Arc<FakeClock>,
-    over: &'static str,
-    taking: Duration,
-}
-
-impl Recorder {
-    /// An observer that has seen nothing.
+impl Told {
+    /// An observer told of nothing yet.
     pub const fn new() -> Self {
         Self {
-            events: Mutex::new(Vec::new()),
-            slow: None,
+            names: Mutex::new(Vec::new()),
         }
     }
 
-    /// The same, which takes `taking` on `clock` over every event named
-    /// `over`.
-    pub const fn slow_over(clock: Arc<FakeClock>, over: &'static str, taking: Duration) -> Self {
-        Self {
-            events: Mutex::new(Vec::new()),
-            slow: Some(Slow {
-                clock,
-                over,
-                taking,
-            }),
-        }
-    }
-
-    /// Every event, in the order the loop emitted them.
-    pub fn events(&self) -> Vec<RunEvent> {
-        self.events
+    /// The name of each event, in the order the loop emitted them.
+    pub fn names(&self) -> Vec<&'static str> {
+        self.names
             .lock()
-            .expect("the recorder isn't poisoned")
+            .expect("the observer isn't poisoned")
             .clone()
     }
-
-    /// The name of each event, which is what a test asserts a run's shape by.
-    pub fn names(&self) -> Vec<&'static str> {
-        self.events()
-            .iter()
-            .map(|event| event.kind.name())
-            .collect()
-    }
 }
 
 #[async_trait::async_trait]
-impl RunObserver for Recorder {
+impl RunObserver for Told {
     async fn on(&self, event: RunEvent) {
-        if let Some(slow) = &self.slow
-            && slow.over == event.kind.name()
-        {
-            slow.clock.advance(slow.taking);
-        }
-        self.events
+        self.names
             .lock()
-            .expect("the recorder isn't poisoned")
-            .push(event);
-    }
-}
-
-/// An observer that hands out a span for every call, so the handoff from
-/// observer to executor can be asserted.
-pub struct Tracer;
-
-#[async_trait::async_trait]
-impl RunObserver for Tracer {
-    async fn on(&self, _event: RunEvent) {}
-
-    fn trace_context(&self, call_id: &lablet_model::ToolCallId) -> Option<crate::TraceContext> {
-        Some(crate::TraceContext {
-            traceparent: format!("00-trace-{}-01", call_id.as_str()),
-            tracestate: None,
-        })
+            .expect("the observer isn't poisoned")
+            .push(event.kind.name());
     }
 }
