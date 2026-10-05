@@ -1234,3 +1234,13 @@ Decided by the owner, reversing the `tracing` half of "OpenTelemetry first, with
 - **A host owes lablet nothing.** No record passes through the process's `tracing` dispatcher, so a host adds no layer, filters no target, and runs several `Lablet`s without routing records between them.
 
 This goes against the OpenTelemetry Rust guidance, which says application code shouldn't call the Logs Bridge API, so a change to that API reaches the generator's template and the wrapper. - **Diagnostics stay on `tracing`.** Decided by the owner on 2026-10-05. Diagnostics are messages for a person, not part of the contract, and the SDK reports its own export failures only through `tracing`, so without it "Observers never fail or slow the run" would lose the export failures it sends to the diagnostic log. A host's subscriber shows lablet's diagnostics beside its own, and they never hold content. The loop has no diagnostics, so `lablet-run` keeps not using `tracing`; making that a lint rule would change the layer rules, and isn't done here.
+
+## 2026-10-05 Generated telemetry is data, and the floors hold it
+
+Decided by the owner. Generated code in a floor crate is held to the same floors as hand-written code, with nothing excused. The spike's generated code held the logic itself: a branch and a push for each field, each a branch to cover and a mutant to kill, which only tests generated beside it would reach, and those tests would check the template against itself.
+
+- **The generated code is data.** Each span and event struct lists its fields as pairs of key and value, a value with none being `None`, with no branch. The structs stay typed: a required attribute is a field of its own type, and the rest are `Option`s.
+- **The logic is hand-written once.** Leaving out what has no value, turning a list or a map into an attribute, and building a span's attributes or a log record from the pairs are functions written by hand, held to the floors, and shared by every span and event, the ones the registry adds later among them.
+- **The floors are met by ordinary tests.** A test that records a span covers its generated function, and a test that checks its attributes kills that function's mutants. Nothing is generated for the tests.
+
+The floors don't see a field paired with the wrong key, which is a fault of the template. The golden comparison of phase 6a and `weaver live-check` see it.
