@@ -1,0 +1,65 @@
+//! This crate's spans, one struct each. A required attribute is a field, and
+//! any other is an `Option`, so a span can't be recorded without what the
+//! registry requires of it.
+
+use opentelemetry::trace::{Span, SpanKind};
+use opentelemetry::{Array, KeyValue, StringValue, Value};
+
+#[allow(unused_imports)]
+use super::enums::*;
+{% macro kv(f, v) -%}
+{%- if f.kind == "enum" -%}KeyValue::new("{{ f.key }}", ({{ v }}).as_str().to_owned())
+{%- elif f.kind == "string[]" -%}KeyValue::new("{{ f.key }}", Value::Array(Array::String(({{ v }}).iter().cloned().map(StringValue::from).collect())))
+{%- elif f.kind.startswith("template[") -%}({{ v }}).iter().map(|(suffix, value)| KeyValue::new(format!("{{ f.key }}.{suffix}"), value.clone()))
+{%- elif f.kind == "string" -%}KeyValue::new("{{ f.key }}", ({{ v }}).clone())
+{%- else -%}KeyValue::new("{{ f.key }}", *({{ v }}))
+{%- endif -%}
+{%- endmacro %}
+{% macro rust_type(f) -%}
+{%- if f.kind == "enum" -%}{{ f.enum_name }}{%- else -%}{{ f.kind | map_text("rust_types") }}{%- endif -%}
+{%- endmacro %}
+{% for s in ctx.spans %}
+
+{{ s.brief | comment }}
+#[derive(Debug, Clone, PartialEq)]
+pub struct {{ s.name }} {
+{% for f in s.fields %}
+    {{ f.brief | comment(indent=4) }}
+    pub {{ f.ident }}: {% if f.optional and not f.kind.startswith("template[") %}Option<{{ rust_type(f) }}>{% else %}{{ rust_type(f) }}{% endif %},
+{% endfor %}
+}
+
+impl {{ s.name }} {
+    /// The registry's type for this span.
+    pub const TYPE: &'static str = "{{ s.type }}";
+    /// The span's kind.
+    pub const KIND: SpanKind = SpanKind::{{ s.kind }};
+
+    /// The span's name, as the registry builds it.
+    pub fn name(&self) -> String {
+        format!("{{ s.name_format }}"{% for a in s.name_args %}, self.{{ a }}{% endfor %})
+    }
+
+    /// Every attribute that has a value.
+    pub fn attributes(&self) -> Vec<KeyValue> {
+        let mut attributes = Vec::with_capacity({{ s.fields | length }});
+{% for f in s.fields %}
+{% if f.kind.startswith("template[") %}
+        attributes.extend({{ kv(f, "self." ~ f.ident) }});
+{% elif f.optional %}
+        if let Some(value) = &self.{{ f.ident }} {
+            attributes.push({{ kv(f, "value") }});
+        }
+{% else %}
+        attributes.push({{ kv(f, "&self." ~ f.ident) }});
+{% endif %}
+{% endfor %}
+        attributes
+    }
+
+    /// Sets every attribute that has a value on `span`.
+    pub fn record(&self, span: &mut impl Span) {
+        span.set_attributes(self.attributes());
+    }
+}
+{% endfor %}

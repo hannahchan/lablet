@@ -1,0 +1,33 @@
+//! The enum attributes this crate's signals carry.
+{% for e in ctx.enums %}
+
+{{ e.brief | comment }}
+#[derive(Debug, Clone, PartialEq, Eq)]
+{% if e.open %}
+#[non_exhaustive]
+{% endif %}
+pub enum {{ e.name }} {
+{% for m in e.members %}
+    {{ m.brief | comment(indent=4) }}
+    {{ m.variant }},
+{% endfor %}
+{% if e.open %}
+    /// A value the registry doesn't list; the attribute's enum is open.
+    Other(String),
+{% endif %}
+}
+
+impl {{ e.name }} {
+    /// The value on the wire.
+    pub fn as_str(&self) -> &str {
+        match self {
+{% for m in e.members %}
+            Self::{{ m.variant }} => "{{ m.value }}",
+{% endfor %}
+{% if e.open %}
+            Self::Other(value) => value,
+{% endif %}
+        }
+    }
+}
+{% endfor %}

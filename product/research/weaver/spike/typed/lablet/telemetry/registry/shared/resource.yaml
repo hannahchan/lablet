@@ -1,0 +1,9 @@
+file_format: definition/2
+
+# The resource is `service.name`, `service.version`, and what the SDK adds.
+# Composer-supplied resource attributes have keys lablet can't know, so they
+# aren't declared.
+imports:
+  entities:
+    - service
+    - telemetry.sdk

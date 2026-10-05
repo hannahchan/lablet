@@ -1,0 +1,86 @@
+# One crate's typed telemetry. The crate is the registry folder its signals
+# were declared in, passed as `crate_dir` (e.g. `application/run`); weaver keeps
+# each signal's source file in `provenance.path`.
+whitespace_control:
+  trim_blocks: true
+  lstrip_blocks: true
+
+comment_formats:
+  rust:
+    format: markdown
+    prefix: "/// "
+    trim: true
+    remove_trailing_dots: false
+    escape_square_brackets: true
+default_comment_format: rust
+
+text_maps:
+  rust_types:
+    int: i64
+    double: f64
+    boolean: bool
+    string: String
+    any: String
+    string[]: Vec<String>
+    template[int]: std::collections::BTreeMap<String, i64>
+    template[string]: std::collections::BTreeMap<String, String>
+
+templates:
+  - template: mod.rs.j2
+    filter: &crate >
+      ("lablet/telemetry/registry/" + $params.crate_dir + "/") as $prefix
+      | def mine: .provenance.path | startswith($prefix);
+        def ident: gsub("\\."; "_");
+        def type_name: split(".") | map(split("_") | map((.[0:1] | ascii_upcase) + .[1:]) | join("")) | join("");
+        def field: {
+          key: .key,
+          ident: (.key | ident),
+          brief: (.brief // ""),
+          optional: (.requirement_level != "required"),
+          kind: (if (.type | type) == "object" then "enum" else .type end),
+          enum_name: (if (.type | type) == "object" then (.key | type_name) else null end)
+        };
+        def enum_def: {
+          name: (.key | type_name),
+          key: .key,
+          brief: (.brief // ""),
+          open: (.key | startswith("lablet.") | not),
+          members: [.type.members[] | select(.value != "_OTHER")
+                    | {variant: (.id | type_name), value: .value, brief: (.brief // "")}]
+        };
+        def sorted_fields: [.attributes[] | field] | sort_by(.optional, .key);
+      {
+        spans: [.registry.spans[] | select(mine) | {
+          name: (.type | type_name),
+          type: .type,
+          kind: (.kind | (.[0:1] | ascii_upcase) + .[1:]),
+          brief: (.brief // ""),
+          name_format: (.name.note | gsub("`"; "") | gsub("\\{[^}]+\\}"; "{}")),
+          name_args: [.name.note | scan("\\{[^}]+\\}") | .[1:-1] | ident],
+          fields: sorted_fields
+        }],
+        events: [.registry.events[] | select(mine) | {
+          name: (.name | type_name),
+          event_name: .name,
+          brief: (.brief // ""),
+          level: ((.annotations.lablet.severity // "info") | ascii_upcase),
+          span_event: ((.annotations.lablet.emit // "log") == "span_event"),
+          fields: sorted_fields
+        }],
+        enums: ([(.registry.spans[], .registry.events[]) | select(mine) | .attributes[]
+                 | select((.type | type) == "object")] | unique_by(.key) | map(enum_def))
+      }
+    application_mode: single
+    file_name: mod.rs
+  - template: enums.rs.j2
+    filter: *crate
+    application_mode: single
+    file_name: enums.rs
+  - template: spans.rs.j2
+    filter: *crate
+    application_mode: single
+    file_name: spans.rs
+  - template: events.rs.j2
+    filter: *crate
+    application_mode: single
+    file_name: events.rs

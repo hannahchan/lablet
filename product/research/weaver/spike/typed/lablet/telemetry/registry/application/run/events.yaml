@@ -1,0 +1,80 @@
+file_format: definition/2
+
+events:
+  - name: lablet.retry
+    annotations:
+      lablet:
+        emit: span_event
+    requirement_level: recommended
+    stability: development
+    brief: A provider call failed. Recorded as a span event on the chat span of the failed attempt.
+    attributes:
+      - ref: lablet.attempt
+        requirement_level: required
+      - ref: lablet.retry.will_retry
+        requirement_level: required
+      - ref: lablet.retry.backoff_ms
+        requirement_level:
+          conditionally_required: If the call is retried.
+
+  - name: gen_ai.client.operation.exception
+    annotations:
+      lablet:
+        severity: warn
+    requirement_level: recommended
+    stability: development
+    brief: A provider call failed. A log record of severity WARN in the context of the chat span of the failed attempt.
+    attributes:
+      - ref_group: attributes.lablet.join
+      - ref: exception.type
+        brief: "The class of provider error: `retryable`, `context_exhausted`, `auth`, `fatal`, or `malformed`."
+        requirement_level: required
+      - ref: exception.message
+        requirement_level: required
+      - ref: gen_ai.operation.name
+        brief: Always `chat`.
+        requirement_level: required
+      - ref: gen_ai.provider.name
+        requirement_level: required
+      - ref: gen_ai.request.model
+        requirement_level: required
+      - ref: lablet.turn
+        requirement_level: required
+      - ref: lablet.attempt
+        requirement_level: required
+
+  - name: gen_ai.client.inference.operation.details
+    requirement_level: opt_in
+    stability: development
+    brief: Captured content. A log record in the context of the span whose content it carries, emitted only when `telemetry.capture_content` is on.
+    note: >
+      A record for the root span carries the tool specs the run offered; a record for a chat
+      span carries the messages; a record for a tool span carries the call's arguments and
+      result. Content never appears on a span. Each value is a JSON string in the form the
+      GenAI conventions give the attribute, and one longer than 1 MiB is cut there.
+    attributes:
+      - ref_group: attributes.lablet.join
+      - ref: gen_ai.operation.name
+        brief: The operation of the span the content belongs to, `invoke_agent`, `chat`, or `execute_tool`.
+        requirement_level: required
+      - ref: lablet.turn
+        requirement_level:
+          conditionally_required: On a record for a chat span or a tool span.
+      - ref: gen_ai.tool.definitions
+        requirement_level: opt_in
+      - ref: gen_ai.system_instructions
+        requirement_level: opt_in
+      - ref: gen_ai.input.messages
+        requirement_level: opt_in
+      - ref: gen_ai.output.messages
+        requirement_level: opt_in
+      - ref: gen_ai.tool.name
+        requirement_level:
+          conditionally_required: On a record for a tool span.
+      - ref: gen_ai.tool.call.id
+        requirement_level:
+          conditionally_required: On a record for a tool span.
+      - ref: gen_ai.tool.call.arguments
+        requirement_level: opt_in
+      - ref: gen_ai.tool.call.result
+        requirement_level: opt_in

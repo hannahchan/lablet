@@ -1,0 +1,14 @@
+name: lablet
+description: Telemetry contract for lablet, the agent-loop harness.
+# Must end in a semver segment.
+schema_url: https://lablet.dev/schemas/0.1.0
+stability: development
+# Weaver resolves a relative registry_path against its working directory, not
+# this file; `cargo xtask weaver` runs it from the repository root. Never a git
+# URL: weaver would clone it on every run. Each schema_url must equal the one
+# in the dependency's own manifest.
+dependencies:
+  - schema_url: https://opentelemetry.io/schemas/1.44.0
+    registry_path: lablet/telemetry/deps/semantic-conventions/model
+  - schema_url: https://opentelemetry.io/schemas/gen-ai-dev/1.42.0-dev
+    registry_path: lablet/telemetry/deps/semantic-conventions-genai/model

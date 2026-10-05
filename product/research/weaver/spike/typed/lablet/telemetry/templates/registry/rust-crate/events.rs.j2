@@ -1,0 +1,70 @@
+//! This crate's events, one struct each, written as `tracing` events that the
+//! OpenTelemetry appender turns into log records, or as span events when the
+//! registry annotates them so. The generator writes each
+//! field's name where the macro needs it, which a hand-written call can't
+//! take from a constant.
+
+#[allow(unused_imports)]
+use super::enums::*;
+{% macro arg(f) -%}
+{%- if f.kind == "enum" -%}
+{%- if f.optional -%}self.{{ f.ident }}.as_ref().map(|value| value.as_str()){%- else -%}self.{{ f.ident }}.as_str(){%- endif -%}
+{%- elif f.kind == "string" -%}
+{%- if f.optional -%}self.{{ f.ident }}.as_deref(){%- else -%}self.{{ f.ident }}.as_str(){%- endif -%}
+{%- else -%}self.{{ f.ident }}
+{%- endif -%}
+{%- endmacro %}
+{% macro rust_type(f) -%}
+{%- if f.kind == "enum" -%}{{ f.enum_name }}{%- else -%}{{ f.kind | map_text("rust_types") }}{%- endif -%}
+{%- endmacro %}
+{% for e in ctx.events %}
+
+{{ e.brief | comment }}
+#[derive(Debug, Clone, PartialEq)]
+pub struct {{ e.name }} {
+{% for f in e.fields %}
+    {{ f.brief | comment(indent=4) }}
+    pub {{ f.ident }}: {% if f.optional and not f.kind.startswith("template[") %}Option<{{ rust_type(f) }}>{% else %}{{ rust_type(f) }}{% endif %},
+{% endfor %}
+}
+
+impl {{ e.name }} {
+    /// The record's event name.
+    pub const NAME: &'static str = "{{ e.event_name }}";
+
+{% if e.span_event %}
+    /// Adds the event to `span`, at `timestamp`.
+    pub fn add_to(&self, span: &mut impl opentelemetry::trace::Span, timestamp: std::time::SystemTime) {
+        let mut attributes: Vec<opentelemetry::KeyValue> = Vec::with_capacity({{ e.fields | length }});
+{% for f in e.fields %}
+{% if f.optional %}
+        if let Some(value) = &self.{{ f.ident }} {
+            attributes.push(opentelemetry::KeyValue::new("{{ f.key }}", *value));
+        }
+{% else %}
+        attributes.push(opentelemetry::KeyValue::new("{{ f.key }}", self.{{ f.ident }}));
+{% endif %}
+{% endfor %}
+        span.add_event_with_timestamp(Self::NAME, timestamp, attributes);
+    }
+{% elif e.fields | length > 32 %}
+    compile_error!("{{ e.event_name }} has {{ e.fields | length }} attributes, more than a `tracing` event can carry; emit it through the Logs Bridge API");
+{% elif e.fields | selectattr("kind", "equalto", "string[]") | list | length > 0 %}
+    compile_error!("{{ e.event_name }} has a list-valued attribute, which a `tracing` field can't carry; emit it through the Logs Bridge API");
+{% elif e.fields | selectattr("kind", "startingwith", "template[") | list | length > 0 %}
+    compile_error!("{{ e.event_name }} has a template attribute, whose names a `tracing` event can't know; emit it through the Logs Bridge API");
+{% else %}
+    /// Writes the record, in the context of the current span.
+    pub fn emit(&self) {
+        tracing::event!(
+            name: "{{ e.event_name }}",
+            target: "{{ params.target }}",
+            tracing::Level::{{ e.level }},
+{% for f in e.fields %}
+            "{{ f.key }}" = {{ arg(f) }},
+{% endfor %}
+        );
+    }
+{% endif %}
+}
+{% endfor %}

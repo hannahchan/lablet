@@ -1,0 +1,13 @@
+[workspace]
+resolver = "3"
+members = ["spike-run", "spike-root"]
+
+[workspace.package]
+edition = "2024"
+
+[workspace.dependencies]
+opentelemetry = { version = "=0.33.0", default-features = false, features = ["trace", "logs"] }
+opentelemetry_sdk = { version = "=0.33.0", default-features = false, features = ["trace", "logs", "testing"] }
+opentelemetry-appender-tracing = "=0.33.0"
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", features = ["registry"] }
