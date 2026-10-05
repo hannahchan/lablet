@@ -10,13 +10,31 @@
 //! a [`Record`] becomes a log record with its event name, severity, the time
 //! the loop measured and the span it belongs to, and [`Logger`] is the
 //! object-safe logger for the loop to hold beside its tracer.
+//!
+//! [`generated`] is the module `cargo xtask weaver generate` writes from the
+//! registry folder `lablet/telemetry/registry/application/run/`, and
+//! [`spellings`] holds the domain's enums to its enums.
+
+pub mod generated;
+pub mod spellings;
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::time::SystemTime;
 
 use opentelemetry::logs::{AnyValue, LogRecord as _, Severity};
 use opentelemetry::trace::SpanContext;
 use opentelemetry::{Array, KeyValue, StringValue};
+
+/// `count` as the wire carries it: an `i64`, of which one too large is the
+/// largest the wire can say.
+///
+/// The loop counts in `u64`, and a generated struct's `int` field is `i64`,
+/// so a call site passes each count through here.
+#[must_use]
+pub fn count_of(count: u64) -> i64 {
+    i64::try_from(count).unwrap_or(i64::MAX)
+}
 
 /// The longest text an attribute holds, in bytes: 1 MiB.
 ///
@@ -72,7 +90,7 @@ impl From<Vec<String>> for Value {
 
 impl From<u64> for Value {
     fn from(count: u64) -> Self {
-        Self::Int(i64::try_from(count).unwrap_or(i64::MAX))
+        Self::Int(count_of(count))
     }
 }
 
@@ -169,6 +187,20 @@ impl Attribute {
     pub fn value(&self) -> Option<&Value> {
         self.value.as_ref()
     }
+}
+
+/// One attribute for each entry of `values`, under the template `prefix`:
+/// what a generated struct's template field becomes, with no branch of its
+/// own.
+#[must_use]
+pub fn each_under<V: Into<Value> + Clone>(
+    prefix: &'static str,
+    values: &BTreeMap<String, V>,
+) -> Vec<Attribute> {
+    values
+        .iter()
+        .map(|(suffix, value)| Attribute::under(prefix, suffix, value.clone()))
+        .collect()
 }
 
 /// The attributes that hold a value, each with its text at or under the

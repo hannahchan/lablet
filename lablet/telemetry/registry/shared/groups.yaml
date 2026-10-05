@@ -1,0 +1,42 @@
+file_format: definition/2
+
+attribute_groups:
+  # The keys a consumer groups by, on every signal so that no query needs a join.
+  - id: attributes.lablet.join
+    visibility: internal
+    attributes:
+      - ref: gen_ai.conversation.id
+        brief: The run id.
+        requirement_level: required
+        annotations:
+          lablet:
+            join: true
+      - ref: session.id
+        brief: The run id, for backends that group by session.
+        requirement_level: required
+        annotations:
+          lablet:
+            join: true
+      - ref: lablet.config.digest
+        requirement_level: required
+        annotations:
+          lablet:
+            join: true
+      - ref: lablet.task.id
+        requirement_level:
+          conditionally_required: If the run request named a task.
+        annotations:
+          lablet:
+            join: true
+      - ref: lablet.experiment.id
+        requirement_level:
+          conditionally_required: If the run request named an experiment.
+        annotations:
+          lablet:
+            join: true
+      - ref: lablet.trial
+        requirement_level:
+          conditionally_required: If the run request named a trial.
+        annotations:
+          lablet:
+            join: true

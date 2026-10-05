@@ -2,7 +2,7 @@
 
 How lablet produces its telemetry, and how to add to it. [README.md](README.md) holds the rules the gates enforce; this page explains the approach behind them, for someone new to the code.
 
-Status: phase 6a is building this. Until the phase closes, the code still reports to a `RunObserver` that the `telemetry-otel` adapter turns into spans and records, the registry's constants live in `lablet-telemetry-registry`, and the adapter ring may still hold the SDK, since `telemetry-otel` does, so the lint's rule for adapters lands with its removal; the phase's last landing removes this paragraph.
+Status: phase 6a is building this. Until the phase closes, the code still reports to a `RunObserver` that the `telemetry-otel` adapter turns into spans and records, the registry's constants live in `lablet-telemetry-registry` beside the generated modules, of which the composition root's is checked in but not declared until the last landing, and the adapter ring may still hold the SDK, since `telemetry-otel` does, so the lint's rule for adapters lands with its removal; the phase's last landing removes this paragraph.
 
 ## What lablet emits, and why it matters
 
@@ -52,26 +52,29 @@ The registry is organised by crate. A signal is declared in the folder of the cr
 
 An adapter gets a folder when it first emits a signal of its own.
 
-The registry's own syntax can't say everything the generator needs, so lablet adds annotations under the `lablet` key. `weaver check` runs policies that hold each one:
+The registry's own syntax can't say everything the generator needs, so lablet adds annotations under the `lablet` key. `weaver check` runs policies that hold each one, and refuse an annotation with any other name:
 
-| Annotation               | Where                            | What it does                                                                                        |
-| ------------------------ | -------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `emit: span_event`       | an event                         | the event is added to a span rather than written as a log record (only `lablet.retry` today)        |
-| `severity: warn`         | an event                         | the record's severity; the default is `info`                                                        |
-| `value: chat`            | a signal's attribute reference   | the attribute always has this value on this signal, so the generator writes a constant, not a field |
-| `values: [retryable, …]` | a signal's attribute reference   | the values this signal uses, generated as a closed enum, so a value not listed doesn't compile      |
-| `join: true`             | each reference in the join group | the attribute is one of the run's join keys, collected into the generated `Join` struct             |
+| Annotation               | Where                            | What it does                                                                                                     |
+| ------------------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `emit: span_event`       | an event                         | the event is added to a span rather than written as a log record (only `lablet.retry` today)                     |
+| `severity: warn`         | an event                         | the record's severity; the default is `info`                                                                     |
+| `value: chat`            | a signal's attribute reference   | the attribute always has this value on this signal, so the generator writes a constant, not a field              |
+| `values: [retryable, …]` | a signal's attribute reference   | the values this signal uses of a string or an open enum, as a closed enum, so a value not listed doesn't compile |
+| `join: true`             | each reference in the join group | the attribute is one of the run's join keys, collected into the generated `Join` struct                          |
+
+An annotation goes on a signal or on one of its attribute references, never on an attribute's definition in `shared/attributes.yaml`: resolution copies a definition's annotations onto every reference to it, so a value fixed there would be fixed on every signal, and the policy refuses one. A `value` fixes the attribute on every signal of its kind, so its reference is `required`, and must be one the attribute's type allows, a text for a string attribute or an open enum (one with an `_OTHER` member, such as `error.type`) and a member for a closed one; `values` may narrow a string attribute or an enum, must be members of a closed one, and name each value once; a span event takes no `severity`. A class of an open attribute is any text to the policy; the spellings tests beside the generated module, which match every variant of the domain's enums to the generated ones, hold that each is spelt as the loop spells it. The join group is inlined into each signal when the registry is resolved, so the policy holds its result: the join keys are the keys on every span and every record, each marked, and a marked key is on all of them.
 
 ## What the generator writes
 
-`cargo xtask weaver generate` writes a `src/telemetry/generated/` module into each crate that emits signals. The generator writes every file there: don't edit them. For each span and event it holds a struct:
+`cargo xtask weaver generate` writes a `src/telemetry/generated/` module into each crate that emits signals, from the templates in `lablet/telemetry/templates/registry/rust-crate/`. The generator writes every file there: don't edit them. Beside the structs, the module holds the enums its signals choose from (each with `ALL`, `as_str` and a conversion to an attribute value), a `key` module with a constant for each attribute name the module's signals use, which tests read, and `SCHEMA_URL`; `lablet-run`'s holds the `Join` struct, which the composition root's module uses from there. For each span and event it holds a struct:
 
-- A required attribute is a field of its own type, and any other is an `Option`, so a span can't be recorded without what the registry requires of it.
-- The six join keys are one `Join` field, built once per run, so they can't differ between a run's signals.
-- A fixed value isn't a field at all, and a signal's own values are a closed enum.
+- A required attribute is a field of its own type, and any other is an `Option`, so a span can't be recorded without what the registry requires of it. An `int` is an `i64`, as the wire carries it, and a template attribute a map from suffix to value.
+- The six join keys are one `Join` field, built once per run from `RunContext`, so they can't differ between a run's signals.
+- A fixed value isn't a field at all but an associated constant, and a signal's own values are a closed enum named for the signal and the attribute.
 - An upstream enum a signal doesn't narrow is text, since generating every value the conventions list would leave code no test can reach.
+- A span has its `KIND`, its `name()` as the registry builds it, and `record()`, which sets its attributes on a span; a record has its `NAME` and `SEVERITY` and `record()`, which makes the log record at a time in a span's context; a span event has its `NAME` and `add_to()`.
 
-The generated code is data, not logic. Each struct lists its attributes as pairs of key and value, with no branches. The logic, leaving out an attribute with no value, cutting text to the length limit, and building a span's attributes or a log record, is written by hand once in `lablet-run` and shared by every struct. This is how the coverage and mutation floors cover generated code without excusing any: the ordinary tests that record a span reach its generated code, and the hand-written logic has tests of its own.
+The generated code is data, not logic. Each struct lists its attributes as pairs of key and value, with no branches, one to a line. The logic, leaving out an attribute with no value, cutting text to the length limit, turning a map into attributes, and building a span's attributes or a log record, is written by hand once in `lablet-run`'s `telemetry` module and shared by every struct; `spellings.rs` beside it converts the domain's enums to the generated ones, exhaustively, with tests over every variant. This is how the coverage and mutation floors cover generated code without excusing any: the ordinary tests that record a span reach its generated code, and the hand-written logic has tests of its own.
 
 ## Adding to the telemetry
 

@@ -1,0 +1,66 @@
+{% import 'macros.j2' as m %}
+{{ m.header(ctx.crate_dir) }}
+
+//! This crate's spans, one struct each. A required attribute is a field of
+//! its own type and any other is an `Option`, so a span can't be recorded
+//! without what the registry requires of it; a value the registry fixes is a
+//! constant, not a field.
+
+{% set templated = ctx.spans | selectattr("templates") | list %}
+{% set joined = ctx.spans | selectattr("has_join") | list %}
+{% if templated %}
+use std::collections::BTreeMap;
+
+{% endif %}
+use opentelemetry::trace::{Span, SpanKind};
+
+use {{ ctx.telemetry_path }}::{Attribute, Value{% if templated %}, each_under{% endif %}, span_attributes};
+
+{% if ctx.span_enums %}
+use super::enums::{
+{% for e in ctx.span_enums %}
+    {{ e }},
+{% endfor %}
+};
+{% endif %}
+use super::key;
+{% if joined %}
+{% if ctx.join %}
+use super::Join;
+{% else %}
+use {{ ctx.telemetry_path }}::generated::Join;
+{% endif %}
+{% endif %}
+
+{% for s in ctx.spans %}
+{{ s.brief | comment }}
+#[derive(Debug, Clone, PartialEq)]
+pub struct {{ s.name }} {
+{% if s.has_join %}
+    /// The keys a consumer groups by, the run's.
+    pub join: Join,
+{% endif %}
+{{ m.fields(s.fields) }}
+}
+
+impl {{ s.name }} {
+    /// The span's kind.
+    pub const KIND: SpanKind = SpanKind::{{ s.kind }};
+{{ m.consts(s) }}
+
+    /// The span's name, as the registry builds it.
+    #[must_use]
+    pub fn name(&self) -> String {
+        format!("{{ s.name_format }}"{% for a in s.name_args %}, {{ a }}{% endfor %})
+    }
+
+    /// Every attribute, the join's first, as pairs of key and value.
+{{ m.attributes(s) }}
+
+    /// Sets every attribute that has a value on `span`.
+    pub fn record(&self, span: &mut impl Span) {
+        span.set_attributes(span_attributes(self.attributes()));
+    }
+}
+
+{% endfor %}

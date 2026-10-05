@@ -1,0 +1,67 @@
+{% import 'macros.j2' as m %}
+{{ m.header(ctx.crate_dir) }}
+
+//! This crate's telemetry, typed: one struct for each span and event the
+//! registry declares in `lablet/telemetry/registry/{{ ctx.crate_dir }}/`, with
+//! the enums its values are chosen from and the keys its attributes are
+//! written under.
+//!
+//! Each struct is data: its `attributes()` lists one
+{% if ctx.join %}
+//! [`Attribute`] for each field and fixed value, with no branch, and the
+{% else %}
+//! [`Attribute`]({{ ctx.telemetry_path }}::Attribute) for each field and fixed
+//! value, with no branch, and the
+{% endif %}
+//! hand-written functions of lablet's telemetry module leave out what has no
+//! value, cut text to the limit and build the span's attributes or the log
+//! record. Every file here is generated; don't edit any of them.
+
+pub mod key;
+
+mod enums;
+mod events;
+mod spans;
+
+{% if ctx.enums %}
+pub use enums::{
+{% for e in ctx.enums %}
+    {{ e.name }},
+{% endfor %}
+};
+{% endif %}
+{% if ctx.events %}
+pub use events::{
+{% for e in ctx.events %}
+    {{ e.name }},
+{% endfor %}
+};
+{% endif %}
+{% if ctx.spans %}
+pub use spans::{
+{% for s in ctx.spans %}
+    {{ s.name }},
+{% endfor %}
+};
+{% endif %}
+{% if ctx.join %}
+use {{ ctx.telemetry_path }}::{Attribute, Value};
+{% endif %}
+
+/// The schema URL of the registry, for the instrumentation scope.
+pub const SCHEMA_URL: &str = "{{ ctx.schema_url }}";
+{% if ctx.join %}
+
+/// The keys a consumer groups by, which every span and every record of a run
+/// carries, so that no query needs a join. Built once for each run, so they
+/// can't differ between a run's signals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Join {
+{{ m.fields(ctx.join_fields) }}
+}
+
+impl Join {
+    /// Every join key, each holding its value if the run has one.
+{{ m.attributes({"has_join": false, "templates": [], "consts": [], "plain": ctx.join_fields}) }}
+}
+{% endif %}

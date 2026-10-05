@@ -1,0 +1,15 @@
+{% import 'macros.j2' as m %}
+{{ m.header(ctx.crate_dir) }}
+
+//! The keys of every attribute this crate's signals carry, for the structs
+//! that write them and the tests that read them.
+
+{% for k in ctx.keys %}
+{% if k.template %}
+{{ [k.brief, "\n\nA template: the emitted key is this prefix, a dot, and `<key>`."] | comment }}
+{% else %}
+{{ k.brief | comment }}
+{% endif %}
+pub const {{ k.const }}: &str = "{{ k.key }}";
+
+{% endfor %}

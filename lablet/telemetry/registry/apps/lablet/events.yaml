@@ -1,0 +1,207 @@
+file_format: definition/2
+
+events:
+  - name: lablet.run
+    requirement_level: recommended
+    stability: development
+    brief: "The wide event: one log record for each run, carrying everything worth knowing about it."
+    note: >
+      Emitted once, after the run ends and whatever the stop reason, in the trace context of the
+      root span. The shape is flat and fixed. Values are raw counts, bytes, tokens, and
+      durations; ratios and averages belong to the aggregation. It's exported alone, after the
+      run's other records, so a batch of them that a collector refuses can't take it along.
+    attributes:
+      # Identity
+      - ref_group: attributes.lablet.join
+      - ref: gen_ai.agent.name
+        brief: Always `lablet`.
+        requirement_level: required
+        annotations:
+          lablet:
+            value: lablet
+      - ref: gen_ai.agent.version
+        brief: The lablet version.
+        requirement_level: required
+      - ref: lablet.tools.digest
+        requirement_level: required
+      - ref: lablet.prompt.system_digest
+        requirement_level: required
+      # Setup
+      - ref: gen_ai.provider.name
+        requirement_level: required
+      - ref: gen_ai.request.model
+        requirement_level: required
+      - ref: server.address
+        requirement_level:
+          conditionally_required: If the provider is reached over the network.
+      - ref: server.port
+        requirement_level:
+          conditionally_required: If `server.address` is set.
+      - ref: gen_ai.request.max_tokens
+        requirement_level: required
+      - ref: gen_ai.request.seed
+        requirement_level:
+          conditionally_required: If `model.seed` is set.
+      - ref: gen_ai.request.reasoning.level
+        requirement_level:
+          conditionally_required: If `model.effort` is set.
+      - ref: gen_ai.request.temperature
+        requirement_level:
+          conditionally_required: If `model.temperature` is set.
+      - ref: lablet.request.thinking
+        requirement_level: required
+      - ref: lablet.request.api
+        requirement_level: required
+      - ref: lablet.request.reasoning_replayed
+        requirement_level: required
+      - ref: lablet.request.cache_scope
+        requirement_level: required
+      - ref: lablet.run.completion_mode
+        requirement_level: required
+      - ref: lablet.run.max_turns
+        requirement_level:
+          conditionally_required: If `run.max_turns` is set.
+      - ref: lablet.run.timeout_ms
+        requirement_level: required
+      - ref: lablet.tools.names
+        requirement_level: required
+      - ref: lablet.tools.count
+        requirement_level: required
+      - ref: lablet.mcp.servers
+        requirement_level:
+          conditionally_required: If the run has MCP servers.
+      - ref: lablet.mcp.server_versions
+        requirement_level:
+          conditionally_required: If the run has MCP servers.
+      - ref: lablet.mcp.lifetime
+        requirement_level:
+          conditionally_required: If the run has MCP servers.
+      - ref: lablet.prompt.system_bytes
+        requirement_level: required
+      - ref: lablet.prompt.user_bytes
+        requirement_level: required
+      - ref: lablet.prompt.tools_bytes
+        requirement_level: required
+      - ref: lablet.skills.count
+        requirement_level: required
+      # Outcome
+      - ref: lablet.run.stop_reason
+        requirement_level: required
+      - ref: error.type
+        brief: The stop reason, when the run didn't complete.
+        requirement_level:
+          conditionally_required: If the stop reason isn't `completed`.
+        annotations:
+          lablet:
+            values:
+              - ended_without_completion
+              - max_turns
+              - timeout
+              - max_total_tokens
+              - output_truncated
+              - context_exhausted
+              - retries_exhausted
+              - invalid_calls_exhausted
+              - cancelled
+              - provider_error
+              - refused
+      - ref: lablet.run.error
+        requirement_level:
+          conditionally_required: If an error ended the run.
+      - ref: lablet.run.duration_ms
+        requirement_level: required
+      - ref: lablet.run.turns
+        requirement_level: required
+      - ref: lablet.result.text_bytes
+        requirement_level: required
+      - ref: lablet.result.has_structured
+        requirement_level: required
+      - ref: lablet.run.transcript_path
+        requirement_level:
+          conditionally_required: If `run.transcript_path` is set.
+      - ref: lablet.telemetry.dropped_records
+        requirement_level: required
+      # Provider
+      - ref: lablet.provider.retries
+        requirement_level: required
+      - ref: lablet.provider.latency_ms.total
+        requirement_level: required
+      - ref: lablet.provider.latency_ms.max
+        requirement_level: required
+      - ref: gen_ai.usage.input_tokens
+        brief: Input tokens summed over every successful provider call, cached tokens included.
+        requirement_level: required
+      - ref: gen_ai.usage.output_tokens
+        brief: Output tokens summed over every successful provider call.
+        requirement_level: required
+      - ref: gen_ai.usage.reasoning.output_tokens
+        brief: >
+          The part of the output tokens spent on reasoning, summed over every successful provider
+          call. A part of `gen_ai.usage.output_tokens`, never added to it.
+        requirement_level:
+          conditionally_required: If a successful provider call reported the count.
+      - ref: gen_ai.usage.cache_read.input_tokens
+        requirement_level:
+          conditionally_required: If a successful provider call reported the count.
+      - ref: gen_ai.usage.cache_write.input_tokens
+        requirement_level:
+          conditionally_required: If a successful provider call reported the count.
+      - ref: lablet.provider.failed.input_tokens
+        requirement_level:
+          conditionally_required: If a failed provider call attempt reported what it used.
+      - ref: lablet.provider.failed.output_tokens
+        requirement_level:
+          conditionally_required: If a failed provider call attempt reported what it used.
+      - ref: lablet.provider.failed.cache_read.input_tokens
+        requirement_level:
+          conditionally_required: If a failed provider call attempt reported the count.
+      - ref: lablet.provider.failed.cache_write.input_tokens
+        requirement_level:
+          conditionally_required: If a failed provider call attempt reported the count.
+      - ref: gen_ai.response.finish_reasons
+        brief: The finish reason of each successful provider call, in order.
+        requirement_level: required
+      - ref: lablet.run.cost_usd
+        requirement_level:
+          conditionally_required: If `model.pricing` is configured.
+      - ref: lablet.pricing.input_usd_per_mtok
+        requirement_level:
+          conditionally_required: If `model.pricing` is configured.
+      - ref: lablet.pricing.output_usd_per_mtok
+        requirement_level:
+          conditionally_required: If `model.pricing` is configured.
+      - ref: lablet.pricing.cache_read_usd_per_mtok
+        requirement_level:
+          conditionally_required: If `model.pricing` is configured.
+      - ref: lablet.pricing.cache_write_usd_per_mtok
+        requirement_level:
+          conditionally_required: If `model.pricing` is configured.
+      # Tools
+      - ref: lablet.tool_calls.total
+        requirement_level: required
+      - ref: lablet.tool_calls.errors
+        requirement_level: required
+      - ref: lablet.tool_calls.unknown
+        requirement_level: required
+      - ref: lablet.tool_calls.truncated
+        requirement_level: required
+      - ref: lablet.tool_calls.latency_ms.total
+        requirement_level: required
+      - ref: lablet.tool_calls.input_bytes.total
+        requirement_level: required
+      - ref: lablet.tool_calls.output_bytes.total
+        requirement_level: required
+      - ref: lablet.tool.calls
+        requirement_level:
+          conditionally_required: One for each tool the run offered and called.
+      - ref: lablet.tool.errors
+        requirement_level:
+          conditionally_required: One for each tool the run offered and called.
+      - ref: lablet.tool.latency_ms
+        requirement_level:
+          conditionally_required: One for each tool the run offered and called.
+      # Content
+      - ref: lablet.result.text
+        requirement_level: opt_in
+      - ref: lablet.result.structured
+        requirement_level: opt_in

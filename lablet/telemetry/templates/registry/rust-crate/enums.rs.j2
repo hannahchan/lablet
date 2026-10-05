@@ -1,0 +1,45 @@
+{% import 'macros.j2' as m %}
+{{ m.header(ctx.crate_dir) }}
+
+//! The closed value sets this crate's signals choose from: lablet's own enum
+//! attributes, and the values each signal lists of an open attribute. A
+//! value that isn't here doesn't compile.
+
+use {{ ctx.telemetry_path }}::Value;
+
+{% for e in ctx.enums %}
+{{ e.brief | comment }}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum {{ e.name }} {
+{% for member in e.members %}
+    {{ member.brief | comment(indent=4) }}
+    {{ member.variant }},
+{% endfor %}
+}
+
+impl {{ e.name }} {
+    /// Every value, each once, in the order the registry lists them.
+    pub const ALL: [Self; {{ e.members | length }}] = [
+{% for member in e.members %}
+        Self::{{ member.variant }},
+{% endfor %}
+    ];
+
+    /// The value as it appears on the wire.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+{% for member in e.members %}
+            Self::{{ member.variant }} => "{{ member.value }}",
+{% endfor %}
+        }
+    }
+}
+
+impl From<{{ e.name }}> for Value {
+    fn from(value: {{ e.name }}) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+{% endfor %}

@@ -1,0 +1,150 @@
+# One crate's typed telemetry: the `src/telemetry/generated/` module of the
+# crate whose registry folder is `crate_dir`. Weaver keeps each signal's
+# source file in `provenance.path`, so the folder is the routing table.
+#
+# Params: `crate_dir`, the registry folder (`application/run`);
+# `telemetry_path`, where the module finds lablet's hand-written telemetry
+# (`crate::telemetry` in lablet-run, `lablet_run::telemetry` elsewhere); and
+# `join`, true for the one module that holds the `Join` struct, lablet-run's,
+# which every other module uses from there. The struct is in that module's
+# `mod.rs`, so no file is written where it isn't generated.
+#
+# The context is the v2 form of the resolved registry. A core or GenAI
+# attribute appears inlined on each signal that refers to it, with that
+# signal's overrides, and as upstream defined it under `.dependencies`; a key
+# constant documents the attribute itself, so its brief is taken from there.
+whitespace_control:
+  trim_blocks: true
+  lstrip_blocks: true
+
+comment_formats:
+  rust:
+    format: markdown
+    prefix: "/// "
+    trim: true
+    remove_trailing_dots: false
+    escape_square_brackets: true
+default_comment_format: rust
+
+templates:
+  - template: mod.rs.j2
+    filter: &crate >
+      ("lablet/telemetry/registry/" + $params.crate_dir + "/") as $prefix
+      | ((($params.join // false) | tostring) == "true") as $join
+      | def mine: .provenance.path | startswith($prefix);
+        def ident: gsub("\\."; "_");
+        def const_name: ident | ascii_upcase;
+        def capitalised: (.[0:1] | ascii_upcase) + .[1:];
+        def pascal: split(".") | map(split("_") | map(capitalised) | join("")) | join("");
+        def lablet: (.annotations // {}) | (.lablet // {});
+        def is_enum: (.type | type) == "object";
+        def is_template: (.type | type) == "string" and (.type | startswith("template["));
+        def named: .type // .name;
+        def rust_type($signal): lablet as $a
+          | if $a.values then ($signal | pascal) + (.key | pascal)
+            elif is_enum and (.key | startswith("lablet.")) then (.key | pascal)
+            elif is_enum then "String"
+            else ({"int": "i64", "double": "f64", "boolean": "bool", "string": "String",
+                   "any": "String", "string[]": "Vec<String>",
+                   "template[int]": "BTreeMap<String, i64>",
+                   "template[string]": "BTreeMap<String, String>"}[.type]
+                  // error("no Rust type for the attribute type " + .type))
+            end;
+        def is_fixed: lablet | has("value");
+        def is_join: lablet.join == true;
+        def field($signal): rust_type($signal) as $type | {
+          key: .key,
+          ident: (.key | ident),
+          const: (.key | const_name),
+          brief: (.brief // ""),
+          optional: (.requirement_level != "required"),
+          template: is_template,
+          copy: ($type != "String" and $type != "Vec<String>" and ($type | startswith("BTreeMap") | not)),
+          rust_type: $type
+        };
+        def fixed: {
+          key: .key,
+          const: (.key | const_name),
+          value: lablet.value,
+          brief: (.brief // "")
+        };
+        def fields($signal): [.attributes[] | select(is_fixed or is_join | not) | field($signal)]
+          | sort_by([.optional, .key]);
+        def fixed_values: [.attributes[] | select(is_fixed) | fixed] | sort_by(.key);
+        def has_join: any(.attributes[]; is_join);
+        def name_args($consts): [.name.note | scan("\\{[^}]+\\}") | .[1:-1]
+          | if . as $key | any($consts[]; .key == $key) then "Self::" + const_name
+            else "self." + ident end];
+        def signal: named as $name | fixed_values as $consts | {
+          name: ($name | pascal),
+          brief: (.brief // ""),
+          has_join: has_join,
+          consts: $consts,
+          fields: fields($name),
+          plain: [fields($name)[] | select(.template | not)],
+          templates: [fields($name)[] | select(.template)]
+        };
+        def member_brief($value): (if is_enum then .type.members else [] end) as $members
+          | ([$members[] | select(.value == $value) | .brief] | .[0]) // ("`" + $value + "`.");
+        def values_enum($signal): {
+          name: (($signal | pascal) + (.key | pascal)),
+          brief: ("The values of `" + .key + "` on `" + $signal + "`."),
+          members: [lablet.values[] as $value | {variant: ($value | pascal), value: $value, brief: member_brief($value)}]
+        };
+        def own_enum($briefs): {
+          name: (.key | pascal),
+          brief: ($briefs[.key] + "\n\nThe values of `" + .key + "`."),
+          members: [.type.members[] | {variant: (.id | pascal), value: .value, brief: (.brief // "")}]
+        };
+        ([.registry.attributes[], (.dependencies[].registry.attributes[] | select(.deprecated | not))]
+          | map({key: .key, value: (.brief // "")}) | from_entries) as $briefs
+      | [.registry.spans[] | select(mine)] as $spans
+      | [.registry.events[] | select(mine)] as $events
+      | ($spans + $events) as $signals
+      | [$signals[] | named as $name | .attributes[] | select(is_fixed or is_join | not) | select(lablet.values) | values_enum($name)] as $values_enums
+      | ([$signals[] | .attributes[] | select(is_fixed or is_join | not) | select((lablet.values | not) and is_enum and (.key | startswith("lablet.")))]
+        | unique_by(.key) | map(own_enum($briefs))) as $own_enums
+      | ([$signals[] | .attributes[] | select(is_join)] | unique_by(.key) | sort_by([.requirement_level != "required", .key])) as $join_attributes
+      | (($own_enums + $values_enums) | sort_by(.name)) as $enums
+      | def enums_used: [.[] | fields(named)[] | .rust_type] | unique
+          | map(select(. as $type | any($enums[]; .name == $type)));
+      {
+        schema_url: .schema_url,
+        crate_dir: $params.crate_dir,
+        telemetry_path: $params.telemetry_path,
+        join: $join,
+        join_fields: [$join_attributes[] | field("join")],
+        keys: ([($signals[] | .attributes[] | select(is_join | not)), (if $join then $join_attributes[] else empty end)]
+          | unique_by(.key) | map({const: (.key | const_name), key: .key, template: is_template, brief: $briefs[.key]})),
+        spans: [$spans[] | signal + {
+          kind: (.kind | capitalised),
+          name_format: (.name.note | gsub("`"; "") | gsub("\\{[^}]+\\}"; "{}")),
+          name_args: name_args(fixed_values)
+        }],
+        events: [$events[] | signal + {
+          event_name: .name,
+          span_event: (lablet.emit == "span_event"),
+          severity: ((lablet.severity // "info") | capitalised)
+        }],
+        enums: $enums,
+        span_enums: ($spans | enums_used),
+        event_enums: ($events | enums_used)
+      }
+    application_mode: single
+    file_name: mod.rs
+  - template: key.rs.j2
+    filter: *crate
+    application_mode: single
+    file_name: key.rs
+  - template: enums.rs.j2
+    filter: *crate
+    application_mode: single
+    file_name: enums.rs
+  - template: spans.rs.j2
+    filter: *crate
+    application_mode: single
+    file_name: spans.rs
+  - template: events.rs.j2
+    filter: *crate
+    application_mode: single
+    file_name: events.rs

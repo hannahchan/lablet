@@ -1,0 +1,90 @@
+{% import 'macros.j2' as m %}
+{{ m.header(ctx.crate_dir) }}
+
+//! This crate's events, one struct each: a span event is added to a span,
+//! and any other is a log record, made in the context of the span it
+//! belongs to and at the time the loop measured. The field rules are the
+//! spans'.
+
+{% set templated = ctx.events | selectattr("templates") | list %}
+{% set joined = ctx.events | selectattr("has_join") | list %}
+{% set span_events = ctx.events | selectattr("span_event") | list %}
+{% set records = ctx.events | rejectattr("span_event") | list %}
+{% if templated %}
+use std::collections::BTreeMap;
+{% endif %}
+use std::time::SystemTime;
+
+{% if records %}
+use opentelemetry::logs::Severity;
+{% endif %}
+{% if span_events %}
+use opentelemetry::trace::Span;
+{% endif %}
+{% if records %}
+use opentelemetry::trace::SpanContext;
+{% endif %}
+
+use {{ ctx.telemetry_path }}::{Attribute{% if records %}, Record{% endif %}, Value{% if templated %}, each_under{% endif %}{% if span_events %}, span_attributes{% endif %}};
+
+{% if ctx.event_enums %}
+use super::enums::{
+{% for e in ctx.event_enums %}
+    {{ e }},
+{% endfor %}
+};
+{% endif %}
+use super::key;
+{% if joined %}
+{% if ctx.join %}
+use super::Join;
+{% else %}
+use {{ ctx.telemetry_path }}::generated::Join;
+{% endif %}
+{% endif %}
+
+{% for e in ctx.events %}
+{{ e.brief | comment }}
+#[derive(Debug, Clone, PartialEq)]
+pub struct {{ e.name }} {
+{% if e.has_join %}
+    /// The keys a consumer groups by, the run's.
+    pub join: Join,
+{% endif %}
+{{ m.fields(e.fields) }}
+}
+
+impl {{ e.name }} {
+    /// The event's name in the registry.
+    pub const NAME: &str = "{{ e.event_name }}";
+{% if not e.span_event %}
+    /// The record's severity.
+    pub const SEVERITY: Severity = Severity::{{ e.severity }};
+{% endif %}
+{{ m.consts(e) }}
+
+    /// Every attribute{% if e.has_join %}, the join's first,{% endif %} as pairs of key and value.
+{{ m.attributes(e) }}
+{% if e.span_event %}
+
+    /// Adds the event to `span`, at `at`.
+    pub fn add_to(&self, span: &mut impl Span, at: SystemTime) {
+        span.add_event_with_timestamp(Self::NAME, at, span_attributes(self.attributes()));
+    }
+{% else %}
+
+    /// The log record of this, at `at`, in the context of `span`.
+    #[must_use]
+    pub fn record(&self, at: SystemTime, span: &SpanContext) -> Record {
+        Record {
+            name: Self::NAME,
+            severity: Self::SEVERITY,
+            at,
+            span: span.clone(),
+            attributes: self.attributes(),
+        }
+    }
+{% endif %}
+}
+
+{% endfor %}

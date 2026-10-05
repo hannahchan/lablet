@@ -3,80 +3,7 @@ file_format: definition/2
 # The spans are lablet's own rather than refinements of the GenAI spans:
 # live-check indexes only what a registry declares itself, and the doc templates
 # give a refinement no page. Each follows the GenAI span it names in its brief.
-attribute_groups:
-  # The keys a consumer groups by, on every signal so that no query needs a join.
-  - id: attributes.lablet.join
-    visibility: internal
-    attributes:
-      - ref: gen_ai.conversation.id
-        brief: The run id.
-        requirement_level: required
-      - ref: session.id
-        brief: The run id, for backends that group by session.
-        requirement_level: required
-      - ref: lablet.config.digest
-        requirement_level: required
-      - ref: lablet.task.id
-        requirement_level:
-          conditionally_required: If the run request named a task.
-      - ref: lablet.experiment.id
-        requirement_level:
-          conditionally_required: If the run request named an experiment.
-      - ref: lablet.trial
-        requirement_level:
-          conditionally_required: If the run request named a trial.
-
 spans:
-  - type: lablet.invoke_agent
-    requirement_level: recommended
-    kind: internal
-    stability: development
-    brief: The root span of a run. Follows the GenAI `invoke_agent` span for an agent in the same process.
-    note: >
-      The `gen_ai.usage.*` values are the run's totals. A query that sums them over every span of
-      a trace counts each token twice unless it filters on `gen_ai.operation.name`.
-    name:
-      note: "`invoke_agent {gen_ai.agent.name}`"
-    attributes:
-      - ref_group: attributes.lablet.join
-      - ref: gen_ai.operation.name
-        brief: Always `invoke_agent`.
-        requirement_level: required
-      - ref: gen_ai.agent.name
-        brief: Always `lablet`.
-        requirement_level: required
-      - ref: gen_ai.agent.version
-        brief: The lablet version.
-        requirement_level: required
-      - ref: gen_ai.request.model
-        requirement_level: required
-      - ref: lablet.run.stop_reason
-        requirement_level: required
-      - ref: error.type
-        brief: The stop reason, when the run didn't complete.
-        requirement_level:
-          conditionally_required: If the stop reason isn't `completed`.
-      - ref: lablet.run.turns
-        requirement_level: required
-      - ref: lablet.tool_calls.total
-        requirement_level: required
-      - ref: gen_ai.usage.input_tokens
-        requirement_level: required
-      - ref: gen_ai.usage.output_tokens
-        requirement_level: required
-      - ref: gen_ai.usage.cache_read.input_tokens
-        requirement_level:
-          conditionally_required: If a successful provider call reported the count.
-      - ref: gen_ai.usage.cache_write.input_tokens
-        requirement_level:
-          conditionally_required: If a successful provider call reported the count.
-      - ref: gen_ai.usage.reasoning.output_tokens
-        requirement_level:
-          conditionally_required: If a successful provider call reported the count.
-      - ref: lablet.run.cost_usd
-        requirement_level:
-          conditionally_required: If `model.pricing` is configured.
-
   - type: lablet.chat
     requirement_level: recommended
     kind: client
@@ -95,6 +22,9 @@ spans:
       - ref: gen_ai.operation.name
         brief: Always `chat`.
         requirement_level: required
+        annotations:
+          lablet:
+            value: chat
       - ref: gen_ai.provider.name
         requirement_level: required
       - ref: gen_ai.request.model
@@ -146,12 +76,19 @@ spans:
           `malformed`; or `cancelled` when the run was cancelled while the attempt was in flight.
         requirement_level:
           conditionally_required: If the call failed or was cancelled.
+        annotations:
+          lablet:
+            values: [retryable, context_exhausted, auth, fatal, malformed, cancelled]
       - ref: lablet.turn
         requirement_level: required
       - ref: lablet.attempt
         requirement_level: required
       - ref: lablet.chat.purpose
+        brief: Always `turn`.
         requirement_level: required
+        annotations:
+          lablet:
+            value: turn
       - ref: lablet.request.bytes
         requirement_level: required
 
@@ -171,6 +108,9 @@ spans:
       - ref: gen_ai.operation.name
         brief: Always `execute_tool`.
         requirement_level: required
+        annotations:
+          lablet:
+            value: execute_tool
       - ref: gen_ai.tool.name
         requirement_level: required
       - ref: gen_ai.tool.call.id
@@ -179,6 +119,9 @@ spans:
         brief: "`function` for a built-in tool, `extension` for an MCP tool."
         requirement_level:
           conditionally_required: If the tool is one the run offered to the model.
+        annotations:
+          lablet:
+            values: [function, extension]
       - ref: gen_ai.tool.description
         requirement_level:
           conditionally_required: If the tool is one the run offered to the model.
@@ -190,6 +133,9 @@ spans:
           when the loop answered the call itself.
         requirement_level:
           conditionally_required: If the call's status isn't `ok`.
+        annotations:
+          lablet:
+            values: [tool_error, timeout, failed, cancelled, unknown, malformed_input, rejected]
       - ref: lablet.turn
         requirement_level: required
       - ref: lablet.tool.status
@@ -228,3 +174,6 @@ spans:
         brief: "`pipe` for a stdio MCP server, `tcp` for an HTTP one."
         requirement_level:
           conditionally_required: If the tool is served over MCP and the call wasn't cancelled.
+        annotations:
+          lablet:
+            values: [pipe, tcp]

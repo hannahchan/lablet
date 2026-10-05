@@ -1,7 +1,9 @@
 //! The changelog gate (spec §8). The config schema, the telemetry registry,
-//! and the outcome JSON are lablet's public contract, the transcript JSON is
-//! what a grader parses, and the golden telemetry fixtures are what a run
-//! emits, so a change to any of them must come with an entry under
+//! and the outcome JSON are lablet's public contract, the templates that
+//! render the registry into each crate's module decide what every signal
+//! records, the transcript JSON is what a grader parses, and the golden
+//! telemetry fixtures are what a run emits, so a change to any of them must
+//! come with an entry under
 //! `## [Unreleased]` in `CHANGELOG.md`. The comparison runs from
 //! a base commit to the working tree, so it judges what is committed on the
 //! branch and what is about to be.
@@ -17,9 +19,10 @@ use crate::workspace::repo_root;
 
 /// The contract files, relative to the repository root. An entry ending in
 /// `/` is a directory and covers everything under it.
-const CONTRACT_PATHS: [&str; 5] = [
+const CONTRACT_PATHS: [&str; 6] = [
     "lablet/schema.json",
     "lablet/telemetry/registry/",
+    "lablet/telemetry/templates/registry/rust-crate/",
     "lablet/tests/fixtures/outcome.json",
     "lablet/tests/fixtures/transcript.json",
     "lablet/tests/fixtures/golden/",
@@ -288,12 +291,14 @@ mod tests {
     }
 
     #[test]
-    fn the_contract_is_the_schema_the_registry_tree_the_two_document_fixtures_and_the_golden_tree()
-    {
+    fn the_contract_is_the_schema_the_registry_and_crate_template_trees_the_two_document_fixtures_and_the_golden_tree()
+     {
         for path in [
             "lablet/schema.json",
             "lablet/telemetry/registry/manifest.yaml",
             "lablet/telemetry/registry/spans/chat.yaml",
+            "lablet/telemetry/templates/registry/rust-crate/weaver.yaml",
+            "lablet/telemetry/templates/registry/rust-crate/spans.rs.j2",
             "lablet/tests/fixtures/outcome.json",
             "lablet/tests/fixtures/transcript.json",
             "lablet/tests/fixtures/golden/starter/expected.json",

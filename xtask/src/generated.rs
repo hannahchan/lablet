@@ -1,6 +1,7 @@
-//! `cargo xtask weaver generate`: the `lablet-telemetry-registry` sources and
-//! the telemetry reference, rendered from the registry. Both are rendered into
-//! a staging directory first, then installed or, with `--check`, compared with
+//! `cargo xtask weaver generate`: the telemetry module of each crate that
+//! emits a signal, the `lablet-telemetry-registry` sources, and the telemetry
+//! reference, rendered from the registry. Everything is rendered into a
+//! staging directory first, then installed or, with `--check`, compared with
 //! the tree, so a failed render never leaves the tree half written.
 
 use std::collections::BTreeMap;
@@ -26,15 +27,66 @@ struct Output {
     staged: &'static str,
     /// The directory it replaces, relative to the repository root.
     tree: &'static str,
+    /// The file rustfmt formats the rendering from, following its `mod`
+    /// lines; `None` for a rendering that isn't Rust.
+    formatted: Option<&'static str>,
 }
 
-const OUTPUTS: [Output; 2] = [
+/// Where the templates of lablet's own Rust renderings are.
+const RUST_TEMPLATES: &str = "lablet/telemetry/templates";
+
+/// The typed module of one crate: the signals its registry folder declares,
+/// using lablet's hand-written telemetry where `params` say.
+const fn module(
+    params: &'static [&'static str],
+    staged: &'static str,
+    tree: &'static str,
+) -> Output {
+    Output {
+        target: "rust-crate",
+        templates: RUST_TEMPLATES,
+        params,
+        staged,
+        tree,
+        formatted: Some("mod.rs"),
+    }
+}
+
+const OUTPUTS: [Output; 4] = [
+    // The loop's signals, and the `Join` struct every module uses.
+    module(
+        &[
+            "--param",
+            "crate_dir=application/run",
+            "--param",
+            "telemetry_path=crate::telemetry",
+            "--param",
+            "join=true",
+        ],
+        "run",
+        "lablet/crates/application/run/src/telemetry/generated",
+    ),
+    // The composition root's signals, the root span and the wide event.
+    module(
+        &[
+            "--param",
+            "crate_dir=apps/lablet",
+            "--param",
+            "telemetry_path=lablet_run::telemetry",
+            "--param",
+            "join=false",
+        ],
+        "root",
+        "lablet/apps/lablet/src/telemetry/generated",
+    ),
+    // The constants crate, until phase 6a's last landing removes it.
     Output {
         target: "rust",
-        templates: "lablet/telemetry/templates",
+        templates: RUST_TEMPLATES,
         params: &[],
         staged: "src",
         tree: "lablet/crates/adapters/secondary/shared/telemetry-registry/src",
+        formatted: Some("lib.rs"),
     },
     Output {
         target: "markdown",
@@ -44,6 +96,7 @@ const OUTPUTS: [Output; 2] = [
         params: &["--param", "registry_base_url=/lablet/docs/telemetry"],
         staged: "docs",
         tree: "lablet/docs/telemetry",
+        formatted: None,
     },
 ];
 
@@ -84,10 +137,26 @@ impl Stage {
             run("weaver", &args)?;
         }
         // Weaver's output is unformatted, and `cargo fmt` reaches only the
-        // members of a workspace. rustfmt follows `mod` lines from the root.
+        // members of a workspace. rustfmt follows `mod` lines from each
+        // rendering's root file, and takes them all at once.
         let edition = edition(&Workspace::load(&root.join("lablet"))?)?;
-        let lib = stage.0.join("src/lib.rs").display().to_string();
-        run("rustfmt", &["--edition", &edition, &lib])?;
+        let roots: Vec<String> = OUTPUTS
+            .iter()
+            .filter_map(|output| {
+                let formatted = output.formatted?;
+                Some(
+                    stage
+                        .0
+                        .join(output.staged)
+                        .join(formatted)
+                        .display()
+                        .to_string(),
+                )
+            })
+            .collect();
+        let mut args = vec!["--edition", &edition];
+        args.extend(roots.iter().map(String::as_str));
+        run("rustfmt", &args)?;
         Ok(stage)
     }
 }
@@ -118,7 +187,8 @@ pub fn write() -> CheckResult {
 }
 
 /// Moves each rendering in `stage` over the directory it replaces under
-/// `root`, which need not exist yet.
+/// `root`, which need not exist yet, nor its parent: a crate's module is
+/// made where the crate has no `telemetry` directory yet.
 fn install(stage: &Path, root: &Path) -> Result<(), Error> {
     for output in &OUTPUTS {
         let tree = root.join(output.tree);
@@ -127,6 +197,9 @@ fn install(stage: &Path, root: &Path) -> Result<(), Error> {
                 return Err(Error::file(Verb::Replace, &tree)(e));
             }
             _ => {}
+        }
+        if let Some(parent) = tree.parent() {
+            std::fs::create_dir_all(parent).map_err(Error::file(Verb::Replace, &tree))?;
         }
         std::fs::rename(stage.join(output.staged), &tree)
             .map_err(Error::file(Verb::Replace, &tree))?;
@@ -254,27 +327,62 @@ mod tests {
 
     /// Where each output's directory is in the tree, spelt out, so that a
     /// rendering compared with or moved to the wrong one fails.
+    const RUN_MODULE: &str = "lablet/crates/application/run/src/telemetry/generated";
+    const ROOT_MODULE: &str = "lablet/apps/lablet/src/telemetry/generated";
     const REGISTRY_SOURCES: &str = "lablet/crates/adapters/secondary/shared/telemetry-registry/src";
     const REFERENCE: &str = "lablet/docs/telemetry";
 
-    /// A stage holding both renderings: the crate's sources and the pages.
+    /// The file each output's rendering holds in the stage and, when it's up
+    /// to date, in the tree.
+    const RENDERED: [(&str, &str, &str); 4] = [
+        ("run", "mod.rs", "pub mod key;\n"),
+        ("root", "mod.rs", "pub mod key;\n"),
+        ("src", "lib.rs", "pub mod attributes;\n"),
+        ("docs", "README.md", "# Telemetry\n"),
+    ];
+
+    /// A stage holding every rendering: the two modules, the crate's sources
+    /// and the pages.
     fn staged() -> TempDir {
         let stage = TempDir::new("stage");
-        stage.write("src/lib.rs", "pub mod attributes;\n");
-        stage.write("docs/README.md", "# Telemetry\n");
+        for (directory, file, text) in RENDERED {
+            stage.write(&format!("{directory}/{file}"), text);
+        }
         stage
     }
 
+    /// A tree in which every output is up to date.
+    fn up_to_date() -> TempDir {
+        let root = TempDir::new("root");
+        for (output, (_, file, text)) in OUTPUTS.iter().zip(RENDERED) {
+            root.write(&format!("{}/{file}", output.tree), text);
+        }
+        root
+    }
+
     #[test]
-    fn a_check_fails_when_either_output_differs_from_its_rendering_and_says_how_to_fix_it() {
-        let (stage, root) = (staged(), TempDir::new("root"));
-        root.write(
-            &format!("{REGISTRY_SOURCES}/lib.rs"),
-            "pub mod attributes;\n",
+    fn the_outputs_are_the_two_crate_modules_the_constants_crate_and_the_pages() {
+        let trees: Vec<&str> = OUTPUTS.iter().map(|output| output.tree).collect();
+        assert_eq!(
+            trees,
+            [RUN_MODULE, ROOT_MODULE, REGISTRY_SOURCES, REFERENCE]
         );
-        root.write(&format!("{REFERENCE}/README.md"), "# Telemetry\n");
+        let staged: Vec<&str> = OUTPUTS.iter().map(|output| output.staged).collect();
+        assert_eq!(staged, RENDERED.map(|(directory, ..)| directory));
+        let formatted: Vec<Option<&str>> = OUTPUTS.iter().map(|output| output.formatted).collect();
+        assert_eq!(
+            formatted,
+            [Some("mod.rs"), Some("mod.rs"), Some("lib.rs"), None]
+        );
+    }
+
+    #[test]
+    fn a_check_fails_when_any_output_differs_from_its_rendering_and_names_each_file() {
+        let (stage, root) = (staged(), up_to_date());
         assert_eq!(compare(stage.path(), root.path()).unwrap(), None);
 
+        root.write(&format!("{RUN_MODULE}/mod.rs"), "pub mod old;\n");
+        root.write(&format!("{ROOT_MODULE}/spans.rs"), "struct Gone;\n");
         root.write(&format!("{REGISTRY_SOURCES}/lib.rs"), "pub mod old;\n");
         root.write(&format!("{REFERENCE}/spans.md"), "spans\n");
         assert_eq!(
@@ -283,8 +391,9 @@ mod tests {
                 .into_verdict(),
             format!(
                 "the generated files differ from what the registry renders to:\n  \
-                 {REGISTRY_SOURCES}/lib.rs is out of date\n  {REFERENCE}/spans.md is no longer \
-                 generated\nfix with: cargo xtask weaver generate"
+                 {RUN_MODULE}/mod.rs is out of date\n  {ROOT_MODULE}/spans.rs is no longer \
+                 generated\n  {REGISTRY_SOURCES}/lib.rs is out of date\n  {REFERENCE}/spans.md is \
+                 no longer generated\nfix with: cargo xtask weaver generate"
             )
         );
     }
@@ -294,7 +403,10 @@ mod tests {
         let (stage, root) = (staged(), TempDir::new("root"));
         root.write(&format!("{REGISTRY_SOURCES}/lib.rs"), "pub mod old;\n");
         root.write(&format!("{REGISTRY_SOURCES}/old.rs"), "\n");
-        // The pages have never been rendered here.
+        root.write(&format!("{RUN_MODULE}/mod.rs"), "pub mod old;\n");
+        // The pages have never been rendered here, and neither has the
+        // composition root's module, whose crate has no `telemetry`
+        // directory at all.
         std::fs::create_dir_all(root.path().join("lablet/docs")).unwrap();
         install(stage.path(), root.path()).unwrap();
 
@@ -303,14 +415,14 @@ mod tests {
             files(&directory, &directory).unwrap()
         };
         let file = |path: &str, text: &str| (path.to_owned(), text.as_bytes().to_vec());
-        assert_eq!(
-            tree(REGISTRY_SOURCES),
-            BTreeMap::from([file("lib.rs", "pub mod attributes;\n")])
-        );
-        assert_eq!(
-            tree(REFERENCE),
-            BTreeMap::from([file("README.md", "# Telemetry\n")])
-        );
+        for (output, (_, name, text)) in OUTPUTS.iter().zip(RENDERED) {
+            assert_eq!(
+                tree(output.tree),
+                BTreeMap::from([file(name, text)]),
+                "{}",
+                output.tree
+            );
+        }
     }
 
     #[test]
@@ -347,13 +459,12 @@ mod tests {
 
     #[test]
     fn a_generated_directory_that_cannot_be_removed_is_left_as_it_was_and_named() {
-        let (stage, root) = (TempDir::new("stage"), TempDir::new("root"));
-        // A file at both ends: removing the tree's fails for its not being a
-        // directory, where a rename alone would have replaced it.
-        stage.write("src", "rendered\n");
-        stage.write("docs/README.md", "# Telemetry\n");
-        root.write(REGISTRY_SOURCES, "in the way\n");
-        let tree = root.path().join(REGISTRY_SOURCES);
+        let (stage, root) = (staged(), TempDir::new("root"));
+        // A file where the first output's directory belongs: removing it
+        // fails for its not being a directory, where a rename alone would
+        // have replaced it.
+        root.write(RUN_MODULE, "in the way\n");
+        let tree = root.path().join(RUN_MODULE);
         let error = install(stage.path(), root.path()).unwrap_err();
         let Error::File { verb, path, source } = &error else {
             panic!("{error:?}");
@@ -362,7 +473,9 @@ mod tests {
         let expected = format!("could not replace {}: {source}", tree.display());
         assert_eq!(chain(&error), expected);
         assert_eq!(std::fs::read_to_string(&tree).unwrap(), "in the way\n");
-        assert!(!root.path().join(REFERENCE).exists());
+        for output in &OUTPUTS[1..] {
+            assert!(!root.path().join(output.tree).exists(), "{}", output.tree);
+        }
     }
 
     /// Stands in for weaver and rustfmt under `root`: weaver writes a file
@@ -375,7 +488,7 @@ mod tests {
             if program == "weaver" {
                 let directory = root.join(args[args.len() - 1]);
                 std::fs::create_dir_all(&directory).unwrap();
-                std::fs::write(directory.join("lib.rs"), "").unwrap();
+                std::fs::write(directory.join("rendered.rs"), "").unwrap();
             }
             if ran.len() == failing {
                 Err(Error::Failed {
@@ -413,7 +526,13 @@ mod tests {
             "lablet/target/weaver-generate/{}",
             std::process::id()
         ));
-        for (failing, program) in [(1, "weaver"), (2, "weaver"), (3, "rustfmt")] {
+        let weavers = OUTPUTS.len();
+        for failing in 1..=weavers + 1 {
+            let program = if failing > weavers {
+                "rustfmt"
+            } else {
+                "weaver"
+            };
             let (rendered, ran) = render(root.path(), failing);
             // The failed command's own error, naming the command it was.
             let error = rendered.err().unwrap();
@@ -424,12 +543,27 @@ mod tests {
         }
 
         let (rendered, ran) = render(root.path(), 0);
-        assert_eq!(programs(&ran), ["weaver", "weaver", "rustfmt"]);
+        assert_eq!(
+            programs(&ran),
+            ["weaver", "weaver", "weaver", "weaver", "rustfmt"]
+        );
         let rendered = rendered.unwrap();
         assert_eq!(rendered.0, staged);
         for output in &OUTPUTS {
-            assert!(staged.join(output.staged).join("lib.rs").is_file());
+            assert!(staged.join(output.staged).join("rendered.rs").is_file());
         }
+        // One rustfmt over every Rust rendering's root file, in the stage.
+        let rustfmt = ran[weavers].to_string();
+        for output in &OUTPUTS {
+            let root_file = output
+                .formatted
+                .map(|file| staged.join(output.staged).join(file).display().to_string());
+            match root_file {
+                Some(file) => assert!(rustfmt.contains(&file), "{rustfmt} lacks {file}"),
+                None => assert!(!rustfmt.contains(output.staged), "{rustfmt}"),
+            }
+        }
+        assert!(rustfmt.contains("--edition 2024"), "{rustfmt}");
         drop(rendered);
         assert!(!staged.exists(), "left once the rendering was done with");
 
@@ -442,7 +576,7 @@ mod tests {
             matches!(&error, Error::File { verb: Verb::Read, path, .. } if *path == manifest),
             "{error:?}"
         );
-        assert_eq!(programs(&ran), ["weaver", "weaver"]);
+        assert_eq!(programs(&ran), ["weaver", "weaver", "weaver", "weaver"]);
         assert!(!staged.exists(), "left by a failed read of the edition");
     }
 
@@ -489,8 +623,54 @@ mod tests {
             assert!(root.join(output.tree).is_dir(), "{}", output.tree);
         }
         let links = "registry_base_url=/lablet/docs/telemetry".to_owned();
-        assert!(!weaver_args(&OUTPUTS[0], "stage").contains(&links));
-        assert!(weaver_args(&OUTPUTS[1], "stage").contains(&links));
+        for output in &OUTPUTS[..3] {
+            assert!(!weaver_args(output, "stage").contains(&links));
+        }
+        assert!(weaver_args(&OUTPUTS[3], "stage").contains(&links));
+    }
+
+    /// Each module's signals are the folder's, it finds lablet's telemetry
+    /// where its crate does, and the `Join` struct is generated once, into
+    /// lablet-run, which the composition root's module uses from there.
+    #[test]
+    fn each_crate_module_is_rendered_from_its_registry_folder_for_its_crate() {
+        let params = |output: &Output| -> Vec<String> {
+            weaver_args(output, "stage")
+                .windows(2)
+                .filter(|pair| pair[0] == "--param")
+                .map(|pair| pair[1].clone())
+                .collect()
+        };
+        assert_eq!(
+            params(&OUTPUTS[0]),
+            [
+                "crate_dir=application/run",
+                "telemetry_path=crate::telemetry",
+                "join=true",
+            ]
+        );
+        assert_eq!(
+            params(&OUTPUTS[1]),
+            [
+                "crate_dir=apps/lablet",
+                "telemetry_path=lablet_run::telemetry",
+                "join=false",
+            ]
+        );
+        for output in &OUTPUTS[..2] {
+            let folder = params(output)[0]
+                .trim_start_matches("crate_dir=")
+                .to_owned();
+            assert!(
+                repo_root().join(REGISTRY).join(&folder).is_dir(),
+                "{folder} isn't a registry folder"
+            );
+            assert!(
+                output.tree.ends_with("/src/telemetry/generated"),
+                "{}",
+                output.tree
+            );
+        }
     }
 
     #[test]
