@@ -10,7 +10,7 @@ use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::trace::{SpanEvents, SpanLinks};
 
 use super::*;
-use crate::testing::memory::{Export, Memory};
+use crate::export::testing::memory::{Export, Memory};
 
 const TRACE: TraceId = TraceId::from_bytes([0xab; 16]);
 

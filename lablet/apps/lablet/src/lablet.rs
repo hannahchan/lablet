@@ -8,7 +8,6 @@ use lablet_documents::TranscriptDocument;
 use lablet_model::{
     BlankTask, ConfigDigest, FinishedRun, Prompts, RunContext, RunId, RunLabels, ToolSpec,
 };
-use lablet_otlp::Telemetry;
 use lablet_provider_fake::FakeProvider;
 use lablet_run::telemetry::{count_of, span_attributes};
 use lablet_run::{RunService, ToolSet};
@@ -19,6 +18,7 @@ use opentelemetry::trace::{FutureExt as _, TraceContextExt as _, Tracer as _};
 use ulid::Ulid;
 
 use crate::cancel::{CancelHandle, RunCancellation};
+use crate::export::Telemetry;
 use crate::telemetry::generated::{LabletInvokeAgent, LabletRun};
 use crate::{root_span, wide};
 

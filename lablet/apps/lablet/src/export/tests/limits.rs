@@ -6,13 +6,13 @@
 use std::process::{Command, Stdio};
 
 use lablet_conformance::otlp::Exported;
-use lablet_otlp::FileTarget;
 use lablet_test_support::Scratch;
 use opentelemetry::trace::{Span as _, Tracer as _};
 use opentelemetry::{Context, KeyValue};
 use serde_json::json;
 
-use crate::harness::{RUN, Records, Settings, WIDE, after, built, emit_run};
+use super::harness::{RUN, Records, Settings, WIDE, after, built, emit_run};
+use crate::export::FileTarget;
 
 /// Set in the environment of the child process the test below starts, to
 /// the file the child exports to.
@@ -58,7 +58,7 @@ fn the_environments_sampler_and_span_limits_cannot_drop_a_span_or_cut_it() {
     let child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "limits::a_child_process_exports_a_span_with_several_attributes_and_events",
+            "export::tests::limits::a_child_process_exports_a_span_with_several_attributes_and_events",
             "--test-threads=1",
         ])
         .env(CHILD, &path)

@@ -20,9 +20,9 @@ use opentelemetry_sdk::logs::{LogExporter, LogProcessor as _, SdkLogger, SdkLogg
 use opentelemetry_sdk::resource::{EnvResourceDetector, TelemetryResourceDetector};
 use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider, SpanExporter, SpanProcessor as _};
 
-use crate::file::{FileLogExporter, FileSpanExporter, FileTarget, Sink};
-use crate::network::{Network, OtelBuildError, OtlpSettings, validate};
-use crate::pipeline::{Lost, RecordQueue, SpanQueue};
+use super::file::{FileLogExporter, FileSpanExporter, FileTarget, Sink};
+use super::network::{Network, OtelBuildError, OtlpSettings, validate};
+use super::pipeline::{Lost, RecordQueue, SpanQueue};
 
 /// The name of the service.
 const LABLET: &str = "lablet";
@@ -48,20 +48,20 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// of the count of records a destination lost. Each destination calls it
 /// with its own count once its own flush has ended, and emits the record it
 /// returns through a logger of its own, in an export of its own.
-pub type WideEvent = Box<dyn Fn(u64) -> Record + Send + Sync>;
+pub(crate) type WideEvent = Box<dyn Fn(u64) -> Record + Send + Sync>;
 
 /// What a flush or a shutdown couldn't export. Nothing about a run changes
 /// for it: it's for whoever reports to the person who ran lablet.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("telemetry wasn't exported whole: {}", failures.join("; "))]
-pub struct FlushError {
+pub(crate) struct FlushError {
     failures: Vec<String>,
 }
 
 impl FlushError {
     /// What failed, one entry for each queue that did.
     #[must_use]
-    pub fn failures(&self) -> &[String] {
+    pub(crate) fn failures(&self) -> &[String] {
         &self.failures
     }
 }
@@ -118,7 +118,7 @@ impl std::fmt::Debug for Destination {
 type MakeDestination = Box<dyn FnOnce(&Resource, &InstrumentationScope) -> Destination + Send>;
 
 /// What a [`Telemetry`] is built from.
-pub struct TelemetryBuilder {
+pub(crate) struct TelemetryBuilder {
     version: String,
     scope: InstrumentationScope,
     resource: Vec<(String, String)>,
@@ -150,14 +150,14 @@ impl TelemetryBuilder {
     /// key the environment names too takes the composer's value, and a key
     /// of lablet's own keeps lablet's value whichever names it.
     #[must_use]
-    pub fn resource(mut self, attributes: Vec<(String, String)>) -> Self {
+    pub(crate) fn resource(mut self, attributes: Vec<(String, String)>) -> Self {
         self.resource = attributes;
         self
     }
 
     /// Exports to `target` as OTLP/JSON lines.
     #[must_use]
-    pub fn file(mut self, target: FileTarget) -> Self {
+    pub(crate) fn file(mut self, target: FileTarget) -> Self {
         self.file = Some(target);
         self
     }
@@ -166,22 +166,24 @@ impl TelemetryBuilder {
     /// Each header's value is a secret from here on: no `Debug` or message
     /// shows one. A header that isn't one is refused by [`Self::build`].
     #[must_use]
-    pub fn otlp(mut self, settings: OtlpSettings) -> Self {
+    pub(crate) fn otlp(mut self, settings: OtlpSettings) -> Self {
         self.otlp = Some(settings);
         self
     }
 
     /// How long [`Telemetry::flush`] waits for a destination, in place of
     /// five seconds.
+    #[cfg(test)]
     #[must_use]
-    pub const fn flush_timeout(mut self, timeout: Duration) -> Self {
+    pub(crate) const fn flush_timeout(mut self, timeout: Duration) -> Self {
         self.flush_timeout = timeout;
         self
     }
 
     /// How long [`Telemetry::shutdown`] waits, in place of five seconds.
+    #[cfg(test)]
     #[must_use]
-    pub const fn shutdown_timeout(mut self, timeout: Duration) -> Self {
+    pub(crate) const fn shutdown_timeout(mut self, timeout: Duration) -> Self {
         self.shutdown_timeout = timeout;
         self
     }
@@ -225,7 +227,7 @@ impl TelemetryBuilder {
     /// Returns an [`OtelBuildError`] when the network exporters can't be
     /// made: the endpoint isn't one the exporter accepts, a header isn't
     /// one a header may have, or TLS to the endpoint can't be set up.
-    pub fn build(self) -> Result<Telemetry, OtelBuildError> {
+    pub(crate) fn build(self) -> Result<Telemetry, OtelBuildError> {
         let Self {
             version,
             scope,
@@ -372,7 +374,7 @@ struct Inner {
 /// five seconds for each of its two providers, ten in all, when a
 /// destination doesn't answer.
 #[derive(Debug, Clone)]
-pub struct Telemetry {
+pub(crate) struct Telemetry {
     inner: Arc<Inner>,
 }
 
@@ -383,7 +385,10 @@ impl Telemetry {
     /// the service's and the scope is the instrumentation's, so each
     /// carries a version of its own, and the composition root hands the
     /// same one to both; nothing here refuses two that differ.
-    pub fn builder(version: impl Into<String>, scope: InstrumentationScope) -> TelemetryBuilder {
+    pub(crate) fn builder(
+        version: impl Into<String>,
+        scope: InstrumentationScope,
+    ) -> TelemetryBuilder {
         TelemetryBuilder {
             version: version.into(),
             scope,
@@ -401,7 +406,7 @@ impl Telemetry {
     /// keeps up to 128 attributes and 128 events whatever the environment
     /// says.
     #[must_use]
-    pub fn tracer(&self) -> BoxedTracer {
+    pub(crate) fn tracer(&self) -> BoxedTracer {
         BoxedTracer::new(Box::new(
             self.inner
                 .tracer_provider
@@ -412,7 +417,7 @@ impl Telemetry {
     /// Lablet's logger, of the scope the composition root handed over,
     /// whose records reach every destination.
     #[must_use]
-    pub fn logger(&self) -> Box<dyn Logger> {
+    pub(crate) fn logger(&self) -> Box<dyn Logger> {
         Box::new(Bridge::new(
             self.inner
                 .records_provider
@@ -426,7 +431,7 @@ impl Telemetry {
     /// first line opens the path again and a file moved between two runs
     /// keeps the first run while the path gets the second. Nothing is
     /// opened here, and a `Telemetry` with no file does nothing.
-    pub fn begin_run(&self, run_id: &RunId) {
+    pub(crate) fn begin_run(&self, run_id: &RunId) {
         if let Some(sink) = &self.inner.sink {
             sink.start(run_id);
         }
@@ -451,7 +456,7 @@ impl Telemetry {
     ///
     /// Returns a [`FlushError`] that names each queue whose export failed,
     /// and each destination that didn't end in time.
-    pub async fn flush(&self, wide: WideEvent) -> Result<(), FlushError> {
+    pub(crate) async fn flush(&self, wide: WideEvent) -> Result<(), FlushError> {
         let inner = Arc::clone(&self.inner);
         let wide = Arc::new(wide);
         blocking(move || inner.flush(Some(&wide))).await
@@ -470,7 +475,7 @@ impl Telemetry {
     ///
     /// Returns a [`FlushError`] that names each queue whose export failed,
     /// or that didn't stop in time, or that says the shutdown didn't end.
-    pub async fn shutdown(&self) -> Result<(), FlushError> {
+    pub(crate) async fn shutdown(&self) -> Result<(), FlushError> {
         let inner = Arc::clone(&self.inner);
         blocking(move || inner.shutdown()).await
     }

@@ -29,10 +29,9 @@ The OpenTelemetry Rust project's guidance is to emit logs through `tracing` and 
 | Domain (`crates/domain/`)               | no                | no                | no                      |
 | Application (`crates/application/`)     | yes               | in tests only     | not in `lablet-run`     |
 | Adapters (`crates/adapters/secondary/`) | yes               | in tests only     | yes                     |
-| Export (`crates/export/otlp`)           | yes               | yes               | yes                     |
 | Composition root (`apps/lablet`)        | yes               | yes               | yes                     |
 
-The domain has no clock and does no I/O, so it has nothing to instrument. The SDK is what a process installs, so only the composition root, and the export crate it alone depends on, may hold it. `cargo xtask lint-layers` enforces the first two columns.
+The domain has no clock and does no I/O, so it has nothing to instrument. The SDK is what a process installs, so only the composition root may hold it. `cargo xtask lint-layers` enforces the first two columns.
 
 **4. Time comes from the loop.** The loop measures every call on its injected `Clock`, and each span and record gets exactly those times: a span is opened with an explicit start time and ended with an explicit end time, and a record carries the time the thing it reports happened. Never let the SDK read the system clock for a span or record. This keeps lablet's own overhead out of the agent's measured latency, makes a span's duration equal the latency the transcript and the wide event report, lets tests drive time with a fake clock, and keeps a mid-run clock adjustment from skewing durations.
 
@@ -82,7 +81,7 @@ The generated code is data, not logic. Each struct lists its attributes as pairs
 4. Fill the field where the crate builds the struct. If you skip this, the build fails at that call site, which is the point.
 5. Add the CHANGELOG entry the registry change needs, and run `cargo xtask weaver live-check` to see the new attribute on the wire.
 
-A call site fills a struct and hands it on; it never writes a key or calls an API by hand. For a chat attempt, the loop builds the generated `LabletChat` with the run's `Join`, the attempt's values and its `error.type` class, and records it on the span it opened, then ends the span at the time it measured. The composition root does the same for the root span and the wide event in `Lablet::run`: it opens the root span from the empty context, runs the loop in it, fills `LabletInvokeAgent` from the finished run and ends the span with the run's measured duration, and fills `LabletRun` from the run's context and summary, all but each destination's count of lost records, which the export crate fills once it has flushed that destination.
+A call site fills a struct and hands it on; it never writes a key or calls an API by hand. For a chat attempt, the loop builds the generated `LabletChat` with the run's `Join`, the attempt's values and its `error.type` class, and records it on the span it opened, then ends the span at the time it measured. The composition root does the same for the root span and the wide event in `Lablet::run`: it opens the root span from the empty context, runs the loop in it, fills `LabletInvokeAgent` from the finished run and ends the span with the run's measured duration, and fills `LabletRun` from the run's context and summary, all but each destination's count of lost records, which the composition root's export module fills once it has flushed that destination.
 
 ## What holds it
 
@@ -91,7 +90,7 @@ A call site fills a struct and hands it on; it never writes a key or calls an AP
 | `cargo xtask weaver check`            | pre-commit, pre-push, CI | a registry that breaks the conventions or lablet's policies, annotations included     |
 | `cargo xtask weaver generate --check` | pre-commit, pre-push, CI | generated code or reference pages that differ from what the registry renders to       |
 | The build                             | always                   | a call site that doesn't fill a field the registry added or now requires              |
-| `cargo xtask lint-layers`             | pre-commit, pre-push, CI | the API in the domain, the SDK outside the composition root and export crate          |
+| `cargo xtask lint-layers`             | pre-commit, pre-push, CI | the API in the domain, the SDK outside the composition root                           |
 | The golden comparison                 | tests                    | a change in what a run emits, with ids, times and attribute order normalised          |
 | `cargo xtask weaver live-check`       | CI                       | an emitted attribute or record the registry doesn't declare, or one of the wrong type |
 | The coverage and mutation floors      | CI, daily                | generated or hand-written telemetry code that no test reaches or checks               |

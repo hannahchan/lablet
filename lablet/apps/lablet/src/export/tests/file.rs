@@ -2,13 +2,13 @@
 //! can't be written reports.
 
 use lablet_conformance::otlp::Exported;
-use lablet_otlp::FileTarget;
 use lablet_test_support::Scratch;
 
-use crate::harness::{
+use super::harness::{
     CONTENT, CONTENT_PER_RUN, OTHER_RUN, RUN, RUN_KEY, Records, SPANS_PER_RUN, Settings, WIDE,
     built, emit_run, file_of, queues, run, runs_of,
 };
+use crate::export::FileTarget;
 
 #[tokio::test]
 async fn the_file_of_a_run_is_whole_when_the_flush_after_the_run_returns() {

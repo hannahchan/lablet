@@ -7,11 +7,11 @@ use std::collections::BTreeSet;
 use std::process::{Command, Stdio};
 
 use lablet_conformance::otlp::Exported;
-use lablet_otlp::FileTarget;
 use lablet_test_support::Scratch;
 use serde_json::json;
 
-use crate::harness::{CONTENT, RUN, Records, Settings, VERSION, WIDE, built, run};
+use super::harness::{CONTENT, RUN, Records, Settings, VERSION, WIDE, built, run};
+use crate::export::FileTarget;
 
 /// Set in the environment of the child process the test below starts, to
 /// the file the child exports its run to.
@@ -48,7 +48,7 @@ fn the_environments_resource_attributes_are_defaults_beneath_the_composers_and_l
     let child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "resource::a_child_process_exports_a_run_with_the_resource_its_environment_and_its_composer_state",
+            "export::tests::resource::a_child_process_exports_a_run_with_the_resource_its_environment_and_its_composer_state",
             "--test-threads=1",
         ])
         .env(CHILD, &path)

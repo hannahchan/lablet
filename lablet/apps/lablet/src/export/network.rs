@@ -32,7 +32,7 @@ use tonic::transport::{ClientTlsConfig, Endpoint, Uri};
 /// How an OTLP collector is spoken to. The exporter would pick one itself
 /// where none is chosen, so one is always chosen here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Transport {
+pub(crate) enum Transport {
     /// OTLP over gRPC.
     Grpc,
     /// OTLP over HTTP, as protobuf.
@@ -41,7 +41,7 @@ pub enum Transport {
 
 /// Which signal an exporter is of, as the environment's variables name it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Signal {
+pub(crate) enum Signal {
     /// Spans.
     Traces,
     /// Log records.
@@ -52,7 +52,7 @@ impl Signal {
     /// The variable that names the endpoint of this signal alone, which the
     /// exporter reads before the generic one.
     #[must_use]
-    pub const fn endpoint_variable(self) -> &'static str {
+    pub(crate) const fn endpoint_variable(self) -> &'static str {
         match self {
             Self::Traces => OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
             Self::Logs => OTEL_EXPORTER_OTLP_LOGS_ENDPOINT,
@@ -104,21 +104,21 @@ impl fmt::Display for Signal {
 
 /// What the config states of the network exporter. A field it leaves out is
 /// the environment's to decide, as the exporter reads it.
-pub struct OtlpSettings {
+pub(crate) struct OtlpSettings {
     /// How the collector is spoken to.
-    pub transport: Transport,
+    pub(crate) transport: Transport,
     /// Where the collector listens. On HTTP it's a base URL, to which the
     /// signal's path is appended, as the exporter appends it to
     /// `OTEL_EXPORTER_OTLP_ENDPOINT`. An empty one is left out, as the
     /// exporter leaves out an empty one it's given.
-    pub endpoint: Option<String>,
+    pub(crate) endpoint: Option<String>,
     /// The headers every export carries, which win over the environment's
     /// of the same name. A value is a secret from here on.
-    pub headers: Vec<(String, String)>,
+    pub(crate) headers: Vec<(String, String)>,
     /// Whether the headers the environment names are kept off every
     /// export, as they are when the endpoint is the config's and not the
     /// environment's.
-    pub strip_environment_headers: bool,
+    pub(crate) strip_environment_headers: bool,
 }
 
 impl fmt::Debug for OtlpSettings {
@@ -141,7 +141,7 @@ fn names_of<V>(headers: &[(String, V)]) -> Vec<&str> {
 /// Why the network exporters couldn't be made. No message holds the
 /// endpoint or a header's value: either may carry credentials.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum OtelBuildError {
+pub(crate) enum OtelBuildError {
     /// The endpoint isn't one the exporter accepts.
     #[error("the OTLP endpoint for {signal} is refused: it isn't a URL the exporter accepts")]
     Endpoint {
@@ -187,7 +187,7 @@ pub enum OtelBuildError {
 /// pair whose name or value is empty is left out, and a value whose
 /// percent-escapes don't decode is kept as it's written.
 #[must_use]
-pub fn decode_headers(value: &str) -> Vec<(String, String)> {
+pub(crate) fn decode_headers(value: &str) -> Vec<(String, String)> {
     value
         .split_terminator(',')
         .map(str::trim)
@@ -433,11 +433,11 @@ fn over_tls(stated: Option<&str>, signal: Signal) -> Option<Endpoint> {
 ///
 /// # Errors
 ///
-/// Returns what [`TelemetryBuilder::build`](crate::TelemetryBuilder::build)
+/// Returns what [`TelemetryBuilder::build`](super::telemetry::TelemetryBuilder::build)
 /// returns for the same settings, so a check refuses what a build refuses,
 /// but for what only making the exporters finds: [`OtelBuildError::Tls`],
 /// [`OtelBuildError::HttpClient`] and [`OtelBuildError::Exporter`].
-pub fn validate(settings: &OtlpSettings) -> Result<(), OtelBuildError> {
+pub(crate) fn validate(settings: &OtlpSettings) -> Result<(), OtelBuildError> {
     let network = Network::new(settings)?;
     for signal in [Signal::Traces, Signal::Logs] {
         let endpoint = match network.of(signal).endpoint {

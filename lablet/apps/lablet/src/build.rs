@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use lablet_model::{RunOutcome, StopReason, ToolSpec};
-use lablet_otlp::{FileTarget, OtelBuildError, OtlpSettings, Telemetry};
 use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
 use lablet_run::{FilterList, RunService, ToolExecutor, ToolSet, ToolSetError};
 use lablet_tools_builtin::{BuiltinTools, SettingsError};
@@ -20,6 +19,7 @@ use crate::config::{
     Config, ConfigError, Context, Env, Format, KeyPath, Model, Place, Provider, Refusal,
     ResolvedConfig, Substituted, Tools, TranscriptFormat, shown,
 };
+use crate::export::{self, FileTarget, OtelBuildError, OtlpSettings, Telemetry};
 use crate::lablet::{Fixed, Lablet, Played, TranscriptPath};
 use crate::otlp;
 use crate::root::{self, OwnFile};
@@ -497,7 +497,7 @@ async fn prepare(written: &Config, env: Env<'_>) -> Result<Prepared, BuildError>
         // trust roots that can't be loaded or other TLS that can't be set
         // up, and the HTTP client (see `validate`); a check installs no
         // exporter.
-        lablet_otlp::validate(settings)
+        export::validate(settings)
             .map_err(|error| otlp_refused(written, env, settings.endpoint.is_some(), error))?;
     }
     let target = file_target(&real, otlp.is_some());

@@ -24,7 +24,7 @@ use opentelemetry_sdk::trace::{SpanData, SpanExporter};
 
 /// Where the OTLP/JSON lines of a `Telemetry`'s runs go.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FileTarget {
+pub(crate) enum FileTarget {
     /// Each run has a file of its own in this directory, named
     /// `lablet-<run_id>.otlp.jsonl`.
     EachRun {

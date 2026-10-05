@@ -12,7 +12,6 @@ members = [
   "crates/adapters/secondary/tools-mcp",
   "crates/adapters/secondary/transcript-json",
   "crates/adapters/secondary/shared/documents",
-  "crates/export/otlp",
   "tests/conformance",
   "tests/mcp-server",
   "tests/test-support",
@@ -51,9 +50,8 @@ lablet-tools-mcp = { path = "crates/adapters/secondary/tools-mcp", version = "0.
 lablet-transcript-json = { path = "crates/adapters/secondary/transcript-json", version = "0.1.0" }
 # Adapter shared kernel: the transcript and outcome documents, and the shapes a script shares with them
 lablet-documents = { path = "crates/adapters/secondary/shared/documents", version = "0.1.0" }
-# Export: the OpenTelemetry SDK and what lablet adds to it, the tracer and logger providers and their OTLP exporters
-lablet-otlp = { path = "crates/export/otlp", version = "0.1.0" }
-# Composition root: config, build(), and the library surface
+# Composition root: config, build(), the library surface, and the OpenTelemetry SDK with what
+# lablet adds to it, the tracer and logger providers and their OTLP exporters
 lablet = { path = "apps/lablet", version = "0.1.0" }
 # Test support: the shared ToolExecutor case set, the reader of OTLP/JSON lines and the in-process OTLP receiver
 lablet-conformance = { path = "tests/conformance", version = "0.1.0" }
@@ -146,7 +144,7 @@ opentelemetry-proto = { version = "=0.33.0", default-features = false, features 
   "with-serde",
 ] }
 # OTLP network exporter over gRPC and HTTP/protobuf, on rustls. `tls-roots` builds tonic with
-# the platform's trust roots, which lablet-otlp turns on for a gRPC endpoint over TLS.
+# the platform's trust roots, which the composition root turns on for a gRPC endpoint over TLS.
 opentelemetry-otlp = { version = "=0.33.0", default-features = false, features = [
   "grpc-tonic",
   "http-proto",
@@ -158,17 +156,18 @@ opentelemetry-otlp = { version = "=0.33.0", default-features = false, features =
   "logs",
   "internal-logs",
 ] }
-# The HTTP client trait the OTLP HTTP exporter sends through. lablet-otlp wraps the client
-# behind it, so the config's headers are set after the exporter has merged the environment's.
+# The HTTP client trait the OTLP HTTP exporter sends through. The composition root wraps the
+# client behind it, so the config's headers are set after the exporter has merged the
+# environment's.
 opentelemetry-http = "=0.33.0"
 # Holds a header value of `telemetry.otlp.headers` from the builder to the request, so no
 # `Debug` or log line prints one.
 secrecy = "=0.10.3"
 # Protobuf bodies in the in-process OTLP HTTP receiver; the line opentelemetry-proto requires.
 prost = "=0.14.4"
-# The request and status types of the OTLP gRPC exporter's interceptor and its TLS in
-# lablet-otlp, and the in-process gRPC receiver in lablet-conformance, which adds the server
-# and TLS features; the line opentelemetry-otlp requires.
+# The request and status types of the OTLP gRPC exporter's interceptor and its TLS in the
+# composition root, and the in-process gRPC receiver in lablet-conformance, which adds the
+# server and TLS features; the line opentelemetry-otlp requires.
 tonic = { version = "=0.14.6", default-features = false }
 # In-process OTLP HTTP receiver in lablet-conformance; the line tonic's router uses, so one copy.
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }

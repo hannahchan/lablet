@@ -536,7 +536,7 @@ fn the_telemetry_is_on_standard_error_when_its_path_is_a_dash_once_variables_are
 /// nothing of either.
 #[test]
 fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_or_names_the_variable_read() {
-    use lablet_otlp::Signal;
+    use crate::export::Signal;
     const PASSWORD: &str = "hunter2-0123456789abcdef";
     let refused = |signal| OtelBuildError::Endpoint { signal };
 
@@ -601,7 +601,7 @@ fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_or_names_the_var
 /// nothing of what that holds.
 #[test]
 fn tls_that_cannot_be_set_up_is_refused_by_the_endpoint_as_written_or_the_variable_read() {
-    use lablet_otlp::Signal;
+    use crate::export::Signal;
     let tls = |signal| OtelBuildError::Tls {
         signal,
         reason: "transport error: no native certs found".to_owned(),

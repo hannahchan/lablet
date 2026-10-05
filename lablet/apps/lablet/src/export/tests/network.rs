@@ -12,9 +12,6 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use lablet_conformance::otlp::Exported;
 use lablet_conformance::receiver::{self, Mode, Received, Receiver};
-use lablet_otlp::{
-    FileTarget, OtelBuildError, OtlpSettings, Signal, Telemetry, Transport, validate,
-};
 use lablet_test_support::Scratch;
 use opentelemetry::InstrumentationScope;
 use opentelemetry::trace::{
@@ -26,9 +23,12 @@ use opentelemetry_otlp::{
 use opentelemetry_sdk::trace::{SpanData, SpanEvents, SpanExporter as _, SpanLinks};
 use tonic::metadata::{MetadataMap, MetadataValue};
 
-use crate::harness::{
+use super::harness::{
     CONTENT, CONTENT_PER_RUN, RUN, Records, SPANS_PER_RUN, Settings, VERSION, WIDE, built, queues,
     run, scope,
+};
+use crate::export::{
+    FileTarget, OtelBuildError, OtlpSettings, Signal, Telemetry, Transport, validate,
 };
 
 /// The endpoint of `receiver` that `transport` speaks to.
@@ -418,7 +418,7 @@ async fn the_environments_headers_win_in_the_exporter_and_the_configs_win_in_lab
     let child = tokio::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "network::a_child_process_exports_with_the_headers_its_environment_and_its_config_state",
+            "export::tests::network::a_child_process_exports_with_the_headers_its_environment_and_its_config_state",
             "--test-threads=1",
         ])
         .env(CHILD, format!("{},{}", receiver.grpc_endpoint(), receiver.http_endpoint()))
@@ -579,7 +579,7 @@ async fn the_grpc_exporter_trusts_the_roots_its_environment_names_with_a_scheme_
     let schemeless = https.trim_start_matches("https://");
 
     child(
-        "network::a_child_process_exports_a_run_to_each_endpoint_over_tls",
+        "export::tests::network::a_child_process_exports_a_run_to_each_endpoint_over_tls",
         TLS_CHILD,
         &format!("{https},{schemeless}"),
         &roots,
@@ -650,8 +650,7 @@ fn a_child_process_with_no_roots_to_trust_makes_no_exporter_that_speaks_tls() {
 /// loaded for it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_grpc_endpoint_over_tls_with_no_roots_to_trust_is_refused_for_tls_by_the_build_alone() {
-    const NAME: &str =
-        "network::a_child_process_with_no_roots_to_trust_makes_no_exporter_that_speaks_tls";
+    const NAME: &str = "export::tests::network::a_child_process_with_no_roots_to_trust_makes_no_exporter_that_speaks_tls";
     const INSECURE: &str = "OTEL_EXPORTER_OTLP_INSECURE";
     let scratch = Scratch::new("network-no-roots");
     let roots = scratch.at("roots.pem");

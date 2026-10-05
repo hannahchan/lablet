@@ -1,6 +1,6 @@
-//! What this crate's tests share: exporters that keep what they're handed,
-//! in memory, and a run of spans and records emitted as the loop emits them,
-//! through a tracer and lablet's logger.
+//! What the export module's tests share: exporters that keep what they're
+//! handed, in memory, and a run of spans and records emitted as the loop
+//! emits them, through a tracer and lablet's logger.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -12,7 +12,7 @@ use opentelemetry::trace::{
 };
 use opentelemetry::{Context, InstrumentationScope, KeyValue};
 
-use crate::telemetry::{Telemetry, WideEvent};
+use super::telemetry::{Telemetry, WideEvent};
 
 pub(crate) use lablet_test_support::Scratch;
 
@@ -24,8 +24,8 @@ pub(crate) const STARTED_UNIX_MS: u64 = 1_790_000_000_000;
 pub(crate) const DURATION_MS: u64 = 12_345;
 
 /// The schema URL the composition root's scope carries in these tests. It
-/// stands for the registry's, which the composition root knows and this
-/// crate doesn't.
+/// stands for the registry's, which the composition root hands over and
+/// this module never reads.
 pub(crate) const SCHEMA_URL: &str = "https://lablet.dev/schemas/test";
 
 /// The key a test's spans and records carry their run under.
@@ -46,6 +46,20 @@ pub(crate) const SPANS_PER_RUN: usize = 4;
 pub(crate) const RECORDS_PER_RUN: usize = 1;
 /// How many records one run of [`emit`] emits with content captured.
 pub(crate) const RECORDS_PER_CAPTURED_RUN: usize = 5;
+/// How many content records one run of [`emit`] emits with content
+/// captured, beside its failed attempt's record.
+pub(crate) const CONTENT_PER_RUN: usize = 4;
+
+/// Which records a run of [`emit`] emits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Records {
+    /// None: a run of spans alone, whose only record is the wide event.
+    None,
+    /// The failed attempt's record.
+    Exception,
+    /// The failed attempt's record and a content record for each span.
+    Captured,
+}
 
 /// The scope the composition root hands over.
 pub(crate) fn scope() -> InstrumentationScope {
@@ -76,21 +90,18 @@ fn record(name: &'static str, at: SystemTime, span: SpanContext, run: &str) -> R
 
 /// Emits one run under the id `run` through `tracer` and `logger`, as the
 /// loop and the composition root do: the root span, opened from an empty
-/// context, two chat spans and a tool span beneath it, a failed attempt's
-/// record in the first chat's context and, with `content`, a content record
-/// for each span, each timed on the run's clock. Returns the run's wide
-/// event as the composition root hands it over: a function of the count of
-/// lost records, in the root span's context, timed at the run's end.
-///
-/// The integration tests emit the same run from `tests/it/harness.rs`,
-/// since that target can't reach a `#[cfg(test)]` module; a change to the
-/// run's shape is made in both.
+/// context, two chat spans and a tool span beneath it, and the `records`
+/// in their spans' contexts, each timed on the run's clock. Returns the
+/// run's wide event as the composition root hands it over: a function of
+/// the count of lost records, in the root span's context, timed at the
+/// run's end.
 pub(crate) fn emit(
     tracer: &BoxedTracer,
     logger: &dyn Logger,
     run: &str,
-    content: bool,
+    records: Records,
 ) -> WideEvent {
+    let content = records == Records::Captured;
     let root = tracer
         .span_builder("invoke_agent lablet")
         .with_kind(SpanKind::Internal)
@@ -115,12 +126,14 @@ pub(crate) fn emit(
         vec![KeyValue::new("lablet.test.attempt", 1_i64)],
     );
     failed.set_status(Status::error("529 overloaded"));
-    logger.emit(record(
-        EXCEPTION,
-        after(47),
-        failed.span_context().clone(),
-        run,
-    ));
+    if records != Records::None {
+        logger.emit(record(
+            EXCEPTION,
+            after(47),
+            failed.span_context().clone(),
+            run,
+        ));
+    }
     if content {
         logger.emit(record(
             CONTENT,
@@ -184,7 +197,7 @@ pub(crate) fn wide_event(run: &str, root: SpanContext) -> WideEvent {
 
 /// Begins the run `run` on `telemetry`, emits it through a tracer and a
 /// logger of `telemetry`'s own, and returns its wide event.
-pub(crate) fn emit_run(telemetry: &Telemetry, run: &str, content: bool) -> WideEvent {
+pub(crate) fn emit_run(telemetry: &Telemetry, run: &str, records: Records) -> WideEvent {
     telemetry.begin_run(&lablet_model::RunId::new(run).unwrap_or_else(|error| {
         panic!("{run} is a run id: {error}");
     }));
@@ -192,7 +205,7 @@ pub(crate) fn emit_run(telemetry: &Telemetry, run: &str, content: bool) -> WideE
         &telemetry.tracer(),
         telemetry.logger().as_ref(),
         run,
-        content,
+        records,
     )
 }
 

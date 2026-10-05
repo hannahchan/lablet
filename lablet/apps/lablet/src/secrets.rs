@@ -19,9 +19,9 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use lablet_model::Secrets;
-use lablet_otlp::decode_headers;
 
 use crate::config::{Config, Env, KeyPath, McpServer, Substituted};
+use crate::export::decode_headers;
 use crate::otlp;
 
 /// What a run withholds and cuts, derived from its config.

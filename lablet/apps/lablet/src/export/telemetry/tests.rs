@@ -9,13 +9,13 @@ use opentelemetry::{Context, Key, Value};
 use opentelemetry_sdk::trace::SpanData;
 
 use super::*;
-use crate::network::{OtelBuildError, OtlpSettings, Transport};
-use crate::pipeline::QUEUE_CAPACITY;
-use crate::testing::memory::{Export, Logged, Memory};
-use crate::testing::{
+use crate::export::network::{OtelBuildError, OtlpSettings, Transport};
+use crate::export::pipeline::QUEUE_CAPACITY;
+use crate::export::testing::memory::{Export, Logged, Memory};
+use crate::export::testing::{
     CONTENT, DROPPED_KEY, DURATION_MS, EXCEPTION, OTHER_RUN, RECORDS_PER_CAPTURED_RUN,
-    RECORDS_PER_RUN, RUN, RUN_KEY, SCHEMA_URL, SPANS_PER_RUN, VERSION, WIDE, after, emit_run,
-    scope, wide_event,
+    RECORDS_PER_RUN, RUN, RUN_KEY, Records, SCHEMA_URL, SPANS_PER_RUN, VERSION, WIDE, after,
+    emit_run, scope, wide_event,
 };
 
 fn exporting(memory: &Memory) -> Telemetry {
@@ -26,8 +26,8 @@ fn exporting(memory: &Memory) -> Telemetry {
 }
 
 /// Emits one run under `run` and flushes it with its wide event.
-async fn run(telemetry: &Telemetry, run: &str, content: bool) -> Result<(), FlushError> {
-    let wide = emit_run(telemetry, run, content);
+async fn run(telemetry: &Telemetry, run: &str, records: Records) -> Result<(), FlushError> {
+    let wide = emit_run(telemetry, run, records);
     telemetry.flush(wide).await
 }
 
@@ -75,7 +75,7 @@ async fn a_run_is_exported_as_its_spans_its_records_and_its_wide_event() {
     let memory = Memory::default();
     let telemetry = exporting(&memory);
 
-    run(&telemetry, RUN, true).await.unwrap();
+    run(&telemetry, RUN, Records::Captured).await.unwrap();
 
     assert_eq!(
         names(&memory.exported_spans()),
@@ -99,7 +99,7 @@ async fn a_run_that_captures_no_content_is_exported_without_any() {
     let memory = Memory::default();
     let telemetry = exporting(&memory);
 
-    run(&telemetry, RUN, false).await.unwrap();
+    run(&telemetry, RUN, Records::Exception).await.unwrap();
 
     assert_eq!(memory.exported_spans().len(), SPANS_PER_RUN);
     assert_eq!(events_of(&memory.exported_records()), [EXCEPTION]);
@@ -111,7 +111,7 @@ async fn the_signals_of_a_run_are_one_sampled_trace_beneath_the_root_span() {
     let memory = Memory::default();
     let telemetry = exporting(&memory);
 
-    run(&telemetry, RUN, true).await.unwrap();
+    run(&telemetry, RUN, Records::Captured).await.unwrap();
 
     let spans = memory.exported_spans();
     let root = spans.last().unwrap();
@@ -166,8 +166,10 @@ async fn two_runs_are_two_traces() {
     let memory = Memory::default();
     let telemetry = exporting(&memory);
 
-    run(&telemetry, RUN, false).await.unwrap();
-    run(&telemetry, OTHER_RUN, false).await.unwrap();
+    run(&telemetry, RUN, Records::Exception).await.unwrap();
+    run(&telemetry, OTHER_RUN, Records::Exception)
+        .await
+        .unwrap();
 
     let spans = memory.exported_spans();
     assert_eq!(spans.len(), 2 * SPANS_PER_RUN);
@@ -226,7 +228,7 @@ async fn the_wide_event_is_exported_alone_and_after_everything_else_of_its_run()
     let memory = Memory::default();
     let telemetry = exporting(&memory);
 
-    run(&telemetry, RUN, true).await.unwrap();
+    run(&telemetry, RUN, Records::Captured).await.unwrap();
 
     let exports = memory.exports();
     let Some(Export::Wide(last)) = exports.last() else {
@@ -254,7 +256,7 @@ async fn the_wide_event_is_the_record_the_function_makes_timed_and_placed_as_it_
     let memory = Memory::default();
     let telemetry = exporting(&memory);
 
-    run(&telemetry, RUN, false).await.unwrap();
+    run(&telemetry, RUN, Records::Exception).await.unwrap();
 
     let wide = memory.exported_wide();
     let (record, _) = &wide[0];
@@ -276,7 +278,7 @@ async fn the_wide_event_counts_what_the_exporters_lost_of_its_run() {
     let telemetry = exporting(&memory);
     memory.refuse_records(true);
 
-    let flushed = run(&telemetry, RUN, true).await;
+    let flushed = run(&telemetry, RUN, Records::Captured).await;
 
     let failures = flushed.unwrap_err();
     assert_eq!(failures.failures().len(), 1, "{failures}");
@@ -306,7 +308,7 @@ async fn the_wide_event_counts_the_spans_and_the_records_together() {
     memory.refuse_records(true);
     memory.refuse_spans(true);
 
-    let flushed = run(&telemetry, RUN, false).await;
+    let flushed = run(&telemetry, RUN, Records::Exception).await;
 
     let failures = flushed.unwrap_err();
     assert_eq!(queues(&failures), ["spans", "log records"]);
@@ -360,10 +362,10 @@ async fn a_runs_wide_event_counts_nothing_of_the_run_before_it() {
     let memory = Memory::default();
     let telemetry = exporting(&memory);
     memory.refuse_spans(true);
-    run(&telemetry, RUN, false).await.unwrap_err();
+    run(&telemetry, RUN, Records::Exception).await.unwrap_err();
     memory.refuse_spans(false);
 
-    let flushed = run(&telemetry, OTHER_RUN, false).await;
+    let flushed = run(&telemetry, OTHER_RUN, Records::Exception).await;
 
     assert_eq!(flushed, Ok(()));
     let lost: Vec<_> = memory.exported_wide().iter().map(dropped).collect();
@@ -376,9 +378,9 @@ async fn a_wide_event_that_was_lost_is_reported_and_is_counted_against_no_run() 
     let telemetry = exporting(&memory);
     memory.refuse_wide(true);
 
-    let lost = run(&telemetry, RUN, false).await;
+    let lost = run(&telemetry, RUN, Records::Exception).await;
     memory.refuse_wide(false);
-    let kept = run(&telemetry, OTHER_RUN, false).await;
+    let kept = run(&telemetry, OTHER_RUN, Records::Exception).await;
 
     let lost = lost.unwrap_err();
     assert_eq!(lost.failures().len(), 1, "{lost}");
@@ -416,7 +418,7 @@ async fn a_flush_of_a_run_that_emitted_nothing_exports_its_wide_event_alone() {
 async fn a_shutdown_after_every_run_was_flushed_exports_nothing_more() {
     let memory = Memory::default();
     let telemetry = exporting(&memory);
-    run(&telemetry, RUN, false).await.unwrap();
+    run(&telemetry, RUN, Records::Exception).await.unwrap();
     let exports = memory.exports().len();
 
     let shut = telemetry.shutdown().await;
@@ -429,7 +431,7 @@ async fn a_shutdown_after_every_run_was_flushed_exports_nothing_more() {
 async fn a_run_nobody_flushed_has_its_spans_and_records_exported_when_the_telemetry_shuts_down() {
     let memory = Memory::default();
     let telemetry = exporting(&memory);
-    let _wide = emit_run(&telemetry, RUN, true);
+    let _wide = emit_run(&telemetry, RUN, Records::Captured);
 
     let shut = telemetry.shutdown().await;
 
@@ -448,7 +450,7 @@ async fn a_telemetry_that_was_shut_down_exports_nothing_more_and_says_so() {
     let telemetry = exporting(&memory);
     telemetry.shutdown().await.unwrap();
 
-    let flushed = run(&telemetry, RUN, true).await;
+    let flushed = run(&telemetry, RUN, Records::Captured).await;
     let again = telemetry.shutdown().await;
 
     assert!(memory.exports().is_empty(), "{:?}", memory.exports());
@@ -466,7 +468,7 @@ async fn a_queue_that_cannot_export_fails_the_shutdown_and_stops_all_the_same() 
     let memory = Memory::default();
     let telemetry = exporting(&memory);
     memory.refuse_spans(true);
-    let _wide = emit_run(&telemetry, RUN, false);
+    let _wide = emit_run(&telemetry, RUN, Records::Exception);
 
     let shut = telemetry.shutdown().await;
 
@@ -497,7 +499,7 @@ async fn a_destination_that_does_not_answer_holds_a_shutdown_only_for_its_timeou
         .build()
         .unwrap();
     memory.hold();
-    let _wide = emit_run(&telemetry, RUN, false);
+    let _wide = emit_run(&telemetry, RUN, Records::Exception);
 
     let began = Instant::now();
     let shut = telemetry.shutdown().await;
@@ -528,7 +530,7 @@ async fn a_telemetry_dropped_after_its_shutdown_costs_nothing_and_one_dropped_wi
  {
     let (shut, dropped) = (Memory::default(), Memory::default());
     let telemetry = exporting(&shut);
-    run(&telemetry, RUN, false).await.unwrap();
+    run(&telemetry, RUN, Records::Exception).await.unwrap();
     telemetry.shutdown().await.unwrap();
     let exports = shut.exports().len();
     let began = Instant::now();
@@ -538,7 +540,7 @@ async fn a_telemetry_dropped_after_its_shutdown_costs_nothing_and_one_dropped_wi
     assert_eq!(shut.exports().len(), exports);
 
     let telemetry = exporting(&dropped);
-    let _wide = emit_run(&telemetry, RUN, false);
+    let _wide = emit_run(&telemetry, RUN, Records::Exception);
     drop(telemetry);
     assert_eq!(dropped.exported_spans().len(), SPANS_PER_RUN);
     assert_eq!(dropped.exported_records().len(), RECORDS_PER_RUN);
@@ -551,7 +553,7 @@ async fn every_signal_is_of_the_scope_the_composition_root_handed_over() {
     let memory = Memory::default();
     let telemetry = exporting(&memory);
 
-    run(&telemetry, RUN, true).await.unwrap();
+    run(&telemetry, RUN, Records::Captured).await.unwrap();
 
     let scopes: Vec<_> = memory
         .exported_spans()
@@ -618,7 +620,7 @@ async fn every_destination_is_handed_every_span_and_every_record_and_counts_its_
         .unwrap();
     second.refuse_records(true);
 
-    let flushed = run(&telemetry, RUN, true).await;
+    let flushed = run(&telemetry, RUN, Records::Captured).await;
 
     let failures = flushed.unwrap_err();
     assert_eq!(failures.failures().len(), 1, "{failures}");
@@ -659,7 +661,7 @@ async fn a_destination_that_does_not_answer_holds_a_flush_only_for_its_bound_and
     network.hold();
 
     let began = Instant::now();
-    let flushed = run(&telemetry, RUN, true).await;
+    let flushed = run(&telemetry, RUN, Records::Captured).await;
     let waited = began.elapsed();
 
     assert_eq!(
@@ -700,7 +702,7 @@ async fn a_flush_with_a_bound_of_nothing_still_answers() {
         .build()
         .unwrap();
 
-    let flushed = run(&telemetry, RUN, false).await;
+    let flushed = run(&telemetry, RUN, Records::Exception).await;
 
     // A bound of nothing gives up on whichever destination hasn't answered
     // by the time it's checked, and never on one that has.
@@ -722,7 +724,7 @@ async fn a_telemetry_with_no_destination_takes_a_run_and_a_flush_returns_at_once
     let telemetry = Telemetry::builder(VERSION, scope()).build().unwrap();
 
     let began = Instant::now();
-    let flushed = run(&telemetry, RUN, true).await;
+    let flushed = run(&telemetry, RUN, Records::Captured).await;
     let shut = telemetry.shutdown().await;
 
     assert_eq!(flushed, Ok(()));
@@ -737,7 +739,7 @@ async fn a_span_is_taken_while_an_export_waits_for_its_destination() {
     memory.hold();
 
     let wides = tokio::time::timeout(Duration::from_secs(5), async {
-        [RUN, OTHER_RUN, RUN].map(|run| emit_run(&telemetry, run, true))
+        [RUN, OTHER_RUN, RUN].map(|run| emit_run(&telemetry, run, Records::Captured))
     })
     .await;
     memory.release();

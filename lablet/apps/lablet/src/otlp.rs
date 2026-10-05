@@ -5,9 +5,8 @@
 //! alone: whether a run has a network exporter at all, the transport it
 //! speaks, and whether the environment's headers go with it.
 
-use lablet_otlp::{OtlpSettings, Signal, Transport};
-
 use crate::config::{Config, Env, OtlpProtocol, Refusal};
+use crate::export::{OtlpSettings, Signal, Transport};
 
 /// The endpoint variable every signal falls back on.
 const ENDPOINT: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";

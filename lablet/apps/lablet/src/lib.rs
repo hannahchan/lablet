@@ -122,6 +122,7 @@ mod build;
 mod cancel;
 mod clock;
 pub mod config;
+mod export;
 mod lablet;
 mod otlp;
 mod root;

@@ -11,7 +11,7 @@ use opentelemetry_sdk::trace::{SpanEvents, SpanLinks};
 use serde_json::json;
 
 use super::*;
-use crate::testing::{SCHEMA_URL, Scratch};
+use crate::export::testing::{SCHEMA_URL, Scratch};
 
 const FIRST: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 const SECOND: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNED";

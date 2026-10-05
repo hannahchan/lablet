@@ -4,8 +4,8 @@
 //! The record's struct is generated from the registry, so a key the registry
 //! adds to `lablet.run` is a field this module must fill before the crate
 //! builds again, and a key it drops is a field that no longer compiles. What
-//! only the export crate knows, each destination's count of lost records, is
-//! filled there, from the struct this module hands over.
+//! only the export module knows, each destination's count of lost records,
+//! is filled there, from the struct this module hands over.
 
 use std::collections::BTreeMap;
 
