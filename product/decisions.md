@@ -1244,3 +1244,12 @@ Decided by the owner. Generated code in a floor crate is held to the same floors
 - **The floors are met by ordinary tests.** A test that records a span covers its generated function, and a test that checks its attributes kills that function's mutants. Nothing is generated for the tests.
 
 The floors don't see a field paired with the wrong key, which is a fault of the template. The golden comparison of phase 6a and `weaver live-check` see it.
+
+## 2026-10-05 The registry states fixed values and the join keys
+
+Decided by the owner. In the spike every call site filled in what the registry had already settled, and only its prose said so: `gen_ai.operation.name` is `chat` on every chat span, `error.type` takes one of lablet's few classes on each signal, and the six join keys are the run's and the same on every signal. A typo in a class compiled, and nothing held the join keys equal across a run's signals.
+
+- **A fixed value is an annotation on the signal's reference** (`lablet: {value: chat}`), which applies to that signal only. The generator leaves the field out and writes the constant.
+- **A signal's own values of an open attribute are an annotation too** (`lablet: {values: [retryable, auth, ...]}`). The generator makes a closed enum for that signal, so a value that isn't listed doesn't compile, and the classes are in the contract rather than in a brief.
+- **The join keys are one generated struct.** Resolution doesn't keep the join group, so every reference the group holds carries `lablet: {join: true}`, which reaches every signal that refers to the group. The generator collects them into a `Join` struct, built once for each run from `RunContext`, which every span and event holds in their place.
+- **Policies hold the annotations.** `weaver check` refuses a fixed value the attribute's type doesn't allow, a list of values on a signal without the attribute, and a reference in the join group without `join: true`.
