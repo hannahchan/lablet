@@ -150,7 +150,7 @@ The telemetry contract doesn't change. Every span, record and attribute a run em
 
 Owner questions, answered before the design commit:
 
-1. **How the loop emits log records.** Answered on 2026-10-05 ("OpenTelemetry first, with `tracing` for logs" in `decisions.md`): `tracing` events bridged by `opentelemetry-appender-tracing`, and the Logs Bridge API only for the wide event, in the composition root.
+1. **How the loop emits log records.** Answered on 2026-10-05 ("Lablet's telemetry records go through its own logger" in `decisions.md`): every telemetry record, the wide event included, through lablet's own logger over the Logs Bridge API. The work below still describes the `tracing` route of the earlier answer, and is revised once the generated code's questions are settled.
 2. **Where the registry's constants live.** `lablet-telemetry-registry` is in the adapter shared kernel, which the application ring may not depend on, and an application crate may depend only on the domain. It has no dependencies of its own, so the domain ring could hold it with no rule changed, but the attribute names are the telemetry's vocabulary and not the run's. The proposal is to let the application ring depend on itself, moving the crate to `crates/application/telemetry-registry`. That's a second change to the layer rules, so it's the owner's.
 3. **What a library caller plugs in where it registered an observer.** Answered on 2026-10-04: nothing, until a caller asks.
 4. **Whether every span is still sampled.** Answered on 2026-10-04: every trace is sampled, and `OTEL_TRACES_SAMPLER` is ignored. The SDK's span limits, 128 attributes and 128 events by default, also apply for the first time, and lablet sets them as it means them.

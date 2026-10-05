@@ -1212,6 +1212,8 @@ Phase 6a builds it before phase 7, since the Anthropic adapter and MCP would oth
 
 ## 2026-10-05 OpenTelemetry first, with `tracing` for logs
 
+**Partly superseded later on 2026-10-05 by "Lablet's telemetry records go through its own logger":** spans and metrics through the OpenTelemetry API still hold; the bullets on `tracing` events, the appender, the log layer a host adds, and the scope a processor restores don't.
+
 Decided by the owner, and meant as the template UsefulBytes follows later. Rust has two ways to instrument, and the OpenTelemetry Rust project and the `tracing` community are converging on guidance that splits them by signal (`opentelemetry-rust`, `docs/traces.md` and `docs/logs.md`, merged on 2026-08-10): spans through the OpenTelemetry API, which knows span kinds, links and remote parents where `tracing` doesn't, and logs through `tracing`, bridged by `opentelemetry-appender-tracing`. The guidance says application code shouldn't call the Logs Bridge API, and that `tracing-opentelemetry` is for code already built on `tracing` spans.
 
 - **Spans, and metrics when lablet has any, go through the OpenTelemetry API.** Never through `tracing` spans or `tracing-opentelemetry`.
@@ -1222,3 +1224,13 @@ Decided by the owner, and meant as the template UsefulBytes follows later. Rust 
 - **The span event `lablet.retry` stays for now.** OTEP 4430 proposes deprecating span events in favour of events, and the guidance prefers events, but moving it changes the telemetry contract, which phase 6a doesn't. Phase 11 decides it with the other contract changes before the release.
 
 `tracing` was already allowed in the application ring and the adapters and forbidden in the domain, so this changes no layer rule. One known gap: the appender's logger scope takes attributes but no version or schema URL, so its records would lose the schema URL phase 4 put on the instrumentation scope. The export crate's log processor restores lablet's scope for lablet's target.
+
+## 2026-10-05 Lablet's telemetry records go through its own logger
+
+Decided by the owner, reversing the `tracing` half of "OpenTelemetry first, with `tracing` for logs" the same day. The spike in `product/research/weaver/typed-codegen.md` showed that a call site never writes the emitting call: it fills a generated struct and calls `emit`. The guidance's case against the Logs Bridge API is that application code would call it by hand while appenders already exist, and generated code is what calls it here. What the appender route cost doesn't go away with generation: a record timed when it's emitted rather than on the run's clock, an empty instrumentation scope, values limited to what a `tracing` field holds, the wide event on a path of its own, and a host that must add lablet's layer to its subscriber and keep the conversation out of its own logs.
+
+- **Every telemetry record lablet emits goes through lablet's own logger over the Logs Bridge API**: the failed-attempt record, the content records and the wide event alike. The generated `emit` builds the record through the API, with its event name, severity, the time the loop measured, and attributes of any value the registry gives them.
+- **The logger is lablet's.** The API's `Logger` can't be held as a trait object, so `lablet-run` holds a small object-safe wrapper, written once for any `Logger` and injected beside the tracer, as the API's `BoxedTracer` is for spans. Each `Lablet` builds its own from the SDK's logger provider, with lablet's instrumentation scope and the registry's schema URL.
+- **A host owes lablet nothing.** No record passes through the process's `tracing` dispatcher, so a host adds no layer, filters no target, and runs several `Lablet`s without routing records between them.
+
+This goes against the OpenTelemetry Rust guidance, which says application code shouldn't call the Logs Bridge API, so a change to that API reaches the generator's template and the wrapper. Whether lablet's diagnostics stay on `tracing` is a separate question: the SDK reports its own export failures only through `tracing`.
