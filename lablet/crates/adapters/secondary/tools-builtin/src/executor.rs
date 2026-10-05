@@ -105,7 +105,6 @@ impl ToolExecutor for BuiltinTools {
             keep,
             secrets,
             id: _,
-            trace_context: _,
         } = call;
         let name = name.as_str();
         let Some(held) = self.tools.iter().find(|held| held.tool().name() == name) else {

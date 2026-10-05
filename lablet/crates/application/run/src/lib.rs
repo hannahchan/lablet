@@ -6,24 +6,20 @@
 //! from `lablet-policy`, and every total from the model's `Run`.
 
 mod clock;
-mod observer;
 mod provider;
 mod service;
 mod shown;
 pub mod telemetry;
 mod tool;
 mod toolset;
-mod trace;
 
 pub use clock::{Cancellation, Clock};
-pub use observer::{EventKind, RunEvent, RunObserver};
 pub use provider::{ModelProvider, ProviderError, ProviderRequest};
 pub use service::{CallLimits, RunService};
 pub use tool::{
     McpCallMeta, NetworkTransport, ToolCall, ToolError, ToolErrorKind, ToolExecutor, ToolOutput,
 };
 pub use toolset::{FilterList, ToolFilter, ToolSet, ToolSetError};
-pub use trace::TraceContext;
 
 /// The longest message of a [`ProviderError`], and the longest error result
 /// the loop makes of a [`ToolError`]'s message, in bytes.

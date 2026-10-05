@@ -3,11 +3,13 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use lablet::{BlankTask, EventKind, OutcomeDocument, RunId, RunRequest, StopReason};
-use lablet_telemetry_registry::attribute as key;
+use lablet::telemetry::generated::{LabletInvokeAgent, LabletRun};
+use lablet::{BlankTask, OutcomeDocument, RunId, RunRequest, StopReason};
+use lablet_run::telemetry::generated::GenAiClientInferenceOperationDetails;
 use serde_json::{Value, json};
 
-use crate::harness::{ENDS, Lab, MODEL, PROMPT, SYSTEM, Traced, observed, request};
+use crate::harness::{ENDS, Lab, MODEL, PROMPT, SYSTEM, Traced, request};
+use crate::key;
 
 const CALLS_THEN_ENDS: &str = "
 - response:
@@ -46,7 +48,7 @@ async fn two_runs_on_one_lablet_are_two_runs_with_one_outcome() {
         json!({ "tools": { "builtin": scratch.builtin(&["bash"]) } }),
     );
     let digest = config.digest().to_string();
-    let (mut lablet, recorder) = observed(config).await;
+    let mut lablet = lablet::build(config).await.unwrap();
     let named = RunId::new("the-second-run").unwrap();
 
     let before = unix_ms_now();
@@ -68,51 +70,36 @@ async fn two_runs_on_one_lablet_are_two_runs_with_one_outcome() {
     }
     assert_eq!(shared(first), shared(second));
 
-    // One `RunStarted` each, under the run's own id, and the same events
-    // after it: the second run made the first run's provider calls again.
-    let events = recorder.events();
-    let of_one_run = [
-        "RunStarted",
-        "TurnStarted",
-        "ProviderCallStarted",
-        "ProviderCallFinished",
-        "ToolCallStarted",
-        "ToolCallFinished",
-        "TurnStarted",
-        "ProviderCallStarted",
-        "ProviderCallFinished",
-        "RunFinished",
-    ];
-    assert_eq!(recorder.names(), [of_one_run, of_one_run].concat());
-    for (run_id, events) in [(&fresh, &events[..10]), (&named, &events[10..])] {
-        for event in events {
-            assert_eq!(&event.run_id, run_id);
-        }
-        let EventKind::RunStarted { context, model, .. } = &events[0].kind else {
-            panic!("{:?}", events[0]);
-        };
-        assert_eq!(&context.run_id, run_id);
-        assert_eq!(context.config_digest.as_str(), digest);
-        assert_eq!(context.agent_version, lablet::VERSION);
-        assert!(
-            (before..=after).contains(&context.started_unix_ms),
-            "{before} <= {} <= {after}",
-            context.started_unix_ms
-        );
-        assert_eq!(model.name, MODEL);
-    }
-
+    // One root span each, under the run's own id, and the same spans under
+    // it: the second run made the first run's provider calls again.
     let exported = scratch.exported();
-    assert_eq!(exported.spans_of("invoke_agent").len(), 2);
-    assert_eq!(exported.records_of("lablet.run").len(), 2);
+    assert_eq!(
+        exported
+            .spans_of(LabletInvokeAgent::GEN_AI_OPERATION_NAME)
+            .len(),
+        2
+    );
+    assert_eq!(exported.records_of(LabletRun::NAME).len(), 2);
     for run_id in [&fresh, &named] {
         let traced = Traced::of(&exported, run_id.as_str());
         assert_eq!(traced.spans.len(), 4, "a root, two attempts and a call");
+        let root = traced.root();
+        assert_eq!(root.attributes[key::LABLET_CONFIG_DIGEST], json!(digest));
+        assert_eq!(
+            root.attributes[key::GEN_AI_AGENT_VERSION],
+            json!(lablet::VERSION)
+        );
+        assert_eq!(root.attributes[key::GEN_AI_REQUEST_MODEL], json!(MODEL));
+        let started_ms = root.start_unix_nano / 1_000_000;
+        assert!(
+            (before..=after).contains(&started_ms),
+            "{before} <= {started_ms} <= {after}"
+        );
         assert_eq!(
             traced.wide().attributes[key::LABLET_RUN_STOP_REASON],
             json!("completed")
         );
-        assert_eq!(traced.wide().trace_id, traced.root().trace_id);
+        assert_eq!(traced.wide().trace_id, root.trace_id);
     }
     assert_ne!(
         Traced::of(&exported, fresh.as_str()).root().trace_id,
@@ -133,28 +120,46 @@ fn ulid_time(id: &str) -> u64 {
 #[tokio::test]
 async fn a_run_without_an_id_gets_a_fresh_ulid_that_holds_when_it_started() {
     let scratch = Lab::new("fresh");
-    let (mut lablet, recorder) = observed(scratch.config(ENDS, json!({}))).await;
+    let mut lablet = lablet::build(scratch.config(ENDS, json!({})))
+        .await
+        .unwrap();
 
     let first = lablet.run(request()).await.summary.outcome.run_id;
     let second = lablet.run(request()).await.summary.outcome.run_id;
     lablet.shutdown().await;
 
     assert_ne!(first, second);
-    let started: Vec<_> = recorder
-        .events()
-        .into_iter()
-        .filter_map(|event| match event.kind {
-            EventKind::RunStarted { context, .. } => Some(*context),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(started.len(), 2);
-    for (context, run_id) in started.iter().zip([&first, &second]) {
-        assert_eq!(&context.run_id, run_id);
-        assert_eq!(ulid_time(run_id.as_str()), context.started_unix_ms);
-        assert_eq!(context.labels, lablet::RunLabels::default());
-        assert_eq!(context.transcript_path, None);
-        assert!(!context.capture_content);
+    let exported = scratch.exported();
+    for run_id in [&first, &second] {
+        let traced = Traced::of(&exported, run_id.as_str());
+        let root = traced.root();
+        assert_eq!(
+            ulid_time(run_id.as_str()),
+            root.start_unix_nano / 1_000_000,
+            "the root span starts when the id says the run did"
+        );
+        for span in &traced.spans {
+            for label in [
+                key::LABLET_TASK_ID,
+                key::LABLET_EXPERIMENT_ID,
+                key::LABLET_TRIAL,
+            ] {
+                assert!(!span.attributes.contains_key(label), "{label}");
+            }
+        }
+        let wide = traced.wide();
+        assert!(
+            !wide
+                .attributes
+                .contains_key(key::LABLET_RUN_TRANSCRIPT_PATH)
+        );
+        assert!(
+            traced
+                .records
+                .iter()
+                .all(|record| record.event_name != GenAiClientInferenceOperationDetails::NAME),
+            "no content is captured"
+        );
     }
 }
 
@@ -189,7 +194,7 @@ fn a_blank_prompt_is_refused_when_the_request_is_made() {
 async fn the_run_is_given_the_prompt_the_request_holds_under_the_system_prompt_of_the_config() {
     let scratch = Lab::new("prompts");
     let config = scratch.config(ENDS, json!({ "telemetry": { "capture_content": true } }));
-    let (mut lablet, recorder) = observed(config).await;
+    let mut lablet = lablet::build(config).await.unwrap();
 
     let finished = lablet
         .run(RunRequest::new(" Rename the parser. ").unwrap())
@@ -199,18 +204,26 @@ async fn the_run_is_given_the_prompt_the_request_holds_under_the_system_prompt_o
     assert_eq!(finished.transcript.system(), SYSTEM);
     assert_eq!(finished.summary.prompt.system_bytes, SYSTEM.len() as u64);
     assert_eq!(finished.summary.prompt.user_bytes, 20);
-    let EventKind::RunStarted {
-        context,
-        system_prompt,
-        prompt,
-        ..
-    } = &recorder.events()[0].kind
-    else {
-        panic!("the first event is the start of the run");
-    };
-    assert!(context.capture_content);
-    assert_eq!(system_prompt.as_deref(), Some(SYSTEM));
-    assert_eq!(prompt.as_deref(), Some(" Rename the parser. "));
+    // The first provider call's content record holds what the model was
+    // sent: the config's system prompt over the request's task.
+    let exported = scratch.exported();
+    let traced = Traced::of(&exported, finished.summary.outcome.run_id.as_str());
+    let chat = traced
+        .records
+        .iter()
+        .find(|record| {
+            record.event_name == GenAiClientInferenceOperationDetails::NAME
+                && record.attributes.contains_key(key::GEN_AI_INPUT_MESSAGES)
+        })
+        .expect("the run captures content, so its one call has a record");
+    let system = chat.attributes[key::GEN_AI_SYSTEM_INSTRUCTIONS]
+        .as_str()
+        .unwrap();
+    assert!(system.contains(SYSTEM), "{system}");
+    let input = chat.attributes[key::GEN_AI_INPUT_MESSAGES]
+        .as_str()
+        .unwrap();
+    assert!(input.contains(" Rename the parser. "), "{input}");
 }
 
 #[tokio::test]

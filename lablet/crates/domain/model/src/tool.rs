@@ -227,7 +227,7 @@ impl ToolCallStatus {
     }
 
     /// Whether anything was started for the call: the loop took it up,
-    /// announced it to the observer, and answered it, with a tool or without
+    /// opened its span, and answered it, with a tool or without
     /// one. Only a call that was never run wasn't, and the run's totals
     /// count the calls that were.
     #[must_use]

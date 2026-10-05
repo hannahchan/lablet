@@ -3,11 +3,11 @@
 //! from the config or the file it names (C10); and a blank task, which
 //! starts no run.
 
-use lablet_telemetry_registry::attribute as key;
 use serde_json::{Value, json};
 
 use super::harness::{CONFIG, ENDS, Lab, PROMPT, ran, shared};
 use crate::harness::{SYSTEM, Traced};
+use crate::key;
 
 #[test]
 fn each_prompt_source_gives_the_run_the_same_task() {

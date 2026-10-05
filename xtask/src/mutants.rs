@@ -617,6 +617,9 @@ mod tests {
     const MODEL: &str = "crates/domain/model/src/lib.rs";
     const POLICY: &str = "crates/domain/policy/src/lib.rs";
     const RUN: &str = "crates/application/run/src/lib.rs";
+    // A file and two mutants in the form cargo-mutants reports them; the file
+    // and the functions aren't in the tree, and needn't be, since the judge
+    // reads no source and these are held only to the lists the tests build.
     const OBSERVER: &str = "crates/application/run/src/observer.rs";
     /// In a crate without a floor.
     const OTHER: &str = "crates/adapters/other/src/lib.rs";
@@ -983,7 +986,8 @@ mod tests {
         }
     }
 
-    /// An outcome as cargo-mutants 27.1.0 wrote it, against the real list.
+    /// An outcome as cargo-mutants 27.1.0 wrote it, against a list that names
+    /// it as the real one did while `lablet-run` carried the mutant.
     #[test]
     fn the_list_excuses_the_mutant_it_names_as_cargo_mutants_reports_it() {
         let reported = r#"{"outcomes": [{
@@ -1004,7 +1008,7 @@ mod tests {
           "phase_results": []}],
           "total_mutants": 1, "missed": 1, "caught": 0, "timeout": 0, "unviable": 0}"#;
         let outcomes: Outcomes = serde_json::from_str(reported).unwrap();
-        let verdict = judge(&outcomes, &crates(true), EQUIVALENT_MUTANTS, Scope::Full);
+        let verdict = judge(&outcomes, &crates(true), &NAMED, Scope::Full);
         assert_eq!(seen(&verdict)[2], ("lablet-run", 0, 1, 1, Standing::Met));
         assert!(verdict.stale.is_empty());
     }

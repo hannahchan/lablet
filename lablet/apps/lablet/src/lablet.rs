@@ -2,19 +2,25 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use lablet_documents::TranscriptDocument;
 use lablet_model::{
     BlankTask, ConfigDigest, FinishedRun, Prompts, RunContext, RunId, RunLabels, ToolSpec,
 };
+use lablet_otlp::Telemetry;
 use lablet_provider_fake::FakeProvider;
+use lablet_run::telemetry::{count_of, span_attributes};
 use lablet_run::{RunService, ToolSet};
-use lablet_telemetry_otel::OtelObserver;
 use lablet_transcript_json::{TranscriptFile, TranscriptWriteError};
+use opentelemetry::Context;
+use opentelemetry::global::BoxedTracer;
+use opentelemetry::trace::{FutureExt as _, TraceContextExt as _, Tracer as _};
 use ulid::Ulid;
 
 use crate::cancel::{CancelHandle, RunCancellation};
+use crate::telemetry::generated::{LabletInvokeAgent, LabletRun};
+use crate::{root_span, wide};
 
 /// What a run is asked to do, what it's known by, and what may stop it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,14 +164,17 @@ pub struct Lablet {
     service: RunService,
     provider: Played,
     tools: Arc<ToolSet>,
-    telemetry: OtelObserver,
+    /// The tracer the root span is opened with, of the same scope the
+    /// loop's is.
+    tracer: BoxedTracer,
+    telemetry: Telemetry,
     cancellation: Arc<RunCancellation>,
     fixed: Fixed,
 }
 
 #[expect(
     clippy::missing_fields_in_debug,
-    reason = "the loop and the provider hold trait objects with nothing to print, and the system prompt is content"
+    reason = "the loop, the tracer and the provider hold trait objects with nothing to print, and the system prompt is content"
 )]
 impl core::fmt::Debug for Lablet {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -182,7 +191,8 @@ impl Lablet {
         service: RunService,
         provider: Played,
         tools: Arc<ToolSet>,
-        telemetry: OtelObserver,
+        tracer: BoxedTracer,
+        telemetry: Telemetry,
         cancellation: Arc<RunCancellation>,
         fixed: Fixed,
     ) -> Self {
@@ -190,6 +200,7 @@ impl Lablet {
             service,
             provider,
             tools,
+            tracer,
             telemetry,
             cancellation,
             fixed,
@@ -205,11 +216,14 @@ impl Lablet {
 
     /// Runs one task to its outcome.
     ///
-    /// The run has the id the request names, or a fresh ULID. Once the loop
-    /// has returned, the run's transcript is written, when the config names
-    /// a place for it, and the telemetry is flushed. So the telemetry file
-    /// is whole when this returns, and the run's wide event is its last
-    /// line.
+    /// The run has the id the request names, or a fresh ULID. It's a trace
+    /// of its own, whatever span the caller has open: the root span is
+    /// opened from the empty context, and the loop runs in it. Once the loop
+    /// has returned, the root span ends with the run's measured duration,
+    /// the telemetry is flushed, which makes the run's wide event the last
+    /// line of its file, and then the run's transcript is written, when the
+    /// config names a place for it. So the telemetry file is whole when
+    /// this returns.
     ///
     /// Never fails: every way a run can go wrong is a stop reason of its
     /// outcome. A transcript that can't be written and telemetry that can't
@@ -239,24 +253,65 @@ impl Lablet {
             capture_content: self.fixed.capture_content,
         };
 
+        self.telemetry.begin_run(&context.run_id);
         self.provider.begin_run();
         let task_prompt = task.task().to_owned();
         let prompts = task.with_system(self.fixed.system.as_str());
         // Every run sets its own, so a handle of an earlier run never
         // reaches this one.
         self.cancellation.set(cancellation);
-        let finished = self.service.run(context.clone(), prompts).await;
+
+        // From the empty context, never the caller's current one, so a run
+        // is a trace of its own whatever span its caller is in. The span
+        // goes into the context by value, as a local span: a child of a
+        // remote span context would be marked as having a remote parent.
+        let root = self
+            .tracer
+            .span_builder(root_span::name())
+            .with_kind(LabletInvokeAgent::KIND)
+            .with_start_time(at(context.started_unix_ms, 0))
+            .start_with_context(&self.tracer, &Context::new());
+        let within = Context::new().with_span(root);
+        let finished = self
+            .service
+            .run(context.clone(), prompts)
+            .with_context(within.clone())
+            .await;
+
+        let summary = &finished.summary;
+        let end = at(context.started_unix_ms, summary.outcome.duration_ms);
+        let root = within.span();
+        root.set_attributes(span_attributes(
+            root_span::invoke_agent(&context, summary).attributes(),
+        ));
+        root.set_status(root_span::status(&summary.outcome));
+        root.end_with_timestamp(end);
+        let root_context = root.span_context().clone();
+
+        // Everything but each destination's own count of what it lost, which
+        // the destination fills once it has flushed.
+        let filled = wide::wide_event(&context, summary);
+        let flushed = self
+            .telemetry
+            .flush(Box::new(move |lost| {
+                LabletRun {
+                    lablet_telemetry_dropped_records: count_of(lost),
+                    ..filled.clone()
+                }
+                .record(end, &root_context)
+            }))
+            .await;
+        if let Err(error) = flushed {
+            tracing::warn!(
+                run_id = %summary.outcome.run_id,
+                failures = ?error.failures(),
+                "the run's telemetry wasn't exported whole"
+            );
+        }
 
         if let Some((file, shown)) = transcript {
             self.write_transcript(file, &shown, context, task_prompt, &finished)
                 .await;
-        }
-        if let Err(error) = self.telemetry.flush().await {
-            tracing::warn!(
-                run_id = %finished.summary.outcome.run_id,
-                failures = ?error.failures(),
-                "the run's telemetry wasn't exported whole"
-            );
         }
         finished
     }
@@ -330,4 +385,11 @@ fn unix_ms(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH).map_or(0, |since| {
         u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
     })
+}
+
+/// The instant `offset_ms` into a run that started at `started_unix_ms`:
+/// what every span and record of the run is timed by, so an exporter's own
+/// clock reaches none of them.
+fn at(started_unix_ms: u64, offset_ms: u64) -> SystemTime {
+    UNIX_EPOCH + Duration::from_millis(started_unix_ms.saturating_add(offset_ms))
 }

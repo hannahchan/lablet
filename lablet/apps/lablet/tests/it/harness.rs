@@ -5,9 +5,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use lablet::{
-    BuildError, Config, EventKind, Format, Lablet, RunEvent, RunObserver, RunRequest, Unsupported,
-};
+use lablet::{BuildError, Config, Format, RunRequest, Unsupported};
 use lablet_conformance::otlp::{Exported, LogRecord, Span};
 use lablet_test_support::Scratch;
 use serde_json::{Value, json};
@@ -137,50 +135,6 @@ pub async fn refusal(config: Config) -> BuildError {
     built
 }
 
-/// Keeps every event it's told, in order.
-#[derive(Default)]
-pub struct Recorder {
-    events: Mutex<Vec<RunEvent>>,
-}
-
-#[async_trait::async_trait]
-impl RunObserver for Recorder {
-    async fn on(&self, event: RunEvent) {
-        self.events.lock().unwrap().push(event);
-    }
-}
-
-impl Recorder {
-    pub fn events(&self) -> Vec<RunEvent> {
-        self.events.lock().unwrap().clone()
-    }
-
-    /// The name of each event, in order.
-    pub fn names(&self) -> Vec<&'static str> {
-        self.events()
-            .iter()
-            .map(|event| event.kind.name())
-            .collect()
-    }
-
-    /// How many events were of a provider call attempt that began.
-    pub fn attempts(&self) -> usize {
-        self.events()
-            .iter()
-            .filter(|event| matches!(event.kind, EventKind::ProviderCallStarted { .. }))
-            .count()
-    }
-}
-
-/// A `Lablet` built from `config`, and what watches its runs.
-pub async fn observed(config: Config) -> (Lablet, Arc<Recorder>) {
-    let recorder = Arc::new(Recorder::default());
-    let lablet = lablet::build_observed(config, vec![Arc::clone(&recorder) as _])
-        .await
-        .unwrap();
-    (lablet, recorder)
-}
-
 /// What one run exported, out of everything a file holds.
 pub struct Traced<'a> {
     pub spans: Vec<&'a Span>,
@@ -192,7 +146,7 @@ impl<'a> Traced<'a> {
     /// conversation.
     pub fn of(exported: &'a Exported, run_id: &str) -> Self {
         let of_run = |attributes: &lablet_conformance::otlp::Attributes| {
-            attributes.get("gen_ai.conversation.id") == Some(&json!(run_id))
+            attributes.get(crate::key::GEN_AI_CONVERSATION_ID) == Some(&json!(run_id))
         };
         Self {
             spans: exported
@@ -235,7 +189,7 @@ impl<'a> Traced<'a> {
             .records
             .iter()
             .copied()
-            .filter(|record| record.event_name == "lablet.run")
+            .filter(|record| record.event_name == lablet::telemetry::generated::LabletRun::NAME)
             .collect();
         assert_eq!(wide.len(), 1, "a run has one wide event");
         wide[0]

@@ -2,10 +2,10 @@
 //! offered, and of the system prompt it sent.
 
 use lablet::{FinishedRun, RunId};
-use lablet_telemetry_registry::attribute as key;
 use serde_json::{Value, json};
 
 use crate::harness::{ENDS, Lab, Traced, read, request};
+use crate::key;
 
 /// One run under the id `run`, of a config with `more` stated, and the
 /// three digests of its wide event: the config's, the tools' and the system

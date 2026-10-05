@@ -19,8 +19,8 @@ use opentelemetry::Context;
 use opentelemetry::trace::{SpanContext, TraceContextExt as _};
 
 use crate::{
-    Cancellation, Clock, ModelProvider, ProviderError, ProviderRequest, RunEvent, RunObserver,
-    ToolCall, ToolError, ToolExecutor, ToolOutput,
+    Cancellation, Clock, ModelProvider, ProviderError, ProviderRequest, ToolCall, ToolError,
+    ToolExecutor, ToolOutput,
 };
 
 /// How many times a call in flight yields to the runtime, once the run is
@@ -708,40 +708,5 @@ impl ToolExecutor for FakeTools {
                 mcp: None,
             }),
         }
-    }
-}
-
-/// An observer that keeps the name of each event it's told of, and nothing
-/// else. The loop still tells one of every event, and what these tests
-/// read is the spans and records the loop emits itself; the names hold
-/// that the events it still emits are the ones it emitted before.
-pub struct Told {
-    names: Mutex<Vec<&'static str>>,
-}
-
-impl Told {
-    /// An observer told of nothing yet.
-    pub const fn new() -> Self {
-        Self {
-            names: Mutex::new(Vec::new()),
-        }
-    }
-
-    /// The name of each event, in the order the loop emitted them.
-    pub fn names(&self) -> Vec<&'static str> {
-        self.names
-            .lock()
-            .expect("the observer isn't poisoned")
-            .clone()
-    }
-}
-
-#[async_trait::async_trait]
-impl RunObserver for Told {
-    async fn on(&self, event: RunEvent) {
-        self.names
-            .lock()
-            .expect("the observer isn't poisoned")
-            .push(event.kind.name());
     }
 }

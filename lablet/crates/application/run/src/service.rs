@@ -31,8 +31,8 @@ use crate::telemetry::generated::{
 use crate::telemetry::spellings::tool_error_type;
 use crate::telemetry::{Logger, count_of};
 use crate::{
-    Cancellation, Clock, EventKind, McpCallMeta, ModelProvider, ProviderError, ProviderRequest,
-    RunEvent, RunObserver, ToolCall, ToolSet, bounded,
+    Cancellation, Clock, McpCallMeta, ModelProvider, ProviderError, ProviderRequest, ToolCall,
+    ToolSet, bounded,
 };
 
 /// What bounds the calls, which is not a stop decision: the run's limits are
@@ -63,7 +63,6 @@ pub struct CallLimits {
 pub struct RunService {
     provider: Arc<dyn ModelProvider>,
     tools: Arc<ToolSet>,
-    observer: Arc<dyn RunObserver>,
     /// What every span of a run is opened through. Never the global tracer:
     /// one process may hold several loops, each with its own destinations,
     /// and tests run in parallel.
@@ -389,7 +388,6 @@ impl RunService {
     pub fn new(
         provider: Arc<dyn ModelProvider>,
         tools: Arc<ToolSet>,
-        observer: Arc<dyn RunObserver>,
         tracer: BoxedTracer,
         logger: Box<dyn Logger>,
         clock: Arc<dyn Clock>,
@@ -404,7 +402,6 @@ impl RunService {
         Self {
             provider,
             tools,
-            observer,
             tracer,
             logger,
             clock,
@@ -458,20 +455,6 @@ impl RunService {
             asked: Asked::of(&setup.model, setup.endpoint.clone(), &self.request),
         };
 
-        self.emit(
-            &run_id,
-            EventKind::RunStarted {
-                context: Box::new(context.clone()),
-                model: setup.model.clone(),
-                endpoint: setup.endpoint.clone(),
-                request: setup.request.clone(),
-                tools: self.tools.specs().to_vec(),
-                system_prompt: capture.then(|| prompts.system().to_owned()),
-                prompt: capture.then(|| prompts.task().to_owned()),
-            },
-        )
-        .await;
-
         // The tools offered are content, so their record is written only
         // when the run captures it, in the context the run was called in.
         let mut conversation = if capture {
@@ -491,17 +474,7 @@ impl RunService {
 
         let rates = self.pricing.as_ref().map(Pricing::rates);
         let cost = self.pricing.as_ref().and_then(|p| p.cost(&ending.spent()));
-        let finished = ending.finish(stopped, self.elapsed(&running), rates, cost);
-
-        self.emit(
-            &run_id,
-            EventKind::RunFinished {
-                context: Box::new(context),
-                summary: Box::new(finished.summary.clone()),
-            },
-        )
-        .await;
-        finished
+        ending.finish(stopped, self.elapsed(&running), rates, cost)
     }
 
     /// The loop proper, split out so `run` can close the record whatever
@@ -523,9 +496,6 @@ impl RunService {
             let turn = u32::try_from(run.transcript().turns().len())
                 .unwrap_or(u32::MAX)
                 .saturating_add(1);
-            self.emit(&running.run_id, EventKind::TurnStarted { turn })
-                .await;
-
             let answered = match self
                 .call(running, &mut run, &mut bytes, turn, began, conversation)
                 .await
@@ -542,8 +512,7 @@ impl RunService {
             let pending = match run.responded(response, opened.began.offset, latency) {
                 Responded::Final(done) => {
                     let reason = self.stop.after_final(&done.turn().record().finish, mode);
-                    self.response_came(running, done.turn(), opened, conversation)
-                        .await;
+                    self.response_came(running, done.turn(), opened, conversation);
                     return (Ending::Final(done), Stopped::just(reason));
                 }
                 Responded::Pending(pending) => pending,
@@ -553,8 +522,7 @@ impl RunService {
                 mode,
                 pending.calls(mode),
             );
-            self.response_came(running, pending.turn(), opened, conversation)
-                .await;
+            self.response_came(running, pending.turn(), opened, conversation);
             if let Some(reason) = reason {
                 let stopped = Stopped {
                     reason,
@@ -575,7 +543,7 @@ impl RunService {
             // learns their results here, in call order, from the turn that
             // holds every outcome. A call that was never run is in the
             // transcript and nowhere else, so the conversation isn't told of
-            // it, as the observer never was.
+            // it.
             if let Some(conversation) = conversation.as_mut() {
                 let outcomes = run.transcript().turns().last().map(Turn::tool_calls);
                 for outcome in outcomes.unwrap_or_default() {
@@ -598,11 +566,11 @@ impl RunService {
         }
     }
 
-    /// The provider call behind `recorded` returned: tells the observer, and
-    /// fills and ends the attempt's span from the turn's record, which is
+    /// The provider call behind `recorded` returned: fills and ends the
+    /// attempt's span from the turn's record, which is
     /// the one place that holds the attempt's timing, its usage and its
     /// finish together.
-    async fn response_came(
+    fn response_came(
         &self,
         running: &Running,
         recorded: &Turn,
@@ -610,17 +578,6 @@ impl RunService {
         conversation: &mut Option<Conversation>,
     ) {
         let record = recorded.record();
-        self.emit(
-            &running.run_id,
-            EventKind::ProviderCallFinished {
-                turn: opened.turn,
-                attempt: record.attempts,
-                record: Box::new(record.clone()),
-                response: running.capture.then(|| recorded.response().to_vec()),
-            },
-        )
-        .await;
-
         let mut opened = opened;
         let chat = &mut opened.chat;
         chat.gen_ai_response_finish_reasons = Some(vec![record.finish.as_str().to_owned()]);
@@ -683,15 +640,6 @@ impl RunService {
             let (opened, result) = {
                 let messages = run.messages();
                 let request_bytes = bytes.measure(&messages);
-                self.emit(
-                    &running.run_id,
-                    EventKind::ProviderCallStarted {
-                        turn,
-                        attempt,
-                        request_bytes,
-                    },
-                )
-                .await;
                 // The struct names the span as the registry does, and is kept
                 // to be filled with what the attempt got when it ends.
                 let chat = running.chat(turn, attempt, request_bytes);
@@ -731,14 +679,11 @@ impl RunService {
                 }
                 Some(Err(error)) => error,
                 None => {
-                    self.attempt_dropped(running, run, opened, latency, conversation)
-                        .await;
+                    self.attempt_dropped(running, run, opened, latency, conversation);
                     return Err(Stopped::just(StopReason::Cancelled));
                 }
             };
-            let next = self
-                .attempt_failed(running, run, opened, latency, error, conversation)
-                .await;
+            let next = self.attempt_failed(running, run, opened, latency, &error, conversation);
 
             // A wait the run was cancelled during is over then: a retry is a
             // provider call, which a cancelled run never makes.
@@ -756,16 +701,15 @@ impl RunService {
 
     /// The attempt in `opened` failed with `error` after `latency`: the run
     /// counts it, point A and the retry policy say what follows, the span
-    /// and the records say how it failed and what was decided, and the
-    /// observer is told. What follows is the wait before the next attempt,
-    /// or why there's none.
-    async fn attempt_failed(
+    /// and the records say how it failed and what was decided. What follows
+    /// is the wait before the next attempt, or why there's none.
+    fn attempt_failed(
         &self,
         running: &Running,
         run: &mut Run,
         opened: Opened,
         latency: Duration,
-        error: ProviderError,
+        error: &ProviderError,
         conversation: &mut Option<Conversation>,
     ) -> Result<Duration, Stopped> {
         let mut opened = opened;
@@ -774,7 +718,7 @@ impl RunService {
         let next = self.after_failure(
             run,
             running,
-            &error,
+            error,
             running.run_id.salt(turn, attempt),
             attempt,
         );
@@ -812,19 +756,6 @@ impl RunService {
             exchange,
             end,
         );
-
-        self.emit(
-            &running.run_id,
-            EventKind::ProviderCallFailed {
-                turn,
-                attempt,
-                error,
-                started_ms: failed.started_ms,
-                latency_ms: failed.latency_ms,
-                retry: next.as_ref().ok().copied(),
-            },
-        )
-        .await;
         next
     }
 
@@ -832,7 +763,7 @@ impl RunService {
     /// because the run was cancelled. It took its time and it was an
     /// attempt, so the run counts it as one that failed, and its span ends
     /// saying why; nothing failed, so there's no retry and no exception.
-    async fn attempt_dropped(
+    fn attempt_dropped(
         &self,
         running: &Running,
         run: &mut Run,
@@ -841,16 +772,6 @@ impl RunService {
         conversation: &mut Option<Conversation>,
     ) {
         let dropped = run.failed_attempt(opened.began.offset, latency, None);
-        self.emit(
-            &running.run_id,
-            EventKind::ProviderCallCancelled {
-                turn: opened.turn,
-                attempt: opened.attempt,
-                started_ms: dropped.started_ms,
-                latency_ms: dropped.latency_ms,
-            },
-        )
-        .await;
         let mut opened = opened;
         opened.chat.error_type = Some(LabletChatErrorType::Cancelled);
         let end = running.at(dropped.started_ms.saturating_add(dropped.latency_ms));
@@ -1020,26 +941,12 @@ impl RunService {
                 ToolInput::Unparsed(_) => None,
             },
         };
-        self.emit(
-            &running.run_id,
-            EventKind::ToolCallStarted {
-                turn,
-                call_id: call.id.clone(),
-                name: call.name.clone(),
-                source: called.source.clone(),
-                input_bytes: call.input_bytes(),
-                input: running.capture.then(|| called.input.cloned()).flatten(),
-            },
-        )
-        .await;
-
         let span = self.open(
             running,
             format!("{} {}", LabletExecuteTool::GEN_AI_OPERATION_NAME, call.name),
             LabletExecuteTool::KIND,
             &began,
         );
-        let trace_context = self.observer.trace_context(&call.id);
         // The span stays here, where it's filled and ended with what the
         // loop measured, since the generated struct records onto an owned
         // span and a context's `SpanRef` can't take it. The call runs under
@@ -1050,13 +957,7 @@ impl RunService {
             .parent
             .with_remote_span_context(span.span_context().clone());
         let settled = self
-            .settle(
-                &call,
-                called.source.clone(),
-                began.left,
-                trace_context,
-                &within,
-            )
+            .settle(&call, called.source.clone(), began.left, &within)
             .await;
         let latency = self.clock.now().saturating_duration_since(began.at);
         let Settled {
@@ -1067,21 +968,6 @@ impl RunService {
 
         let answer = Answer::measured(status, output, self.calls.output_cap, began.offset, latency);
         self.tool_span(running, span, &called, &answer, mcp.as_ref());
-        self.emit(
-            &running.run_id,
-            EventKind::ToolCallFinished {
-                turn,
-                call_id: call.id.clone(),
-                status: answer.status().clone(),
-                started_ms: answer.started_ms(),
-                latency_ms: answer.latency_ms(),
-                output_bytes: answer.output_bytes(),
-                truncated_from_bytes: answer.truncated_from_bytes(),
-                mcp,
-                output: running.capture.then(|| answer.content().to_vec()),
-            },
-        )
-        .await;
         answer
     }
 
@@ -1217,7 +1103,6 @@ impl RunService {
         call: &ToolUse,
         source: Option<ToolSource>,
         left: Duration,
-        trace_context: Option<crate::TraceContext>,
         within: &Context,
     ) -> Settled {
         let Some(source) = source else {
@@ -1265,7 +1150,6 @@ impl RunService {
                         deadline: left,
                         keep: self.calls.output_cap.map(OutputCap::keeps),
                         secrets: Arc::clone(&self.secrets),
-                        trace_context,
                     })
                     .with_context(within.clone()),
             )
@@ -1310,15 +1194,6 @@ impl RunService {
 
     fn elapsed(&self, running: &Running) -> Duration {
         running.offset(self.clock.now())
-    }
-
-    async fn emit(&self, run_id: &RunId, kind: EventKind) {
-        self.observer
-            .on(RunEvent {
-                run_id: run_id.clone(),
-                kind,
-            })
-            .await;
     }
 }
 

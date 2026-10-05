@@ -18,8 +18,8 @@ lablet-documents.workspace = true
 lablet-model.workspace = true
 lablet-policy.workspace = true
 lablet-provider-fake.workspace = true
+lablet-otlp.workspace = true
 lablet-run.workspace = true
-lablet-telemetry-otel.workspace = true
 lablet-tools-builtin.workspace = true
 lablet-transcript-json.workspace = true
 opentelemetry.workspace = true
@@ -39,9 +39,11 @@ nix = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
 lablet-conformance.workspace = true
-lablet-telemetry-registry.workspace = true
 lablet-test-support.workspace = true
 nix.workspace = true
+# A host's own tracer in the tests, over the SDK's in-memory exporter, which is behind
+# `testing`, so a test can open a span of the host's and read what reached it.
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["test-util"] }
 
 [[test]]

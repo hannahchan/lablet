@@ -2,6 +2,9 @@
 //! states, since a test can't set a variable of its own process: the check
 //! of the key's variable, the names of lablet's secrets, and `${VAR}`.
 
+use lablet_run::telemetry::generated::GenAiClientInferenceOperationDetails;
+use lablet_run::telemetry::generated::key;
+
 use super::*;
 
 /// What stands for a key that was written where the variable's name
@@ -291,31 +294,6 @@ async fn an_endpoint_from_the_environment_turns_the_exporter_on_and_a_null_path_
     assert!(prepared.otlp.is_none());
 }
 
-/// Every event of a run's start that tells what the run was built with.
-#[derive(Default)]
-struct Started {
-    seen: std::sync::Mutex<Vec<(String, String, Option<String>)>>,
-}
-
-#[async_trait::async_trait]
-impl RunObserver for Started {
-    async fn on(&self, event: lablet_run::RunEvent) {
-        if let lablet_run::EventKind::RunStarted {
-            context,
-            model,
-            system_prompt,
-            ..
-        } = event.kind
-        {
-            self.seen.lock().unwrap().push((
-                context.config_digest.to_string(),
-                model.name,
-                system_prompt,
-            ));
-        }
-    }
-}
-
 const ENDS: &str = "
 - response:
     content:
@@ -339,7 +317,7 @@ telemetry: {{ capture_content: true, file: {{ path: '{}' }} }}
         script.display(),
         scratch.at("telemetry.otlp.jsonl").display()
     );
-    let started = Arc::new(Started::default());
+    let mut runs = Vec::new();
 
     for (model, language) in [("scripted-1", "Rust"), ("scripted-2", "Go")] {
         let held = |name: &str| match name {
@@ -347,27 +325,62 @@ telemetry: {{ capture_content: true, file: {{ path: '{}' }} }}
             "LANGUAGE" => Some(language.into()),
             _ => None,
         };
-        let observers = vec![Arc::clone(&started) as Arc<dyn RunObserver>];
-        let mut lablet = build_in(config(&text), observers, &held).await.unwrap();
-        lablet.run(crate::RunRequest::new("Fix it.").unwrap()).await;
+        let mut lablet = build_in(config(&text), &held).await.unwrap();
+        let finished = lablet.run(crate::RunRequest::new("Fix it.").unwrap()).await;
         lablet.shutdown().await;
+        runs.push(finished.summary.outcome.run_id);
     }
 
-    let seen = started.seen.lock().unwrap().clone();
+    // What each run was built with, as its own telemetry says: the digest
+    // and the model on its root span, and the system prompt in the content
+    // record of its first provider call.
+    let exported =
+        lablet_conformance::otlp::Exported::read(&scratch.at("telemetry.otlp.jsonl")).unwrap();
     let written = config(&text).digest().to_string();
+    let seen: Vec<(String, String, bool)> = runs
+        .iter()
+        .zip(["You fix Rust tests.", "You fix Go tests."])
+        .map(|(run_id, system)| {
+            let of_run = |attributes: &lablet_conformance::otlp::Attributes| {
+                attributes.get(key::GEN_AI_CONVERSATION_ID)
+                    == Some(&serde_json::Value::String(run_id.to_string()))
+            };
+            let root = exported
+                .spans_of(crate::telemetry::generated::LabletInvokeAgent::GEN_AI_OPERATION_NAME)
+                .into_iter()
+                .find(|span| of_run(&span.attributes))
+                .unwrap();
+            let content = exported
+                .records_of(GenAiClientInferenceOperationDetails::NAME)
+                .into_iter()
+                .find(|record| {
+                    of_run(&record.attributes)
+                        && record
+                            .attributes
+                            .contains_key(key::GEN_AI_SYSTEM_INSTRUCTIONS)
+                })
+                .unwrap();
+            (
+                root.attributes[key::LABLET_CONFIG_DIGEST]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+                root.attributes[key::GEN_AI_REQUEST_MODEL]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+                content.attributes[key::GEN_AI_SYSTEM_INSTRUCTIONS]
+                    .as_str()
+                    .unwrap()
+                    .contains(system),
+            )
+        })
+        .collect();
     assert_eq!(
         seen,
         [
-            (
-                written.clone(),
-                "scripted-1".to_owned(),
-                Some("You fix Rust tests.".to_owned())
-            ),
-            (
-                written,
-                "scripted-2".to_owned(),
-                Some("You fix Go tests.".to_owned())
-            ),
+            (written.clone(), "scripted-1".to_owned(), true),
+            (written, "scripted-2".to_owned(), true),
         ]
     );
 }
@@ -523,7 +536,7 @@ fn the_telemetry_is_on_standard_error_when_its_path_is_a_dash_once_variables_are
 /// nothing of either.
 #[test]
 fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_or_names_the_variable_read() {
-    use lablet_telemetry_otel::Signal;
+    use lablet_otlp::Signal;
     const PASSWORD: &str = "hunter2-0123456789abcdef";
     let refused = |signal| OtelBuildError::Endpoint { signal };
 
@@ -588,7 +601,7 @@ fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_or_names_the_var
 /// nothing of what that holds.
 #[test]
 fn tls_that_cannot_be_set_up_is_refused_by_the_endpoint_as_written_or_the_variable_read() {
-    use lablet_telemetry_otel::Signal;
+    use lablet_otlp::Signal;
     let tls = |signal| OtelBuildError::Tls {
         signal,
         reason: "transport error: no native certs found".to_owned(),

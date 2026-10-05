@@ -95,7 +95,6 @@ pub fn call(tool: &str, input: Value) -> ToolCall {
         deadline: TIMEOUT,
         keep: None,
         secrets: Arc::default(),
-        trace_context: None,
     }
 }
 

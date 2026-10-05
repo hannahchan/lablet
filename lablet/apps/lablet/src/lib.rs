@@ -15,6 +15,11 @@
 //! stops before the provider is selected. A run stops early when the
 //! [`CancelHandle`] its request was given is fired.
 //!
+//! A `Lablet`'s telemetry is its own: nothing plugs into it, and a host owes
+//! it nothing. A host's `tracing` subscriber sees lablet's diagnostics and
+//! none of its telemetry, and a tool executor finds its call's span in the
+//! current OpenTelemetry context.
+//!
 //! A `Lablet` is built and run on a tokio runtime, which its adapters keep
 //! their deadlines on.
 //!
@@ -117,16 +122,16 @@ mod build;
 mod cancel;
 mod clock;
 pub mod config;
-mod fanout;
 mod lablet;
 mod otlp;
 mod root;
+mod root_span;
 mod secrets;
 mod settings;
+pub mod telemetry;
+mod wide;
 
-pub use build::{
-    BuildError, Checked, ErrorClass, Unsupported, build, build_observed, check, telemetry_on_stderr,
-};
+pub use build::{BuildError, Checked, ErrorClass, Unsupported, build, check, telemetry_on_stderr};
 pub use cancel::CancelHandle;
 pub use config::{Config, ConfigError, Format, Place, RawConfig, ResolvedConfig, schema};
 pub use lablet::{Lablet, RunIdRefused, RunRequest};
@@ -135,7 +140,7 @@ pub use lablet_model::{
     BlankTask, ConfigDigest, FinishedRun, IdError, RunId, RunLabels, RunOutcome, StopReason,
     ToolSpec,
 };
-pub use lablet_run::{EventKind, FilterList, RunEvent, RunObserver};
+pub use lablet_run::FilterList;
 pub use root::OwnFile;
 
 /// The version of lablet, which a run's record names as

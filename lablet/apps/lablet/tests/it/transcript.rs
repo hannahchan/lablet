@@ -4,10 +4,10 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lablet::{FinishedRun, RunId, RunLabels, StopReason};
-use lablet_telemetry_registry::attribute as key;
 use serde_json::{Value, json};
 
 use crate::harness::{Diagnostics, ENDS, Lab, MODEL, PROMPT, SYSTEM, Traced, json_of, request};
+use crate::key;
 
 const CALLS_THEN_ENDS: &str = "
 - response:

@@ -4,7 +4,7 @@
 //! `crates/export/*`, is reached only from the composition root, `tests/`
 //! crates aside, and a
 //! forbidden family may let through the one crate named like the family: the
-//! application ring forbids the `opentelemetry` family and allows
+//! application and adapter rings forbid the `opentelemetry` family and allow
 //! `opentelemetry` itself, the API, since instrumented code depends on the API
 //! and only the process that runs it installs the SDK.
 //!
@@ -98,11 +98,12 @@ impl Ring {
 
     /// External crate families this ring may not use: the runtime, transport,
     /// and telemetry frameworks belong to adapters and the composition root.
-    /// The application may name the OpenTelemetry API, `opentelemetry` itself,
-    /// and no other member of its family, so the loop instruments itself while
-    /// the SDK stays in the composition root and the export ring. `serde` and
-    /// `serde_json` are allowed everywhere (decisions.md, "serde derives
-    /// allowed in the domain").
+    /// The application and the adapters may name the OpenTelemetry API,
+    /// `opentelemetry` itself, and no other member of its family, so the loop
+    /// and the adapters instrument themselves while the SDK stays in the
+    /// composition root and the export ring. `serde` and `serde_json` are
+    /// allowed everywhere (decisions.md, "serde derives allowed in the
+    /// domain").
     const fn forbidden_families(self) -> &'static [(&'static str, Namesake)] {
         match self {
             Self::Domain => &[
@@ -124,9 +125,8 @@ impl Ring {
                 ("hyper", Namesake::Forbidden),
                 ("opentelemetry", Namesake::Allowed),
             ],
-            Self::SecondaryAdapter | Self::Export | Self::CompositionRoot | Self::TestSupport => {
-                &[]
-            }
+            Self::SecondaryAdapter => &[("opentelemetry", Namesake::Allowed)],
+            Self::Export | Self::CompositionRoot | Self::TestSupport => &[],
         }
     }
 
@@ -145,10 +145,12 @@ impl Ring {
                 }
             }
         }
-        let excepted = if excepted.is_empty() {
-            String::new()
-        } else {
-            format!(", or {}", excepted.join(", or "))
+        let excepted = match (whole.is_empty(), excepted.is_empty()) {
+            (_, true) => String::new(),
+            // A ring that forbids a family's members alone names them without
+            // a list of whole families before.
+            (true, false) => excepted.join(", or "),
+            (false, false) => format!(", or {}", excepted.join(", or ")),
         };
         format!("{self} may not use {}{excepted}", whole.join(", "))
     }
@@ -334,8 +336,8 @@ mod tests {
     const POLICY: &str = "crates/domain/policy";
     const RUN: &str = "crates/application/run";
     const FAKE: &str = "crates/adapters/secondary/provider-fake";
-    const OTEL: &str = "crates/adapters/secondary/telemetry-otel";
-    const REGISTRY: &str = "crates/adapters/secondary/shared/telemetry-registry";
+    const MCP: &str = "crates/adapters/secondary/tools-mcp";
+    const DOCUMENTS: &str = "crates/adapters/secondary/shared/documents";
     const EXPORT: &str = "crates/export/otlp";
 
     /// Declares `ALL_RINGS` beside a match with an arm for each ring it
@@ -368,7 +370,7 @@ mod tests {
             (RUN, Some(Ring::Application)),
             (FAKE, Some(Ring::SecondaryAdapter)),
             // A shared kernel classifies into its ring like any sibling.
-            (REGISTRY, Some(Ring::SecondaryAdapter)),
+            (DOCUMENTS, Some(Ring::SecondaryAdapter)),
             (EXPORT, Some(Ring::Export)),
             ("apps/lablet", Some(Ring::CompositionRoot)),
             ("tests/mcp-server", Some(Ring::TestSupport)),
@@ -382,7 +384,7 @@ mod tests {
 
     #[test]
     fn only_a_shared_directory_in_the_adapter_ring_is_a_kernel() {
-        assert!(is_kernel(REGISTRY));
+        assert!(is_kernel(DOCUMENTS));
         for path in [
             FAKE,
             "crates/adapters/primary/shared/http-util",
@@ -494,21 +496,23 @@ mod tests {
     }
 
     #[test]
-    fn the_application_may_name_the_opentelemetry_api_and_no_other_member_of_its_family() {
-        assert_eq!(forbidden_family(Ring::Application, "opentelemetry"), None);
-        for name in [
-            "opentelemetry_sdk",
-            "opentelemetry-otlp",
-            "opentelemetry-proto",
-            "opentelemetry-http",
-            "opentelemetry-appender-tracing",
-            "tracing-opentelemetry",
-        ] {
-            assert_eq!(
-                forbidden_family(Ring::Application, name),
-                Some("opentelemetry"),
-                "{name}"
-            );
+    fn the_application_and_the_adapters_may_name_the_opentelemetry_api_and_no_other_member() {
+        for ring in [Ring::Application, Ring::SecondaryAdapter] {
+            assert_eq!(forbidden_family(ring, "opentelemetry"), None, "{ring}");
+            for name in [
+                "opentelemetry_sdk",
+                "opentelemetry-otlp",
+                "opentelemetry-proto",
+                "opentelemetry-http",
+                "opentelemetry-appender-tracing",
+                "tracing-opentelemetry",
+            ] {
+                assert_eq!(
+                    forbidden_family(ring, name),
+                    Some("opentelemetry"),
+                    "{ring}: {name}"
+                );
+            }
         }
         // The namesake is let through only where the ring says so.
         assert_eq!(
@@ -520,16 +524,59 @@ mod tests {
             "Application may not use tokio, reqwest, rmcp, tonic, axum, hyper, or any member of \
              the opentelemetry family but opentelemetry itself"
         );
+        assert_eq!(
+            Ring::SecondaryAdapter.forbidden_rule(),
+            "Secondary Adapter may not use any member of the opentelemetry family but \
+             opentelemetry itself"
+        );
     }
 
     #[test]
-    fn serde_is_allowed_everywhere_and_only_the_inner_rings_forbid_anything() {
+    fn serde_is_allowed_everywhere_and_only_the_emitting_rings_forbid_anything() {
         for ring in ALL_RINGS {
             assert_eq!(forbidden_family(ring, "serde"), None, "{ring}");
             assert_eq!(forbidden_family(ring, "serde_json"), None, "{ring}");
-            let inner = matches!(ring, Ring::Domain | Ring::Application);
-            assert_eq!(ring.forbidden_families().is_empty(), !inner, "{ring}");
+            let emits = matches!(
+                ring,
+                Ring::Domain | Ring::Application | Ring::SecondaryAdapter
+            );
+            assert_eq!(ring.forbidden_families().is_empty(), !emits, "{ring}");
         }
+    }
+
+    #[test]
+    fn an_adapter_may_use_the_otel_api_and_tokio_but_not_the_sdk() {
+        let adapter = |dependencies: &[&str]| {
+            let workspace = base()
+                .member(
+                    FAKE,
+                    "lablet-provider-fake",
+                    &inherit("dependencies", dependencies),
+                )
+                .load();
+            lint(&workspace)
+        };
+        assert_findings(&adapter(&["lablet-run", "tokio", "tracing", "otel"]), &[]);
+        assert_findings(
+            &adapter(&["otel-sdk"]),
+            &[&format!(
+                "lablet-provider-fake ({FAKE}, Secondary Adapter): [dependencies] depends on \
+                 opentelemetry_sdk (declared as `otel-sdk`), of the `opentelemetry` family. \
+                 Rule: Secondary Adapter may not use any member of the opentelemetry family but \
+                 opentelemetry itself"
+            )],
+        );
+        // In tests alone, an adapter may read what it emits from the SDK's
+        // in-memory exporters.
+        assert_findings(&adapter(&[]), &[]);
+        let workspace = base()
+            .member(
+                FAKE,
+                "lablet-provider-fake",
+                &inherit("dev-dependencies", &["otel-sdk"]),
+            )
+            .load();
+        assert_findings(&lint(&workspace), &[]);
     }
 
     /// What every fixture workspace offers for inheritance. An internal entry
@@ -545,7 +592,8 @@ lablet-model = { path = "crates/domain/model", version = "0.1.0" }
 lablet-otlp = { path = "crates/export/otlp", version = "0.1.0" }
 lablet-run = { path = "crates/application/run", version = "0.1.0" }
 lablet-provider-fake = { path = "crates/adapters/secondary/provider-fake", version = "0.1.0" }
-lablet-telemetry-registry = { path = "crates/adapters/secondary/shared/telemetry-registry", version = "0.1.0" }
+lablet-documents = { path = "crates/adapters/secondary/shared/documents", version = "0.1.0" }
+lablet-tools-mcp = { path = "crates/adapters/secondary/tools-mcp", version = "0.1.0" }
 lablet-http-util = { path = "crates/adapters/secondary/shared/http-util", version = "0.1.0" }
 lablet-conformance = { path = "tests/conformance", version = "0.1.0" }
 lablet-test-mcp-server = { path = "tests/mcp-server", version = "0.1.0" }
@@ -730,17 +778,13 @@ lablet-test-mcp-server = { path = "tests/mcp-server", version = "0.1.0" }
     #[test]
     fn an_adapter_reaches_a_shared_kernel_but_not_a_sibling_adapter() {
         let http_util = "crates/adapters/secondary/shared/http-util";
-        let adapters = |otel: &[&str], registry: &[&str]| {
-            let registry = inherit("dependencies", registry);
+        let adapters = |mcp: &[&str], documents: &[&str]| {
+            let documents = inherit("dependencies", documents);
             let workspace = base()
                 .member(FAKE, "lablet-provider-fake", "")
                 .member(http_util, "lablet-http-util", "")
-                .member(REGISTRY, "lablet-telemetry-registry", &registry)
-                .member(
-                    OTEL,
-                    "lablet-telemetry-otel",
-                    &inherit("dependencies", otel),
-                )
+                .member(DOCUMENTS, "lablet-documents", &documents)
+                .member(MCP, "lablet-tools-mcp", &inherit("dependencies", mcp))
                 .load();
             lint(&workspace)
         };
@@ -748,10 +792,7 @@ lablet-test-mcp-server = { path = "tests/mcp-server", version = "0.1.0" }
         // kernels of their own ring". No kernel can reach an adapter, so the
         // worst case is a chain of kernels.
         assert_findings(
-            &adapters(
-                &["lablet-telemetry-registry", "lablet-run"],
-                &["lablet-http-util"],
-            ),
+            &adapters(&["lablet-documents", "lablet-run"], &["lablet-http-util"]),
             &[],
         );
         let sibling = "depends on lablet-provider-fake (crates/adapters/secondary/provider-fake, \

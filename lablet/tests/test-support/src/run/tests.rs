@@ -1,8 +1,10 @@
-use std::sync::Mutex;
 use std::time::Duration;
 
 use lablet_model::StopReason;
-use lablet_run::EventKind;
+use lablet_run::telemetry::generated::key;
+use opentelemetry::global::BoxedTracer;
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 
 use super::*;
 
@@ -17,18 +19,25 @@ const ENDS: &str = "
     finish: end_turn
 ";
 
-/// Keeps what the loop said of each failed attempt: how long it waited
-/// before the next, when it tried again.
-#[derive(Default)]
-struct Waits(Mutex<Vec<Option<Duration>>>);
-
-#[async_trait::async_trait]
-impl RunObserver for Waits {
-    async fn on(&self, event: RunEvent) {
-        if let EventKind::ProviderCallFailed { retry, .. } = event.kind {
-            self.0.lock().unwrap().push(retry);
-        }
-    }
+/// What the loop said of each failed attempt, on its span's `lablet.retry`
+/// event: how long it waited before the next, when it tried again.
+fn waits(spans: &InMemorySpanExporter) -> Vec<Option<i64>> {
+    spans
+        .get_finished_spans()
+        .unwrap()
+        .iter()
+        .flat_map(|span| span.events.iter())
+        .map(|retry| {
+            retry
+                .attributes
+                .iter()
+                .find(|attribute| attribute.key.as_str() == key::LABLET_RETRY_BACKOFF_MS)
+                .map(|backoff| match &backoff.value {
+                    opentelemetry::Value::I64(ms) => *ms,
+                    other => panic!("{other:?}"),
+                })
+        })
+        .collect()
 }
 
 #[tokio::test(start_paused = true)]
@@ -52,9 +61,12 @@ async fn a_loop_built_with_nothing_said_runs_with_the_policies_its_builder_names
 #[tokio::test(start_paused = true)]
 async fn a_loop_built_with_nothing_said_tries_a_call_three_times_more_after_waits_that_double() {
     let fails = "- error: { kind: retryable, message: 529 overloaded }\n".repeat(4);
-    let waits = Arc::new(Waits::default());
+    let spans = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(spans.clone())
+        .build();
     let mut service = RunBuilder::new(scripted(&fails))
-        .observer(Arc::clone(&waits) as _)
+        .tracer(BoxedTracer::new(Box::new(provider.tracer("test"))))
         .build()
         .await;
 
@@ -64,15 +76,7 @@ async fn a_loop_built_with_nothing_said_tries_a_call_three_times_more_after_wait
         finished.summary.outcome.stop_reason(),
         StopReason::RetriesExhausted
     );
-    assert_eq!(
-        *waits.0.lock().unwrap(),
-        [
-            Some(Duration::from_millis(100)),
-            Some(Duration::from_millis(200)),
-            Some(Duration::from_millis(400)),
-            None,
-        ]
-    );
+    assert_eq!(waits(&spans), [Some(100), Some(200), Some(400), None]);
 }
 
 #[tokio::test(start_paused = true)]

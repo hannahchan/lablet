@@ -16,7 +16,7 @@ mod scratch;
 pub use clock::{CancelledAfter, NeverCancelled, TokioClock};
 pub use run::{
     AGENT_VERSION, CONFIG_DIGEST, MODEL, PROMPT, RunBuilder, SCRIPT, STARTED_UNIX_MS, SYSTEM,
-    Unobserved, context, prompts, request, scripted,
+    context, prompts, request, scripted,
 };
 pub use scratch::Scratch;
 

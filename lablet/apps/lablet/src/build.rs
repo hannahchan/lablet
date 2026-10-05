@@ -8,14 +8,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use lablet_model::{RunOutcome, StopReason, ToolSpec};
+use lablet_otlp::{FileTarget, OtelBuildError, OtlpSettings, Telemetry};
 use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
-use lablet_run::telemetry::Bridge;
-use lablet_run::{FilterList, RunObserver, RunService, ToolExecutor, ToolSet, ToolSetError};
-use lablet_telemetry_otel::{FileTarget, OtelBuildError, OtelObserver, OtlpSettings};
+use lablet_run::{FilterList, RunService, ToolExecutor, ToolSet, ToolSetError};
 use lablet_tools_builtin::{BuiltinTools, SettingsError};
-use opentelemetry::global::BoxedTracer;
-use opentelemetry::logs::{LoggerProvider as _, NoopLoggerProvider};
-use opentelemetry::trace::noop::NoopTracer;
+use opentelemetry::InstrumentationScope;
 
 use crate::cancel::RunCancellation;
 use crate::clock::TokioClock;
@@ -23,7 +20,6 @@ use crate::config::{
     Config, ConfigError, Context, Env, Format, KeyPath, Model, Place, Provider, Refusal,
     ResolvedConfig, Substituted, Tools, TranscriptFormat, shown,
 };
-use crate::fanout::FanOut;
 use crate::lablet::{Fixed, Lablet, Played, TranscriptPath};
 use crate::otlp;
 use crate::root::{self, OwnFile};
@@ -33,6 +29,11 @@ use crate::settings::{Selected, Settings, System};
 /// The name of a run's own telemetry file, with the run id where a run's
 /// is.
 const EACH_RUN_FILE: &str = "lablet-{run_id}.otlp.jsonl";
+
+/// The name of lablet's instrumentation scope, which every span and record
+/// of a run is emitted under, with lablet's version and the registry's
+/// schema URL.
+const SCOPE: &str = "lablet";
 
 /// What a config may state that this lablet has no adapter for yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -432,20 +433,7 @@ pub(crate) async fn check_in(config: &Config, env: Env<'_>) -> Result<Checked, B
 /// Returns [`BuildError::UnknownTool`] when `tools.allow` or `tools.deny`
 /// names a tool the run doesn't have.
 pub async fn build(config: Config) -> Result<Lablet, BuildError> {
-    build_observed(config, Vec::new()).await
-}
-
-/// A `Lablet` that runs as `config` says and tells `observers` every event
-/// of its runs, after it has told its own telemetry.
-///
-/// # Errors
-///
-/// Returns what [`build`] returns.
-pub async fn build_observed(
-    config: Config,
-    observers: Vec<Arc<dyn RunObserver>>,
-) -> Result<Lablet, BuildError> {
-    build_in(config, observers, &environment).await
+    build_in(config, &environment).await
 }
 
 /// What checking a config comes to, which a build goes on from.
@@ -509,7 +497,7 @@ async fn prepare(written: &Config, env: Env<'_>) -> Result<Prepared, BuildError>
         // trust roots that can't be loaded or other TLS that can't be set
         // up, and the HTTP client (see `validate`); a check installs no
         // exporter.
-        lablet_telemetry_otel::validate(settings)
+        lablet_otlp::validate(settings)
             .map_err(|error| otlp_refused(written, env, settings.endpoint.is_some(), error))?;
     }
     let target = file_target(&real, otlp.is_some());
@@ -591,11 +579,7 @@ fn unknown_tool(real: &Config, written: &Config, list: FilterList, name: &str) -
     }
 }
 
-async fn build_in(
-    config: Config,
-    observers: Vec<Arc<dyn RunObserver>>,
-    env: Env<'_>,
-) -> Result<Lablet, BuildError> {
+async fn build_in(config: Config, env: Env<'_>) -> Result<Lablet, BuildError> {
     let Prepared {
         real,
         settings,
@@ -613,7 +597,11 @@ async fn build_in(
     };
     let provider = Arc::new(FakeProvider::new(real.model.name.clone(), script));
 
-    let mut telemetry = OtelObserver::builder(crate::VERSION)
+    let scope = InstrumentationScope::builder(SCOPE)
+        .with_version(crate::VERSION)
+        .with_schema_url(crate::telemetry::generated::SCHEMA_URL)
+        .build();
+    let mut telemetry = Telemetry::builder(crate::VERSION, scope)
         .resource(real.telemetry.resource.clone().into_iter().collect());
     if let Some(target) = target {
         telemetry = telemetry.file(target);
@@ -627,19 +615,13 @@ async fn build_in(
     let telemetry = telemetry
         .build()
         .map_err(|error| otlp_refused(&config, env, endpoint_stated, error))?;
-    let mut told: Vec<Arc<dyn RunObserver>> = vec![Arc::new(telemetry.clone())];
-    told.extend(observers);
 
     let cancellation = Arc::new(RunCancellation::default());
-    // The run's telemetry still comes from the observer, so what the loop
-    // emits itself goes nowhere until the export crate's providers take the
-    // observer's place.
     let service = RunService::new(
         Arc::clone(&provider) as _,
         Arc::clone(&tools),
-        Arc::new(FanOut::new(told)),
-        BoxedTracer::new(Box::new(NoopTracer::new())),
-        Box::new(Bridge::new(NoopLoggerProvider::new().logger("lablet"))),
+        telemetry.tracer(),
+        telemetry.logger(),
         Arc::new(TokioClock),
         Arc::clone(&cancellation) as _,
         settings.stop,
@@ -653,6 +635,7 @@ async fn build_in(
         service,
         Played::Script(provider),
         tools,
+        telemetry.tracer(),
         telemetry,
         cancellation,
         Fixed {

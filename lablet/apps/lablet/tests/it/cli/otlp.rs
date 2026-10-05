@@ -7,10 +7,10 @@
 
 use lablet_conformance::otlp::Exported;
 use lablet_conformance::receiver::{self, Mode, Received, Receiver};
-use lablet_telemetry_registry::attribute as key;
 use serde_json::{Value, json};
 
 use super::harness::{CONFIG, ENDS, Lab, PROMPT, Ran, ran};
+use crate::key;
 
 /// The authorization the config states, which wins over the environment's.
 const CONFIGS_AUTHORIZATION: &str = "Bearer config-0123456789abcdef";

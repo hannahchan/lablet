@@ -18,6 +18,12 @@ mod golden;
 #[cfg(test)]
 mod harness;
 #[cfg(test)]
+mod hosts;
+#[cfg(test)]
+mod invariants;
+#[cfg(test)]
+mod key;
+#[cfg(test)]
 mod labels;
 #[cfg(test)]
 mod library;
@@ -33,3 +39,5 @@ mod tools;
 mod transcript;
 #[cfg(test)]
 mod wide;
+#[cfg(test)]
+mod wide_checks;

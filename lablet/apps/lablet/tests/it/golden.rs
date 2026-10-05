@@ -37,11 +37,11 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::key;
 use lablet::config::Provider;
 use lablet::{CancelHandle, Config, FinishedRun, Format, RunId, RunRequest, StopReason};
 use lablet_conformance::otlp::{Attributes, Exported, LogRecord, Span, SpanKind, Status};
-use lablet_telemetry_registry::attribute as key;
-use lablet_telemetry_registry::signals::EVENT_GEN_AI_CLIENT_OPERATION_EXCEPTION_NAME as EXCEPTION;
+use lablet_run::telemetry::generated::GenAiClientOperationException;
 use lablet_test_support::Scratch;
 use serde_json::{Value, json};
 
@@ -302,7 +302,12 @@ async fn the_cancelled_run_emits_what_its_fixture_holds() {
         ]
     );
     assert_eq!(exported.spans_of("chat").len(), 2);
-    assert_eq!(exported.records_of(EXCEPTION).len(), 1);
+    assert_eq!(
+        exported
+            .records_of(GenAiClientOperationException::NAME)
+            .len(),
+        1
+    );
 }
 
 /// The export in its normalised form, as the fixture holds it.

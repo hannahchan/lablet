@@ -1,6 +1,6 @@
 [package]
 name = "lablet-conformance"
-description = "Shared ToolExecutor and RunObserver conformance cases"
+description = "The shared ToolExecutor conformance cases, the OTLP/JSON reader and the in-process OTLP receiver"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,8 +13,6 @@ async-trait.workspace = true
 axum.workspace = true
 lablet-model.workspace = true
 lablet-run.workspace = true
-lablet-telemetry-registry.workspace = true
-lablet-test-support.workspace = true
 opentelemetry-proto = { workspace = true, features = ["gen-tonic"] }
 prost.workspace = true
 rcgen.workspace = true
@@ -25,11 +23,8 @@ tokio.workspace = true
 tonic = { workspace = true, features = ["server", "router", "tls-aws-lc"] }
 
 [dev-dependencies]
+lablet-test-support.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
-
-[[test]]
-name = "it"
-path = "tests/it/main.rs"
 
 [lints]
 workspace = true

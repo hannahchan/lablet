@@ -150,7 +150,7 @@ fn a_call_named_a_tool_the_run_offered_unless_its_name_was_unknown_or_never_look
 }
 
 /// The loop answers an invalid call without a tool, and it still took the
-/// call up and told the observer. Only `not_run` says it never did.
+/// call up and opened its span. Only `not_run` says it never did.
 #[test]
 fn something_was_started_for_every_call_but_one_that_was_never_run() {
     for status in every_status() {

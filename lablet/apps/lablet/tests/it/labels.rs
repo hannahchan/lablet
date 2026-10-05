@@ -2,10 +2,10 @@
 //! record of the run, and in its outcome.
 
 use lablet::{OutcomeDocument, RunId, RunLabels};
-use lablet_telemetry_registry::attribute as key;
 use serde_json::json;
 
 use crate::harness::{Lab, Traced, request};
+use crate::key;
 
 const LABELS: [&str; 3] = [
     key::LABLET_TASK_ID,

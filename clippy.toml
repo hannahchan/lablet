@@ -5,5 +5,5 @@ allow-expect-in-tests = true
 
 # Proper nouns clippy would want in backticks: `GenAI` is in the
 # semantic-convention briefs that become doc comments in the generated
-# telemetry-registry crate, `OpenAI` names a provider. `..` keeps clippy's own list.
+# telemetry modules, `OpenAI` names a provider. `..` keeps clippy's own list.
 doc-valid-idents = ["..", "GenAI", "OpenAI"]

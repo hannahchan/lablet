@@ -14,8 +14,7 @@ use lablet_policy::{Pricing, RetryPolicy, RetrySettings, StopPolicy};
 use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
 use lablet_run::telemetry::{Bridge, Logger};
 use lablet_run::{
-    CallLimits, Cancellation, ModelProvider, RunEvent, RunObserver, RunService, ToolExecutor,
-    ToolFilter, ToolSet,
+    CallLimits, Cancellation, ModelProvider, RunService, ToolExecutor, ToolFilter, ToolSet,
 };
 use opentelemetry::global::BoxedTracer;
 use opentelemetry::logs::{LoggerProvider as _, NoopLoggerProvider};
@@ -105,16 +104,8 @@ pub fn request() -> RequestParams {
     }
 }
 
-/// An observer that keeps nothing.
-pub struct Unobserved;
-
-#[async_trait::async_trait]
-impl RunObserver for Unobserved {
-    async fn on(&self, _: RunEvent) {}
-}
-
 /// Builds the loop around a provider. Unless a test says otherwise the loop
-/// offers no tool, tells no observer, emits its spans and records to no one,
+/// offers no tool, emits its spans and records to no one,
 /// is never cancelled, has no cap on turns and an hour to run, stops at the
 /// third invalid turn in a row, tries a failed call again three times after
 /// waits of 100 ms doubled each time with no jitter, asks for [`request`],
@@ -123,7 +114,6 @@ impl RunObserver for Unobserved {
 pub struct RunBuilder {
     provider: Arc<dyn ModelProvider>,
     tools: Vec<Arc<dyn ToolExecutor>>,
-    observer: Arc<dyn RunObserver>,
     tracer: BoxedTracer,
     logger: Box<dyn Logger>,
     cancel: Arc<dyn Cancellation>,
@@ -144,7 +134,6 @@ impl RunBuilder {
         Self {
             provider,
             tools: Vec::new(),
-            observer: Arc::new(Unobserved),
             tracer: BoxedTracer::new(Box::new(NoopTracer::new())),
             logger: Box::new(Bridge::new(NoopLoggerProvider::new().logger("lablet"))),
             cancel: Arc::new(NeverCancelled),
@@ -163,13 +152,6 @@ impl RunBuilder {
     #[must_use]
     pub fn tools(mut self, executors: Vec<Arc<dyn ToolExecutor>>) -> Self {
         self.tools = executors;
-        self
-    }
-
-    /// Tells `observer` of every run.
-    #[must_use]
-    pub fn observer(mut self, observer: Arc<dyn RunObserver>) -> Self {
-        self.observer = observer;
         self
     }
 
@@ -276,7 +258,6 @@ impl RunBuilder {
         RunService::new(
             self.provider,
             Arc::new(must(tools, "offering the tools")),
-            self.observer,
             self.tracer,
             self.logger,
             Arc::new(TokioClock),

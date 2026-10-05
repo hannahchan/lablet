@@ -6,14 +6,14 @@ use std::time::Duration;
 
 use lablet_model::{KeptOutput, OutputKeep, Secrets, ToolCallEnd, ToolCallId, ToolName, ToolSpec};
 
-use crate::TraceContext;
-
 /// One tool call, as the loop hands it to an executor.
 ///
 /// `input` is a value rather than [`lablet_model::ToolInput`], because a call
 /// whose arguments didn't parse never reaches an executor: the loop settles it
 /// as [`lablet_model::ToolCallStatus::MalformedInput`] and sends the model its
-/// own text back.
+/// own text back. The call's span isn't on the call: it's the span of
+/// `opentelemetry::Context::current()` while `execute` runs, for an executor
+/// that propagates one.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolCall {
     /// The id the outcome will answer to.
@@ -36,9 +36,6 @@ pub struct ToolCall {
     /// no executor can be handed a call without them. The run holds one
     /// set, and this is a handle on it.
     pub secrets: Arc<Secrets>,
-    /// The span the observer opened for this call, for an executor that
-    /// propagates one. `None` when no observer keeps spans.
-    pub trace_context: Option<TraceContext>,
 }
 
 /// What a tool returned.

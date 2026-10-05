@@ -2,10 +2,10 @@
 
 use lablet::{RunId, StopReason};
 use lablet_conformance::otlp::Status;
-use lablet_telemetry_registry::attribute as key;
 use serde_json::json;
 
-use crate::harness::{Lab, Traced, observed, request};
+use crate::harness::{Lab, Traced, request};
+use crate::key;
 
 const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 
@@ -18,7 +18,9 @@ const REJECTS_THE_KEY: &str = "
 #[tokio::test]
 async fn a_rejected_key_ends_the_run_at_once_and_the_chat_span_says_auth() {
     let scratch = Lab::new("auth");
-    let (mut lablet, recorder) = observed(scratch.config(REJECTS_THE_KEY, json!({}))).await;
+    let mut lablet = lablet::build(scratch.config(REJECTS_THE_KEY, json!({})))
+        .await
+        .unwrap();
 
     let finished = lablet
         .run(request().run_id(RunId::new(RUN).unwrap()).unwrap())
@@ -33,17 +35,12 @@ async fn a_rejected_key_ends_the_run_at_once_and_the_chat_span_says_auth() {
         Some(lablet::ErrorClass::Provider)
     );
     assert_eq!(outcome.turns, 0);
-    assert_eq!(
-        recorder.attempts(),
-        1,
-        "a rejected key is never tried again"
-    );
     assert_eq!(finished.summary.provider.retries, 0);
 
     let exported = scratch.exported();
     let traced = Traced::of(&exported, RUN);
     let chats = traced.chats();
-    assert_eq!(chats.len(), 1);
+    assert_eq!(chats.len(), 1, "a rejected key is never tried again");
     assert_eq!(chats[0].attributes[key::ERROR_TYPE], json!("auth"));
     assert_eq!(chats[0].attributes[key::LABLET_ATTEMPT], json!(1));
     assert!(

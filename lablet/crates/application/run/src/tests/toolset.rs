@@ -327,7 +327,6 @@ fn call(name_: &str) -> ToolCall {
         deadline: Duration::from_secs(30),
         keep: None,
         secrets: Arc::default(),
-        trace_context: None,
     }
 }
 

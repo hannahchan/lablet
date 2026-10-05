@@ -1,10 +1,10 @@
 //! What names a run on the command line: its id and its labels, in its
 //! outcome and on its wide event (C18).
 
-use lablet_telemetry_registry::attribute as key;
 use serde_json::json;
 
 use super::harness::{ENDS, Lab};
+use crate::key;
 
 #[test]
 fn the_run_id_and_the_labels_given_are_in_the_outcome_and_on_the_wide_event() {

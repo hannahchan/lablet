@@ -10,10 +10,8 @@ members = [
   "crates/adapters/secondary/provider-fake",
   "crates/adapters/secondary/tools-builtin",
   "crates/adapters/secondary/tools-mcp",
-  "crates/adapters/secondary/telemetry-otel",
   "crates/adapters/secondary/transcript-json",
   "crates/adapters/secondary/shared/documents",
-  "crates/adapters/secondary/shared/telemetry-registry",
   "crates/export/otlp",
   "tests/conformance",
   "tests/mcp-server",
@@ -49,19 +47,15 @@ lablet-provider-fake = { path = "crates/adapters/secondary/provider-fake", versi
 lablet-tools-builtin = { path = "crates/adapters/secondary/tools-builtin", version = "0.1.0" }
 # Adapter: ToolExecutor over rmcp
 lablet-tools-mcp = { path = "crates/adapters/secondary/tools-mcp", version = "0.1.0" }
-# Adapter: RunObserver mapping events to OTel spans and logs
-lablet-telemetry-otel = { path = "crates/adapters/secondary/telemetry-otel", version = "0.1.0" }
 # Adapter: writes a run's transcript document to a JSON file
 lablet-transcript-json = { path = "crates/adapters/secondary/transcript-json", version = "0.1.0" }
 # Adapter shared kernel: the transcript and outcome documents, and the shapes a script shares with them
 lablet-documents = { path = "crates/adapters/secondary/shared/documents", version = "0.1.0" }
-# Adapter shared kernel: generated attribute name constants and enums
-lablet-telemetry-registry = { path = "crates/adapters/secondary/shared/telemetry-registry", version = "0.1.0" }
 # Export: the OpenTelemetry SDK and what lablet adds to it, the tracer and logger providers and their OTLP exporters
 lablet-otlp = { path = "crates/export/otlp", version = "0.1.0" }
 # Composition root: config, build(), and the library surface
 lablet = { path = "apps/lablet", version = "0.1.0" }
-# Test support: shared ToolExecutor and RunObserver case sets, and the reader of OTLP/JSON lines
+# Test support: the shared ToolExecutor case set, the reader of OTLP/JSON lines and the in-process OTLP receiver
 lablet-conformance = { path = "tests/conformance", version = "0.1.0" }
 # Test support: one scratch directory, the loop's clock and cancellation on tokio, and a builder of the loop
 lablet-test-support = { path = "tests/test-support", version = "0.1.0" }
@@ -152,7 +146,7 @@ opentelemetry-proto = { version = "=0.33.0", default-features = false, features 
   "with-serde",
 ] }
 # OTLP network exporter over gRPC and HTTP/protobuf, on rustls. `tls-roots` builds tonic with
-# the platform's trust roots, which telemetry-otel turns on for a gRPC endpoint over TLS.
+# the platform's trust roots, which lablet-otlp turns on for a gRPC endpoint over TLS.
 opentelemetry-otlp = { version = "=0.33.0", default-features = false, features = [
   "grpc-tonic",
   "http-proto",
@@ -164,7 +158,7 @@ opentelemetry-otlp = { version = "=0.33.0", default-features = false, features =
   "logs",
   "internal-logs",
 ] }
-# The HTTP client trait the OTLP HTTP exporter sends through. telemetry-otel wraps the client
+# The HTTP client trait the OTLP HTTP exporter sends through. lablet-otlp wraps the client
 # behind it, so the config's headers are set after the exporter has merged the environment's.
 opentelemetry-http = "=0.33.0"
 # Holds a header value of `telemetry.otlp.headers` from the builder to the request, so no
@@ -173,7 +167,7 @@ secrecy = "=0.10.3"
 # Protobuf bodies in the in-process OTLP HTTP receiver; the line opentelemetry-proto requires.
 prost = "=0.14.4"
 # The request and status types of the OTLP gRPC exporter's interceptor and its TLS in
-# telemetry-otel, and the in-process gRPC receiver in lablet-conformance, which adds the server
+# lablet-otlp, and the in-process gRPC receiver in lablet-conformance, which adds the server
 # and TLS features; the line opentelemetry-otlp requires.
 tonic = { version = "=0.14.6", default-features = false }
 # In-process OTLP HTTP receiver in lablet-conformance; the line tonic's router uses, so one copy.

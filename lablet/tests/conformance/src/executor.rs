@@ -125,7 +125,6 @@ impl Asked {
             deadline,
             keep,
             secrets,
-            trace_context: None,
         }
     }
 }

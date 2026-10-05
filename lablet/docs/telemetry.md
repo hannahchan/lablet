@@ -37,8 +37,12 @@ A rename in the conventions lablet depends on is a breaking change to this contr
 
 1. Look for a semantic-convention attribute first, in the vendored registries under `lablet/telemetry/deps/`.
 2. Edit the registry: a new `lablet.*` attribute goes in `attributes.yaml` with its justification, and every span or event that carries it refers to it with a requirement level.
-3. Run `cargo xtask weaver check`, then `cargo xtask weaver generate`, which writes the `lablet-telemetry-registry` crate and the reference again.
-4. Use the generated constant in the code. Attribute names never appear as string literals. An attribute added to `lablet.run` is a new variant of the generated `EventLabletRunKey`, and the build fails until the observer's match over that enum says what the attribute holds.
+3. Run `cargo xtask weaver check`, then `cargo xtask weaver generate`, which writes the generated telemetry module of the crate that emits the signal, `lablet-run` for the chat and tool spans and their records and the composition root for the root span and the wide event, and the reference again. The struct of the signal gains a field.
+4. Fill the field where the crate builds the struct. The build fails until it's filled, which is the point: an attribute added to `lablet.run` is a field of the generated `LabletRun` the composition root must say the value of. Attribute names never appear as string literals; tests read them from the `key` module beside the struct.
 5. Add an entry under `Unreleased` in `CHANGELOG.md`.
 
 `cargo xtask pre-commit` runs the check and fails when the generated files are out of date.
+
+## Running lablet as a library
+
+A host that runs lablet as a library owes it nothing: a `Lablet`'s telemetry goes to the destinations its own config names, and nothing plugs into it. The host's own `tracing` subscriber sees lablet's diagnostics, such as an export that failed, and none of its telemetry, which never passes through `tracing`. Two `Lablet`s in one process each write only their own runs.

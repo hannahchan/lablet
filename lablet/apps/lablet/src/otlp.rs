@@ -5,7 +5,7 @@
 //! alone: whether a run has a network exporter at all, the transport it
 //! speaks, and whether the environment's headers go with it.
 
-use lablet_telemetry_otel::{OtlpSettings, Signal, Transport};
+use lablet_otlp::{OtlpSettings, Signal, Transport};
 
 use crate::config::{Config, Env, OtlpProtocol, Refusal};
 

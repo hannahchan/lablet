@@ -9,15 +9,15 @@
 //! adds up, and a loaded runner changes both alike.
 
 use lablet::{FinishedRun, RunId, StopReason};
-use lablet_conformance::observer::{
-    assert_the_wide_event_counts_the_tokens_the_run_returned, assert_the_wide_event_is_declared,
-    assert_the_wide_event_sums_its_steps,
-};
 use lablet_conformance::otlp::{Exported, Span};
-use lablet_telemetry_registry::attribute as key;
 use serde_json::json;
 
 use crate::harness::{Lab, PROMPT, SYSTEM, Traced, request};
+use crate::key;
+use crate::wide_checks::{
+    assert_the_wide_event_counts_the_tokens_the_run_returned, assert_the_wide_event_is_declared,
+    assert_the_wide_event_sums_its_steps,
+};
 
 const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 

@@ -409,9 +409,9 @@ pub fn weaver_diagnostic_args() -> [&'static str; 4] {
     diagnostic_args(in_ci())
 }
 
-/// Renders the `lablet-telemetry-registry` sources and the telemetry reference
-/// from the registry, or with `check` fails when the tree differs from that
-/// rendering; see [`generated`].
+/// Renders each crate's telemetry module and the telemetry reference from the
+/// registry, or with `check` fails when the tree differs from that rendering;
+/// see [`generated`].
 pub fn weaver_generate_steps(check: bool) -> Vec<Step> {
     let run = if check {
         generated::check

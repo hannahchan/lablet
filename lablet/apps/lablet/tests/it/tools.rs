@@ -2,12 +2,12 @@
 
 use std::os::unix::fs::symlink;
 
-use lablet::{EventKind, FinishedRun, StopReason};
+use lablet::{FinishedRun, StopReason};
 use lablet_model::{ToolCallOutcome, ToolResultContent};
-use lablet_telemetry_registry::attribute as key;
 use serde_json::{Value, json};
 
-use crate::harness::{Lab, Traced, observed, request};
+use crate::harness::{Lab, Traced, request};
+use crate::key;
 
 const SECRET: &str = "what the model is not to read";
 
@@ -84,21 +84,19 @@ async fn an_allow_list_offers_the_tools_it_names_and_no_other() {
         } }),
     );
     scratch.write("work/notes.md", SECRET);
-    let (mut lablet, recorder) = observed(config).await;
+    let mut lablet = lablet::build(config).await.unwrap();
 
-    let finished = lablet.run(request()).await;
-    lablet.shutdown().await;
-
-    let EventKind::RunStarted { tools, .. } = &recorder.events()[0].kind else {
-        panic!("the first event is the start of the run");
-    };
     assert_eq!(
-        tools
+        lablet
+            .tools()
             .iter()
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>(),
         ["bash"]
     );
+    let finished = lablet.run(request()).await;
+    lablet.shutdown().await;
+
     assert_eq!(
         finished
             .summary

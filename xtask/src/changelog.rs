@@ -310,7 +310,7 @@ mod tests {
             "lablet/schema.json.bak",
             "lablet/telemetry/registry.yaml",
             "lablet/telemetry/deps/semconv/model/http.yaml",
-            "lablet/telemetry/templates/registry/rust/weaver.yaml",
+            "lablet/telemetry/templates/diagnostics/text/weaver.yaml",
             "lablet/tests/fixtures/outcome.json/nested",
             "lablet/tests/fixtures/transcript.json.bak",
             "lablet/tests/fixtures/other.json",

@@ -769,8 +769,8 @@ fn a_run_that_has_just_responded_has_spent_what_its_failed_attempts_reported_too
     );
 }
 
-/// The loop tells an observer of a failed attempt what comes back here, so
-/// the events of a run and its totals hold one number for each attempt.
+/// The loop puts on a failed attempt's span what comes back here, so the
+/// spans of a run and its totals hold one number for each attempt.
 #[test]
 fn a_failed_attempt_gives_back_its_timing_as_the_totals_count_it() {
     let mut run = start();

@@ -617,11 +617,11 @@ mod tests {
         dir.write("Cargo.toml", "[workspace]\nmembers = [\"a\"]\n");
         dir.write(
             "a/Cargo.toml",
-            "[package]\nname = \"lablet-telemetry-otel\"\n",
+            "[package]\nname = \"lablet-sample-adapter\"\n",
         );
         let workspace = Workspace::load(dir.path()).unwrap();
-        assert!(workspace.member_named("lablet_telemetry_otel").is_some());
-        assert!(workspace.member_named("lablet-telemetry").is_none());
+        assert!(workspace.member_named("lablet_sample_adapter").is_some());
+        assert!(workspace.member_named("lablet-sample").is_none());
         assert!(workspace.member_at("a").is_some());
         assert!(workspace.member_at("./a").is_none());
     }

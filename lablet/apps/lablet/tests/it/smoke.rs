@@ -3,17 +3,15 @@
 //! left in its file.
 
 use lablet::{FinishedRun, RunId, StopReason};
-use lablet_conformance::otlp::{Attributes, Exported, LogRecord, SpanKind, Status};
-use lablet_telemetry_registry::attribute as key;
-use lablet_telemetry_registry::signals::{
-    EVENT_LABLET_RUN_KEYS, EVENT_LABLET_RUN_REQUIRED, EventLabletRunTemplate,
-    SPAN_LABLET_CHAT_KEYS, SPAN_LABLET_CHAT_REQUIRED, SPAN_LABLET_EXECUTE_TOOL_KEYS,
-    SPAN_LABLET_EXECUTE_TOOL_REQUIRED, SPAN_LABLET_INVOKE_AGENT_KEYS,
-    SPAN_LABLET_INVOKE_AGENT_REQUIRED,
-};
+use lablet_conformance::otlp::{Exported, LogRecord, SpanKind, Status};
 use serde_json::json;
 
 use crate::harness::{Lab, MODEL, Traced, request};
+use crate::key;
+use crate::wide_checks::{
+    CHAT_KEYS, CHAT_REQUIRED, EXECUTE_TOOL_KEYS, EXECUTE_TOOL_REQUIRED, INVOKE_AGENT_KEYS,
+    INVOKE_AGENT_REQUIRED, RUN_KEYS, RUN_REQUIRED, RUN_TEMPLATES, assert_declared,
+};
 
 const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 
@@ -41,35 +39,6 @@ const WRITES_READS_ENDS: &str = "
     usage: { input_tokens: 1200, output_tokens: 30 }
     finish: end_turn
 ";
-
-/// Holds `attributes` to the registry's lists for their signal: every key
-/// the signal always carries is there, and none is there that the signal
-/// doesn't declare, by name or as one of `templates` with a tool's name
-/// after it.
-fn assert_declared(
-    signal: &str,
-    attributes: &Attributes,
-    required: &[&str],
-    declared: &[&str],
-    templates: &[EventLabletRunTemplate],
-) {
-    for key in required {
-        assert!(
-            attributes.contains_key(*key),
-            "{signal} lacks `{key}`, which the registry requires of it"
-        );
-    }
-    for key in attributes.keys() {
-        let of_a_tool = templates.iter().any(|template| {
-            key.strip_prefix(template.prefix())
-                .is_some_and(|tool| tool.starts_with('.'))
-        });
-        assert!(
-            declared.contains(&key.as_str()) || of_a_tool,
-            "{signal} holds `{key}`, which the registry doesn't declare for it"
-        );
-    }
-}
 
 /// One run of the script, and what was in its file when `run` returned.
 struct Smoke {
@@ -143,8 +112,8 @@ async fn a_run_completes_and_leaves_a_root_span_over_its_calls() {
     assert_declared(
         "the root span",
         &root.attributes,
-        SPAN_LABLET_INVOKE_AGENT_REQUIRED,
-        SPAN_LABLET_INVOKE_AGENT_KEYS,
+        INVOKE_AGENT_REQUIRED,
+        INVOKE_AGENT_KEYS,
         &[],
     );
     assert_eq!(
@@ -190,8 +159,8 @@ async fn every_attempt_of_a_provider_call_leaves_a_chat_span() {
         assert_declared(
             "a chat span",
             &chat.attributes,
-            SPAN_LABLET_CHAT_REQUIRED,
-            SPAN_LABLET_CHAT_KEYS,
+            CHAT_REQUIRED,
+            CHAT_KEYS,
             &[],
         );
         assert_eq!(chat.attributes[key::GEN_AI_PROVIDER_NAME], json!("fake"));
@@ -261,8 +230,8 @@ async fn every_tool_call_leaves_a_tool_span() {
         assert_declared(
             "a tool span",
             &tool.attributes,
-            SPAN_LABLET_EXECUTE_TOOL_REQUIRED,
-            SPAN_LABLET_EXECUTE_TOOL_KEYS,
+            EXECUTE_TOOL_REQUIRED,
+            EXECUTE_TOOL_KEYS,
             &[],
         );
         assert_eq!(tool.attributes[key::LABLET_TOOL_SOURCE], json!("builtin"));
@@ -296,9 +265,9 @@ async fn the_wide_event_is_the_last_line_of_the_run_and_holds_what_the_run_came_
     assert_declared(
         "the wide event",
         &wide.attributes,
-        EVENT_LABLET_RUN_REQUIRED,
-        EVENT_LABLET_RUN_KEYS,
-        EventLabletRunTemplate::ALL,
+        RUN_REQUIRED,
+        RUN_KEYS,
+        RUN_TEMPLATES,
     );
     for (key, holds) in [
         (key::GEN_AI_CONVERSATION_ID, json!(RUN)),

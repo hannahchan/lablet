@@ -3,11 +3,11 @@
 
 use std::time::{Duration, Instant};
 
-use lablet_telemetry_registry::attribute as key;
 use serde_json::json;
 
 use super::harness::Lab;
 use crate::harness::{Traced, json_of};
+use crate::key;
 
 /// The grace period a container's stop allows by default, which a stopped
 /// run returns inside (spec §1).

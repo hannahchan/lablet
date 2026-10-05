@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use lablet_model::Secrets;
-use lablet_telemetry_otel::decode_headers;
+use lablet_otlp::decode_headers;
 
 use crate::config::{Config, Env, KeyPath, McpServer, Substituted};
 use crate::otlp;

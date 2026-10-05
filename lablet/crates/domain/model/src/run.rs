@@ -140,8 +140,8 @@ pub struct Progress {
 
 /// The timing of a provider call attempt that failed, as the run counted it.
 ///
-/// [`Run::failed_attempt`] gives it back, so what the loop tells an observer
-/// of the attempt is what the summary's provider latencies hold of it.
+/// [`Run::failed_attempt`] gives it back, so what the loop puts on the
+/// attempt's span is what the summary's provider latencies hold of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FailedAttempt {
     /// When the attempt began, in whole milliseconds since the run started.

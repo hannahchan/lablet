@@ -11,5 +11,6 @@ lablet/telemetry/deps/** linguist-vendored -text
 
 # Written by `cargo xtask weaver generate` from lablet/telemetry/registry/,
 # never by hand.
-lablet/crates/adapters/secondary/shared/telemetry-registry/src/** linguist-generated=true
+lablet/crates/application/run/src/telemetry/generated/** linguist-generated=true
+lablet/apps/lablet/src/telemetry/generated/** linguist-generated=true
 lablet/docs/telemetry/** linguist-generated=true

@@ -32,7 +32,7 @@ use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLogRecord, SdkLoggerProvid
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
 use serde_json::json;
 
-use super::fakes::{Answer, Answers, FakeCancel, FakeClock, FakeProvider, FakeTools, Told};
+use super::fakes::{Answer, Answers, FakeCancel, FakeClock, FakeProvider, FakeTools};
 use crate::telemetry::Bridge;
 use crate::telemetry::generated::{
     GenAiClientInferenceOperationDetails, GenAiClientOperationException, LabletChat,
@@ -195,7 +195,6 @@ fn output_cap(max_bytes: u64, cut: OutputCut) -> OutputCap {
 struct Harness {
     clock: Arc<FakeClock>,
     provider: Arc<FakeProvider>,
-    observer: Arc<Told>,
     cancel: Arc<FakeCancel>,
     tools: Vec<Arc<dyn crate::ToolExecutor>>,
     filter: ToolFilter,
@@ -228,7 +227,6 @@ impl Harness {
             ))],
             clock,
             provider,
-            observer: Arc::new(Told::new()),
             cancel: Arc::new(FakeCancel::never()),
             filter: ToolFilter::default(),
             stop: StopPolicy {
@@ -280,7 +278,6 @@ impl Harness {
         let mut service = RunService::new(
             Arc::clone(&self.provider) as Arc<dyn crate::ModelProvider>,
             Arc::new(tools),
-            Arc::clone(&self.observer) as Arc<dyn crate::RunObserver>,
             tracer,
             Box::new(Bridge::new(log_provider.logger("lablet"))),
             Arc::clone(&self.clock) as Arc<dyn crate::Clock>,
@@ -307,7 +304,6 @@ impl Harness {
         Run {
             finished,
             provider: self.provider,
-            observer: self.observer,
             clock: self.clock,
             root: within.span().span_context().clone(),
             spans,
@@ -327,7 +323,6 @@ const fn movable<F: Future + Send>(future: F) -> F {
 struct Run {
     finished: lablet_model::FinishedRun,
     provider: Arc<FakeProvider>,
-    observer: Arc<Told>,
     clock: Arc<FakeClock>,
     /// The span the loop ran inside, which every span of the run is a
     /// child of.
@@ -1947,53 +1942,6 @@ async fn the_spans_and_records_of_a_scripted_run_are_exactly_these() {
         events,
         [Some(GenAiClientOperationException::NAME)],
         "content is off, so the one record is the failure's"
-    );
-}
-
-/// The composition root still exports through the observer, so the loop
-/// tells it of every event it did before the spans were its own.
-#[tokio::test]
-async fn the_observer_is_still_told_of_every_event_beside_the_spans() {
-    let run = Harness::new(vec![
-        Answer::fails(ProviderErrorKind::Retryable),
-        Answer::now(says("On it.", &["bash"], FinishReason::ToolUse)),
-        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
-    ])
-    .run()
-    .await;
-
-    assert_eq!(
-        run.observer.names(),
-        [
-            "RunStarted",
-            "TurnStarted",
-            "ProviderCallStarted",
-            "ProviderCallFailed",
-            "ProviderCallStarted",
-            "ProviderCallFinished",
-            "ToolCallStarted",
-            "ToolCallFinished",
-            "TurnStarted",
-            "ProviderCallStarted",
-            "ProviderCallFinished",
-            "RunFinished",
-        ]
-    );
-    let cancelled = Arc::new(FakeCancel::never());
-    let mut harness = Harness::new(vec![Answer::Cancels(Arc::clone(&cancelled), ms(70))]);
-    harness.cancel = cancelled;
-
-    let run = harness.run().await;
-
-    assert_eq!(
-        run.observer.names(),
-        [
-            "RunStarted",
-            "TurnStarted",
-            "ProviderCallStarted",
-            "ProviderCallCancelled",
-            "RunFinished",
-        ]
     );
 }
 

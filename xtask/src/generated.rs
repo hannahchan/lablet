@@ -1,6 +1,5 @@
 //! `cargo xtask weaver generate`: the telemetry module of each crate that
-//! emits a signal, the `lablet-telemetry-registry` sources, and the telemetry
-//! reference, rendered from the registry. Everything is rendered into a
+//! emits a signal, and the telemetry reference, rendered from the registry. Everything is rendered into a
 //! staging directory first, then installed or, with `--check`, compared with
 //! the tree, so a failed render never leaves the tree half written.
 
@@ -52,7 +51,7 @@ const fn module(
     }
 }
 
-const OUTPUTS: [Output; 4] = [
+const OUTPUTS: [Output; 3] = [
     // The loop's signals, and the `Join` struct every module uses.
     module(
         &[
@@ -79,15 +78,6 @@ const OUTPUTS: [Output; 4] = [
         "root",
         "lablet/apps/lablet/src/telemetry/generated",
     ),
-    // The constants crate, until phase 6a's last landing removes it.
-    Output {
-        target: "rust",
-        templates: RUST_TEMPLATES,
-        params: &[],
-        staged: "src",
-        tree: "lablet/crates/adapters/secondary/shared/telemetry-registry/src",
-        formatted: Some("lib.rs"),
-    },
     Output {
         target: "markdown",
         templates: "lablet/telemetry/deps/weaver-packages/templates/docs",
@@ -329,20 +319,17 @@ mod tests {
     /// rendering compared with or moved to the wrong one fails.
     const RUN_MODULE: &str = "lablet/crates/application/run/src/telemetry/generated";
     const ROOT_MODULE: &str = "lablet/apps/lablet/src/telemetry/generated";
-    const REGISTRY_SOURCES: &str = "lablet/crates/adapters/secondary/shared/telemetry-registry/src";
     const REFERENCE: &str = "lablet/docs/telemetry";
 
     /// The file each output's rendering holds in the stage and, when it's up
     /// to date, in the tree.
-    const RENDERED: [(&str, &str, &str); 4] = [
+    const RENDERED: [(&str, &str, &str); 3] = [
         ("run", "mod.rs", "pub mod key;\n"),
         ("root", "mod.rs", "pub mod key;\n"),
-        ("src", "lib.rs", "pub mod attributes;\n"),
         ("docs", "README.md", "# Telemetry\n"),
     ];
 
-    /// A stage holding every rendering: the two modules, the crate's sources
-    /// and the pages.
+    /// A stage holding every rendering: the two modules and the pages.
     fn staged() -> TempDir {
         let stage = TempDir::new("stage");
         for (directory, file, text) in RENDERED {
@@ -361,19 +348,13 @@ mod tests {
     }
 
     #[test]
-    fn the_outputs_are_the_two_crate_modules_the_constants_crate_and_the_pages() {
+    fn the_outputs_are_the_two_crate_modules_and_the_pages() {
         let trees: Vec<&str> = OUTPUTS.iter().map(|output| output.tree).collect();
-        assert_eq!(
-            trees,
-            [RUN_MODULE, ROOT_MODULE, REGISTRY_SOURCES, REFERENCE]
-        );
+        assert_eq!(trees, [RUN_MODULE, ROOT_MODULE, REFERENCE]);
         let staged: Vec<&str> = OUTPUTS.iter().map(|output| output.staged).collect();
         assert_eq!(staged, RENDERED.map(|(directory, ..)| directory));
         let formatted: Vec<Option<&str>> = OUTPUTS.iter().map(|output| output.formatted).collect();
-        assert_eq!(
-            formatted,
-            [Some("mod.rs"), Some("mod.rs"), Some("lib.rs"), None]
-        );
+        assert_eq!(formatted, [Some("mod.rs"), Some("mod.rs"), None]);
     }
 
     #[test]
@@ -383,7 +364,6 @@ mod tests {
 
         root.write(&format!("{RUN_MODULE}/mod.rs"), "pub mod old;\n");
         root.write(&format!("{ROOT_MODULE}/spans.rs"), "struct Gone;\n");
-        root.write(&format!("{REGISTRY_SOURCES}/lib.rs"), "pub mod old;\n");
         root.write(&format!("{REFERENCE}/spans.md"), "spans\n");
         assert_eq!(
             compare(stage.path(), root.path())
@@ -392,8 +372,8 @@ mod tests {
             format!(
                 "the generated files differ from what the registry renders to:\n  \
                  {RUN_MODULE}/mod.rs is out of date\n  {ROOT_MODULE}/spans.rs is no longer \
-                 generated\n  {REGISTRY_SOURCES}/lib.rs is out of date\n  {REFERENCE}/spans.md is \
-                 no longer generated\nfix with: cargo xtask weaver generate"
+                 generated\n  {REFERENCE}/spans.md is no longer generated\nfix with: cargo xtask \
+                 weaver generate"
             )
         );
     }
@@ -401,9 +381,8 @@ mod tests {
     #[test]
     fn installing_replaces_each_generated_directory_whole_and_makes_one_that_is_missing() {
         let (stage, root) = (staged(), TempDir::new("root"));
-        root.write(&format!("{REGISTRY_SOURCES}/lib.rs"), "pub mod old;\n");
-        root.write(&format!("{REGISTRY_SOURCES}/old.rs"), "\n");
         root.write(&format!("{RUN_MODULE}/mod.rs"), "pub mod old;\n");
+        root.write(&format!("{RUN_MODULE}/old.rs"), "\n");
         // The pages have never been rendered here, and neither has the
         // composition root's module, whose crate has no `telemetry`
         // directory at all.
@@ -543,10 +522,7 @@ mod tests {
         }
 
         let (rendered, ran) = render(root.path(), 0);
-        assert_eq!(
-            programs(&ran),
-            ["weaver", "weaver", "weaver", "weaver", "rustfmt"]
-        );
+        assert_eq!(programs(&ran), ["weaver", "weaver", "weaver", "rustfmt"]);
         let rendered = rendered.unwrap();
         assert_eq!(rendered.0, staged);
         for output in &OUTPUTS {
@@ -576,7 +552,7 @@ mod tests {
             matches!(&error, Error::File { verb: Verb::Read, path, .. } if *path == manifest),
             "{error:?}"
         );
-        assert_eq!(programs(&ran), ["weaver", "weaver", "weaver", "weaver"]);
+        assert_eq!(programs(&ran), ["weaver", "weaver", "weaver"]);
         assert!(!staged.exists(), "left by a failed read of the edition");
     }
 
@@ -623,10 +599,10 @@ mod tests {
             assert!(root.join(output.tree).is_dir(), "{}", output.tree);
         }
         let links = "registry_base_url=/lablet/docs/telemetry".to_owned();
-        for output in &OUTPUTS[..3] {
+        for output in &OUTPUTS[..2] {
             assert!(!weaver_args(output, "stage").contains(&links));
         }
-        assert!(weaver_args(&OUTPUTS[3], "stage").contains(&links));
+        assert!(weaver_args(&OUTPUTS[2], "stage").contains(&links));
     }
 
     /// Each module's signals are the folder's, it finds lablet's telemetry

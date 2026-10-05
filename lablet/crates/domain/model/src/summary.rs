@@ -23,7 +23,8 @@ pub struct RunContext {
     /// The run's id.
     pub run_id: RunId,
     /// What the run request named the run's task, experiment and trial. The
-    /// loop copies them to the outcome, and an observer reads them here.
+    /// loop copies them to the outcome, and the composition root reads them
+    /// here for the root span and the wide event.
     pub labels: RunLabels,
     /// When the run started, in milliseconds since the Unix epoch. It's
     /// read where the context is filled in: the domain reads no clock, and
@@ -41,8 +42,9 @@ pub struct RunContext {
     /// itself and how long they live; `None` for a run that has none.
     pub mcp: Option<McpServers>,
     /// Whether prompts, responses, and tool content may reach telemetry. The
-    /// loop reads it to fill the content fields of its events, and an observer
-    /// reads it before emitting the result from the summary.
+    /// loop reads it to fill the content fields of its records, and the
+    /// composition root reads it before putting the result from the summary
+    /// into the wide event.
     pub capture_content: bool,
 }
 
@@ -73,8 +75,9 @@ pub struct PromptSizes {
 /// `lablet.prompt` is in `prompt`, what's under `lablet.provider` in
 /// `provider`, and what's under `lablet.tool_calls` in `tool_calls`. The
 /// groups are for reading. Two numbers of one group can still be taken for
-/// each other, and what holds each to its attribute is the observer's match
-/// over the registry's keys, with the tests of what each key holds.
+/// each other, and what holds each to its attribute is the field of the wide
+/// event's generated struct that the composition root fills from it, with the
+/// tests of what each field holds.
 ///
 /// It has no written form of its own: the wide event is a mapping of its
 /// fields to attributes, and the documents lablet writes are the outcome and

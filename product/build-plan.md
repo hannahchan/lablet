@@ -26,7 +26,7 @@ Sequencing rationale: the loop is proven against fakes before any real adapter e
 | 11    | Hardening and release                               | Not started      |
 | 12    | After the release                                   | Not started      |
 
-A date is the date of the `decisions.md` entry that closed the phase. Spec §6 and §7 describe what phases 4 to 10 build: the parts of phases 4 to 6 are built, and the rest is ahead of the code. From phase 6a's design commit, spec §1's telemetry paragraphs, §2, §5 to §7 and §9's conformance line describe what the phase builds; until the phase closes, the code still reports to the observer the spec no longer has, `telemetry-otel` still holds the SDK in the adapter ring, and the lint's rule for adapters lands with its removal.
+A date is the date of the `decisions.md` entry that closed the phase. Spec §6 and §7 describe what phases 4 to 10 build: the parts of phases 4 to 6a are built, and the rest is ahead of the code.
 
 ## Phase 0: Scaffold
 

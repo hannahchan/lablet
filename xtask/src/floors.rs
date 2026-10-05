@@ -99,13 +99,9 @@ pub struct Equivalent {
 /// a tool, so each survivor is judged once by a person and written down here
 /// with the reason. cargo-mutants still generates and tests every one, so a
 /// full run fails on an entry that no longer matches a missed mutant: the code
-/// it named is gone, or a test now catches it.
-pub const EQUIVALENT_MUTANTS: &[Equivalent] = &[Equivalent {
-    package: "lablet-run",
-    file: "crates/application/run/src/observer.rs",
-    mutant: "replace RunObserver::trace_context -> Option<TraceContext> with None",
-    reason: "the default body of `RunObserver::trace_context` is already `None`",
-}];
+/// it named is gone, or a test now catches it. The list is empty today: no
+/// floor crate carries an equivalent mutant.
+pub const EQUIVALENT_MUTANTS: &[Equivalent] = &[];
 
 /// A `tests.rs` file or anything under a `tests/` directory, as a regex.
 pub const TEST_FILES: &str = r"(^|/)tests(\.rs|/)";
@@ -477,10 +473,7 @@ mod tests {
             .iter()
             .map(|named| named.mutant)
             .collect();
-        assert_eq!(
-            names,
-            ["replace RunObserver::trace_context -> Option<TraceContext> with None"]
-        );
+        assert_eq!(names, Vec::<&str>::new(), "no floor crate carries one");
     }
 
     #[test]

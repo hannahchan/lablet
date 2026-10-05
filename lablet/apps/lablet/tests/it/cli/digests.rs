@@ -2,11 +2,11 @@
 //! taken after `--set` and before `${VAR}` substitution, over the settings
 //! that say what a run does (C5, C6, C12).
 
-use lablet_telemetry_registry::attribute as key;
 use serde_json::json;
 
 use super::harness::{CONFIG, ENDS, Lab, ran};
 use crate::harness::Traced;
+use crate::key;
 
 /// The variable the system prompt of the runs below holds.
 const STYLE: &str = "LABLET_TEST_STYLE";
