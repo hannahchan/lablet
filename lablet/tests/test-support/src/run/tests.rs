@@ -102,7 +102,7 @@ fn a_run_s_context_names_the_run_and_nothing_a_run_may_be_without() {
 
     assert_eq!(context.run_id.as_str(), RUN);
     assert_eq!(context.labels, RunLabels::default());
-    assert_eq!(context.started_unix_ms, STARTED_UNIX_MS);
+    assert_eq!(context.started_unix_ms(), STARTED_UNIX_MS);
     assert_eq!(context.config_digest.as_str(), CONFIG_DIGEST);
     assert_eq!(context.agent_version, AGENT_VERSION);
     assert_eq!(context.transcript_path, None);

@@ -114,7 +114,8 @@ pub use usage::{TokenCounts, Usage};
 
 /// Whole milliseconds, truncated. The one conversion from a `Duration` to
 /// milliseconds, in the model and in the loop, so every `*_ms` value is cut
-/// the same way and a span opens at the offset its record says.
+/// the same way and is the whole milliseconds of the span time or length it
+/// measures, which isn't cut.
 #[must_use]
 pub fn whole_ms(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)

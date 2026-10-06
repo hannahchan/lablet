@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
 use crate::{
@@ -96,7 +96,7 @@ fn a_finished_run_carries_the_summary_and_the_conversation() {
     )
     .finish(
         StopReason::Cancelled,
-        Duration::from_millis(250),
+        Duration::from_micros(250_400),
         None,
         None,
         None,
@@ -107,9 +107,38 @@ fn a_finished_run_carries_the_summary_and_the_conversation() {
         finished.summary.outcome.stop_reason(),
         StopReason::Cancelled
     );
+    assert_eq!(finished.duration, Duration::from_micros(250_400));
     assert_eq!(finished.summary.outcome.duration_ms, 250);
     assert_eq!(finished.transcript.system(), "Be brief.");
     assert!(finished.transcript.turns().is_empty());
+}
+
+fn started_at(started: SystemTime) -> RunContext {
+    RunContext {
+        run_id: RunId::new("01K5F3Z8Q4X9T2M7B6W1R0VNEC").unwrap(),
+        labels: labels(),
+        started,
+        config_digest: crate::ConfigDigest::new("0".repeat(64)).unwrap(),
+        agent_version: "0.1.0".to_owned(),
+        transcript_path: None,
+        skills_count: 0,
+        mcp: None,
+        capture_content: false,
+    }
+}
+
+#[test]
+fn the_documents_start_is_the_run_s_start_cut_to_whole_milliseconds() {
+    let started = UNIX_EPOCH + Duration::from_nanos(1_790_000_000_123_999_999);
+
+    assert_eq!(started_at(started).started_unix_ms(), 1_790_000_000_123);
+}
+
+#[test]
+fn a_run_that_started_before_the_epoch_started_at_it_in_the_documents() {
+    let started = UNIX_EPOCH - Duration::from_nanos(1);
+
+    assert_eq!(started_at(started).started_unix_ms(), 0);
 }
 
 #[test]

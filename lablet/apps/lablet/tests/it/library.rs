@@ -1,7 +1,7 @@
 //! One `Lablet`, many runs: each is a run of its own, and all of them hear
 //! the script from its first entry.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use lablet::{BlankTask, OutcomeDocument, RunId, RunRequest, StopReason};
 use lablet_run::telemetry::generated::GenAiClientInferenceOperationDetails;
@@ -26,6 +26,11 @@ const CALLS_THEN_ENDS: &str = "
 fn unix_ms_now() -> u64 {
     let since = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     u64::try_from(since.as_millis()).unwrap()
+}
+
+fn unix_nanos_now() -> u64 {
+    let since = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    u64::try_from(since.as_nanos()).unwrap()
 }
 
 /// The outcome as its document, without what names the run and what times
@@ -249,4 +254,56 @@ async fn telemetry_that_cannot_be_written_leaves_the_outcome_alone() {
     );
     assert_eq!(warned[0].matches("exported whole").count(), 1, "{lines:?}");
     lablet.shutdown().await;
+}
+
+/// A response that takes a millisecond, which a test cuts short.
+const TAKES_A_MILLISECOND: &str = "
+- response:
+    content:
+      - text: Nothing to fix.
+    usage: { input_tokens: 100, output_tokens: 10 }
+    finish: end_turn
+    latency: 1ms
+";
+
+/// Tokio's paused clock moves on by itself only to a whole millisecond of
+/// its timer, so the clock is moved by hand, a millisecond and a half, while
+/// the attempt waits: the attempt and the run then last exactly that. The
+/// run's start is bounded by readings of the wall clock to the nanosecond, so
+/// a start cut to the millisecond falls before the first, unless that reading
+/// lands on a whole millisecond.
+#[tokio::test(start_paused = true)]
+async fn the_run_s_own_span_and_its_wide_event_are_timed_to_the_nanosecond_from_its_start() {
+    let scratch = Lab::new("nanoseconds");
+    let mut lablet = lablet::build(scratch.config(TAKES_A_MILLISECOND, json!({})))
+        .await
+        .unwrap();
+    let lasting = Duration::from_micros(1_500);
+
+    let before = unix_nanos_now();
+    let (finished, ()) = tokio::join!(lablet.run(request()), tokio::time::advance(lasting));
+    let after = unix_nanos_now();
+    lablet.shutdown().await;
+
+    assert_eq!(finished.duration, lasting);
+    let exported = scratch.exported();
+    let traced = Traced::of(&exported, finished.summary.outcome.run_id.as_str());
+    let (root, wide) = (traced.root(), traced.wide());
+    let [chat] = traced.chats().try_into().unwrap();
+    assert!(
+        (before..=after).contains(&root.start_unix_nano),
+        "{before} <= {} <= {after}",
+        root.start_unix_nano
+    );
+    assert_eq!(
+        (root.start_unix_nano, root.end_unix_nano),
+        (chat.start_unix_nano, chat.end_unix_nano),
+        "the run began and ended with its one attempt, timed by the loop"
+    );
+    assert_eq!(root.end_unix_nano - root.start_unix_nano, 1_500_000);
+    assert_eq!(
+        (wide.time_unix_nano, wide.observed_time_unix_nano),
+        (root.end_unix_nano, root.end_unix_nano)
+    );
+    assert_eq!(wide.attributes[key::LABLET_RUN_DURATION_MS], json!(1));
 }

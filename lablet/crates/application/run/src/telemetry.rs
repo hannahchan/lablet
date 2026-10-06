@@ -23,7 +23,7 @@ pub mod spellings;
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use opentelemetry::logs::{AnyValue, LogRecord as _, Severity};
 use opentelemetry::trace::SpanContext;
@@ -37,6 +37,18 @@ use opentelemetry::{Array, KeyValue, StringValue};
 #[must_use]
 pub fn count_of(count: u64) -> i64 {
     i64::try_from(count).unwrap_or(i64::MAX)
+}
+
+/// The time `offset` into a run that started at `started`: what every span,
+/// span event and record of a run is timed by, at the precision the clocks
+/// gave, so an exporter's own clock reaches none of them.
+///
+/// A time past the latest the platform's clock can say is the run's start.
+/// Only a clock that's wrong puts a run's start that late, and the start is
+/// the one time it gave; the sum would otherwise panic.
+#[must_use]
+pub fn time_at(started: SystemTime, offset: Duration) -> SystemTime {
+    started.checked_add(offset).unwrap_or(started)
 }
 
 /// The longest text an attribute holds, in bytes: 1 MiB.

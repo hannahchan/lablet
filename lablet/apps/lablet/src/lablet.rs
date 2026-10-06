@@ -2,14 +2,14 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use lablet_documents::TranscriptDocument;
 use lablet_model::{
     BlankTask, ConfigDigest, FinishedRun, Prompts, RunContext, RunId, RunLabels, ToolSpec,
 };
 use lablet_provider_fake::FakeProvider;
-use lablet_run::telemetry::{count_of, span_attributes};
+use lablet_run::telemetry::{count_of, span_attributes, time_at};
 use lablet_run::{RunService, ToolSet};
 use lablet_transcript_json::{TranscriptFile, TranscriptWriteError};
 use opentelemetry::Context;
@@ -266,14 +266,16 @@ impl Lablet {
             }
         }
         // One reading of the clock, so a fresh id holds the time its run
-        // started.
-        let started = SystemTime::now();
+        // started. A clock before the epoch is read as the epoch, as the
+        // documents give it: an exporter puts any time before the epoch at
+        // 0, which would leave every span no length.
+        let started = SystemTime::now().max(UNIX_EPOCH);
         let run_id = run_id.unwrap_or_else(|| RunId::ulid(Ulid::from_datetime(started).0));
         let transcript = self.transcript_file(&run_id);
         let context = RunContext {
             run_id,
             labels,
-            started_unix_ms: unix_ms(started),
+            started,
             config_digest: self.fixed.config_digest.clone(),
             agent_version: crate::VERSION.to_owned(),
             transcript_path: transcript.as_ref().map(|(file, _)| file.path().to_owned()),
@@ -299,7 +301,7 @@ impl Lablet {
             .tracer
             .span_builder(root_span::name())
             .with_kind(LabletInvokeAgent::KIND)
-            .with_start_time(at(context.started_unix_ms, 0))
+            .with_start_time(context.started)
             .start_with_context(&self.tracer, &Context::new());
         let within = Context::new().with_span(root);
         let finished = self
@@ -309,7 +311,7 @@ impl Lablet {
             .await;
 
         let summary = &finished.summary;
-        let end = at(context.started_unix_ms, summary.outcome.duration_ms);
+        let end = time_at(context.started, finished.duration);
         let root = within.span();
         root.set_attributes(span_attributes(
             root_span::invoke_agent(&context, summary).attributes(),
@@ -407,21 +409,6 @@ impl Lablet {
             tracing::warn!(%run_id, "{error}");
         }
     }
-}
-
-/// `time` in milliseconds since the Unix epoch; 0 for a time before it,
-/// which is what a machine whose clock was never set gives.
-fn unix_ms(time: SystemTime) -> u64 {
-    time.duration_since(UNIX_EPOCH).map_or(0, |since| {
-        u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
-    })
-}
-
-/// The instant `offset_ms` into a run that started at `started_unix_ms`:
-/// what every span and record of the run is timed by, so an exporter's own
-/// clock reaches none of them.
-fn at(started_unix_ms: u64, offset_ms: u64) -> SystemTime {
-    UNIX_EPOCH + Duration::from_millis(started_unix_ms.saturating_add(offset_ms))
 }
 
 #[cfg(test)]

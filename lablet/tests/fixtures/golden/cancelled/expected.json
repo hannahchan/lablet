@@ -11,7 +11,7 @@
       "body": null,
       "event_name": "gen_ai.client.inference.operation.details",
       "flags": 1,
-      "observed_time_ms": 0,
+      "observed_time_ns": 0,
       "resource": {
         "service.name": "lablet",
         "service.version": "0.1.0",
@@ -27,7 +27,7 @@
       "severity_number": 9,
       "severity_text": "INFO",
       "span_id": "span-1",
-      "time_ms": 0,
+      "time_ns": 0,
       "trace_id": "trace-1"
     },
     {
@@ -43,7 +43,7 @@
       "body": null,
       "event_name": "gen_ai.client.inference.operation.details",
       "flags": 1,
-      "observed_time_ms": 40,
+      "observed_time_ns": 40000000,
       "resource": {
         "service.name": "lablet",
         "service.version": "0.1.0",
@@ -59,7 +59,7 @@
       "severity_number": 9,
       "severity_text": "INFO",
       "span_id": "span-2",
-      "time_ms": 40,
+      "time_ns": 40000000,
       "trace_id": "trace-1"
     },
     {
@@ -78,7 +78,7 @@
       "body": null,
       "event_name": "gen_ai.client.operation.exception",
       "flags": 1,
-      "observed_time_ms": 40,
+      "observed_time_ns": 40000000,
       "resource": {
         "service.name": "lablet",
         "service.version": "0.1.0",
@@ -94,7 +94,7 @@
       "severity_number": 13,
       "severity_text": "WARN",
       "span_id": "span-2",
-      "time_ms": 40,
+      "time_ns": 40000000,
       "trace_id": "trace-1"
     },
     {
@@ -111,7 +111,7 @@
       "body": null,
       "event_name": "gen_ai.client.inference.operation.details",
       "flags": 1,
-      "observed_time_ms": 903,
+      "observed_time_ns": 903000000,
       "resource": {
         "service.name": "lablet",
         "service.version": "0.1.0",
@@ -127,7 +127,7 @@
       "severity_number": 9,
       "severity_text": "INFO",
       "span_id": "span-3",
-      "time_ms": 903,
+      "time_ns": 903000000,
       "trace_id": "trace-1"
     },
     {
@@ -145,7 +145,7 @@
       "body": null,
       "event_name": "gen_ai.client.inference.operation.details",
       "flags": 1,
-      "observed_time_ms": 903,
+      "observed_time_ns": 903000000,
       "resource": {
         "service.name": "lablet",
         "service.version": "0.1.0",
@@ -161,7 +161,7 @@
       "severity_number": 9,
       "severity_text": "INFO",
       "span_id": "span-4",
-      "time_ms": 903,
+      "time_ns": 903000000,
       "trace_id": "trace-1"
     },
     {
@@ -179,7 +179,7 @@
       "body": null,
       "event_name": "gen_ai.client.inference.operation.details",
       "flags": 1,
-      "observed_time_ms": 903,
+      "observed_time_ns": 903000000,
       "resource": {
         "service.name": "lablet",
         "service.version": "0.1.0",
@@ -195,7 +195,7 @@
       "severity_number": 9,
       "severity_text": "INFO",
       "span_id": "span-5",
-      "time_ms": 903,
+      "time_ns": 903000000,
       "trace_id": "trace-1"
     },
     {
@@ -213,7 +213,7 @@
       "body": null,
       "event_name": "gen_ai.client.inference.operation.details",
       "flags": 1,
-      "observed_time_ms": 10000,
+      "observed_time_ns": 10000000000,
       "resource": {
         "service.name": "lablet",
         "service.version": "0.1.0",
@@ -229,7 +229,7 @@
       "severity_number": 9,
       "severity_text": "INFO",
       "span_id": "span-6",
-      "time_ms": 10000,
+      "time_ns": 10000000000,
       "trace_id": "trace-1"
     },
     {
@@ -295,7 +295,7 @@
       "body": null,
       "event_name": "lablet.run",
       "flags": 1,
-      "observed_time_ms": 10000,
+      "observed_time_ns": 10000000000,
       "resource": {
         "service.name": "lablet",
         "service.version": "0.1.0",
@@ -311,7 +311,7 @@
       "severity_number": 9,
       "severity_text": "INFO",
       "span_id": "span-1",
-      "time_ms": 10000,
+      "time_ns": 10000000000,
       "trace_id": "trace-1"
     }
   ],
@@ -333,7 +333,7 @@
         "lablet.tool_calls.total": 3,
         "session.id": "golden-cancelled"
       },
-      "end_ms": 10000,
+      "end_ns": 10000000000,
       "events": [],
       "flags": 257,
       "kind": "internal",
@@ -352,7 +352,7 @@
         "version": "0.1.0"
       },
       "span_id": "span-1",
-      "start_ms": 0,
+      "start_ns": 0,
       "status": {
         "code": "error",
         "description": ""
@@ -376,7 +376,7 @@
         "lablet.turn": 1,
         "session.id": "golden-cancelled"
       },
-      "end_ms": 40,
+      "end_ns": 40000000,
       "events": [
         {
           "attributes": {
@@ -385,7 +385,7 @@
             "lablet.retry.will_retry": true
           },
           "name": "lablet.retry",
-          "time_ms": 40
+          "time_ns": 40000000
         }
       ],
       "flags": 257,
@@ -405,7 +405,7 @@
         "version": "0.1.0"
       },
       "span_id": "span-2",
-      "start_ms": 0,
+      "start_ns": 0,
       "status": {
         "code": "error",
         "description": "529 overloaded"
@@ -432,7 +432,7 @@
         "lablet.turn": 1,
         "session.id": "golden-cancelled"
       },
-      "end_ms": 903,
+      "end_ns": 903000000,
       "events": [],
       "flags": 257,
       "kind": "client",
@@ -451,7 +451,7 @@
         "version": "0.1.0"
       },
       "span_id": "span-3",
-      "start_ms": 653,
+      "start_ns": 653000000,
       "status": {
         "code": "unset"
       },
@@ -475,7 +475,7 @@
         "lablet.turn": 1,
         "session.id": "golden-cancelled"
       },
-      "end_ms": 903,
+      "end_ns": 903000000,
       "events": [],
       "flags": 257,
       "kind": "internal",
@@ -494,7 +494,7 @@
         "version": "0.1.0"
       },
       "span_id": "span-4",
-      "start_ms": 903,
+      "start_ns": 903000000,
       "status": {
         "code": "unset"
       },
@@ -518,7 +518,7 @@
         "lablet.turn": 1,
         "session.id": "golden-cancelled"
       },
-      "end_ms": 903,
+      "end_ns": 903000000,
       "events": [],
       "flags": 257,
       "kind": "internal",
@@ -537,7 +537,7 @@
         "version": "0.1.0"
       },
       "span_id": "span-5",
-      "start_ms": 903,
+      "start_ns": 903000000,
       "status": {
         "code": "unset"
       },
@@ -562,7 +562,7 @@
         "lablet.turn": 1,
         "session.id": "golden-cancelled"
       },
-      "end_ms": 10000,
+      "end_ns": 10000000000,
       "events": [],
       "flags": 257,
       "kind": "internal",
@@ -581,7 +581,7 @@
         "version": "0.1.0"
       },
       "span_id": "span-6",
-      "start_ms": 903,
+      "start_ns": 903000000,
       "status": {
         "code": "error",
         "description": ""

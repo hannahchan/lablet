@@ -55,7 +55,7 @@
       "body": null,
       "event_name": "lablet.run",
       "flags": 1,
-      "observed_time_ms": 450,
+      "observed_time_ns": 450000000,
       "resource": {
         "service.name": "lablet",
         "service.version": "0.1.0",
@@ -71,7 +71,7 @@
       "severity_number": 9,
       "severity_text": "INFO",
       "span_id": "span-1",
-      "time_ms": 450,
+      "time_ns": 450000000,
       "trace_id": "trace-1"
     }
   ],
@@ -91,7 +91,7 @@
         "lablet.tool_calls.total": 1,
         "session.id": "golden-two-turns"
       },
-      "end_ms": 450,
+      "end_ns": 450000000,
       "events": [],
       "flags": 257,
       "kind": "internal",
@@ -110,7 +110,7 @@
         "version": "0.1.0"
       },
       "span_id": "span-1",
-      "start_ms": 0,
+      "start_ns": 0,
       "status": {
         "code": "unset"
       },
@@ -135,7 +135,7 @@
         "lablet.turn": 1,
         "session.id": "golden-two-turns"
       },
-      "end_ms": 300,
+      "end_ns": 300000000,
       "events": [],
       "flags": 257,
       "kind": "client",
@@ -154,7 +154,7 @@
         "version": "0.1.0"
       },
       "span_id": "span-2",
-      "start_ms": 0,
+      "start_ns": 0,
       "status": {
         "code": "unset"
       },
@@ -178,7 +178,7 @@
         "lablet.turn": 1,
         "session.id": "golden-two-turns"
       },
-      "end_ms": 300,
+      "end_ns": 300000000,
       "events": [],
       "flags": 257,
       "kind": "internal",
@@ -197,7 +197,7 @@
         "version": "0.1.0"
       },
       "span_id": "span-3",
-      "start_ms": 300,
+      "start_ns": 300000000,
       "status": {
         "code": "unset"
       },
@@ -222,7 +222,7 @@
         "lablet.turn": 2,
         "session.id": "golden-two-turns"
       },
-      "end_ms": 450,
+      "end_ns": 450000000,
       "events": [],
       "flags": 257,
       "kind": "client",
@@ -241,7 +241,7 @@
         "version": "0.1.0"
       },
       "span_id": "span-4",
-      "start_ms": 300,
+      "start_ns": 300000000,
       "status": {
         "code": "unset"
       },

@@ -63,7 +63,7 @@ fn context() -> RunContext {
     RunContext {
         run_id: run_id(),
         labels: RunLabels::default(),
-        started_unix_ms: STARTED_UNIX_MS,
+        started: UNIX_EPOCH + Duration::from_millis(STARTED_UNIX_MS),
         config_digest: ConfigDigest::new(CONFIG_DIGEST).unwrap(),
         agent_version: "0.1.0".to_owned(),
         transcript_path: None,

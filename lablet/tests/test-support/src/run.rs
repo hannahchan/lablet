@@ -4,7 +4,7 @@
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use lablet_model::{
     CacheScope, CompletionMode, OutputCap, Prompts, RequestParams, RunContext, RunId, RunLabels,
@@ -71,7 +71,7 @@ pub fn context(run: &str) -> RunContext {
     RunContext {
         run_id: must(RunId::new(run), "naming the run"),
         labels: RunLabels::default(),
-        started_unix_ms: STARTED_UNIX_MS,
+        started: UNIX_EPOCH + Duration::from_millis(STARTED_UNIX_MS),
         config_digest: must(
             lablet_model::ConfigDigest::new(CONFIG_DIGEST),
             "naming the config",

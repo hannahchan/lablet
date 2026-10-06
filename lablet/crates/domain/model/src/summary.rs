@@ -4,11 +4,12 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::{
     CompletionMode, ConfigDigest, Cost, Endpoint, FinishReason, McpServers, ModelRef,
     ProviderTotals, Rates, RequestParams, RunId, RunLabels, RunOutcome, ToolCallTotals, ToolName,
-    ToolStats, Transcript, Usage,
+    ToolStats, Transcript, Usage, whole_ms,
 };
 
 /// What only the composition root knows about a run: its part of the wide
@@ -26,10 +27,13 @@ pub struct RunContext {
     /// loop copies them to the outcome, and the composition root reads them
     /// here for the root span and the wide event.
     pub labels: RunLabels,
-    /// When the run started, in milliseconds since the Unix epoch. It's
-    /// read where the context is filled in: the domain reads no clock, and
-    /// the loop's gives instants, which have no date.
-    pub started_unix_ms: u64,
+    /// When the run started, as the wall clock said it, whole: every span
+    /// and record of the run is timed from it. It's read where the context
+    /// is filled in: the domain reads no clock, and the loop's gives
+    /// instants, which have no date. The documents' `started_unix_ms` is
+    /// [`RunContext::started_unix_ms`], cut from it, so the two can't
+    /// disagree.
+    pub started: SystemTime,
     /// SHA-256 of the resolved config, which groups the runs made from it.
     pub config_digest: ConfigDigest,
     /// The lablet version.
@@ -46,6 +50,16 @@ pub struct RunContext {
     /// composition root reads it before putting the result from the summary
     /// into the wide event.
     pub capture_content: bool,
+}
+
+impl RunContext {
+    /// When the run started, in whole milliseconds since the Unix epoch, as
+    /// the documents give it; 0 for a start before the epoch, which is what
+    /// a machine whose clock was never set gives.
+    #[must_use]
+    pub fn started_unix_ms(&self) -> u64 {
+        self.started.duration_since(UNIX_EPOCH).map_or(0, whole_ms)
+    }
 }
 
 /// The sizes of what the model was shown before its first response, in
@@ -148,6 +162,11 @@ pub struct FinishedRun {
     pub summary: RunSummary,
     /// The whole conversation, whatever the stop reason.
     pub transcript: Transcript,
+    /// How long the run took, as the loop measured it: what the run's own
+    /// span lasts and when its wide event is timed. The outcome's
+    /// `duration_ms` is its whole milliseconds, cut by [`crate::Run::finish`]
+    /// from this one value.
+    pub duration: Duration,
 }
 
 #[cfg(test)]

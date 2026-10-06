@@ -64,12 +64,13 @@ impl TranscriptDocument {
         task_prompt: String,
         transcript: Transcript,
     ) -> Self {
+        let started_unix_ms = context.started_unix_ms();
         // What the context holds beyond what names a run describes the
         // process around it, which the wide event reports.
         let RunContext {
             run_id,
             labels,
-            started_unix_ms,
+            started: _,
             config_digest,
             agent_version,
             transcript_path: _,

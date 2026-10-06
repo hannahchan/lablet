@@ -17,6 +17,27 @@ fn at() -> SystemTime {
     UNIX_EPOCH + Duration::from_millis(1_234)
 }
 
+#[test]
+fn a_time_into_a_run_is_its_start_plus_the_offset_to_the_nanosecond() {
+    let started = UNIX_EPOCH + Duration::from_nanos(1_790_000_000_123_456_789);
+
+    assert_eq!(
+        time_at(started, Duration::from_nanos(1_500_001)),
+        UNIX_EPOCH + Duration::from_nanos(1_790_000_000_124_956_790)
+    );
+    assert_eq!(time_at(started, Duration::ZERO), started);
+}
+
+#[test]
+fn a_time_past_the_latest_the_clock_can_say_is_the_run_s_start() {
+    let latest = UNIX_EPOCH
+        .checked_add(Duration::new(i64::MAX.unsigned_abs(), 999_999_999))
+        .unwrap();
+
+    assert_eq!(time_at(latest, Duration::from_nanos(1)), latest);
+    assert_eq!(time_at(UNIX_EPOCH, Duration::MAX), UNIX_EPOCH);
+}
+
 fn context(flags: TraceFlags) -> SpanContext {
     SpanContext::new(TRACE, SPAN, flags, false, TraceState::default())
 }

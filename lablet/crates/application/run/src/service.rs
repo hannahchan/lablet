@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::Poll;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime};
 
 use lablet_model::{
     Answer, CacheScope, Cost, Effort, Endpoint, Final, FinishedRun, KeptOutput, Message, ModelRef,
@@ -29,7 +29,7 @@ use crate::telemetry::generated::{
     LabletExecuteToolNetworkTransport, LabletRetry,
 };
 use crate::telemetry::spellings::tool_error_type;
-use crate::telemetry::{Logger, count_of};
+use crate::telemetry::{Logger, count_of, time_at};
 use crate::{
     Cancellation, Clock, McpCallMeta, ModelProvider, ProviderError, ProviderRequest, ToolCall,
     ToolSet, bounded,
@@ -92,9 +92,9 @@ struct Running {
     /// The reading of the clock the run started at, which every offset is
     /// measured from.
     started: Instant,
-    /// When the run started on the wall clock, which every span and record
-    /// is timed from.
-    started_unix_ms: u64,
+    /// When the run started on the wall clock: every span and record is
+    /// timed at this plus its own offset from `started`.
+    wall: SystemTime,
     /// Whether the run's content goes into the content records.
     capture: bool,
     /// The context `run` was called in: the parent of every span, and the
@@ -109,18 +109,14 @@ struct Running {
 }
 
 impl Running {
-    /// The instant `offset_ms` into the run.
-    ///
-    /// The sum is of milliseconds in a `u64`, and the clocks of the
-    /// platforms lablet runs on count seconds in an `i64`, so every instant
-    /// this can name is one the clock can say.
-    fn at(&self, offset_ms: u64) -> SystemTime {
-        UNIX_EPOCH + Duration::from_millis(self.started_unix_ms.saturating_add(offset_ms))
-    }
-
     /// How far into the run the reading `at` is.
     fn offset(&self, at: Instant) -> Duration {
         at.saturating_duration_since(self.started)
+    }
+
+    /// When a call that `began` and took `latency` ended, on the wall clock.
+    fn ended(&self, began: &Began, latency: Duration) -> SystemTime {
+        time_at(self.wall, began.offset.saturating_add(latency))
     }
 
     /// The chat span of the attempt `attempt` of the turn `turn`, as far as
@@ -441,7 +437,7 @@ impl RunService {
         let running = Running {
             run_id: run_id.clone(),
             started,
-            started_unix_ms: context.started_unix_ms,
+            wall: context.started,
             capture,
             parent,
             join: Join::from(&context),
@@ -456,7 +452,7 @@ impl RunService {
                 ..running.content(Operation::InvokeAgent, None)
             };
             self.logger
-                .emit(offered.record(running.at(0), running.parent.span().span_context()));
+                .emit(offered.record(running.wall, running.parent.span().span_context()));
             Some(Conversation::opening(prompts.system(), prompts.task()))
         } else {
             None
@@ -505,7 +501,7 @@ impl RunService {
             let pending = match run.responded(response, opened.began.offset, latency) {
                 Responded::Final(done) => {
                     let reason = self.stop.after_final(&done.turn().record().finish, mode);
-                    self.response_came(running, done.turn(), opened, conversation);
+                    self.response_came(running, done.turn(), opened, latency, conversation);
                     return (Ending::Final(done), Stopped::just(reason));
                 }
                 Responded::Pending(pending) => pending,
@@ -515,7 +511,7 @@ impl RunService {
                 mode,
                 pending.calls(mode),
             );
-            self.response_came(running, pending.turn(), opened, conversation);
+            self.response_came(running, pending.turn(), opened, latency, conversation);
             if let Some(reason) = reason {
                 let stopped = Stopped {
                     reason,
@@ -559,15 +555,15 @@ impl RunService {
         }
     }
 
-    /// The provider call behind `recorded` returned: fills and ends the
-    /// attempt's span from the turn's record, which is
-    /// the one place that holds the attempt's timing, its usage and its
-    /// finish together.
+    /// The provider call behind `recorded` returned after `latency`: fills
+    /// the attempt's span from the turn's record, which holds its usage and
+    /// its finish, and ends it `latency` after it began.
     fn response_came(
         &self,
         running: &Running,
         recorded: &Turn,
         opened: Opened,
+        latency: Duration,
         conversation: &mut Option<Conversation>,
     ) {
         let record = recorded.record();
@@ -578,7 +574,7 @@ impl RunService {
         chat.gen_ai_response_model
             .clone_from(&record.response_model);
         spent(chat, &record.usage);
-        let end = running.at(record.started_ms.saturating_add(record.latency_ms));
+        let end = running.ended(&opened.began, latency);
         let exchange = conversation
             .as_mut()
             .map(|conversation| conversation.responded(recorded.response()));
@@ -707,7 +703,7 @@ impl RunService {
     ) -> Result<Duration, Stopped> {
         let mut opened = opened;
         let (turn, attempt) = (opened.turn, opened.attempt);
-        let failed = run.failed_attempt(opened.began.offset, latency, error.usage);
+        run.failed_attempt(opened.began.offset, latency, error.usage);
         let next = self.after_failure(
             run,
             running,
@@ -720,7 +716,7 @@ impl RunService {
         if let Some(usage) = &error.usage {
             spent(&mut opened.chat, usage);
         }
-        let end = running.at(failed.started_ms.saturating_add(failed.latency_ms));
+        let end = running.ended(&opened.began, latency);
         // The retry event and the exception record carry the attempt's
         // number and the span's end time: they say what was decided when
         // the attempt ended.
@@ -764,10 +760,10 @@ impl RunService {
         latency: Duration,
         conversation: &mut Option<Conversation>,
     ) {
-        let dropped = run.failed_attempt(opened.began.offset, latency, None);
+        run.failed_attempt(opened.began.offset, latency, None);
         let mut opened = opened;
         opened.chat.error_type = Some(LabletChatErrorType::Cancelled);
-        let end = running.at(dropped.started_ms.saturating_add(dropped.latency_ms));
+        let end = running.ended(&opened.began, latency);
         let exchange = conversation.as_mut().map(Conversation::unanswered);
         self.end_chat(
             running,
@@ -784,7 +780,7 @@ impl RunService {
         self.tracer
             .span_builder(name)
             .with_kind(kind)
-            .with_start_time(running.at(whole_ms(began.offset)))
+            .with_start_time(time_at(running.wall, began.offset))
             .start_with_context(&self.tracer, &running.parent)
     }
 
@@ -959,8 +955,9 @@ impl RunService {
             mcp,
         } = settled;
 
+        let end = running.ended(&began, latency);
         let answer = Answer::measured(status, output, self.calls.output_cap, began.offset, latency);
-        self.tool_span(running, span, &called, &answer, mcp.as_ref());
+        self.tool_span(running, span, &called, &answer, mcp.as_ref(), end);
         answer
     }
 
@@ -989,8 +986,8 @@ impl RunService {
 
     /// Fills `span` from what `answer` says of `called`, and from what the
     /// call carried back over MCP when it did, writes the record of the
-    /// call's content when the run captures it, and ends the span when the
-    /// call ended.
+    /// call's content when the run captures it, and ends the span at `end`,
+    /// when the call ended.
     fn tool_span(
         &self,
         running: &Running,
@@ -998,6 +995,7 @@ impl RunService {
         called: &Called<'_>,
         answer: &Answer,
         mcp: Option<&McpCallMeta>,
+        end: SystemTime,
     ) {
         let Called {
             call,
@@ -1005,7 +1003,6 @@ impl RunService {
             source,
             input,
         } = called;
-        let end = running.at(answer.started_ms().saturating_add(answer.latency_ms()));
         let failed = answer.status().is_error();
         let over_mcp = OverMcp::of(mcp);
         LabletExecuteTool {

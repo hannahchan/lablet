@@ -271,7 +271,7 @@ fn context(labels: RunLabels) -> RunContext {
     RunContext {
         run_id: RunId::ulid(7),
         labels,
-        started_unix_ms: 1_700_000_000_000,
+        started: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
         config_digest: ConfigDigest::from_sha256([0xab; 32]),
         agent_version: "0.1.0".to_owned(),
         transcript_path: None,

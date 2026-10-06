@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use lablet_model::{
     CacheScope, CompletionMode, ContentBlock, Effort, Endpoint, FinishReason, ModelRef, OutputCap,
@@ -44,6 +44,10 @@ const fn ms(millis: u64) -> Duration {
     Duration::from_millis(millis)
 }
 
+const fn us(micros: u64) -> Duration {
+    Duration::from_micros(micros)
+}
+
 fn nz(count: u32) -> std::num::NonZeroU32 {
     std::num::NonZeroU32::new(count).expect("a cap in these tests is above zero")
 }
@@ -71,8 +75,11 @@ fn mcp(server: &str) -> ToolSource {
 /// The id of every run here, unless a test gives its run another.
 const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 
-/// When every run here started, in milliseconds since the Unix epoch.
-const STARTED_UNIX_MS: u64 = 1_790_000_000_000;
+/// When every run here started: a fraction of a millisecond past a whole
+/// one, so a time cut to the millisecond anywhere is a time that differs.
+fn started() -> SystemTime {
+    UNIX_EPOCH + Duration::from_nanos(1_790_000_000_000_123_456)
+}
 
 /// The digest every run's context gives its config.
 const CONFIG_DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -81,7 +88,7 @@ fn context() -> RunContext {
     RunContext {
         run_id: RunId::new(RUN).expect("a valid run id"),
         labels: RunLabels::default(),
-        started_unix_ms: STARTED_UNIX_MS,
+        started: started(),
         config_digest: lablet_model::ConfigDigest::new(CONFIG_DIGEST).expect("a digest"),
         agent_version: "0.1.0".to_owned(),
         transcript_path: None,
@@ -490,11 +497,11 @@ fn record_json(record: &SdkLogRecord, key: &str) -> serde_json::Value {
 }
 
 /// How far into the run `at` is, in whole milliseconds.
-fn offset_ms(at: std::time::SystemTime) -> u64 {
-    let since_epoch = at
-        .duration_since(UNIX_EPOCH)
-        .expect("the run started after the epoch");
-    u64::try_from(since_epoch.as_millis()).expect("a time within the epoch") - STARTED_UNIX_MS
+fn offset_ms(at: SystemTime) -> u64 {
+    let since = at
+        .duration_since(started())
+        .expect("nothing of a run is timed before it started");
+    u64::try_from(since.as_millis()).expect("a run's offsets are short")
 }
 
 /// When `span` started and how long it lasted, in milliseconds into the run.
@@ -1109,7 +1116,7 @@ async fn a_run_cancelled_during_a_provider_attempt_drops_it_and_makes_no_other()
             ms(250),
         ),
         Answer::Fails(overloaded(), ms(40)),
-        Answer::Cancels(Arc::clone(&cancel), ms(70)),
+        Answer::Cancels(Arc::clone(&cancel), us(70_500)),
         Answer::now(says("Never reached.", &[], FinishReason::EndTurn)),
     ]);
     harness.cancel = cancel;
@@ -1148,6 +1155,11 @@ async fn a_run_cancelled_during_a_provider_attempt_drops_it_and_makes_no_other()
         timing(dropped),
         (390, 70),
         "the attempt began after the backoff and was dropped when the run was cancelled"
+    );
+    assert_eq!(
+        dropped.end_time,
+        started() + us(460_500),
+        "the dropped attempt's span ends when it was dropped, to the nanosecond"
     );
     assert_eq!(
         dropped.status,
@@ -5313,49 +5325,92 @@ async fn every_span_is_a_sampled_child_of_the_context_the_run_was_called_in() {
     }
 }
 
-/// The fake's latencies are a fraction over a whole millisecond, so a span
-/// timed from the loop's own `Duration`s would differ from the record.
+/// Every time a span, an event or a record carries is the run's start plus
+/// what the loop measured on its clock, to the nanosecond, while each `*_ms`
+/// value is the whole milliseconds of the time or the length it measures.
 #[tokio::test]
-async fn a_span_starts_and_ends_at_the_run_s_start_plus_the_model_s_whole_millisecond_offsets() {
+async fn a_span_event_and_record_are_timed_to_the_nanosecond_and_their_ms_values_are_cut() {
     let mut harness = Harness::new(vec![
+        Answer::Fails(overloaded(), us(250)),
         Answer::Responds(
             Box::new(says("On it.", &["bash"], FinishReason::ToolUse)),
-            ms(400) + Duration::from_micros(600),
+            us(250),
         ),
-        Answer::Responds(Box::new(says("Done.", &[], FinishReason::EndTurn)), ms(150)),
+        Answer::Responds(Box::new(says("Done.", &[], FinishReason::EndTurn)), us(125)),
     ]);
     harness.tools = vec![Arc::new(
         FakeTools::new(
             Arc::clone(&harness.clock),
             vec![spec("bash", ToolSource::Builtin)],
         )
-        .taking(ms(250) + Duration::from_micros(900)),
+        .taking(us(1_500)),
     )];
+    harness.context.capture_content = true;
 
     let run = harness.run().await;
 
-    let at = |offset_ms: u64| UNIX_EPOCH + Duration::from_millis(STARTED_UNIX_MS + offset_ms);
-    let turns = run.finished.transcript.turns();
-    let chats = run.chats();
-    for (chat, turn) in chats.iter().zip(turns) {
-        let record = turn.record();
-        assert_eq!(chat.start_time, at(record.started_ms), "{record:?}");
-        assert_eq!(
-            chat.end_time,
-            at(record.started_ms + record.latency_ms),
-            "{record:?}"
-        );
-    }
-    assert_eq!(
-        chats.iter().map(timing).collect::<Vec<_>>(),
-        [(0, 400), (651, 150)],
-        "the fractions are cut, not rounded, and the second attempt began at 651.5 ms"
-    );
+    let at = |offset: Duration| started() + offset;
+    let lasted = |span: &SpanData| span.end_time.duration_since(span.start_time).unwrap();
+    let [failed, answered, done] = run.chats().try_into().expect("three attempts");
     let [tool] = run.tools().try_into().expect("one call");
+    assert_eq!(run.clock.sleeps(), [ms(100)]);
+    assert_eq!(
+        (failed.start_time, failed.end_time),
+        (at(ms(0)), at(us(250)))
+    );
+    assert_eq!(answered.start_time, at(us(100_250)));
+    assert_eq!(lasted(&answered), us(250));
+    assert_eq!(
+        (tool.start_time, tool.end_time),
+        (at(us(100_500)), at(ms(102)))
+    );
+    assert_eq!(
+        (done.start_time, done.end_time),
+        (at(ms(102)), at(us(102_125)))
+    );
+    assert_eq!(run.finished.duration, us(102_125));
+
+    let [retry] = failed.events.events.as_slice() else {
+        panic!("one event: {:?}", failed.events);
+    };
+    assert_eq!(retry.timestamp, at(us(250)));
+    let [exception] = run.exceptions().try_into().expect("one exception");
+    assert_eq!(exception.timestamp(), Some(at(us(250))));
+    assert_eq!(exception.observed_timestamp(), Some(at(us(250))));
+    let times: Vec<_> = run
+        .content()
+        .iter()
+        .map(|record| (record.timestamp(), record.observed_timestamp()))
+        .collect();
+    let both = |offset| (Some(at(offset)), Some(at(offset)));
+    assert_eq!(
+        times,
+        [
+            both(ms(0)),
+            both(us(250)),
+            both(us(100_500)),
+            both(ms(102)),
+            both(us(102_125))
+        ],
+        "the tools offered, then each attempt and the call as it ended"
+    );
+
+    let summary = &run.finished.summary;
+    let latency = summary.provider.latency;
+    assert_eq!((latency.total_ms(), latency.max_ms()), (0, 0));
+    assert_eq!(summary.tool_calls.latency_ms, 1);
+    assert_eq!(summary.outcome.duration_ms, 102);
+    let turns = run.finished.transcript.turns();
+    let record = turns[0].record();
+    assert_eq!((record.started_ms, record.latency_ms), (100, 0));
     let outcome = &turns[0].tool_calls()[0];
-    assert_eq!(tool.start_time, at(outcome.started_ms));
-    assert_eq!(tool.end_time, at(outcome.started_ms + outcome.latency_ms));
-    assert_eq!(timing(&tool), (400, 250));
+    assert_eq!((outcome.started_ms, outcome.latency_ms), (100, 1));
+    let backoff = retry
+        .attributes
+        .iter()
+        .find(|attribute| attribute.key.as_str() == key::LABLET_RETRY_BACKOFF_MS)
+        .map(|attribute| attribute.value.clone());
+    assert_eq!(backoff, Some(Value::I64(100)));
 }
 
 #[tokio::test]
@@ -5576,7 +5631,7 @@ async fn each_record_of_content_is_in_the_context_of_the_span_the_content_belong
                 .collect();
             if context.span_id == run.root.span_id() {
                 assert_eq!(context.trace_id, run.root.trace_id());
-                assert_eq!(record.timestamp(), Some(UNIX_EPOCH + ms(STARTED_UNIX_MS)));
+                assert_eq!(record.timestamp(), Some(started()));
                 assert_eq!(attributes.get(key::LABLET_TURN), None);
                 return ("the context the run was called in", held);
             }

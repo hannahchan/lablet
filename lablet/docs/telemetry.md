@@ -18,7 +18,7 @@ The resource carries [`service.name`, `service.version`](telemetry/service/entit
 
 `gen_ai.conversation.id`, `session.id`, and `lablet.config.digest` are on every span and log record, so any of them groups a run's data without a join. So are `lablet.task.id`, `lablet.experiment.id`, and `lablet.trial`, each when the run request named it.
 
-Every span starts when the loop measured its call to start and lasts as long as the loop measured it to take, so the durations of a run's spans sum to the latencies of its wide event.
+Every span starts when the loop measured its call to start and lasts as long as the loop measured it to take, as finely as the clock measured it: a sub-millisecond call is a span of its own length, not of none. The span events and log records are timed the same way. The `*_ms` attributes are whole milliseconds, each cut from the time or length it measures, so a latency the wide event totals is the sum of its spans' durations each cut to whole milliseconds, and can fall short of their summed durations by under a millisecond a span.
 
 Captured content is a JSON string in the form the GenAI conventions give its attribute, and a text longer than 1 MiB is cut there. The wide event is exported alone and after everything else of its run, so a batch of content that a collector refuses for its size can't take it along. Its `lablet.telemetry.dropped_records` counts the run's spans and log records that were lost on the way.
 

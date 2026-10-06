@@ -138,10 +138,8 @@ pub struct Progress {
     pub consecutive_invalid_turns: u32,
 }
 
-/// The timing of a provider call attempt that failed, as the run counted it.
-///
-/// [`Run::failed_attempt`] gives it back, so what the loop puts on the
-/// attempt's span is what the summary's provider latencies hold of it.
+/// The timing of a provider call attempt that failed, as the run counted it:
+/// in the whole milliseconds the summary's provider latencies hold of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FailedAttempt {
     /// When the attempt began, in whole milliseconds since the run started.
@@ -423,6 +421,7 @@ impl Run {
         FinishedRun {
             summary,
             transcript,
+            duration,
         }
     }
 

@@ -87,7 +87,7 @@ fn what_names_the_run_is_what_its_context_states() {
         json!(context.config_digest.as_str())
     );
     assert_eq!(document["lablet_version"], json!(context.agent_version));
-    assert_eq!(document["started_unix_ms"], json!(context.started_unix_ms));
+    assert_eq!(document["started_unix_ms"], json!(1_790_000_000_123_u64));
     assert_eq!(
         document["model"],
         json!({

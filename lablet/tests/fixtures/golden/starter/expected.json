@@ -49,7 +49,7 @@
       "body": null,
       "event_name": "lablet.run",
       "flags": 1,
-      "observed_time_ms": 0,
+      "observed_time_ns": 0,
       "resource": {
         "service.name": "lablet",
         "service.version": "0.1.0",
@@ -65,7 +65,7 @@
       "severity_number": 9,
       "severity_text": "INFO",
       "span_id": "span-1",
-      "time_ms": 0,
+      "time_ns": 0,
       "trace_id": "trace-1"
     }
   ],
@@ -85,7 +85,7 @@
         "lablet.tool_calls.total": 0,
         "session.id": "golden-starter"
       },
-      "end_ms": 0,
+      "end_ns": 0,
       "events": [],
       "flags": 257,
       "kind": "internal",
@@ -104,7 +104,7 @@
         "version": "0.1.0"
       },
       "span_id": "span-1",
-      "start_ms": 0,
+      "start_ns": 0,
       "status": {
         "code": "unset"
       },
@@ -129,7 +129,7 @@
         "lablet.turn": 1,
         "session.id": "golden-starter"
       },
-      "end_ms": 0,
+      "end_ns": 0,
       "events": [],
       "flags": 257,
       "kind": "client",
@@ -148,7 +148,7 @@
         "version": "0.1.0"
       },
       "span_id": "span-2",
-      "start_ms": 0,
+      "start_ns": 0,
       "status": {
         "code": "unset"
       },

@@ -21,7 +21,8 @@
 //!
 //! What's normalised: trace and span ids become their order of first
 //! appearance in a canonical order of the signals, times become their offset
-//! in milliseconds from the root span's start, the attributes of every
+//! in nanoseconds from the root span's start, so a fixture shows a time as
+//! finely as lablet exports it, the attributes of every
 //! signal are sorted by key, and the SDK's own version in the resource
 //! becomes the word `normalised`, so a bump of the SDK stays a commit of its
 //! own. Nothing else is: lablet's version is in the fixture as it is, and a
@@ -323,10 +324,9 @@ fn normalised(exported: &Exported) -> Value {
     // Nothing of a run is timed before its root span starts, so the
     // difference is checked rather than saturated.
     let offset = |nanos: u64| {
-        nanos.checked_sub(origin).map_or_else(
-            || panic!("{nanos} is before the root span's start {origin}"),
-            |since| since / 1_000_000,
-        )
+        nanos
+            .checked_sub(origin)
+            .unwrap_or_else(|| panic!("{nanos} is before the root span's start {origin}"))
     };
 
     // Concurrent calls and export batches put the signals in no fixed
@@ -368,7 +368,7 @@ fn normalised(exported: &Exported) -> Value {
                 .map(|event| {
                     json!({
                         "name": event.name,
-                        "time_ms": offset(event.time_unix_nano),
+                        "time_ns": offset(event.time_unix_nano),
                         "attributes": event.attributes,
                     })
                 })
@@ -379,8 +379,8 @@ fn normalised(exported: &Exported) -> Value {
                 "parent_span_id": parent_span_id,
                 "name": span.name,
                 "kind": kind(span.kind),
-                "start_ms": offset(span.start_unix_nano),
-                "end_ms": offset(span.end_unix_nano),
+                "start_ns": offset(span.start_unix_nano),
+                "end_ns": offset(span.end_unix_nano),
                 "status": status(&span.status),
                 "flags": span.flags,
                 "scope": scope(&span.scope),
@@ -401,8 +401,8 @@ fn normalised(exported: &Exported) -> Value {
                 "event_name": record.event_name,
                 "severity_number": record.severity_number,
                 "severity_text": record.severity_text,
-                "time_ms": offset(record.time_unix_nano),
-                "observed_time_ms": offset(record.observed_time_unix_nano),
+                "time_ns": offset(record.time_unix_nano),
+                "observed_time_ns": offset(record.observed_time_unix_nano),
                 "flags": record.flags,
                 "scope": scope(&record.scope),
                 "resource": resource(&record.resource),

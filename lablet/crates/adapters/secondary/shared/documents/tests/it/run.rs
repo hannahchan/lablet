@@ -4,7 +4,7 @@
 use std::num::NonZeroU32;
 use std::pin::pin;
 use std::task::{Context, Poll, Waker};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use lablet_model::{
     Answer, CacheScope, CompletionMode, ConfigDigest, ContentBlock, FinishReason, KeptOutput,
@@ -45,7 +45,7 @@ pub(crate) fn context() -> RunContext {
     RunContext {
         run_id: run_id(),
         labels: labels(),
-        started_unix_ms: 1_790_000_000_123,
+        started: UNIX_EPOCH + Duration::from_nanos(1_790_000_000_123_456_789),
         config_digest: ConfigDigest::new(
             "9f2c6a1d0b7e4c35a8f1d2e3b4c5a6978877665544332211ffeeddccbbaa0099",
         )

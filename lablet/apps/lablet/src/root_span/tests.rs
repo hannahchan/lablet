@@ -2,7 +2,7 @@
 //! by stop reason.
 
 use std::num::NonZeroU32;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use lablet_model::{
     CacheScope, CompletionMode, ConfigDigest, Cost, FinishReason, ModelRef, Prompts, ProviderApi,
@@ -27,7 +27,7 @@ fn context() -> RunContext {
             experiment: None,
             trial: None,
         },
-        started_unix_ms: 1_790_000_000_000,
+        started: UNIX_EPOCH + Duration::from_secs(1_790_000_000),
         config_digest: ConfigDigest::new(CONFIG_DIGEST).unwrap(),
         agent_version: "0.4.2".to_owned(),
         transcript_path: None,

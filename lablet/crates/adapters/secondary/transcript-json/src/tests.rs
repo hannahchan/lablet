@@ -1,5 +1,5 @@
 use std::ffi::OsStr;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use lablet_model::{
     CacheScope, CompletionMode, ModelRef, Prompts, ProviderApi, RequestParams, Run, RunContext,
@@ -52,7 +52,7 @@ fn document(run: &str, system: &str) -> TranscriptDocument {
     let context = RunContext {
         run_id: id(run),
         labels: RunLabels::default(),
-        started_unix_ms: 1_790_000_000_123,
+        started: UNIX_EPOCH + Duration::from_millis(1_790_000_000_123),
         config_digest: lablet_model::ConfigDigest::new("9f2c".repeat(16)).unwrap(),
         agent_version: "0.1.0".to_owned(),
         transcript_path: None,
