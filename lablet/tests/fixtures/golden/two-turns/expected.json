@@ -19,8 +19,8 @@
         "lablet.prompt.system_digest": "5b867631ba121bd65363b27f2404b8f81f1b3a8aa98437106cd144a88df658f4",
         "lablet.prompt.tools_bytes": 970,
         "lablet.prompt.user_bytes": 36,
-        "lablet.provider.latency_ms.max": 0,
-        "lablet.provider.latency_ms.total": 0,
+        "lablet.provider.latency_ms.max": 300,
+        "lablet.provider.latency_ms.total": 450,
         "lablet.provider.retries": 0,
         "lablet.request.api": "script",
         "lablet.request.cache_scope": "shared",
@@ -29,7 +29,7 @@
         "lablet.result.has_structured": false,
         "lablet.result.text_bytes": 60,
         "lablet.run.completion_mode": "natural",
-        "lablet.run.duration_ms": 0,
+        "lablet.run.duration_ms": 450,
         "lablet.run.stop_reason": "completed",
         "lablet.run.timeout_ms": 600000,
         "lablet.run.turns": 2,
@@ -55,7 +55,7 @@
       "body": null,
       "event_name": "lablet.run",
       "flags": 1,
-      "observed_time_ms": 0,
+      "observed_time_ms": 450,
       "resource": {
         "service.name": "lablet",
         "service.version": "0.1.0",
@@ -71,7 +71,7 @@
       "severity_number": 9,
       "severity_text": "INFO",
       "span_id": "span-1",
-      "time_ms": 0,
+      "time_ms": 450,
       "trace_id": "trace-1"
     }
   ],
@@ -91,7 +91,7 @@
         "lablet.tool_calls.total": 1,
         "session.id": "golden-two-turns"
       },
-      "end_ms": 0,
+      "end_ms": 450,
       "events": [],
       "flags": 257,
       "kind": "internal",
@@ -124,18 +124,18 @@
         "gen_ai.request.max_tokens": 32000,
         "gen_ai.request.model": "scripted",
         "gen_ai.response.finish_reasons": [
-          "end_turn"
+          "tool_use"
         ],
-        "gen_ai.usage.input_tokens": 210,
-        "gen_ai.usage.output_tokens": 18,
+        "gen_ai.usage.input_tokens": 140,
+        "gen_ai.usage.output_tokens": 24,
         "lablet.attempt": 1,
         "lablet.chat.purpose": "turn",
         "lablet.config.digest": "961503b2eeb9472a7ba76372acb90ec73e10db87c0f5a0d95961d77af34e6456",
-        "lablet.request.bytes": 1400,
-        "lablet.turn": 2,
+        "lablet.request.bytes": 1114,
+        "lablet.turn": 1,
         "session.id": "golden-two-turns"
       },
-      "end_ms": 0,
+      "end_ms": 300,
       "events": [],
       "flags": 257,
       "kind": "client",
@@ -163,50 +163,6 @@
     {
       "attributes": {
         "gen_ai.conversation.id": "golden-two-turns",
-        "gen_ai.operation.name": "chat",
-        "gen_ai.provider.name": "fake",
-        "gen_ai.request.max_tokens": 32000,
-        "gen_ai.request.model": "scripted",
-        "gen_ai.response.finish_reasons": [
-          "tool_use"
-        ],
-        "gen_ai.usage.input_tokens": 140,
-        "gen_ai.usage.output_tokens": 24,
-        "lablet.attempt": 1,
-        "lablet.chat.purpose": "turn",
-        "lablet.config.digest": "961503b2eeb9472a7ba76372acb90ec73e10db87c0f5a0d95961d77af34e6456",
-        "lablet.request.bytes": 1114,
-        "lablet.turn": 1,
-        "session.id": "golden-two-turns"
-      },
-      "end_ms": 0,
-      "events": [],
-      "flags": 257,
-      "kind": "client",
-      "name": "chat scripted",
-      "parent_span_id": "span-1",
-      "resource": {
-        "service.name": "lablet",
-        "service.version": "0.1.0",
-        "telemetry.sdk.language": "rust",
-        "telemetry.sdk.name": "opentelemetry",
-        "telemetry.sdk.version": "normalised"
-      },
-      "scope": {
-        "name": "lablet",
-        "schema_url": "https://lablet.dev/schemas/0.1.0",
-        "version": "0.1.0"
-      },
-      "span_id": "span-3",
-      "start_ms": 0,
-      "status": {
-        "code": "unset"
-      },
-      "trace_id": "trace-1"
-    },
-    {
-      "attributes": {
-        "gen_ai.conversation.id": "golden-two-turns",
         "gen_ai.operation.name": "execute_tool",
         "gen_ai.tool.call.id": "call_1",
         "gen_ai.tool.description": "Returns the text of a file. A path that isn't absolute starts at the run's root directory, which is where `bash` starts, and a path that leads outside that directory once symbolic links are followed is refused. `offset` and `limit` choose lines, so a file too long to be returned whole can be read in parts: `offset` is how many lines to skip, and `limit` is how many to return after them. Bytes that aren't UTF-8 are returned as U+FFFD. A call that takes longer than 120s is stopped.",
@@ -222,7 +178,7 @@
         "lablet.turn": 1,
         "session.id": "golden-two-turns"
       },
-      "end_ms": 0,
+      "end_ms": 300,
       "events": [],
       "flags": 257,
       "kind": "internal",
@@ -240,8 +196,52 @@
         "schema_url": "https://lablet.dev/schemas/0.1.0",
         "version": "0.1.0"
       },
+      "span_id": "span-3",
+      "start_ms": 300,
+      "status": {
+        "code": "unset"
+      },
+      "trace_id": "trace-1"
+    },
+    {
+      "attributes": {
+        "gen_ai.conversation.id": "golden-two-turns",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "fake",
+        "gen_ai.request.max_tokens": 32000,
+        "gen_ai.request.model": "scripted",
+        "gen_ai.response.finish_reasons": [
+          "end_turn"
+        ],
+        "gen_ai.usage.input_tokens": 210,
+        "gen_ai.usage.output_tokens": 18,
+        "lablet.attempt": 1,
+        "lablet.chat.purpose": "turn",
+        "lablet.config.digest": "961503b2eeb9472a7ba76372acb90ec73e10db87c0f5a0d95961d77af34e6456",
+        "lablet.request.bytes": 1400,
+        "lablet.turn": 2,
+        "session.id": "golden-two-turns"
+      },
+      "end_ms": 450,
+      "events": [],
+      "flags": 257,
+      "kind": "client",
+      "name": "chat scripted",
+      "parent_span_id": "span-1",
+      "resource": {
+        "service.name": "lablet",
+        "service.version": "0.1.0",
+        "telemetry.sdk.language": "rust",
+        "telemetry.sdk.name": "opentelemetry",
+        "telemetry.sdk.version": "normalised"
+      },
+      "scope": {
+        "name": "lablet",
+        "schema_url": "https://lablet.dev/schemas/0.1.0",
+        "version": "0.1.0"
+      },
       "span_id": "span-4",
-      "start_ms": 0,
+      "start_ms": 300,
       "status": {
         "code": "unset"
       },

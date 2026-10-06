@@ -64,6 +64,7 @@ An entry under `Unreleased` is mandatory for any change to one of these files, a
 - `RunRequest::run_id` refuses an id that isn't one component of a path, `.` and `..` and any id that holds a `/` or a NUL, and an id longer than 128 bytes, since a run's files are named with its id.
 - A YAML config that holds `.nan` or `.inf` is refused when it's read, since JSON has no such number, and a JSON config that writes a key twice in one object is refused, where the last one was kept.
 - `model.base_url` is refused when it isn't a URL that begins `http://` or `https://` and names a host.
+- The `two-turns` example's scripted model waits 300 ms before its first answer and 150 ms before its second, as a model would, so the run's chat spans in Jaeger have a length. That run's golden telemetry changes with it in its times and its latency and duration attributes, and in nothing else.
 
 ### Added
 
