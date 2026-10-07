@@ -33,7 +33,7 @@ pub(crate) enum FileTarget {
 /// Where the lines go.
 #[derive(Debug)]
 enum Destination {
-    File(PathBuf),
+    File(Held<File>),
     Stderr {
         /// Whether a write that failed left part of a line on standard
         /// error. It's one stream whatever run writes to it, so a run's
@@ -42,14 +42,7 @@ enum Destination {
     },
 }
 
-#[derive(Debug)]
-struct Open {
-    destination: Destination,
-    /// The file that was written last.
-    held: Option<Held<File>>,
-}
-
-/// A file that lines were written to, which is a `W`.
+/// The file at one path that lines are written to, which is a `W`.
 #[derive(Debug)]
 struct Held<W> {
     path: PathBuf,
@@ -62,28 +55,23 @@ struct Held<W> {
 }
 
 impl<W: io::Write> Held<W> {
-    /// Appends `line` to the file at `path`, which `open` opens unless
-    /// `held` is that file and has it open.
+    /// The file at `path`, which the first line opens.
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            file: None,
+            torn: false,
+        }
+    }
+
+    /// Appends `line` to the file, which `open` opens unless it's open.
     ///
     /// A file that failed is let go of, so the next line opens it again, in
     /// case what was wrong with it has been put right.
-    fn append(
-        held: &mut Option<Self>,
-        path: &Path,
-        line: &str,
-        open: impl FnOnce(&Path) -> io::Result<W>,
-    ) -> io::Result<()> {
-        let held = match held {
-            Some(held) if held.path == path => held,
-            _ => held.insert(Self {
-                path: path.to_owned(),
-                file: None,
-                torn: false,
-            }),
-        };
-        let written = held.write(line, open);
+    fn append(&mut self, line: &str, open: impl FnOnce(&Path) -> io::Result<W>) -> io::Result<()> {
+        let written = self.write(line, open);
         if written.is_err() {
-            held.let_go();
+            self.let_go();
         }
         written
     }
@@ -138,20 +126,17 @@ fn whole(file: &mut impl io::Write, text: &str, torn: &mut bool) -> io::Result<(
 /// at a time whichever of them writes it.
 #[derive(Debug, Clone)]
 pub(crate) struct Sink {
-    open: Arc<Mutex<Open>>,
+    destination: Arc<Mutex<Destination>>,
 }
 
 impl Sink {
     pub(crate) fn new(target: FileTarget) -> Self {
         let destination = match target {
-            FileTarget::Path(path) => Destination::File(path),
+            FileTarget::Path(path) => Destination::File(Held::new(path)),
             FileTarget::Stderr => Destination::Stderr { torn: false },
         };
         Self {
-            open: Arc::new(Mutex::new(Open {
-                destination,
-                held: None,
-            })),
+            destination: Arc::new(Mutex::new(destination)),
         }
     }
 
@@ -160,8 +145,11 @@ impl Sink {
     /// would take the lines its path is to hold. Nothing is opened here: the
     /// loop is waiting.
     pub(crate) fn start(&self) {
-        let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(held) = &mut open.held {
+        let mut destination = self
+            .destination
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Destination::File(held) = &mut *destination {
             held.let_go();
         }
     }
@@ -171,12 +159,15 @@ impl Sink {
     /// An error names no path: the caller may have taken the path from a
     /// variable, and what a variable holds is in no message.
     fn write(&self, line: &str) -> Result<(), String> {
-        let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
-        let Open { destination, held } = &mut *open;
-        match destination {
+        let mut destination = self
+            .destination
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match &mut *destination {
             Destination::Stderr { torn } => put(&mut io::stderr().lock(), line, torn)
                 .map_err(|error| format!("standard error couldn't be written: {error}")),
-            Destination::File(path) => Held::append(held, path, line, to_append)
+            Destination::File(held) => held
+                .append(line, to_append)
                 .map_err(|error| format!("the telemetry file couldn't be written: {error}")),
         }
     }

@@ -12,6 +12,7 @@ use opentelemetry::trace::{
     SpanContext, SpanId, TraceContextExt as _, TraceFlags, TraceId, TraceState,
 };
 use opentelemetry::{Context, Key, Value, global};
+use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::resource::{EnvResourceDetector, ResourceDetector as _};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use serde_json::json;
@@ -56,13 +57,45 @@ fn env_resource_detector_child() {
 }
 
 /// Lablet decodes the pairs itself, from the seam, rather than decoding what
-/// this detector gives. When the SDK decodes them, this fails: lablet's own
-/// detector can then give way to the SDK's.
+/// this detector gives. When the SDK decodes them, this fails, and lablet's
+/// own detector can give way to the SDK's once
+/// `canary_resource_builder_puts_the_pairs_over_otel_service_name` fails too.
 #[test]
 fn canary_env_resource_detector_leaves_an_escape_undecoded() {
     in_a_child(
         "env_resource_detector_child",
         &[("OTEL_RESOURCE_ATTRIBUTES", "team=a%2Cb")],
+    );
+}
+
+/// The child's side: the SDK's own resource, with both `OTEL_SERVICE_NAME`
+/// and a `service.name` among the pairs, takes the pairs'.
+#[test]
+fn resource_builder_precedence_child() {
+    if std::env::var_os(CHILD).is_none() {
+        return;
+    }
+    let resource = Resource::builder().build();
+    assert_eq!(
+        resource.get(&Key::new("service.name")),
+        Some(Value::from("from-the-pairs"))
+    );
+}
+
+/// Lablet puts `OTEL_SERVICE_NAME` over the pairs' `service.name`, as the
+/// specification orders them, where the SDK's builder merges the pairs
+/// last. A release that decodes the pairs but keeps this order would fail
+/// the decoding canary alone, and giving way to the SDK's detector then
+/// would let the pairs name the service. When the SDK takes the variable
+/// over the pairs, this fails.
+#[test]
+fn canary_resource_builder_puts_the_pairs_over_otel_service_name() {
+    in_a_child(
+        "resource_builder_precedence_child",
+        &[
+            ("OTEL_SERVICE_NAME", "from-the-variable"),
+            ("OTEL_RESOURCE_ATTRIBUTES", "service.name=from-the-pairs"),
+        ],
     );
 }
 

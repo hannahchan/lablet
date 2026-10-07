@@ -347,8 +347,10 @@ impl Telemetry {
     /// # Errors
     ///
     /// Returns a [`FlushError`] holding what each provider said of a
-    /// processor that failed to export or to stop in time, or that the
-    /// provider was shut down already.
+    /// processor that didn't stop in time, or that the provider was shut
+    /// down already. An export that fails as a processor stops isn't among
+    /// them: the 0.33 SDK's batch processors drop what that export returned,
+    /// and report it only on the diagnostic log, as their own export error.
     pub(crate) async fn shutdown(&self) -> Result<(), FlushError> {
         let Some(Providers { tracer, logger }) = self.providers.clone() else {
             return Ok(());

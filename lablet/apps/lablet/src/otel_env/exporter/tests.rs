@@ -206,16 +206,36 @@ fn a_header_pair_that_is_not_one_is_dropped_with_a_warning_that_holds_no_value()
 }
 
 #[test]
-fn a_header_variable_that_leaves_no_header_is_unset_and_the_generic_one_decides() {
-    let (exporter, _) = read(&[
-        ("OTEL_EXPORTER_OTLP_HEADERS", "x-generic=g"),
-        ("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "nothing usable"),
+fn a_signals_header_variable_that_leaves_no_header_still_decides_over_the_generic_one() {
+    let (exporter, warnings) = read(&[
+        ("OTEL_EXPORTER_OTLP_HEADERS", "x-generic=hunter2hunter2"),
+        ("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "x-api-key="),
+        ("OTEL_EXPORTER_OTLP_LOGS_HEADERS", "nothing usable"),
     ]);
 
-    assert_eq!(
-        pairs(exporter.traces.headers.as_ref()),
-        [("x-generic", "g")]
-    );
+    for inherited in [&exporter.traces, &exporter.logs] {
+        assert_eq!(inherited.headers, Some(Vec::new()));
+        assert_eq!(inherited.header_names, ["x-generic"]);
+    }
+    assert_eq!(warnings.len(), 2);
+    assert!(warnings.iter().all(|warning| !warning.contains("hunter2")));
+}
+
+#[test]
+fn a_signals_header_variable_that_is_not_utf8_still_decides_over_the_generic_one() {
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let env = |name: &str| match name {
+        "OTEL_EXPORTER_OTLP_HEADERS" => Some("x-generic=g".into()),
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS" => {
+            Some(std::ffi::OsString::from_vec(b"x-api-key=\xff".to_vec()))
+        }
+        _ => None,
+    };
+    let exporter = Exporter::read(&Variables(&env));
+
+    assert_eq!(exporter.traces.headers, Some(Vec::new()));
+    assert_eq!(pairs(exporter.logs.headers.as_ref()), [("x-generic", "g")]);
 }
 
 #[test]
@@ -265,6 +285,27 @@ fn a_timeout_that_is_not_a_number_is_ignored_with_a_warning() {
              milliseconds, so it's ignored"
         ]
     );
+}
+
+#[test]
+fn a_timeout_of_zero_is_no_limit_and_still_wins_over_the_generic_one() {
+    let (exporter, warnings) = read(&[
+        ("OTEL_EXPORTER_OTLP_TIMEOUT", "0"),
+        ("OTEL_EXPORTER_OTLP_LOGS_TIMEOUT", "750"),
+    ]);
+    let (own, _) = read(&[
+        ("OTEL_EXPORTER_OTLP_TIMEOUT", "2500"),
+        ("OTEL_EXPORTER_OTLP_TRACES_TIMEOUT", "0"),
+    ]);
+
+    assert!(warnings.is_empty());
+    assert_eq!(
+        exporter.traces.timeout,
+        Duration::from_millis(2_147_483_647)
+    );
+    assert_eq!(exporter.logs.timeout, Duration::from_millis(750));
+    assert_eq!(own.traces.timeout, Duration::from_millis(2_147_483_647));
+    assert_eq!(own.logs.timeout, Duration::from_millis(2_500));
 }
 
 #[test]

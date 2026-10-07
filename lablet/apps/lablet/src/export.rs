@@ -10,8 +10,10 @@
 //! destination through the SDK's batch processors: an OTLP collector over
 //! the network, by gRPC or HTTP/protobuf, and OTLP/JSON lines in a file. A
 //! run may go to both, and the file's processors are flushed first, so the
-//! file never waits on the network. What a processor drops or fails to
-//! export, the SDK says on the diagnostic log, through `tracing`.
+//! file never waits on the network. What a processor fails to export, the
+//! SDK says on the diagnostic log, through `tracing`. Of what it drops, the
+//! SDK warns at the first drop and logs the total when the processor is
+//! shut down, so which run lost what can't be told.
 
 mod file;
 mod network;

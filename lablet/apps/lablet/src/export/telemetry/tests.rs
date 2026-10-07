@@ -365,7 +365,9 @@ async fn a_telemetry_that_was_shut_down_exports_nothing_more_and_says_so() {
 }
 
 /// What a processor fails to export as it stops, the SDK says on its own
-/// diagnostic log; the stop is what's held here.
+/// diagnostic log, and its shutdown returns `Ok` all the same. If an upgrade
+/// makes this shutdown fail, the SDK has begun to return that export's
+/// result, and the `# Errors` of `Telemetry::shutdown` can name it.
 #[tokio::test]
 async fn a_shutdown_stops_every_processor_even_one_that_cannot_export() {
     let memory = Memory::default();
@@ -373,7 +375,9 @@ async fn a_shutdown_stops_every_processor_even_one_that_cannot_export() {
     memory.refuse_spans(true);
     let _wide = emit_run(&telemetry, RUN, Records::Exception);
 
-    let _ = telemetry.shutdown().await;
+    let shut = telemetry.shutdown().await;
+
+    assert_eq!(shut, Ok(()), "the refused export isn't reported");
 
     assert!(memory.exported_spans().is_empty());
     assert_eq!(memory.exported_records().len(), RECORDS_PER_RUN);

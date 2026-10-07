@@ -496,6 +496,74 @@ async fn a_receiver_that_asks_for_a_client_certificate_gets_the_one_the_environm
     }
 }
 
+/// A collector whose address drops the connection's first packet holds a
+/// connect for as long as the platform retries it, a minute or more, and
+/// nothing on this host can stand in for one, so the bound is read off the
+/// endpoint the channel is made from.
+#[test]
+fn a_grpc_connection_is_bounded_by_the_timeout_of_its_signal() {
+    let settings = otlp_of(
+        &to("grpc", "https://localhost:4317", None),
+        &[
+            ("OTEL_EXPORTER_OTLP_TIMEOUT", "1500"),
+            ("OTEL_EXPORTER_OTLP_LOGS_TIMEOUT", "2500"),
+        ],
+    );
+
+    let bounds: Vec<_> = settings
+        .destinations()
+        .map(|(signal, destination)| {
+            let endpoint = crate::export::network::endpoint(signal, destination).unwrap();
+            (signal, endpoint.get_connect_timeout())
+        })
+        .collect();
+
+    assert_eq!(
+        bounds,
+        [
+            (Signal::Traces, Some(Duration::from_millis(1_500))),
+            (Signal::Logs, Some(Duration::from_millis(2_500))),
+        ]
+    );
+}
+
+/// tonic bounds a request by the timeout but connects a lazy channel
+/// before the request, so a handshake with a peer that holds the socket
+/// and never answers isn't bounded by it unless lablet states it there
+/// too.
+#[tokio::test]
+async fn a_grpc_tls_handshake_that_never_ends_fails_the_export_by_its_timeout() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let silent = listener.local_addr().unwrap();
+    let holding = tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    let receiver = Receiver::start(Mode::Answers).await;
+    let scratch = Scratch::new("network-stalled-handshake");
+    let material = Material::of(&receiver, &scratch);
+    let settings = otlp_of(
+        &to("grpc", &format!("https://{silent}"), None),
+        &[
+            ("OTEL_EXPORTER_OTLP_CERTIFICATE", material.ca.as_str()),
+            ("OTEL_EXPORTER_OTLP_TIMEOUT", "500"),
+        ],
+    );
+
+    let began = Instant::now();
+    let exported = exported_to(settings, "network-stalled-handshake").await;
+    let waited = began.elapsed();
+    holding.abort();
+
+    exported.unwrap_err();
+    assert!(
+        waited < SDK_BOUND,
+        "the export and the shutdown took {waited:?}, so the handshake waited past its timeout"
+    );
+}
+
 // The headers on the wire, from a child process whose environment sets some
 
 /// Set in the environment of the child process the test below starts, to

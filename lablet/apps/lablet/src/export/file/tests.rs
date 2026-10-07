@@ -246,28 +246,22 @@ impl io::Write for Fills {
 
 /// A file at `runs.otlp.jsonl` as the sink holds one, and what it holds.
 struct Appended {
-    held: Option<Held<Fills>>,
+    held: Held<Fills>,
     written: Written,
 }
 
 impl Appended {
     fn new() -> Self {
         Self {
-            held: None,
+            held: Held::new(PathBuf::from("runs.otlp.jsonl")),
             written: Written::default(),
         }
     }
 
     /// Appends `line`. A file that has to be opened for it has `room`.
-    fn append_to(&mut self, path: &str, line: &str, room: usize) -> io::Result<()> {
-        let written = Arc::clone(&self.written);
-        Held::append(&mut self.held, Path::new(path), line, |_| {
-            Ok(Fills { written, room })
-        })
-    }
-
     fn append(&mut self, line: &str, room: usize) -> io::Result<()> {
-        self.append_to("runs.otlp.jsonl", line, room)
+        let written = Arc::clone(&self.written);
+        self.held.append(line, |_| Ok(Fills { written, room }))
     }
 
     fn text(&self) -> String {
@@ -352,21 +346,10 @@ fn a_file_that_was_let_go_of_still_ends_in_the_part_of_a_line_it_was_left_with()
     let mut file = Appended::new();
 
     file.append(ONE, 4).unwrap_err();
-    file.held.as_mut().unwrap().let_go();
+    file.held.let_go();
     file.append(TWO, usize::MAX).unwrap();
 
     assert_eq!(file.text(), format!("{{\"re\n{TWO}"));
-}
-
-#[test]
-fn part_of_a_line_in_one_file_puts_no_newline_in_another() {
-    let mut file = Appended::new();
-
-    file.append_to("first.otlp.jsonl", ONE, 4).unwrap_err();
-    file.append_to("second.otlp.jsonl", TWO, usize::MAX)
-        .unwrap();
-
-    assert_eq!(file.text(), format!("{{\"re{TWO}"));
 }
 
 #[test]
@@ -383,11 +366,9 @@ fn a_file_that_takes_nothing_and_says_so_without_an_error_is_an_error() {
         }
     }
 
-    let mut held = None;
+    let mut held = Held::new(PathBuf::from("runs.otlp.jsonl"));
 
-    let failed = Held::append(&mut held, Path::new("runs.otlp.jsonl"), ONE, |_| {
-        Ok(TakesNothing)
-    });
+    let failed = held.append(ONE, |_| Ok(TakesNothing));
 
     assert_eq!(failed.unwrap_err().kind(), io::ErrorKind::WriteZero);
 }
@@ -465,9 +446,9 @@ async fn standard_error_stays_the_destination_when_a_run_starts_and_is_left_whol
 }
 
 fn stderr_is_torn(sink: &Sink) -> bool {
-    match sink.open.lock().unwrap().destination {
+    match *sink.destination.lock().unwrap() {
         Destination::Stderr { torn } => torn,
-        Destination::File(ref path) => panic!("{} isn't standard error", path.display()),
+        Destination::File(ref held) => panic!("{} isn't standard error", held.path.display()),
     }
 }
 
@@ -476,7 +457,7 @@ fn stderr_is_torn(sink: &Sink) -> bool {
 #[tokio::test]
 async fn standard_error_ends_the_part_of_a_line_a_failed_write_left_whatever_run_writes_next() {
     let sink = Sink::new(FileTarget::Stderr);
-    sink.open.lock().unwrap().destination = Destination::Stderr { torn: true };
+    *sink.destination.lock().unwrap() = Destination::Stderr { torn: true };
 
     sink.start();
 

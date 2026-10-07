@@ -3,9 +3,10 @@
 //! for each signal, and the GenAI instrumentation's capture variable.
 //!
 //! Each setting of a signal is its own variable's when that gives one
-//! lablet can use, else the generic variable's. Each generic variable is
-//! read once for both signals, so a value lablet can't use is warned about
-//! once.
+//! lablet can use, else the generic variable's, but for the headers: a
+//! signal's header variable that's set decides even when it leaves no
+//! header. Each generic variable is read once for both signals, so a value
+//! lablet can't use is warned about once.
 
 use std::path::PathBuf;
 use std::str::FromStr as _;
@@ -13,7 +14,7 @@ use std::time::Duration;
 
 use reqwest::header::{HeaderName, HeaderValue};
 
-use super::{Choice, Named, Parse, Variables};
+use super::{Choice, Named, Parse, Timeout, Variables};
 use crate::config::Env;
 use crate::export::{Signal, Transport, decode_headers};
 use crate::otlp::{Hidden, Inherited, InheritedEndpoint, Variable};
@@ -152,7 +153,7 @@ struct Family {
     protocol: Option<Transport>,
     endpoint: Option<InheritedEndpoint>,
     headers: Option<Headers>,
-    timeout: Option<Duration>,
+    timeout: Option<Timeout>,
     compression: Option<Compression>,
     insecure: Option<bool>,
     certificate: Option<Variable<PathBuf>>,
@@ -171,7 +172,12 @@ impl Family {
                 generic: names.endpoint == GENERIC.endpoint,
                 text: Hidden(text.to_string_lossy().into_owned()),
             }),
-            headers: variables.get(names.headers),
+            // A header variable that's set is the signal's headers even
+            // when every pair in it is dropped, as the exporter reads it, so
+            // the generic variable's token never goes to the endpoint the
+            // signal's variable was set for.
+            headers: raw(variables, names.headers)
+                .map(|_| variables.get(names.headers).unwrap_or_default()),
             timeout: variables.get(names.timeout),
             compression: variables.get(names.compression),
             // A Boolean that's set to what isn't one reads as `false`, as
@@ -226,7 +232,10 @@ fn inherited(variables: &Variables<'_>, signal: Signal, generic: &Family) -> Inh
             .or_else(|| generic.headers.clone())
             .map(|headers| headers.pairs),
         header_names,
-        timeout: own.timeout.or(generic.timeout).unwrap_or(TIMEOUT),
+        timeout: own
+            .timeout
+            .or(generic.timeout)
+            .map_or(TIMEOUT, |Timeout(timeout)| timeout),
         gzip: own.compression.or(generic.compression) == Some(Compression::Gzip),
         insecure: own.insecure.or(generic.insecure).unwrap_or(false),
         certificate: own.certificate.or_else(|| generic.certificate.clone()),
@@ -285,7 +294,7 @@ impl Parse for Compression {
 /// The headers one variable names, each pair one a request may carry, and
 /// the names it sets. A pair that isn't one is warned about, never with
 /// its value, and dropped, and a value that leaves none gives nothing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct Headers {
     pairs: Vec<(String, Hidden)>,
     names: Vec<String>,

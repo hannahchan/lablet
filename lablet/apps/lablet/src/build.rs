@@ -413,6 +413,14 @@ pub(crate) async fn check_in(config: &Config, env: Env<'_>) -> Result<Checked, B
 
 /// A `Lablet` that runs as `config` says.
 ///
+/// The process's environment is read once, here: the `OTEL_*` variables
+/// decide where the telemetry goes, and how, wherever the config's
+/// `telemetry` section states nothing, while `OTEL_SDK_DISABLED=true` turns
+/// it all off whatever the config states; `TRACEPARENT` and `TRACESTATE`
+/// name the parent of every run the `Lablet` makes, and `BAGGAGE` is in
+/// each run's context. An endpoint or a TLS file a variable names is
+/// refused as one the config states is.
+///
 /// # Errors
 ///
 /// Returns [`BuildError::Config`] for a config that states what a config

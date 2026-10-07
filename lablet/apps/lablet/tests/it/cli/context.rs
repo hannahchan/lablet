@@ -150,7 +150,9 @@ fn a_traceparent_that_does_not_parse_is_warned_of_by_name_and_the_run_is_a_trace
 
 /// `baggage` is a default propagator, so an inbound `BAGGAGE` is extracted
 /// into every run's context; nothing lablet emits carries it, the content
-/// it captures included.
+/// it captures and the diagnostic log included. The trailing comma is a
+/// member the propagator can't read, whose warning from the SDK holds the
+/// whole value.
 #[test]
 fn inbound_baggage_is_emitted_nowhere() {
     let (lab, run) = completed(
@@ -158,10 +160,15 @@ fn inbound_baggage_is_emitted_nowhere() {
         READS,
         &[
             ("TRACEPARENT", SAMPLED),
-            ("BAGGAGE", "carried=baggage-0123456789"),
+            ("BAGGAGE", "carried=baggage-0123456789,"),
         ],
     );
 
+    assert!(
+        run.stderr
+            .contains("`BAGGAGE` holds a value the baggage propagator can't read in full"),
+        "{run:?}"
+    );
     let text = std::fs::read_to_string(lab.telemetry()).unwrap();
     assert!(!text.is_empty());
     for held in ["baggage-0123456789", "carried"] {

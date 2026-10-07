@@ -303,23 +303,36 @@ fn client_tls(tls: &Tls) -> ClientTlsConfig {
 
 /// The channel of a gRPC exporter to `destination`, as the exporter would
 /// make it, but with lablet's TLS: lazy, so nothing connects until the
-/// first export, and bounded by the destination's timeout. It needs a tokio
-/// runtime to be made in, for the channel's worker.
+/// first export. It needs a tokio runtime to be made in, for the channel's
+/// worker.
 fn channel(signal: Signal, destination: &Destination) -> Result<Channel, OtelBuildError> {
+    Ok(endpoint(signal, destination)?.connect_lazy())
+}
+
+/// The endpoint a gRPC exporter's channel to `destination` is made from,
+/// each stage of an export bounded by the destination's timeout. tonic's
+/// timeout bounds the request alone, and a lazy channel connects, and
+/// shakes hands over TLS, before the request is sent, so the connection and
+/// the handshake are bounded too, or a collector that holds the socket and
+/// never answers holds the export as long as it likes.
+pub(super) fn endpoint(
+    signal: Signal,
+    destination: &Destination,
+) -> Result<Endpoint, OtelBuildError> {
     let endpoint = Endpoint::from_shared(destination.endpoint.expose_secret().to_owned())
         .map_err(|_| OtelBuildError::Endpoint { signal })?
-        .timeout(destination.timeout);
-    let endpoint = if speaks_tls(&endpoint) {
+        .timeout(destination.timeout)
+        .connect_timeout(destination.timeout);
+    if speaks_tls(&endpoint) {
         endpoint
-            .tls_config(client_tls(&destination.tls))
+            .tls_config(client_tls(&destination.tls).timeout(destination.timeout))
             .map_err(|error| OtelBuildError::Tls {
                 signal,
                 reason: chain(&error),
-            })?
+            })
     } else {
-        endpoint
-    };
-    Ok(endpoint.connect_lazy())
+        Ok(endpoint)
+    }
 }
 
 /// Whether the exporter speaks TLS to `endpoint`, which it does for

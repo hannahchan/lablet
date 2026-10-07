@@ -85,27 +85,38 @@ fn a_resource_attributes_value_that_does_not_decode_is_discarded_whole_with_a_wa
     }
 }
 
-/// The SDK ignores such a pair without a word; the seam says so, naming
-/// the variable alone.
+/// The resource specification discards the whole value on any error, so
+/// a pair that isn't one takes the pairs beside it with it, whether or not
+/// it decodes. A blank member isn't a pair, and is skipped.
 #[test]
-fn a_resource_attributes_pair_with_no_equals_sign_or_no_key_is_ignored_with_a_warning() {
-    let (context, warnings) = read(&[(RESOURCE_ATTRIBUTES, "team=evals,lonely,=orphan")]);
+fn a_resource_attributes_pair_with_no_equals_sign_or_no_key_discards_the_whole_value() {
+    for (broken, why) in [
+        ("team=evals,lonely", "has a pair with no `=`"),
+        ("team=evals,junk%ZZ", "has a pair with no `=`"),
+        ("team=evals,=orphan", "has a pair with no key"),
+        ("team=evals, =orphan", "has a pair with no key"),
+    ] {
+        let (context, warnings) = read(&[(RESOURCE_ATTRIBUTES, broken)]);
 
+        assert!(context.resource_attributes.is_empty(), "{broken}");
+        assert_eq!(
+            warnings,
+            [format!(
+                "`{RESOURCE_ATTRIBUTES}` holds a value that {why}, so the whole of it is ignored"
+            )],
+            "{broken}"
+        );
+    }
+
+    let (context, warnings) = read(&[(RESOURCE_ATTRIBUTES, "team=evals,, ,tier=gold,")]);
     assert_eq!(
         context.resource_attributes,
-        [("team".to_owned(), "evals".to_owned())]
-    );
-    assert_eq!(
-        warnings,
         [
-            format!(
-                "`{RESOURCE_ATTRIBUTES}` holds a value that has a pair with no `=`, which is ignored"
-            ),
-            format!(
-                "`{RESOURCE_ATTRIBUTES}` holds a value that has a pair with no key, which is ignored"
-            ),
+            ("team".to_owned(), "evals".to_owned()),
+            ("tier".to_owned(), "gold".to_owned()),
         ]
     );
+    assert!(warnings.is_empty(), "{warnings:?}");
 }
 
 #[test]

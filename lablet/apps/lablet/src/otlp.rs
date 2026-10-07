@@ -70,8 +70,8 @@ pub(crate) struct Inherited {
     pub(crate) protocol: Option<Transport>,
     /// The endpoint, when a variable names one.
     pub(crate) endpoint: Option<InheritedEndpoint>,
-    /// The headers: the signal's variable's when it holds one, else the
-    /// generic variable's, when either does.
+    /// The headers: the signal's variable's when it's set, even to pairs
+    /// that are all dropped, else the generic variable's, when it's set.
     pub(crate) headers: Option<Vec<(String, Hidden)>>,
     /// Every header name either variable sets, which comes off every
     /// request whichever of them the exporter merged in.
@@ -257,12 +257,20 @@ pub(crate) fn settings(
         .as_deref()
         .filter(|endpoint| !endpoint.is_empty());
     if otlp.enabled == Some(false) && endpoint.is_some() {
-        let shown = written.written_text(ENDPOINT_KEY).unwrap_or_default();
+        // An endpoint that holds an `@` is shown by its key alone, as the
+        // refusal of an endpoint shows it, since user information is a
+        // secret and where it ends can't be told.
+        let shown = match written.written_text(ENDPOINT_KEY) {
+            Some(endpoint) if !endpoint.contains('@') => {
+                format!("`telemetry.otlp.endpoint: {endpoint}`")
+            }
+            _ => "`telemetry.otlp.endpoint`".to_owned(),
+        };
         return Err(written.refused(Refusal::invalid(
             "telemetry.otlp.enabled",
             format!(
-                "it turns the network exporter off, and `telemetry.otlp.endpoint: {shown}` \
-                 names where it sends; a config that wants it off states no endpoint"
+                "it turns the network exporter off, and {shown} names where it sends; a config \
+                 that wants it off states no endpoint"
             ),
         )));
     }
@@ -320,7 +328,7 @@ fn destination(
             .map(|(name, value)| (name.clone(), SecretString::from(value.0.clone())))
             .collect(),
     };
-    let tls = tls(written, signal, inherited)?;
+    let tls = tls(written, signal, stated.is_some(), inherited)?;
     if !speaks_tls(&endpoint) {
         for variable in [
             &inherited.certificate,
@@ -332,7 +340,7 @@ fn destination(
         {
             tracing::warn!(
                 "`{}` names a file for TLS, and the endpoint for {signal} doesn't speak TLS, so \
-                 it's ignored",
+                 the file isn't used, though it's still loaded and refused when it can't be",
                 variable.name
             );
         }
@@ -391,13 +399,27 @@ fn speaks_tls(endpoint: &str) -> bool {
 }
 
 /// The TLS material the environment names for `signal`, loaded as the
-/// exporters load it.
-fn tls(written: &Config, signal: Signal, inherited: &Inherited) -> Result<Tls, ConfigError> {
+/// exporters load it. A refusal is under `telemetry.otlp.endpoint`, and
+/// says when the config states no endpoint, which `stated` tells, since
+/// the config then holds nothing at fault.
+fn tls(
+    written: &Config,
+    signal: Signal,
+    stated: bool,
+    inherited: &Inherited,
+) -> Result<Tls, ConfigError> {
     let refused = |reason: String| ConfigError::Invalid {
         key: ENDPOINT_KEY.to_owned(),
         place: written.place_of(ENDPOINT_KEY),
         value: None,
-        reason: format!("TLS to the collector for {signal} can't be set up: {reason}"),
+        reason: if stated {
+            format!("TLS to the collector for {signal} can't be set up: {reason}")
+        } else {
+            format!(
+                "the config states no endpoint, and TLS to the collector for {signal}, which \
+                 the environment's variables set, can't be set up: {reason}"
+            )
+        },
     };
     let read = |variable: &Variable<PathBuf>| {
         std::fs::read(&variable.value).map_err(|error| {

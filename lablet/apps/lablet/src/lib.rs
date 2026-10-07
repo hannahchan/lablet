@@ -4,8 +4,9 @@
 //! A [`Lablet`] is built from a [`Config`] and runs many times. Each run
 //! takes a [`RunRequest`] and returns the [`FinishedRun`] the loop made of
 //! it, whose summary holds the outcome. Once a run has returned, its
-//! telemetry is in the file the config names, as OTLP/JSON lines, and its
-//! transcript is written when the config names a place for one.
+//! telemetry has been flushed to where the config and the environment send
+//! it, OTLP to `http://localhost:4318` when neither names another place,
+//! and its transcript is written when the config names a place for one.
 //!
 //! A config's text is read into a [`RawConfig`] first, where an override
 //! can state a setting over the text, and then into a [`Config`], which
@@ -19,6 +20,17 @@
 //! it nothing. A host's `tracing` subscriber sees lablet's diagnostics and
 //! none of its telemetry, and a tool executor finds its call's span in the
 //! current OpenTelemetry context.
+//!
+//! The process's environment configures it, as it configures any
+//! application instrumented with OpenTelemetry. When a `Lablet` is built,
+//! or a config checked, the `OTEL_*` variables are read once, and decide
+//! where the telemetry goes, and how, wherever the config's `telemetry`
+//! section states nothing, while `OTEL_SDK_DISABLED=true` turns it all off
+//! whatever the config states. `TRACEPARENT` and `TRACESTATE` are read then
+//! too, and name the parent of every run the `Lablet` makes, the same for
+//! each, and `BAGGAGE` is in each run's context: a host that runs under a
+//! trace of its own has every run beneath that trace's span unless it
+//! clears them.
 //!
 //! A `Lablet` is built and run on a tokio runtime, which its adapters keep
 //! their deadlines on.

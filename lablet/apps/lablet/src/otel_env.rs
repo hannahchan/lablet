@@ -139,6 +139,31 @@ impl Parse for Duration {
     }
 }
 
+/// The specification's Timeout: whole milliseconds, as a duration is, but
+/// 0 is no limit rather than none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Timeout(pub(crate) Duration);
+
+impl Timeout {
+    /// What a timeout of 0 is given as. The clients add a timeout to the
+    /// clock, so no limit is stated as the very long time the specification
+    /// allows in its place, its own example: the most milliseconds a 32-bit
+    /// integer holds, 2^31 - 1, about 24.8 days.
+    pub(crate) const NO_LIMIT: Duration = Duration::from_millis(2_147_483_647);
+}
+
+impl Parse for Timeout {
+    fn parse(text: &str, ignored: &mut dyn FnMut(&str, &str)) -> Option<Self> {
+        Duration::parse(text, ignored).map(|timeout| {
+            Timeout(if timeout.is_zero() {
+                Self::NO_LIMIT
+            } else {
+                timeout
+            })
+        })
+    }
+}
+
 /// `text` as a whole number of digits alone, or nothing, said with `why`.
 /// Rust's own parsing takes a leading `+`, which the specification's
 /// integers don't have.

@@ -224,6 +224,24 @@ fn enabled_false_beside_an_endpoint_is_refused_as_a_setting_without_effect() {
     );
 }
 
+/// The endpoint is shown as the config writes it, so user information
+/// written there is shown by the key alone.
+#[test]
+fn enabled_false_beside_an_endpoint_with_user_information_shows_its_key_alone() {
+    let written = config(
+        "telemetry: { otlp: { enabled: false, endpoint: 'https://user:hunter2@collector.internal' } }",
+    );
+
+    let refused = settings(&written, &written, &Exporter::default()).unwrap_err();
+
+    assert_eq!(
+        refused.to_string(),
+        "telemetry.otlp.enabled (line 1): false is refused: it turns the network exporter off, \
+         and `telemetry.otlp.endpoint` names where it sends; a config that wants it off states \
+         no endpoint"
+    );
+}
+
 #[test]
 fn enabled_false_beside_an_endpoint_of_nothing_is_a_config_that_states_no_endpoint() {
     assert_eq!(
@@ -605,6 +623,39 @@ async fn a_certificate_file_that_cannot_be_read_or_holds_none_is_refused_naming_
         ),
         "{empty}"
     );
+}
+
+/// A config that states no endpoint has no key at fault, so a refusal of
+/// TLS the environment alone sets up says the config states none, as the
+/// refusal of an endpoint variable does, rather than reading as one of the
+/// config's endpoint.
+#[tokio::test]
+async fn a_tls_refusal_the_environment_alone_causes_says_the_config_states_no_endpoint() {
+    let material = Material::new("otlp-tls-environment").await;
+    let missing = material.at("missing.pem");
+
+    let refused = resolved(
+        "",
+        &[
+            (
+                "OTEL_EXPORTER_OTLP_ENDPOINT",
+                "https://collector.internal:4318",
+            ),
+            ("OTEL_EXPORTER_OTLP_CERTIFICATE", &missing),
+        ],
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        refused.starts_with(
+            "telemetry.otlp.endpoint: its value is refused: the config states no endpoint, and \
+             TLS to the collector for traces, which the environment's variables set, can't be \
+             set up: `OTEL_EXPORTER_OTLP_CERTIFICATE` names a file that can't be read: "
+        ),
+        "{refused}"
+    );
+    assert!(!refused.contains("missing.pem"), "{refused}");
 }
 
 /// PEM whose body isn't DER is split by the client's library without a

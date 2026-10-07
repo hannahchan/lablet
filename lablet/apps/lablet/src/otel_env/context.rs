@@ -101,9 +101,10 @@ impl Choice for Propagator {
 }
 
 /// The pairs of `OTEL_RESOURCE_ATTRIBUTES`: `key=value`, comma-separated,
-/// each side trimmed and then percent-decoded. A pair with no `=` or no key
-/// is ignored, and anything that doesn't decode discards the whole value,
-/// as the resource specification asks, so no half of it is used.
+/// each side trimmed and then percent-decoded. A blank member, as a
+/// trailing comma leaves, is skipped. Any other error, a pair with no `=`
+/// or no key or a part that doesn't decode, discards the whole value, as
+/// the resource specification asks, so no half of it is used.
 struct ResourceAttributes(Vec<(String, String)>);
 
 impl Parse for ResourceAttributes {
@@ -113,10 +114,13 @@ impl Parse for ResourceAttributes {
 
     fn parse(text: &str, ignored: &mut dyn FnMut(&str, &str)) -> Option<Self> {
         let mut pairs = Vec::new();
-        for pair in text.split_terminator(',') {
+        for pair in text.split(',').filter(|pair| !pair.trim().is_empty()) {
             let Some((key, value)) = pair.split_once('=') else {
-                ignored(pair, "has a pair with no `=`, which is ignored");
-                continue;
+                ignored(
+                    text,
+                    "has a pair with no `=`, so the whole of it is ignored",
+                );
+                return None;
             };
             let (Some(key), Some(value)) = (decoded(key.trim()), decoded(value.trim())) else {
                 ignored(
@@ -126,8 +130,11 @@ impl Parse for ResourceAttributes {
                 return None;
             };
             if key.is_empty() {
-                ignored(pair, "has a pair with no key, which is ignored");
-                continue;
+                ignored(
+                    text,
+                    "has a pair with no key, so the whole of it is ignored",
+                );
+                return None;
             }
             pairs.push((key, value));
         }

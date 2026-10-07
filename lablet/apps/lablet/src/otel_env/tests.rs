@@ -168,6 +168,33 @@ fn a_size_of_nothing_is_out_of_range_and_ignored_with_a_warning() {
 }
 
 #[test]
+fn a_timeout_is_whole_milliseconds_and_zero_is_no_limit() {
+    assert_eq!(
+        get::<Timeout>("1500"),
+        (Some(Timeout(Duration::from_millis(1_500))), Vec::new())
+    );
+    assert_eq!(
+        get::<Timeout>("0"),
+        (
+            Some(Timeout(Duration::from_millis(2_147_483_647))),
+            Vec::new()
+        )
+    );
+    assert_eq!(get::<Duration>("0"), (Some(Duration::ZERO), Vec::new()));
+    assert_eq!(
+        get::<Timeout>("-1"),
+        (
+            None,
+            vec![
+                "`OTEL_TEST_VARIABLE` holds `-1`, which isn't a whole number of milliseconds, so \
+                 it's ignored"
+                    .to_owned()
+            ]
+        )
+    );
+}
+
+#[test]
 fn a_duration_is_whole_milliseconds() {
     assert_eq!(
         get::<Duration>("1500"),

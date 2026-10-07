@@ -276,3 +276,39 @@ fn the_batch_fields_the_environment_names_reach_each_processors_config() {
         assert!(config.contains(expected), "{config}");
     }
 }
+
+#[test]
+fn the_batch_fields_are_taken_as_given_up_to_the_specifications_largest_integer() {
+    // A processor built from these allocates the whole queue and spins at
+    // the zero delay, and lablet takes both anyway, as decided on
+    // 2026-10-07, so a cap or a refusal here is a change of that decision.
+    let largest = "2147483647";
+    let (sdk, warnings) = read(&[
+        ("OTEL_BSP_SCHEDULE_DELAY", "0"),
+        ("OTEL_BSP_MAX_QUEUE_SIZE", largest),
+        ("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", largest),
+        ("OTEL_BLRP_SCHEDULE_DELAY", "0"),
+        ("OTEL_BLRP_MAX_QUEUE_SIZE", largest),
+        ("OTEL_BLRP_MAX_EXPORT_BATCH_SIZE", largest),
+    ]);
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let batch = Batch {
+        schedule_delay: Duration::ZERO,
+        max_queue_size: 2_147_483_647,
+        max_export_batch_size: 2_147_483_647,
+    };
+    assert_eq!((sdk.spans, sdk.logs), (batch, batch));
+    for config in [
+        format!("{:?}", sdk.spans.span_config()),
+        format!("{:?}", sdk.logs.log_config()),
+    ] {
+        assert!(
+            config.contains(
+                "max_queue_size: 2147483647, scheduled_delay: 0ns, max_export_batch_size: \
+                 2147483647"
+            ),
+            "{config}"
+        );
+    }
+}

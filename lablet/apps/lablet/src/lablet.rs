@@ -161,7 +161,10 @@ pub(crate) struct TranscriptPath {
 /// One loop with its adapters, built from a config.
 ///
 /// It runs many times, one run at a time, and every run has an id, a start
-/// time and labels of its own.
+/// time and labels of its own. Where its telemetry goes, and the parent
+/// every run's root span has, are fixed when it's built, by the config and
+/// the `OTEL_*`, `TRACEPARENT`, `TRACESTATE` and `BAGGAGE` variables of the
+/// environment it's built in.
 pub struct Lablet {
     service: RunService,
     provider: Played,
@@ -223,30 +226,31 @@ impl Lablet {
 
     /// Runs one task to its outcome.
     ///
-    /// The run has the id the request names, or a fresh ULID. It's a trace
-    /// of its own, whatever span the caller has open: the root span is
-    /// opened from the empty context, and the loop runs in it. Once the loop
-    /// has returned, the root span ends with the run's measured duration
-    /// and the run's wide event is filled; the run's transcript is written,
-    /// when the config names a place for it, and then the wide event is
-    /// emitted and the telemetry flushed once, so the transcript the wide
-    /// event names is whole, or its failure logged, when it arrives. Both
-    /// are whole when this returns, and the file holds the run's one wide
-    /// event.
+    /// The run has the id the request names, or a fresh ULID. Its root span is
+    /// a child of the parent `TRACEPARENT` named when this `Lablet` was built,
+    /// and starts a trace of its own when that named none; never a child of a
+    /// span the caller has open. The loop runs in the root span's context. Once
+    /// the loop has returned, the root span ends with the run's measured
+    /// duration and the run's wide event is filled; the run's transcript is
+    /// written, when the config names a place for it, and then the wide event
+    /// is emitted and the telemetry flushed once, so the transcript the wide
+    /// event names is whole, or its failure logged, when it arrives. Both are
+    /// whole when this returns, and the file holds the run's one wide event.
     ///
     /// A run is stopped through its [`CancelHandle`]. Dropping the future
-    /// abandons it with no outcome. Dropped before the loop returns, it
-    /// leaves no transcript or wide event either; dropped once the
-    /// transcript write or the flush has begun, it may still leave both,
-    /// since neither stops part-way. The spans it had open are exported
-    /// unfilled, with the providers' next export, and before this
+    /// abandons it with no outcome. Dropped before the loop returns, it leaves
+    /// no transcript or wide event either. Dropped during the transcript write,
+    /// it still leaves the transcript, since the write doesn't stop part-way,
+    /// and no wide event, which is emitted only once the write has returned;
+    /// dropped during the flush, it leaves both. The spans it had open are
+    /// exported unfilled, with the providers' next export, and before this
     /// `Lablet`'s next run reads the clock, which waits up to one flush for
     /// them.
     ///
     /// Never fails: every way a run can go wrong is a stop reason of its
-    /// outcome. A transcript that can't be written and telemetry that can't
-    /// be exported are reported on the diagnostic log, and the run measured
-    /// what it measured either way.
+    /// outcome. A transcript that can't be written and telemetry that can't be
+    /// exported are reported on the diagnostic log, and the run measured what
+    /// it measured either way.
     pub async fn run(&mut self, request: RunRequest) -> FinishedRun {
         let RunRequest {
             task,
@@ -342,7 +346,9 @@ impl Lablet {
 
     /// Flushes the telemetry and stops its exporters. A destination that
     /// doesn't answer is given about five seconds, and what couldn't be
-    /// exported is reported on the diagnostic log.
+    /// exported is reported on the diagnostic log: by the SDK, as an export
+    /// that failed, or by a warning that the telemetry wasn't exported whole
+    /// when an exporter didn't stop in time.
     pub async fn shutdown(self) {
         if let Err(error) = self.telemetry.shutdown().await {
             tracing::warn!(

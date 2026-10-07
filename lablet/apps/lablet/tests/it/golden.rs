@@ -422,7 +422,9 @@ fn hostile() -> Vec<(String, String)> {
     let refused = format!("http://{}", Receiver::closed());
     let missing = "/nonexistent/lablet-hostile-golden";
     let mut env: Vec<(String, String)> = [
-        // Honoured: the fixture holds each one's effect.
+        // Honoured, and the fixture, or the assertions after the
+        // comparison, hold each one's effect: `BAGGAGE`'s is that nothing
+        // emits it, and a batch of one is a line of its own.
         ("OTEL_SERVICE_NAME", "hostile-service"),
         (
             "OTEL_RESOURCE_ATTRIBUTES",
@@ -436,6 +438,13 @@ fn hostile() -> Vec<(String, String)> {
         ),
         ("TRACESTATE", "hostile=1"),
         ("BAGGAGE", "hostile=baggage"),
+        ("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "1"),
+        ("OTEL_BLRP_MAX_EXPORT_BATCH_SIZE", "1"),
+        // Honoured, with no effect this run can show: it has no span
+        // events or links, its spans hold fewer than 32 attributes, the
+        // three attribute limits leave none to `OTEL_ATTRIBUTE_COUNT_LIMIT`,
+        // the flush exports whatever the delay, and a queue of 64 holds the
+        // run. A sampler argument decides nothing under the default sampler.
         ("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "32"),
         ("OTEL_SPAN_EVENT_COUNT_LIMIT", "0"),
         ("OTEL_SPAN_LINK_COUNT_LIMIT", "0"),
@@ -444,18 +453,16 @@ fn hostile() -> Vec<(String, String)> {
         ("OTEL_ATTRIBUTE_COUNT_LIMIT", "1"),
         ("OTEL_BSP_SCHEDULE_DELAY", "3600000"),
         ("OTEL_BSP_MAX_QUEUE_SIZE", "64"),
-        ("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "1"),
         ("OTEL_BLRP_SCHEDULE_DELAY", "3600000"),
         ("OTEL_BLRP_MAX_QUEUE_SIZE", "64"),
-        ("OTEL_BLRP_MAX_EXPORT_BATCH_SIZE", "1"),
-        // The config overrides these: it states its file, no network and
-        // no content.
+        ("OTEL_TRACES_SAMPLER_ARG", "0"),
+        // Read, and overridden by the config: it states its file, no
+        // network and no content.
+        ("OTEL_TRACES_EXPORTER", "none"),
         ("OTEL_LOGS_EXPORTER", "otlp"),
         ("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true"),
         // Read by nothing lablet uses, or inert in the crates.
-        ("OTEL_TRACES_EXPORTER", "none"),
         ("OTEL_METRICS_EXPORTER", "otlp"),
-        ("OTEL_TRACES_SAMPLER_ARG", "0"),
         ("OTEL_BSP_EXPORT_TIMEOUT", "1"),
         ("OTEL_BLRP_EXPORT_TIMEOUT", "1"),
         ("OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT", "1"),
@@ -480,7 +487,8 @@ fn hostile() -> Vec<(String, String)> {
     .map(|(name, value)| (name.to_owned(), value.to_owned()))
     .collect();
     // Each OTLP exporter variable, generic and for each signal, metrics
-    // included.
+    // included. The config's turning the network off overrides those lablet
+    // reads.
     for signal in ["", "TRACES_", "LOGS_", "METRICS_"] {
         for (setting, value) in [
             ("ENDPOINT", refused.as_str()),

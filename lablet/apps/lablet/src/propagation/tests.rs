@@ -176,6 +176,39 @@ fn inbound_baggage_is_in_the_runs_context() {
     );
 }
 
+/// A member the baggage propagator can't read is dropped and the rest are
+/// kept, and the warning names the variable, never a member: the SDK's own
+/// warning holds the whole value.
+#[test]
+fn a_baggage_member_that_does_not_parse_is_ignored_with_a_warning_that_names_no_value() {
+    for broken in [
+        "tenant=acme,user-email=jo%40example.com,",
+        "tenant=acme,user-email",
+        "tenant=acme,user-email=%FF",
+    ] {
+        let (inbound, warnings) = inbound_of(&[("BAGGAGE", broken)]);
+
+        assert_eq!(
+            inbound
+                .parent
+                .baggage()
+                .get("tenant")
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("acme"),
+            "{broken}"
+        );
+        assert_eq!(
+            warnings,
+            [
+                "`BAGGAGE` holds a value the baggage propagator can't read in full, so what it \
+                 can't read is ignored"
+            ],
+            "{broken}"
+        );
+    }
+}
+
 /// The carriers specification's normalisation, with its own example.
 #[test]
 fn a_key_is_read_from_the_variable_its_normalised_name_names() {
