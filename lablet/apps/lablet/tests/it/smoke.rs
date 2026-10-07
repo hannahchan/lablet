@@ -251,14 +251,13 @@ async fn every_tool_call_leaves_a_tool_span() {
 }
 
 #[tokio::test]
-async fn the_wide_event_is_the_last_line_of_the_run_and_holds_what_the_run_came_to() {
+async fn the_wide_event_is_the_runs_one_and_holds_what_the_run_came_to() {
     let smoke = Smoke::run("smoke-wide").await;
     let traced = smoke.traced();
 
     let (root, wide) = (traced.root(), traced.wide());
     assert_eq!(wide.trace_id, root.trace_id);
     assert_eq!(wide.span_id, root.span_id);
-    assert_eq!(wide.line, smoke.exported.lines);
     assert_declared(
         "the wide event",
         &wide.attributes,
@@ -290,7 +289,6 @@ async fn the_wide_event_is_the_last_line_of_the_run_and_holds_what_the_run_came_
             key::LABLET_TOOLS_NAMES,
             json!(["bash", "read_file", "write_file"]),
         ),
-        (key::LABLET_TELEMETRY_DROPPED_RECORDS, json!(0)),
         (key::LABLET_SKILLS_COUNT, json!(0)),
     ] {
         assert_eq!(wide.attributes[key], holds, "{key}");
@@ -356,10 +354,10 @@ async fn content_reaches_telemetry_when_the_config_says_so() {
             .records_of("gen_ai.client.inference.operation.details")
             .is_empty()
     );
-    let wide = exported.records_of("lablet.run")[0];
+    let wide = exported.records_of("lablet.run");
+    assert_eq!(wide.len(), 1, "the run's one wide event");
     assert_eq!(
-        wide.attributes[key::LABLET_RESULT_TEXT],
+        wide[0].attributes[key::LABLET_RESULT_TEXT],
         json!("Nothing to fix.")
     );
-    assert_eq!(wide.line, exported.lines);
 }

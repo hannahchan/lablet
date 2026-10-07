@@ -1,26 +1,28 @@
 use std::time::{Duration, Instant};
 
+use lablet_conformance::otlp::Exported;
 use lablet_run::telemetry::Record;
 use opentelemetry::logs::{AnyValue, Severity};
 use opentelemetry::trace::{
     Span as _, SpanContext, SpanId, TraceFlags, TraceId, TraceState, Tracer as _,
 };
-use opentelemetry::{Context, Key, Value};
+use opentelemetry::{Context, Key, KeyValue, Value};
 use opentelemetry_sdk::trace::SpanData;
 
 use super::*;
 use crate::export::network::{OtelBuildError, OtlpSettings, Transport};
-use crate::export::pipeline::QUEUE_CAPACITY;
-use crate::export::testing::memory::{Export, Logged, Memory};
+use crate::export::resource;
+use crate::export::testing::memory::{Logged, Memory};
 use crate::export::testing::{
-    CONTENT, DROPPED_KEY, DURATION_MS, EXCEPTION, OTHER_RUN, RECORDS_PER_CAPTURED_RUN,
-    RECORDS_PER_RUN, RUN, RUN_KEY, Records, SCHEMA_URL, SPANS_PER_RUN, VERSION, WIDE, after,
-    emit_run, scope, wide_event,
+    CONTENT, DURATION_MS, EXCEPTION, OTHER_RUN, RECORDS_PER_CAPTURED_RUN, RECORDS_PER_RUN, RUN,
+    RUN_KEY, Records, SCHEMA_URL, SPANS_PER_RUN, Scratch, VERSION, WIDE, after, emit_run, scope,
+    sdk_of, wide_event,
 };
+use crate::otel_env;
 
 fn exporting(memory: &Memory) -> Telemetry {
-    Telemetry::builder(VERSION, scope())
-        .exporting_to(memory.spans(), memory.records(), memory.wide())
+    Telemetry::builder(scope())
+        .exporting_to(memory.spans(), memory.records())
         .build()
         .unwrap()
 }
@@ -50,17 +52,8 @@ fn held(record: &Logged, key: &'static str) -> AnyValue {
         .unwrap_or_else(|| panic!("the record holds no `{key}`"))
 }
 
-fn dropped(record: &Logged) -> AnyValue {
-    held(record, DROPPED_KEY)
-}
-
-/// `n` as a wide event counts it.
-fn count(n: usize) -> AnyValue {
-    AnyValue::Int(i64::try_from(n).unwrap())
-}
-
-/// The queues each failure of `error` names.
-fn queues(error: &FlushError) -> Vec<&str> {
+/// The providers each failure of `error` names.
+fn providers(error: &FlushError) -> Vec<&str> {
     error
         .failures()
         .iter()
@@ -191,10 +184,10 @@ async fn two_runs_are_two_traces() {
     );
 }
 
-/// The limits are set so the environment can't lower them, and they're the
-/// SDK's defaults, so a span the loop fills never meets them.
+/// The specification's defaults, which an environment that sets no limit
+/// gives, so a span the loop fills never meets them.
 #[tokio::test]
-async fn a_span_keeps_up_to_128_attributes_and_128_events() {
+async fn a_span_keeps_128_attributes_and_128_events_when_the_environment_sets_no_limit() {
     let memory = Memory::default();
     let telemetry = exporting(&memory);
     let tracer = telemetry.tracer();
@@ -223,36 +216,36 @@ async fn a_span_keeps_up_to_128_attributes_and_128_events() {
 
 // The wide event
 
+/// The processors wait an hour between exports of their own, so what a
+/// destination holds when the flush returns is what the flush exported.
 #[tokio::test]
-async fn the_wide_event_is_exported_alone_and_after_everything_else_of_its_run() {
-    let memory = Memory::default();
-    let telemetry = exporting(&memory);
+async fn the_wide_event_is_emitted_once_and_flushed_with_the_run() {
+    let (first, second) = (Memory::default(), Memory::default());
+    let hour = "3600000";
+    let telemetry = Telemetry::builder(scope())
+        .sdk(sdk_of(&[
+            ("OTEL_BSP_SCHEDULE_DELAY", hour),
+            ("OTEL_BLRP_SCHEDULE_DELAY", hour),
+        ]))
+        .exporting_to(first.spans(), first.records())
+        .exporting_to(second.spans(), second.records())
+        .build()
+        .unwrap();
 
     run(&telemetry, RUN, Records::Captured).await.unwrap();
 
-    let exports = memory.exports();
-    let Some(Export::Wide(last)) = exports.last() else {
-        panic!("the last export is the wide event's: {exports:?}");
-    };
-    assert_eq!(events_of(last), [WIDE]);
-    let others = &exports[..exports.len() - 1];
-    assert!(
-        others
-            .iter()
-            .all(|export| matches!(export, Export::Spans(_) | Export::Records(_))),
-        "the wide event has one export: {exports:?}"
-    );
-    assert!(
-        others.iter().all(|export| match export {
-            Export::Records(records) => !events_of(records).contains(&WIDE),
-            Export::Spans(_) | Export::Wide(_) => true,
-        }),
-        "and it's in no other"
-    );
+    for memory in [&first, &second] {
+        let wide = memory.exported_wide();
+        assert_eq!(events_of(&wide), [WIDE], "one wide event, by the flush");
+        assert_eq!(held(&wide[0], RUN_KEY), RUN.into());
+        assert_eq!(memory.exported_spans().len(), SPANS_PER_RUN);
+        assert_eq!(memory.exported_records().len(), RECORDS_PER_CAPTURED_RUN);
+    }
+    telemetry.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn the_wide_event_is_the_record_the_function_makes_timed_and_placed_as_it_says() {
+async fn the_wide_event_is_the_record_handed_over_timed_and_placed_as_it_says() {
     let memory = Memory::default();
     let telemetry = exporting(&memory);
 
@@ -269,130 +262,10 @@ async fn the_wide_event_is_the_record_the_function_makes_timed_and_placed_as_it_
     assert_eq!(context.trace_id, root.trace_id());
     assert_eq!(context.span_id, root.span_id());
     assert_eq!(held(&wide[0], RUN_KEY), RUN.into());
-    assert_eq!(dropped(&wide[0]), AnyValue::Int(0));
 }
 
 #[tokio::test]
-async fn the_wide_event_counts_what_the_exporters_lost_of_its_run() {
-    let memory = Memory::default();
-    let telemetry = exporting(&memory);
-    memory.refuse_records(true);
-
-    let flushed = run(&telemetry, RUN, Records::Captured).await;
-
-    let failures = flushed.unwrap_err();
-    assert_eq!(failures.failures().len(), 1, "{failures}");
-    assert!(
-        failures.failures()[0].starts_with("log records: "),
-        "{failures}"
-    );
-    assert!(
-        failures
-            .to_string()
-            .starts_with("telemetry wasn't exported whole: log records: "),
-        "{failures}"
-    );
-    assert!(memory.exported_records().is_empty());
-    assert_eq!(memory.exported_spans().len(), SPANS_PER_RUN);
-    assert_eq!(
-        dropped(&memory.exported_wide()[0]),
-        count(RECORDS_PER_CAPTURED_RUN),
-        "the five records of the run, which the flush itself lost"
-    );
-}
-
-#[tokio::test]
-async fn the_wide_event_counts_the_spans_and_the_records_together() {
-    let memory = Memory::default();
-    let telemetry = exporting(&memory);
-    memory.refuse_records(true);
-    memory.refuse_spans(true);
-
-    let flushed = run(&telemetry, RUN, Records::Exception).await;
-
-    let failures = flushed.unwrap_err();
-    assert_eq!(queues(&failures), ["spans", "log records"]);
-    assert_eq!(
-        dropped(&memory.exported_wide()[0]),
-        count(SPANS_PER_RUN + RECORDS_PER_RUN)
-    );
-}
-
-#[tokio::test]
-async fn the_wide_event_counts_what_a_full_queue_turned_away() {
-    let memory = Memory::default();
-    let telemetry = exporting(&memory);
-    let (tracer, logger) = (telemetry.tracer(), telemetry.logger());
-    memory.hold();
-
-    let mut root = None;
-    for _ in 0..QUEUE_CAPACITY + 3 {
-        let mut span = tracer
-            .span_builder("chat scripted-1")
-            .with_start_time(after(0))
-            .start_with_context(&tracer, &Context::new());
-        let context = span.span_context().clone();
-        span.end_with_timestamp(after(1));
-        logger.emit(Record {
-            name: EXCEPTION,
-            severity: Severity::Warn,
-            at: after(1),
-            span: context.clone(),
-            attributes: Vec::new(),
-        });
-        root.get_or_insert(context);
-    }
-    memory.release();
-    telemetry
-        .flush(wide_event(RUN, root.unwrap()))
-        .await
-        .unwrap();
-
-    assert_eq!(memory.exported_spans().len(), QUEUE_CAPACITY);
-    assert_eq!(memory.exported_records().len(), QUEUE_CAPACITY);
-    assert_eq!(
-        dropped(&memory.exported_wide()[0]),
-        AnyValue::Int(3 + 3),
-        "three spans and three records"
-    );
-}
-
-#[tokio::test]
-async fn a_runs_wide_event_counts_nothing_of_the_run_before_it() {
-    let memory = Memory::default();
-    let telemetry = exporting(&memory);
-    memory.refuse_spans(true);
-    run(&telemetry, RUN, Records::Exception).await.unwrap_err();
-    memory.refuse_spans(false);
-
-    let flushed = run(&telemetry, OTHER_RUN, Records::Exception).await;
-
-    assert_eq!(flushed, Ok(()));
-    let lost: Vec<_> = memory.exported_wide().iter().map(dropped).collect();
-    assert_eq!(lost, [count(SPANS_PER_RUN), AnyValue::Int(0)]);
-}
-
-#[tokio::test]
-async fn a_wide_event_that_was_lost_is_reported_and_is_counted_against_no_run() {
-    let memory = Memory::default();
-    let telemetry = exporting(&memory);
-    memory.refuse_wide(true);
-
-    let lost = run(&telemetry, RUN, Records::Exception).await;
-    memory.refuse_wide(false);
-    let kept = run(&telemetry, OTHER_RUN, Records::Exception).await;
-
-    let lost = lost.unwrap_err();
-    assert_eq!(lost.failures().len(), 1, "{lost}");
-    assert!(lost.failures()[0].starts_with("the wide event: "), "{lost}");
-    assert_eq!(kept, Ok(()));
-    let wide = memory.exported_wide();
-    assert_eq!(wide.len(), 1, "a wide event is made once");
-    assert_eq!(dropped(&wide[0]), AnyValue::Int(0));
-}
-
-#[tokio::test]
-async fn a_flush_of_a_run_that_emitted_nothing_exports_its_wide_event_alone() {
+async fn a_flush_of_a_run_that_emitted_nothing_exports_its_wide_event() {
     let memory = Memory::default();
     let telemetry = exporting(&memory);
     // The context of a root span no tracer of the telemetry's opened, so
@@ -410,6 +283,33 @@ async fn a_flush_of_a_run_that_emitted_nothing_exports_its_wide_event_alone() {
     assert_eq!(flushed, Ok(()));
     assert_eq!(memory.exports().len(), 1, "{:?}", memory.exports());
     assert_eq!(events_of(&memory.exported_wide()), [WIDE]);
+}
+
+#[tokio::test]
+async fn a_flush_says_what_the_sdk_said_of_an_export_that_failed() {
+    let memory = Memory::default();
+    let telemetry = exporting(&memory);
+    memory.refuse_records(true);
+
+    let flushed = run(&telemetry, RUN, Records::Captured).await;
+
+    let failures = flushed.unwrap_err();
+    assert_eq!(providers(&failures), ["log records"], "{failures}");
+    assert!(
+        failures
+            .to_string()
+            .starts_with("telemetry wasn't exported whole: log records: "),
+        "{failures}"
+    );
+    assert!(
+        failures
+            .to_string()
+            .contains("the destination can't be written"),
+        "the exporter's own error, as the SDK hands it on: {failures}"
+    );
+    assert!(memory.exported_records().is_empty());
+    assert!(memory.exported_wide().is_empty());
+    assert_eq!(memory.exported_spans().len(), SPANS_PER_RUN);
 }
 
 // Shutting down
@@ -456,48 +356,43 @@ async fn a_telemetry_that_was_shut_down_exports_nothing_more_and_says_so() {
     assert!(memory.exports().is_empty(), "{:?}", memory.exports());
     let failures = flushed.unwrap_err();
     assert_eq!(
-        queues(&failures),
-        ["spans", "log records", "the wide event"],
-        "each queue says that it has stopped: {failures}"
+        providers(&failures),
+        ["spans", "log records"],
+        "each provider says that its processors have stopped: {failures}"
     );
-    assert!(again.is_err());
+    assert_eq!(providers(&again.unwrap_err()), ["spans", "log records"]);
 }
 
+/// What a processor fails to export as it stops, the SDK says on its own
+/// diagnostic log; the stop is what's held here.
 #[tokio::test]
-async fn a_queue_that_cannot_export_fails_the_shutdown_and_stops_all_the_same() {
+async fn a_shutdown_stops_every_processor_even_one_that_cannot_export() {
     let memory = Memory::default();
     let telemetry = exporting(&memory);
     memory.refuse_spans(true);
     let _wide = emit_run(&telemetry, RUN, Records::Exception);
 
-    let shut = telemetry.shutdown().await;
+    let _ = telemetry.shutdown().await;
 
-    let failures = shut.unwrap_err();
-    assert_eq!(queues(&failures), ["spans"], "{failures}");
     assert!(memory.exported_spans().is_empty());
     assert_eq!(memory.exported_records().len(), RECORDS_PER_RUN);
     let after = telemetry
         .flush(wide_event(RUN, SpanContext::empty_context()))
         .await;
     assert_eq!(
-        queues(&after.unwrap_err()),
-        ["spans", "log records", "the wide event"],
-        "every queue stopped"
+        providers(&after.unwrap_err()),
+        ["spans", "log records"],
+        "every processor stopped"
     );
 }
 
-/// A destination that doesn't answer holds a shutdown for no longer than
-/// the timeout it's given, which is far less than the five seconds the SDK
-/// waits for a flush. What it bounds is the export that never ends.
+/// The SDK gives each processor five seconds to stop, so a destination
+/// that never answers costs a shutdown that much once, since the two
+/// providers are shut down side by side, and not once for each.
 #[tokio::test]
-async fn a_destination_that_does_not_answer_holds_a_shutdown_only_for_its_timeout() {
-    let brief = Duration::from_millis(100);
+async fn a_shutdown_with_a_destination_that_never_answers_returns_within_five_seconds() {
     let memory = Memory::default();
-    let telemetry = Telemetry::builder(VERSION, scope())
-        .exporting_to(memory.spans(), memory.records(), memory.wide())
-        .shutdown_timeout(brief)
-        .build()
-        .unwrap();
+    let telemetry = exporting(&memory);
     memory.hold();
     let _wide = emit_run(&telemetry, RUN, Records::Exception);
 
@@ -506,25 +401,18 @@ async fn a_destination_that_does_not_answer_holds_a_shutdown_only_for_its_timeou
     let waited = began.elapsed();
     memory.release();
 
-    assert_eq!(
-        shut.unwrap_err().failures(),
-        ["the shutdown didn't end within 100ms"],
-        "the shutdown stopped waiting at its timeout, and at nothing before it"
-    );
-    assert!(waited >= brief, "the shutdown gave up after {waited:?}");
-    // A shutdown that waited on the stuck exporter, or took the default
-    // bound in place of the one it was given, costs at least the SDK's five
-    // seconds, which the tolerance rules out.
+    assert_eq!(providers(&shut.unwrap_err()), ["spans", "log records"]);
     assert!(
-        waited < brief + Duration::from_secs(1),
-        "the shutdown waited {waited:?}, past the bound it was given"
+        waited < Duration::from_secs(5) + Duration::from_millis(1_500),
+        "the shutdown waited {waited:?}"
     );
 }
 
 /// The SDK's providers stop their processors when they're dropped, each for
-/// up to five seconds of the SDK's. After lablet's shutdown every queue
-/// answers that at once, so the drop costs nothing and stops nothing again;
-/// without lablet's shutdown, the SDK's is what exports what the queues held.
+/// up to five seconds of the SDK's. After a shutdown the providers are
+/// marked as shut down, so the drop costs nothing and stops nothing again;
+/// without one, the SDK's shutdown on the drop is what exports what the
+/// processors held.
 #[tokio::test]
 async fn a_telemetry_dropped_after_its_shutdown_costs_nothing_and_one_dropped_without_is_stopped_by_the_sdk()
  {
@@ -579,18 +467,25 @@ async fn every_signal_is_of_the_scope_the_composition_root_handed_over() {
 async fn every_exporter_is_told_the_service_the_sdk_and_what_the_composer_added() {
     let memory = Memory::default();
 
-    let telemetry = Telemetry::builder(VERSION, scope())
-        .resource(vec![
-            ("team".to_owned(), "evals".to_owned()),
-            ("service.name".to_owned(), "not-lablet".to_owned()),
-            ("deployment.environment.name".to_owned(), "ci".to_owned()),
-        ])
-        .exporting_to(memory.spans(), memory.records(), memory.wide())
+    let telemetry = Telemetry::builder(scope())
+        .resource(resource(
+            VERSION,
+            vec![
+                ("team".to_owned(), "evals".to_owned()),
+                ("service.name".to_owned(), "not-lablet".to_owned()),
+                ("deployment.environment.name".to_owned(), "ci".to_owned()),
+            ],
+            &otel_env::Context::default(),
+        ))
+        .exporting_to(memory.spans(), memory.records())
         .build()
         .unwrap();
+    // A processor hands its exporter the resource from its own thread, which
+    // has done so by the time it has stopped.
+    telemetry.shutdown().await.unwrap();
 
     let resources = memory.resources();
-    assert_eq!(resources.len(), 3, "the three exporters of one destination");
+    assert_eq!(resources.len(), 2, "the two exporters of one destination");
     for resource in resources {
         let said = |key: &'static str| resource.get(&Key::new(key));
         assert_eq!(said("service.name"), Some(Value::from("lablet")));
@@ -605,17 +500,16 @@ async fn every_exporter_is_told_the_service_the_sdk_and_what_the_composer_added(
         assert!(said("telemetry.sdk.version").is_some());
         assert_eq!(resource.len(), 7, "{resource:?}");
     }
-    telemetry.shutdown().await.unwrap();
 }
 
 // Where a run is exported to
 
 #[tokio::test]
-async fn every_destination_is_handed_every_span_and_every_record_and_counts_its_own_losses() {
+async fn every_destination_is_handed_every_span_and_every_record() {
     let (first, second) = (Memory::default(), Memory::default());
-    let telemetry = Telemetry::builder(VERSION, scope())
-        .exporting_to(first.spans(), first.records(), first.wide())
-        .exporting_over_the_network_to(second.spans(), second.records(), second.wide())
+    let telemetry = Telemetry::builder(scope())
+        .exporting_to(first.spans(), first.records())
+        .exporting_to(second.spans(), second.records())
         .build()
         .unwrap();
     second.refuse_records(true);
@@ -623,105 +517,79 @@ async fn every_destination_is_handed_every_span_and_every_record_and_counts_its_
     let flushed = run(&telemetry, RUN, Records::Captured).await;
 
     let failures = flushed.unwrap_err();
-    assert_eq!(failures.failures().len(), 1, "{failures}");
-    assert!(
-        failures.failures()[0].starts_with("otlp log records: "),
-        "{failures}"
-    );
+    assert_eq!(providers(&failures), ["log records"], "{failures}");
     assert_eq!(first.exported_spans(), second.exported_spans());
     assert_eq!(first.exported_spans().len(), SPANS_PER_RUN);
     assert_eq!(first.exported_records().len(), RECORDS_PER_CAPTURED_RUN);
-    assert!(second.exported_records().is_empty());
     assert_eq!(events_of(&first.exported_wide()), [WIDE]);
-    assert_eq!(events_of(&second.exported_wide()), [WIDE]);
-    assert_eq!(
-        dropped(&first.exported_wide()[0]),
-        AnyValue::Int(0),
-        "the first lost nothing, and counts nothing of what the second did"
-    );
-    assert_eq!(
-        dropped(&second.exported_wide()[0]),
-        count(RECORDS_PER_CAPTURED_RUN)
+    assert!(
+        second.exported_records().is_empty() && second.exported_wide().is_empty(),
+        "the second refused its records, and the first has them whole"
     );
 }
 
-/// A destination that doesn't answer holds a flush for no longer than the
-/// bound it's given, and holds no other destination at all: the file is
-/// whole, wide event and all, while the network is stuck.
+/// A provider flushes its processors in the order they were added, and the
+/// file's are added first, so the file is whole, wide event and all, while
+/// the destination added after it is still held. The SDK gives the held
+/// one's flush five seconds, and the two providers wait for theirs side by
+/// side.
 #[tokio::test]
-async fn a_destination_that_does_not_answer_holds_a_flush_only_for_its_bound_and_no_other() {
-    let brief = Duration::from_millis(100);
-    let (file, network) = (Memory::default(), Memory::default());
-    let telemetry = Telemetry::builder(VERSION, scope())
-        .exporting_over_the_network_to(network.spans(), network.records(), network.wide())
-        .exporting_to(file.spans(), file.records(), file.wide())
-        .flush_timeout(brief)
+async fn a_run_end_flushes_the_file_before_a_destination_that_is_held() {
+    let scratch = Scratch::new("held-after-the-file");
+    let path = scratch.at("runs.otlp.jsonl");
+    let held = Memory::default();
+    let telemetry = Telemetry::builder(scope())
+        .file(FileTarget::Path(path.clone()))
+        .exporting_to(held.spans(), held.records())
         .build()
         .unwrap();
-    network.hold();
+    held.hold();
+    let wide = emit_run(&telemetry, RUN, Records::Captured);
 
     let began = Instant::now();
-    let flushed = run(&telemetry, RUN, Records::Captured).await;
-    let waited = began.elapsed();
-
-    assert_eq!(
-        flushed.unwrap_err().failures(),
-        ["otlp: the flush didn't end within 100ms"],
-        "the network destination alone is reported, by its bound"
-    );
-    assert!(waited >= brief, "the flush gave up after {waited:?}");
-    // A flush that waited on a queue, in place of the bound it was given,
-    // costs at least the SDK's five seconds, which the tolerance rules out.
-    assert!(
-        waited < brief + Duration::from_secs(1),
-        "the flush waited {waited:?}, past the bound it was given"
-    );
-    assert_eq!(file.exported_spans().len(), SPANS_PER_RUN);
-    assert_eq!(file.exported_records().len(), RECORDS_PER_CAPTURED_RUN);
-    assert_eq!(events_of(&file.exported_wide()), [WIDE]);
-    assert_eq!(dropped(&file.exported_wide()[0]), AnyValue::Int(0));
-    assert!(network.exports().is_empty());
-
-    // Once the destination answers, the thread the flush left makes the
-    // run's wide event, and the shutdown waits for that thread before it
-    // stops the queues, so the event is exported however late it's made.
-    network.release();
-    telemetry.shutdown().await.unwrap();
-    assert_eq!(network.exported_spans().len(), SPANS_PER_RUN);
-    assert_eq!(events_of(&network.exported_wide()), [WIDE]);
-    assert_eq!(dropped(&network.exported_wide()[0]), AnyValue::Int(0));
-}
-
-#[tokio::test]
-async fn a_flush_with_a_bound_of_nothing_still_answers() {
-    let (memory, other) = (Memory::default(), Memory::default());
-    let telemetry = Telemetry::builder(VERSION, scope())
-        .exporting_to(memory.spans(), memory.records(), memory.wide())
-        .exporting_over_the_network_to(other.spans(), other.records(), other.wide())
-        .flush_timeout(Duration::ZERO)
-        .build()
-        .unwrap();
-
-    let flushed = run(&telemetry, RUN, Records::Exception).await;
-
-    // A bound of nothing gives up on whichever destination hasn't answered
-    // by the time it's checked, and never on one that has.
-    if let Err(failures) = flushed {
-        for failure in failures.failures() {
-            assert!(
-                failure.ends_with("the flush didn't end within 0ns"),
-                "{failures}"
-            );
+    let flushing = tokio::spawn({
+        let telemetry = telemetry.clone();
+        async move { telemetry.flush(wide).await }
+    });
+    let whole = loop {
+        let read = Exported::read(&path).ok();
+        if let Some(read) = read.filter(|read| {
+            read.records_of(WIDE).len() == 1
+                && read.spans.len() == SPANS_PER_RUN
+                && read.records.len() == RECORDS_PER_CAPTURED_RUN + 1
+        }) {
+            break Some(read);
         }
-    }
+        if began.elapsed() > Duration::from_secs(1) {
+            break None;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    let file_whole_after = began.elapsed();
+    assert!(
+        whole.is_some(),
+        "the file wasn't whole within a second of the flush beginning"
+    );
+    assert!(
+        !flushing.is_finished(),
+        "the flush was still waiting on the held destination"
+    );
+    assert!(held.exports().is_empty());
+
+    let flushed = flushing.await.unwrap();
+    let waited = began.elapsed();
+    held.release();
+    assert_eq!(providers(&flushed.unwrap_err()), ["spans", "log records"]);
+    assert!(
+        waited < Duration::from_secs(5) + Duration::from_millis(1_500),
+        "the flush waited {waited:?}, with the file whole after {file_whole_after:?}"
+    );
     telemetry.shutdown().await.unwrap();
-    assert_eq!(memory.exported_wide().len(), 1);
-    assert_eq!(other.exported_wide().len(), 1);
 }
 
 #[tokio::test]
 async fn a_telemetry_with_no_destination_takes_a_run_and_a_flush_returns_at_once() {
-    let telemetry = Telemetry::builder(VERSION, scope()).build().unwrap();
+    let telemetry = Telemetry::builder(scope()).build().unwrap();
 
     let began = Instant::now();
     let flushed = run(&telemetry, RUN, Records::Captured).await;
@@ -752,32 +620,46 @@ async fn a_span_is_taken_while_an_export_waits_for_its_destination() {
     assert_eq!(memory.exported_wide().len(), 3);
 }
 
+#[tokio::test]
+async fn a_record_emitted_through_the_logger_is_exported_by_the_next_flush() {
+    let memory = Memory::default();
+    let telemetry = exporting(&memory);
+
+    telemetry.logger().emit(Record {
+        name: EXCEPTION,
+        severity: Severity::Warn,
+        at: after(1),
+        span: SpanContext::empty_context(),
+        attributes: Vec::new(),
+    });
+    telemetry.flush_leftovers().await.unwrap();
+
+    assert_eq!(events_of(&memory.exported_records()), [EXCEPTION]);
+    assert!(memory.exported_wide().is_empty());
+}
+
 // The builder
 
 #[test]
-fn a_builder_prints_what_it_was_given_and_gives_a_flush_and_a_shutdown_five_seconds_by_default() {
-    let builder = Telemetry::builder("0.1.0", scope())
-        .resource(vec![("team".to_owned(), "evals".to_owned())])
-        .file(FileTarget::Stderr);
+fn a_builder_prints_what_it_was_given() {
+    let builder = Telemetry::builder(scope()).file(FileTarget::Stderr);
 
     let shown = format!("{builder:?}");
 
     assert!(
-        shown.starts_with("TelemetryBuilder { version: \"0.1.0\", scope: InstrumentationScope {"),
+        shown.starts_with("TelemetryBuilder { scope: InstrumentationScope {"),
         "{shown}"
     );
     assert!(
-        shown.ends_with(
-            "resource: [(\"team\", \"evals\")], file: Some(Stderr), otlp: None, \
-             flush_timeout: 5s, shutdown_timeout: 5s, .. }"
-        ),
+        shown.contains("file: Some(Stderr), otlp: None, sdk: Sdk { sampling: Sampling {"),
         "{shown}"
     );
+    assert!(shown.ends_with(" .. }"), "{shown}");
 }
 
 #[test]
 fn a_builder_prints_neither_the_endpoint_nor_a_header_value_it_was_given() {
-    let builder = Telemetry::builder("0.1.0", scope()).otlp(OtlpSettings {
+    let builder = Telemetry::builder(scope()).otlp(OtlpSettings {
         transport: Transport::HttpProtobuf,
         endpoint: Some("http://user:hunter2hunter2@collector:4318".to_owned()),
         headers: vec![(
@@ -801,7 +683,7 @@ fn a_builder_prints_neither_the_endpoint_nor_a_header_value_it_was_given() {
 
 #[tokio::test]
 async fn a_header_that_is_not_one_fails_the_build_and_names_the_header() {
-    let refused = Telemetry::builder("0.1.0", scope())
+    let refused = Telemetry::builder(scope())
         .otlp(OtlpSettings {
             transport: Transport::Grpc,
             endpoint: Some("http://127.0.0.1:1".to_owned()),

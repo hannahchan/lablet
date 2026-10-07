@@ -183,9 +183,9 @@ async fn an_endpoint_nothing_listens_on_leaves_the_outcome_what_a_good_destinati
 
     let lines = diagnostics.lines();
     assert!(
-        lines.iter().any(|line| {
-            line.contains("the run's telemetry wasn't exported whole") && line.contains("\"otlp")
-        }),
+        lines
+            .iter()
+            .any(|line| line.contains("the run's telemetry wasn't exported whole")),
         "the run's flush said the network destination failed: {lines:?}"
     );
 

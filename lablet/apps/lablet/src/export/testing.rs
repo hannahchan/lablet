@@ -2,6 +2,7 @@
 //! handed, in memory, and a run of spans and records emitted as the loop
 //! emits them, through a tracer and lablet's logger.
 
+use std::ffi::OsString;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use lablet_run::telemetry::{Attribute, Logger, Record};
@@ -12,7 +13,8 @@ use opentelemetry::trace::{
 };
 use opentelemetry::{Context, InstrumentationScope, KeyValue};
 
-use super::telemetry::{Telemetry, WideEvent};
+use super::telemetry::Telemetry;
+use crate::otel_env::{OtelEnv, Sdk};
 
 pub(crate) use lablet_test_support::Scratch;
 
@@ -30,8 +32,6 @@ pub(crate) const SCHEMA_URL: &str = "https://lablet.dev/schemas/test";
 
 /// The key a test's spans and records carry their run under.
 pub(crate) const RUN_KEY: &str = "lablet.test.run";
-/// The key a test's wide event counts the lost records under.
-pub(crate) const DROPPED_KEY: &str = "lablet.test.dropped";
 
 /// The event name of a run's wide event.
 pub(crate) const WIDE: &str = "lablet.run";
@@ -92,15 +92,14 @@ fn record(name: &'static str, at: SystemTime, span: SpanContext, run: &str) -> R
 /// loop and the composition root do: the root span, opened from an empty
 /// context, two chat spans and a tool span beneath it, and the `records`
 /// in their spans' contexts, each timed on the run's clock. Returns the
-/// run's wide event as the composition root hands it over: a function of
-/// the count of lost records, in the root span's context, timed at the
-/// run's end.
+/// run's wide event as the composition root hands it over, in the root
+/// span's context, timed at the run's end.
 pub(crate) fn emit(
     tracer: &BoxedTracer,
     logger: &dyn Logger,
     run: &str,
     records: Records,
-) -> WideEvent {
+) -> Record {
     let content = records == Records::Captured;
     let root = tracer
         .span_builder("invoke_agent lablet")
@@ -181,23 +180,30 @@ pub(crate) fn emit(
 }
 
 /// The wide event of the run `run`, as the composition root hands it over.
-pub(crate) fn wide_event(run: &str, root: SpanContext) -> WideEvent {
-    let run = run.to_owned();
-    Box::new(move |lost| Record {
+pub(crate) fn wide_event(run: &str, root: SpanContext) -> Record {
+    Record {
         name: WIDE,
         severity: Severity::Info,
         at: after(DURATION_MS),
-        span: root.clone(),
-        attributes: vec![
-            Attribute::of(RUN_KEY, run.as_str()),
-            Attribute::of(DROPPED_KEY, lost),
-        ],
-    })
+        span: root,
+        attributes: vec![Attribute::of(RUN_KEY, run)],
+    }
+}
+
+/// The SDK's settings an environment that holds `held`, and nothing else,
+/// gives, read through the seam as a build reads them.
+pub(crate) fn sdk_of(held: &[(&str, &str)]) -> Sdk {
+    let env = |name: &str| {
+        held.iter()
+            .find(|(variable, _)| *variable == name)
+            .map(|(_, value)| OsString::from(value))
+    };
+    OtelEnv::read(&env).sdk
 }
 
 /// Begins the run `run` on `telemetry`, emits it through a tracer and a
 /// logger of `telemetry`'s own, and returns its wide event.
-pub(crate) fn emit_run(telemetry: &Telemetry, run: &str, records: Records) -> WideEvent {
+pub(crate) fn emit_run(telemetry: &Telemetry, run: &str, records: Records) -> Record {
     telemetry.begin_run(&lablet_model::RunId::new(run).unwrap_or_else(|error| {
         panic!("{run} is a run id: {error}");
     }));
@@ -221,6 +227,8 @@ pub(crate) mod memory {
     use opentelemetry_sdk::logs::{LogBatch, LogExporter, SdkLogRecord};
     use opentelemetry_sdk::trace::{SpanData, SpanExporter};
 
+    use super::WIDE;
+
     /// One log record, and the scope it was emitted under.
     pub(crate) type Logged = (SdkLogRecord, InstrumentationScope);
 
@@ -229,8 +237,6 @@ pub(crate) mod memory {
     pub(crate) enum Export {
         Spans(Vec<SpanData>),
         Records(Vec<Logged>),
-        /// What the exporter of the wide event was handed.
-        Wide(Vec<Logged>),
     }
 
     #[derive(Debug, Default)]
@@ -239,15 +245,11 @@ pub(crate) mod memory {
         resources: Mutex<Vec<Resource>>,
         refuses_spans: AtomicBool,
         refuses_records: AtomicBool,
-        refuses_wide: AtomicBool,
         held: Mutex<bool>,
         released: Condvar,
-        /// How many exports are waiting to be released.
-        exporting: Mutex<usize>,
-        began: Condvar,
     }
 
-    /// The memory of one destination's three exporters, which says what
+    /// The memory of one destination's two exporters, which says what
     /// they were handed and decides what becomes of it.
     #[derive(Debug, Clone, Default)]
     pub(crate) struct Memory(Arc<Kept>);
@@ -256,10 +258,7 @@ pub(crate) mod memory {
     pub(crate) struct Spans(Memory);
 
     #[derive(Debug)]
-    pub(crate) struct Records {
-        memory: Memory,
-        wide: bool,
-    }
+    pub(crate) struct Records(Memory);
 
     impl Memory {
         pub(crate) fn spans(&self) -> Spans {
@@ -267,17 +266,7 @@ pub(crate) mod memory {
         }
 
         pub(crate) fn records(&self) -> Records {
-            Records {
-                memory: self.clone(),
-                wide: false,
-            }
-        }
-
-        pub(crate) fn wide(&self) -> Records {
-            Records {
-                memory: self.clone(),
-                wide: true,
-            }
+            Records(self.clone())
         }
 
         /// From now on, or no longer, an export of spans fails, as one to
@@ -291,11 +280,6 @@ pub(crate) mod memory {
             self.0.refuses_records.store(refuses, Ordering::SeqCst);
         }
 
-        /// From now on, or no longer, an export of the wide event fails.
-        pub(crate) fn refuse_wide(&self, refuses: bool) {
-            self.0.refuses_wide.store(refuses, Ordering::SeqCst);
-        }
-
         /// From now on an export waits, as one to a destination that
         /// doesn't answer does, until [`Memory::release`].
         pub(crate) fn hold(&self) {
@@ -305,18 +289,6 @@ pub(crate) mod memory {
         pub(crate) fn release(&self) {
             *self.0.held.lock().unwrap() = false;
             self.0.released.notify_all();
-        }
-
-        /// Returns once an export is waiting to be released, which an
-        /// export to a held destination does for as long as it's held.
-        pub(crate) fn wait_until_exporting(&self) {
-            let exporting = self.0.exporting.lock().unwrap();
-            drop(
-                self.0
-                    .began
-                    .wait_while(exporting, |exporting| *exporting == 0)
-                    .unwrap(),
-            );
         }
 
         /// Every export so far, in order.
@@ -330,7 +302,20 @@ pub(crate) mod memory {
                 .into_iter()
                 .filter_map(|export| match export {
                     Export::Spans(spans) => Some(spans),
-                    Export::Records(_) | Export::Wide(_) => None,
+                    Export::Records(_) => None,
+                })
+                .flatten()
+                .collect()
+        }
+
+        /// Every log record so far, the wide events among them, in the
+        /// order they were exported.
+        fn exported_logs(&self) -> Vec<Logged> {
+            self.exports()
+                .into_iter()
+                .filter_map(|export| match export {
+                    Export::Records(records) => Some(records),
+                    Export::Spans(_) => None,
                 })
                 .flatten()
                 .collect()
@@ -339,25 +324,17 @@ pub(crate) mod memory {
         /// Every log record so far but the wide events, in the order they
         /// were exported.
         pub(crate) fn exported_records(&self) -> Vec<Logged> {
-            self.exports()
+            self.exported_logs()
                 .into_iter()
-                .filter_map(|export| match export {
-                    Export::Records(records) => Some(records),
-                    Export::Spans(_) | Export::Wide(_) => None,
-                })
-                .flatten()
+                .filter(|(record, _)| record.event_name() != Some(WIDE))
                 .collect()
         }
 
         /// Every wide event so far, in the order they were exported.
         pub(crate) fn exported_wide(&self) -> Vec<Logged> {
-            self.exports()
+            self.exported_logs()
                 .into_iter()
-                .filter_map(|export| match export {
-                    Export::Wide(records) => Some(records),
-                    Export::Spans(_) | Export::Records(_) => None,
-                })
-                .flatten()
+                .filter(|(record, _)| record.event_name() == Some(WIDE))
                 .collect()
         }
 
@@ -367,11 +344,8 @@ pub(crate) mod memory {
         }
 
         fn export(&self, export: Export, refuses: &AtomicBool) -> OTelSdkResult {
-            *self.0.exporting.lock().unwrap() += 1;
-            self.0.began.notify_all();
             let held = self.0.held.lock().unwrap();
             drop(self.0.released.wait_while(held, |held| *held).unwrap());
-            *self.0.exporting.lock().unwrap() -= 1;
             if refuses.load(Ordering::SeqCst) {
                 return Err(OTelSdkError::InternalFailure(
                     "the destination can't be written".to_owned(),
@@ -402,17 +376,14 @@ pub(crate) mod memory {
                 .iter()
                 .map(|(record, scope)| (record.clone(), scope.clone()))
                 .collect();
-            future::ready(if self.wide {
-                self.memory
-                    .export(Export::Wide(records), &self.memory.0.refuses_wide)
-            } else {
-                self.memory
-                    .export(Export::Records(records), &self.memory.0.refuses_records)
-            })
+            future::ready(
+                self.0
+                    .export(Export::Records(records), &self.0.0.refuses_records),
+            )
         }
 
         fn set_resource(&mut self, resource: &Resource) {
-            self.memory.described(resource);
+            self.0.described(resource);
         }
     }
 }

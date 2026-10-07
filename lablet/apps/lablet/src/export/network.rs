@@ -575,30 +575,22 @@ impl Network {
         }
     }
 
-    /// The three exporters: one of spans, and two of log records, the
-    /// second of which is the wide event's. They need a tokio runtime to
-    /// be made in, for the gRPC channel's worker.
+    /// The two exporters, of spans and of log records. They need a tokio
+    /// runtime to be made in, for the gRPC channel's worker.
     ///
     /// # Errors
     ///
     /// Returns an [`OtelBuildError`] when the exporter refuses the endpoint,
     /// can't set up TLS to it, or can't make itself.
-    pub(crate) fn exporters(
-        &self,
-    ) -> Result<(SpanExporter, LogExporter, LogExporter), OtelBuildError> {
+    pub(crate) fn exporters(&self) -> Result<(SpanExporter, LogExporter), OtelBuildError> {
         let traces = self.of(Signal::Traces);
         let logs = self.of(Signal::Logs);
         match self.transport {
-            Transport::Grpc => Ok((grpc_spans(&traces)?, grpc_logs(&logs)?, grpc_logs(&logs)?)),
-            Transport::HttpProtobuf => {
-                let traces_client = blocking_client(timeout_of(Signal::Traces))?;
-                let logs_client = blocking_client(timeout_of(Signal::Logs))?;
-                Ok((
-                    http_spans(&traces, &traces_client)?,
-                    http_logs(&logs, &logs_client)?,
-                    http_logs(&logs, &logs_client)?,
-                ))
-            }
+            Transport::Grpc => Ok((grpc_spans(&traces)?, grpc_logs(&logs)?)),
+            Transport::HttpProtobuf => Ok((
+                http_spans(&traces, &blocking_client(timeout_of(Signal::Traces))?)?,
+                http_logs(&logs, &blocking_client(timeout_of(Signal::Logs))?)?,
+            )),
         }
     }
 }

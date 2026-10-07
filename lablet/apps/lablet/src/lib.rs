@@ -103,14 +103,14 @@
 //!     };
 //!     assert_eq!(shared(first)?, shared(second)?);
 //!
-//!     // The file holds both runs, and the last line of each is its wide
-//!     // event.
+//!     // The file holds both runs, and each run's one wide event.
 //!     let telemetry = std::fs::read_to_string(format!("{directory}/telemetry.otlp.jsonl"))?;
-//!     let wide_events = telemetry
+//!     let wide_events: Vec<_> = telemetry
 //!         .lines()
-//!         .filter(|line| line.contains(r#""eventName":"lablet.run""#));
-//!     assert_eq!(wide_events.count(), 2);
-//!     assert!(telemetry.lines().last().is_some_and(|line| line.contains("the-second-run")));
+//!         .filter(|line| line.contains(r#""eventName":"lablet.run""#))
+//!         .collect();
+//!     assert_eq!(wide_events.len(), 2);
+//!     assert!(wide_events[1].contains("the-second-run"));
 //!     Ok::<_, Box<dyn std::error::Error>>(())
 //! })?;
 //! # std::fs::remove_dir_all(directory.to_string())?;
@@ -124,7 +124,9 @@ mod clock;
 pub mod config;
 mod export;
 mod lablet;
+mod otel_env;
 mod otlp;
+mod propagation;
 mod root;
 mod root_span;
 mod secrets;

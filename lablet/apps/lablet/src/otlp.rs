@@ -7,6 +7,7 @@
 
 use crate::config::{Config, Env, OtlpProtocol, Refusal};
 use crate::export::{OtlpSettings, Signal, Transport};
+use crate::otel_env;
 
 /// The endpoint variable every signal falls back on.
 const ENDPOINT: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
@@ -57,6 +58,7 @@ pub(crate) fn settings(
     written: &Config,
     real: &Config,
     env: Env<'_>,
+    _exporter: &otel_env::Exporter,
 ) -> Result<Option<OtlpSettings>, Refusal> {
     let otlp = &real.telemetry.otlp;
     let endpoint = otlp

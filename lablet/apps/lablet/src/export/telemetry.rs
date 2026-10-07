@@ -1,57 +1,27 @@
-//! The destinations and the providers behind them: what the composition
+//! The providers and the destinations behind them: what the composition
 //! root builds once, hands the loop a tracer and a logger from, and flushes
 //! after each run.
 
-use std::collections::BTreeMap;
-use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use lablet_model::RunId;
 use lablet_run::telemetry::{Bridge, Logger, Record};
+use opentelemetry::InstrumentationScope;
 use opentelemetry::global::BoxedTracer;
 use opentelemetry::logs::LoggerProvider as _;
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry::{InstrumentationScope, KeyValue};
 use opentelemetry_sdk::Resource;
-use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
-use opentelemetry_sdk::logs::{LogExporter, LogProcessor as _, SdkLogger, SdkLoggerProvider};
-use opentelemetry_sdk::resource::{EnvResourceDetector, TelemetryResourceDetector};
-use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider, SpanExporter, SpanProcessor as _};
+use opentelemetry_sdk::error::OTelSdkResult;
+use opentelemetry_sdk::logs::{BatchLogProcessor, LogExporter, SdkLoggerProvider};
+use opentelemetry_sdk::trace::{BatchSpanProcessor, SdkTracerProvider, SpanExporter};
 
 use super::file::{FileLogExporter, FileSpanExporter, FileTarget, Sink};
 use super::network::{Network, OtelBuildError, OtlpSettings, validate};
-use super::pipeline::{Lost, RecordQueue, SpanQueue};
+use crate::otel_env::Sdk;
 
-/// The name of the service.
-const LABLET: &str = "lablet";
-
-/// The resource keys lablet sets itself, as the resource conventions name
-/// them. They're the service's, not a signal's: the registry's attributes
-/// are named by the crates that emit them.
-const SERVICE_NAME: &str = "service.name";
-const SERVICE_VERSION: &str = "service.version";
-
-/// How many attributes and how many events a span keeps. A run is one
-/// trace whose wide event counts every span in it, so an attribute a limit
-/// cut would be a step the record says happened and the file doesn't hold;
-/// the limits are set here so `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT` and
-/// `OTEL_SPAN_EVENT_COUNT_LIMIT` can't lower them.
-const SPAN_LIMIT: u32 = 128;
-
-/// How long a flush and a shutdown are each given unless the builder says
-/// otherwise, so a destination that doesn't answer costs seconds.
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// The run's wide event, as the composition root hands it over: a function
-/// of the count of records a destination lost. Each destination calls it
-/// with its own count once its own flush has ended, and emits the record it
-/// returns through a logger of its own, in an export of its own.
-pub(crate) type WideEvent = Box<dyn Fn(u64) -> Record + Send + Sync>;
-
-/// What a flush or a shutdown couldn't export. Nothing about a run changes
-/// for it: it's for whoever reports to the person who ran lablet.
+/// What a flush or a shutdown couldn't export, as the SDK said it. Nothing
+/// about a run changes for it: it's for whoever reports to the person who
+/// ran lablet.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("telemetry wasn't exported whole: {}", failures.join("; "))]
 pub(crate) struct FlushError {
@@ -59,99 +29,50 @@ pub(crate) struct FlushError {
 }
 
 impl FlushError {
-    /// What failed, one entry for each queue that did.
+    /// What failed, one entry for each provider whose processors said so:
+    /// `spans: ` or `log records: `, then the SDK's error.
     #[must_use]
     pub(crate) fn failures(&self) -> &[String] {
         &self.failures
     }
 }
 
-/// How one destination and its three queues are named in what a flush
-/// reports.
-#[derive(Debug, Clone, Copy)]
-struct Names {
-    destination: &'static str,
-    spans: &'static str,
-    records: &'static str,
-    wide: &'static str,
-}
+/// What a shutdown gives each processor to export what it holds and stop.
+const SHUTDOWN: Duration = Duration::from_secs(5);
 
-const FILE: Names = Names {
-    destination: "file",
-    spans: "spans",
-    records: "log records",
-    wide: "the wide event",
-};
-
-const OTLP: Names = Names {
-    destination: "otlp",
-    spans: "otlp spans",
-    records: "otlp log records",
-    wide: "the otlp wide event",
-};
-
-/// Where a run's signals go: three queues, each with a thread of the SDK's
-/// behind it, one for spans, one for log records and one that only the wide
-/// event goes through, and the destination's own count of what they lost.
-///
-/// The span queue and the record queue are processors of the providers
-/// every destination shares, so the loop's tracer and logger reach each
-/// destination; the wide event's queue has a provider of its own, so the
-/// event is never in a batch with a content record.
-struct Destination {
-    names: Names,
-    spans: SpanQueue,
-    records: RecordQueue,
-    wide: SdkLoggerProvider,
-    wide_logger: SdkLogger,
-    lost: Arc<Lost>,
-}
-
-impl std::fmt::Debug for Destination {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Destination")
-            .field("names", &self.names)
-            .finish_non_exhaustive()
-    }
-}
-
-type MakeDestination = Box<dyn FnOnce(&Resource, &InstrumentationScope) -> Destination + Send>;
+/// One destination's processors, made once the SDK's settings are known.
+#[cfg(test)]
+type Hooked = Box<dyn FnOnce(&Sdk) -> (BatchSpanProcessor, BatchLogProcessor) + Send>;
 
 /// What a [`Telemetry`] is built from.
 pub(crate) struct TelemetryBuilder {
-    version: String,
     scope: InstrumentationScope,
-    resource: Vec<(String, String)>,
+    resource: Resource,
     file: Option<FileTarget>,
     otlp: Option<OtlpSettings>,
-    flush_timeout: Duration,
-    shutdown_timeout: Duration,
-    destinations: Vec<MakeDestination>,
+    sdk: Sdk,
+    #[cfg(test)]
+    hooked: Vec<Hooked>,
 }
 
 impl std::fmt::Debug for TelemetryBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TelemetryBuilder")
-            .field("version", &self.version)
             .field("scope", &self.scope)
             .field("resource", &self.resource)
             .field("file", &self.file)
             .field("otlp", &self.otlp)
-            .field("flush_timeout", &self.flush_timeout)
-            .field("shutdown_timeout", &self.shutdown_timeout)
+            .field("sdk", &self.sdk)
             .finish_non_exhaustive()
     }
 }
 
 impl TelemetryBuilder {
-    /// The composer's own resource attributes, which every export carries
-    /// beside `service.name`, `service.version` and what the SDK says of
-    /// itself, over those `OTEL_RESOURCE_ATTRIBUTES` holds when it's set. A
-    /// key the environment names too takes the composer's value, and a key
-    /// of lablet's own keeps lablet's value whichever names it.
+    /// The resource every export describes itself with, in place of an
+    /// empty one.
     #[must_use]
-    pub(crate) fn resource(mut self, attributes: Vec<(String, String)>) -> Self {
-        self.resource = attributes;
+    pub(crate) fn resource(mut self, resource: Resource) -> Self {
+        self.resource = resource;
         self
     }
 
@@ -171,56 +92,32 @@ impl TelemetryBuilder {
         self
     }
 
-    /// How long [`Telemetry::flush`] waits for a destination, in place of
-    /// five seconds.
-    #[cfg(test)]
+    /// The sampler, the span limits and the batch processors' settings, in
+    /// place of the specification's defaults.
     #[must_use]
-    pub(crate) const fn flush_timeout(mut self, timeout: Duration) -> Self {
-        self.flush_timeout = timeout;
+    pub(crate) fn sdk(mut self, sdk: Sdk) -> Self {
+        self.sdk = sdk;
         self
     }
 
-    /// How long [`Telemetry::shutdown`] waits, in place of five seconds.
+    /// Exports to `spans` and `records` too, as a destination registered
+    /// where the network's is, after the file's.
     #[cfg(test)]
     #[must_use]
-    pub(crate) const fn shutdown_timeout(mut self, timeout: Duration) -> Self {
-        self.shutdown_timeout = timeout;
-        self
-    }
-
-    /// Exports to these three exporters, the third of which is handed the
-    /// wide event and nothing else, named as the file's queues are.
-    #[cfg(test)]
-    pub(crate) fn exporting_to<S, L>(mut self, spans: S, records: L, wide: L) -> Self
+    pub(crate) fn exporting_to<S, L>(mut self, spans: S, records: L) -> Self
     where
         S: SpanExporter + 'static,
         L: LogExporter + 'static,
     {
-        self.destinations
-            .push(destination(FILE, spans, records, wide));
+        self.hooked
+            .push(Box::new(move |sdk| processors(sdk, spans, records)));
         self
     }
 
-    /// As [`Self::exporting_to`], named as the network's queues are.
-    #[cfg(test)]
-    pub(crate) fn exporting_over_the_network_to<S, L>(
-        mut self,
-        spans: S,
-        records: L,
-        wide: L,
-    ) -> Self
-    where
-        S: SpanExporter + 'static,
-        L: LogExporter + 'static,
-    {
-        self.destinations
-            .push(destination(OTLP, spans, records, wide));
-        self
-    }
-
-    /// The destinations, with a thread behind each of their queues, and the
-    /// providers over them. With a network destination it must be called
-    /// inside a tokio runtime, which the gRPC channel's worker runs on.
+    /// The providers, with a batch processor of the SDK's for each
+    /// destination and signal. With a network destination it must be
+    /// called inside a tokio runtime, which the gRPC channel's worker runs
+    /// on.
     ///
     /// # Errors
     ///
@@ -229,188 +126,115 @@ impl TelemetryBuilder {
     /// one a header may have, or TLS to the endpoint can't be set up.
     pub(crate) fn build(self) -> Result<Telemetry, OtelBuildError> {
         let Self {
-            version,
             scope,
             resource,
             file,
             otlp,
-            flush_timeout,
-            shutdown_timeout,
-            mut destinations,
+            sdk,
+            #[cfg(test)]
+            hooked,
         } = self;
-        // A later source wins a key an earlier one set. So the environment's
-        // attributes are defaults beneath the composer's, as every `OTEL_*`
-        // variable lablet inherits is, and what the SDK says of itself and
-        // lablet's own two keys come last, so neither source can rename the
-        // service or misstate the SDK. `OTEL_SERVICE_NAME` goes unread: the
-        // detector that reads it isn't one of these.
-        let resource = Resource::builder_empty()
-            .with_detector(Box::new(EnvResourceDetector::new()))
-            .with_attributes(
-                resource
-                    .into_iter()
-                    .map(|(key, value)| KeyValue::new(key, value)),
-            )
-            .with_detector(Box::new(TelemetryResourceDetector))
-            .with_attributes([
-                KeyValue::new(SERVICE_NAME, LABLET),
-                KeyValue::new(SERVICE_VERSION, version),
-            ])
-            .build();
 
+        // A provider flushes and stops its processors one after the other,
+        // in the order they were added, so the file's come first: it never
+        // waits on the network.
+        let sink = file.map(Sink::new);
+        let mut destinations = Vec::new();
+        if let Some(sink) = &sink {
+            destinations.push(processors(
+                &sdk,
+                FileSpanExporter::new(sink.clone()),
+                FileLogExporter::new(sink.clone()),
+            ));
+        }
         if let Some(settings) = otlp {
             // What a check of the settings refuses, the build refuses first,
             // so the two can't come apart. Only what the check can't do
             // without making it is the build's alone: the trust roots of a
             // gRPC exporter that speaks TLS, and the HTTP client.
             validate(&settings)?;
-            let (spans, records, wide) = Network::new(&settings)?.exporters()?;
-            destinations.push(destination(OTLP, spans, records, wide));
+            let (spans, records) = Network::new(&settings)?.exporters()?;
+            destinations.push(processors(&sdk, spans, records));
         }
-        let sink = file.map(Sink::new);
-        if let Some(sink) = &sink {
-            destinations.push(destination(
-                FILE,
-                FileSpanExporter::new(sink.clone()),
-                FileLogExporter::new(sink.clone()),
-                FileLogExporter::new(sink.clone()),
-            ));
-        }
-        let destinations: Vec<Destination> = destinations
-            .into_iter()
-            .map(|make| make(&resource, &scope))
-            .collect();
+        #[cfg(test)]
+        destinations.extend(hooked.into_iter().map(|hook| hook(&sdk)));
 
-        // The sampler and the limits are set after the SDK has read its
-        // environment, so the variables that would lower them can't.
         let mut tracer_provider = SdkTracerProvider::builder()
-            .with_sampler(Sampler::AlwaysOn)
-            .with_max_attributes_per_span(SPAN_LIMIT)
-            .with_max_events_per_span(SPAN_LIMIT)
+            .with_sampler(sdk.sampling.sampler())
+            .with_span_limits(sdk.limits.span_limits())
             .with_resource(resource.clone());
-        let mut records_provider = SdkLoggerProvider::builder().with_resource(resource);
-        for destination in &destinations {
-            tracer_provider = tracer_provider.with_span_processor(destination.spans.clone());
-            records_provider = records_provider.with_log_processor(destination.records.clone());
+        let mut logger_provider = SdkLoggerProvider::builder().with_resource(resource);
+        for (spans, records) in destinations {
+            tracer_provider = tracer_provider.with_span_processor(spans);
+            logger_provider = logger_provider.with_log_processor(records);
         }
-
-        let destinations_flushing: Vec<Vec<thread::JoinHandle<()>>> =
-            destinations.iter().map(|_| Vec::new()).collect();
         Ok(Telemetry {
-            inner: Arc::new(Inner {
-                scope,
-                tracer_provider: tracer_provider.build(),
-                records_provider: records_provider.build(),
-                destinations,
-                sink,
-                flush_timeout,
-                shutdown_timeout,
-                flushing: Mutex::new(destinations_flushing),
-            }),
+            scope,
+            tracer_provider: tracer_provider.build(),
+            logger_provider: logger_provider.build(),
+            sink,
         })
     }
 }
 
-/// A destination of three exporters, made once the resource they describe
-/// their exports with and the scope they're emitted under are known.
-fn destination<S, L>(names: Names, spans: S, records: L, wide: L) -> MakeDestination
+/// The batch processors of one destination, as the SDK's settings say.
+fn processors<S, L>(sdk: &Sdk, spans: S, records: L) -> (BatchSpanProcessor, BatchLogProcessor)
 where
     S: SpanExporter + 'static,
     L: LogExporter + 'static,
 {
-    Box::new(move |resource, scope| {
-        let lost = Arc::new(Lost::default());
-        // The wide event isn't one of the records its own count is of, so
-        // what becomes of it is counted apart and reported by the flush.
-        let wide = SdkLoggerProvider::builder()
-            .with_resource(resource.clone())
-            .with_log_processor(RecordQueue::new(
-                names.destination,
-                wide,
-                resource,
-                &Arc::new(Lost::default()),
-            ))
-            .build();
-        Destination {
-            names,
-            spans: SpanQueue::new(names.destination, spans, resource, &lost),
-            records: RecordQueue::new(names.destination, records, resource, &lost),
-            wide_logger: wide.logger_with_scope(scope.clone()),
-            wide,
-            lost,
-        }
-    })
+    (
+        BatchSpanProcessor::builder(spans)
+            .with_batch_config(sdk.spans.span_config())
+            .build(),
+        BatchLogProcessor::builder(records)
+            .with_batch_config(sdk.logs.log_config())
+            .build(),
+    )
 }
 
-#[derive(Debug)]
-struct Inner {
-    scope: InstrumentationScope,
-    tracer_provider: SdkTracerProvider,
-    records_provider: SdkLoggerProvider,
-    destinations: Vec<Destination>,
-    sink: Option<Sink>,
-    flush_timeout: Duration,
-    shutdown_timeout: Duration,
-    /// For each destination, the flush threads that may still be running:
-    /// a flush that gave up on a destination left its thread, which makes
-    /// the wide event of the run it took once the destination answers.
-    /// A shutdown waits for them before it stops that destination's
-    /// queues, or a wide event made late would be emitted into a queue
-    /// already stopped.
-    flushing: Mutex<Vec<Vec<thread::JoinHandle<()>>>>,
-}
-
-/// The destinations a run's telemetry goes to, and the providers behind
-/// them.
+/// The providers a run's telemetry goes through, and the destinations
+/// behind them.
 ///
 /// The loop opens its spans through [`Telemetry::tracer`] and emits its
 /// records through [`Telemetry::logger`], which only queue what they're
 /// handed, so neither waits for an export. Whoever runs the loop calls
 /// [`Telemetry::begin_run`] before a run and [`Telemetry::flush`] when it
-/// has returned, which is when the run's wide event is made and exported,
-/// and [`Telemetry::shutdown`] before the process exits. A `Telemetry`
-/// dropped without a shutdown is stopped by the SDK instead, which exports
-/// what the queues hold but costs the thread that drops it up to the SDK's
-/// five seconds for each of its two providers, ten in all, when a
-/// destination doesn't answer.
+/// has returned, with the run's wide event, and [`Telemetry::shutdown`]
+/// before the process exits. A `Telemetry` dropped without a shutdown is
+/// shut down by the SDK on the thread that drops it, which exports what the
+/// processors hold but costs that thread up to five seconds for each
+/// processor, in turn, when a destination doesn't answer.
 #[derive(Debug, Clone)]
 pub(crate) struct Telemetry {
-    inner: Arc<Inner>,
+    scope: InstrumentationScope,
+    tracer_provider: SdkTracerProvider,
+    logger_provider: SdkLoggerProvider,
+    sink: Option<Sink>,
 }
 
 impl Telemetry {
-    /// A builder for lablet `version`, which is the `service.version` of
-    /// the resource, emitting every span and record under `scope`, the
-    /// instrumentation scope the composition root makes. The resource is
-    /// the service's and the scope is the instrumentation's, so each
-    /// carries a version of its own, and the composition root hands the
-    /// same one to both; nothing here refuses two that differ.
-    pub(crate) fn builder(
-        version: impl Into<String>,
-        scope: InstrumentationScope,
-    ) -> TelemetryBuilder {
+    /// A builder emitting every span and record under `scope`, the
+    /// instrumentation scope the composition root makes.
+    pub(crate) fn builder(scope: InstrumentationScope) -> TelemetryBuilder {
         TelemetryBuilder {
-            version: version.into(),
             scope,
-            resource: Vec::new(),
+            resource: Resource::builder_empty().build(),
             file: None,
             otlp: None,
-            flush_timeout: SHUTDOWN_TIMEOUT,
-            shutdown_timeout: SHUTDOWN_TIMEOUT,
-            destinations: Vec::new(),
+            sdk: Sdk::default(),
+            #[cfg(test)]
+            hooked: Vec::new(),
         }
     }
 
     /// A tracer of the scope the composition root handed over, whose spans
-    /// reach every destination. Every span it opens is sampled, and a span
-    /// keeps up to 128 attributes and 128 events whatever the environment
-    /// says.
+    /// reach every destination, sampled and limited as the SDK's settings
+    /// say.
     #[must_use]
     pub(crate) fn tracer(&self) -> BoxedTracer {
         BoxedTracer::new(Box::new(
-            self.inner
-                .tracer_provider
-                .tracer_with_scope(self.inner.scope.clone()),
+            self.tracer_provider.tracer_with_scope(self.scope.clone()),
         ))
     }
 
@@ -419,9 +243,7 @@ impl Telemetry {
     #[must_use]
     pub(crate) fn logger(&self) -> Box<dyn Logger> {
         Box::new(Bridge::new(
-            self.inner
-                .records_provider
-                .logger_with_scope(self.inner.scope.clone()),
+            self.logger_provider.logger_with_scope(self.scope.clone()),
         ))
     }
 
@@ -432,285 +254,85 @@ impl Telemetry {
     /// keeps the first run while the path gets the second. Nothing is
     /// opened here, and a `Telemetry` with no file does nothing.
     pub(crate) fn begin_run(&self, run_id: &RunId) {
-        if let Some(sink) = &self.inner.sink {
+        if let Some(sink) = &self.sink {
             sink.start(run_id);
         }
     }
 
-    /// Exports what the run so far gave rise to, to each destination on its
-    /// own: its spans and its log records, then, in an export of its own,
-    /// the run's wide event, which `wide` makes from that destination's own
-    /// count of what it lost.
+    /// Emits `wide`, the run's wide event, through lablet's logger, and
+    /// then flushes both providers, side by side. Each flushes the file's
+    /// processor before the network's, so when this returns the file holds
+    /// the run whole, its wide event included, whatever a collector did.
     ///
-    /// The wide event is made once everything else of its run has been
-    /// exported to the destination or lost, so its count is whole.
-    ///
-    /// Each destination is waited for no longer than the builder's flush
-    /// timeout, five seconds unless it says otherwise, and none waits on
-    /// another: when this returns, a file the telemetry exports to holds
-    /// every line of the run, whatever a collector did. A destination that
-    /// didn't answer in time is left to its thread, which still makes the
-    /// wide event once the destination answers.
-    ///
-    /// That thread can outlive the run: what the next run's queues turn
-    /// away while it waits is counted in its wide event rather than the
-    /// next run's, the next run's wide event can reach the destination
-    /// first, and with a directory of per-run files, what it still writes
-    /// goes to the next run's file.
+    /// The SDK gives each processor's flush five seconds, so a collector
+    /// that never answers costs this about five seconds.
     ///
     /// # Errors
     ///
-    /// Returns a [`FlushError`] that names each queue whose export failed,
-    /// and each destination that didn't end in time.
-    pub(crate) async fn flush(&self, wide: WideEvent) -> Result<(), FlushError> {
-        let inner = Arc::clone(&self.inner);
-        let wide = Arc::new(wide);
-        blocking(move || inner.flush(Some(&wide))).await
+    /// Returns a [`FlushError`] holding what each provider's processors
+    /// said of a flush that failed or gave up.
+    pub(crate) async fn flush(&self, wide: Record) -> Result<(), FlushError> {
+        self.logger().emit(wide);
+        self.flush_leftovers().await
     }
 
-    /// Exports what the queues hold with no wide event, as [`Self::flush`]
-    /// does with one: what a run whose future was dropped left, its open
-    /// spans ended as they were dropped, to the destinations that run's
-    /// [`Self::begin_run`] named. It's bounded as [`Self::flush`] is, so the
-    /// run that calls it waits up to one flush bound for it.
+    /// Flushes both providers, side by side, as [`Self::flush`] does, with
+    /// no wide event: what a run whose future was dropped left, its open
+    /// spans ended as they were dropped.
     ///
     /// # Errors
     ///
     /// As [`Self::flush`].
     pub(crate) async fn flush_leftovers(&self) -> Result<(), FlushError> {
-        let inner = Arc::clone(&self.inner);
-        blocking(move || inner.flush(None)).await
+        let (spans, records) = (self.tracer_provider.clone(), self.logger_provider.clone());
+        both(move || spans.force_flush(), move || records.force_flush()).await
     }
 
-    /// Waits for the threads of the flushes that gave up, so that a wide
-    /// event made late is in its queue first, then flushes what the queues
-    /// still hold, and then stops every queue's thread, and waits for all
-    /// that no longer than the builder's shutdown timeout, five seconds
-    /// unless it says otherwise. So a destination that doesn't
-    /// answer can't hold a process that's ready to exit: what it still
-    /// holds then is left to a thread that nothing waits for. Spans and
-    /// records that come after a shutdown that ended are dropped.
+    /// Flushes what the processors still hold and stops them, both
+    /// providers side by side, each processor given five seconds.
+    /// So a collector that never answers holds this about five seconds, and
+    /// what it still holds then is left to a thread that nothing waits for.
+    /// Spans and records that come after a shutdown are dropped.
     ///
     /// # Errors
     ///
-    /// Returns a [`FlushError`] that names each queue whose export failed,
-    /// or that didn't stop in time, or that says the shutdown didn't end.
+    /// Returns a [`FlushError`] holding what each provider said of a
+    /// processor that failed to export or to stop in time, or that the
+    /// provider was shut down already.
     pub(crate) async fn shutdown(&self) -> Result<(), FlushError> {
-        let inner = Arc::clone(&self.inner);
-        blocking(move || inner.shutdown()).await
+        let (spans, records) = (self.tracer_provider.clone(), self.logger_provider.clone());
+        both(
+            move || spans.shutdown_with_timeout(SHUTDOWN),
+            move || records.shutdown_with_timeout(SHUTDOWN),
+        )
+        .await
     }
 }
 
-/// Runs `work` where it may wait: a queue answers a flush from its own
-/// thread, and waiting for it on the runtime's would hold up whatever else
-/// runs there.
-async fn blocking(work: impl FnOnce() -> Vec<String> + Send + 'static) -> Result<(), FlushError> {
-    let failures = tokio::task::spawn_blocking(work)
-        .await
-        .unwrap_or_else(|error| vec![format!("the flush didn't run to its end: {error}")]);
+/// Runs `spans` and `records` side by side where they may wait, since a
+/// processor answers from a thread of its own and waiting for it on the
+/// runtime's would hold up whatever else runs there, and gathers what each
+/// said went wrong.
+async fn both(
+    spans: impl FnOnce() -> OTelSdkResult + Send + 'static,
+    records: impl FnOnce() -> OTelSdkResult + Send + 'static,
+) -> Result<(), FlushError> {
+    let (spans, records) = tokio::join!(
+        tokio::task::spawn_blocking(spans),
+        tokio::task::spawn_blocking(records)
+    );
+    let failures: Vec<String> = [("spans", spans), ("log records", records)]
+        .into_iter()
+        .filter_map(|(provider, done)| match done {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(format!("{provider}: {error}")),
+            Err(error) => Some(format!("{provider}: it didn't run to its end: {error}")),
+        })
+        .collect();
     if failures.is_empty() {
         Ok(())
     } else {
         Err(FlushError { failures })
-    }
-}
-
-/// Adds what went wrong with `queue`, if anything did, to `failures`.
-fn note(failures: &mut Vec<String>, queue: &str, result: OTelSdkResult) {
-    if let Err(error) = result {
-        failures.push(format!("{queue}: {error}"));
-    }
-}
-
-impl Destination {
-    /// Exports what the queues hold, the spans and the records side by
-    /// side, and then the wide event `wide` makes, when there is one, with
-    /// the count of what was lost by then.
-    fn flush(&self, wide: Option<&WideEvent>) -> Vec<String> {
-        let mut failures = Vec::new();
-        let (spans, records) = thread::scope(|scope| {
-            let records = scope.spawn(|| self.records.force_flush());
-            let spans = self.spans.force_flush();
-            let records = records.join().unwrap_or_else(|_| {
-                Err(OTelSdkError::InternalFailure(
-                    "the flush didn't run to its end".to_owned(),
-                ))
-            });
-            (spans, records)
-        });
-        note(&mut failures, self.names.spans, spans);
-        note(&mut failures, self.names.records, records);
-
-        if let Some(wide) = wide {
-            wide(self.lost.take()).emit_through(&self.wide_logger);
-        }
-        note(&mut failures, self.names.wide, self.wide.force_flush());
-        failures
-    }
-
-    /// Stops the three queues, each given `timeout`.
-    fn stop(&self, timeout: Duration, failures: &mut Vec<String>) {
-        note(
-            failures,
-            self.names.spans,
-            self.spans.shutdown_with_timeout(timeout),
-        );
-        note(
-            failures,
-            self.names.records,
-            self.records.shutdown_with_timeout(timeout),
-        );
-        note(
-            failures,
-            self.names.wide,
-            self.wide.shutdown_with_timeout(timeout),
-        );
-    }
-}
-
-impl Inner {
-    fn flushing(&self) -> MutexGuard<'_, Vec<Vec<thread::JoinHandle<()>>>> {
-        self.flushing.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Flushes each destination on a thread of its own, and waits for them
-    /// all for as long as a flush is given. A destination that hasn't
-    /// answered by then is left to its thread, and said to have held the
-    /// flush up; the others are whole.
-    fn flush(self: &Arc<Self>, wide: Option<&Arc<WideEvent>>) -> Vec<String> {
-        let timeout = self.flush_timeout;
-        let (done, answers) = mpsc::channel();
-        let mut failures = Vec::new();
-        let mut waiting = Vec::new();
-        for (index, destination) in self.destinations.iter().enumerate() {
-            let inner = Arc::clone(self);
-            let wide = wide.map(Arc::clone);
-            let done = done.clone();
-            let started = thread::Builder::new()
-                .name(format!(
-                    "lablet-telemetry-flush-{}",
-                    destination.names.destination
-                ))
-                .spawn(move || {
-                    // Once the caller has stopped waiting there's no one to
-                    // answer, and nothing to do about it.
-                    let _ = done.send((index, inner.destinations[index].flush(wide.as_deref())));
-                });
-            match started {
-                Ok(thread) => {
-                    let mut flushing = self.flushing();
-                    flushing[index].retain(|thread| !thread.is_finished());
-                    flushing[index].push(thread);
-                    waiting.push(index);
-                }
-                Err(error) => failures.push(format!(
-                    "{}: the flush couldn't start: {error}",
-                    destination.names.destination
-                )),
-            }
-        }
-        drop(done);
-
-        let deadline = Instant::now() + timeout;
-        let mut answered = BTreeMap::new();
-        let mut unanswered = format!("the flush didn't end within {timeout:?}");
-        while answered.len() < waiting.len() {
-            match answers.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-                Ok((index, failed)) => {
-                    answered.insert(index, failed);
-                }
-                Err(RecvTimeoutError::Timeout) => break,
-                Err(RecvTimeoutError::Disconnected) => {
-                    "the flush didn't run to its end".clone_into(&mut unanswered);
-                    break;
-                }
-            }
-        }
-        for index in waiting {
-            match answered.remove(&index) {
-                Some(failed) => failures.extend(failed),
-                None => failures.push(format!(
-                    "{}: {unanswered}",
-                    self.destinations[index].names.destination
-                )),
-            }
-        }
-        failures
-    }
-
-    /// Stops the queues from a thread of its own, and waits for that for
-    /// as long as a shutdown is given. The SDK waits five seconds for a
-    /// queue's flush whatever it's told, so a destination that doesn't
-    /// answer holds that thread for longer, and never the caller.
-    fn shutdown(self: &Arc<Self>) -> Vec<String> {
-        let timeout = self.shutdown_timeout;
-        let (stopped, answer) = mpsc::sync_channel(1);
-        let inner = Arc::clone(self);
-        let stopping = thread::Builder::new()
-            .name("lablet-telemetry-shutdown".to_owned())
-            .spawn(move || {
-                // Once the caller has stopped waiting there's no one to
-                // answer, and nothing to do about it.
-                let _ = stopped.send(inner.stop());
-            });
-        if let Err(error) = stopping {
-            return vec![format!("the shutdown couldn't start: {error}")];
-        }
-        answer.recv_timeout(timeout).unwrap_or_else(|error| {
-            vec![match error {
-                RecvTimeoutError::Timeout => format!("the shutdown didn't end within {timeout:?}"),
-                RecvTimeoutError::Disconnected => "the shutdown didn't run to its end".to_owned(),
-            }]
-        })
-    }
-
-    /// Flushes and stops each destination on a thread of its own, so none
-    /// waits on another, and waits for them all: the shutdown's own bound
-    /// is the caller's. Then marks the providers shut down, so that their
-    /// drop doesn't stop the queues again.
-    fn stop(&self) -> Vec<String> {
-        let timeout = self.shutdown_timeout;
-        let flushing: Vec<_> = self.flushing().iter_mut().map(std::mem::take).collect();
-        let failures = thread::scope(|scope| {
-            let stopping: Vec<_> = self
-                .destinations
-                .iter()
-                .zip(flushing)
-                .map(|(destination, flushing)| {
-                    scope.spawn(move || {
-                        // A flush thread's failures were said, or given up
-                        // on, by the flush that started it.
-                        for thread in flushing {
-                            let _ = thread.join();
-                        }
-                        let mut failures = destination.flush(None);
-                        destination.stop(timeout, &mut failures);
-                        failures
-                    })
-                })
-                .collect();
-            stopping
-                .into_iter()
-                .zip(&self.destinations)
-                .flat_map(|(stopped, destination)| {
-                    stopped.join().unwrap_or_else(|_| {
-                        vec![format!(
-                            "{}: the shutdown didn't run to its end",
-                            destination.names.destination
-                        )]
-                    })
-                })
-                .collect()
-        });
-        // Every queue was told to stop above and answers a provider at
-        // once, so this only marks the providers, which otherwise stop
-        // their processors again when they're dropped, each for up to the
-        // SDK's five seconds. What the queues said of their stop is in
-        // `failures`; a provider has nothing to add, and a second shutdown
-        // of a provider says only that it was shut down already.
-        let _ = self.tracer_provider.shutdown_with_timeout(timeout);
-        let _ = self.records_provider.shutdown_with_timeout(timeout);
-        failures
     }
 }
 

@@ -9,17 +9,17 @@ use lablet_model::{
     BlankTask, ConfigDigest, FinishedRun, Prompts, RunContext, RunId, RunLabels, ToolSpec,
 };
 use lablet_provider_fake::FakeProvider;
-use lablet_run::telemetry::{count_of, span_attributes, time_at};
+use lablet_run::telemetry::{span_attributes, time_at};
 use lablet_run::{RunService, ToolSet};
 use lablet_transcript_json::{TranscriptFile, TranscriptWriteError};
-use opentelemetry::Context;
 use opentelemetry::global::BoxedTracer;
 use opentelemetry::trace::{FutureExt as _, TraceContextExt as _, Tracer as _};
 use ulid::Ulid;
 
 use crate::cancel::{CancelHandle, RunCancellation};
 use crate::export::Telemetry;
-use crate::telemetry::generated::{LabletInvokeAgent, LabletRun};
+use crate::propagation::Inbound;
+use crate::telemetry::generated::LabletInvokeAgent;
 use crate::{root_span, wide};
 
 /// What a run is asked to do, what it's known by, and what may stop it.
@@ -144,6 +144,8 @@ pub(crate) struct Fixed {
     pub(crate) capture_content: bool,
     /// Where a transcript goes, when the config names a place for one.
     pub(crate) transcript: Option<TranscriptPath>,
+    /// The context every run's root span is opened in.
+    pub(crate) inbound: Inbound,
 }
 
 /// Where a run's transcript goes, as it's written to and as the config
@@ -226,11 +228,11 @@ impl Lablet {
     /// opened from the empty context, and the loop runs in it. Once the loop
     /// has returned, the root span ends with the run's measured duration
     /// and the run's wide event is filled; the run's transcript is written,
-    /// when the config names a place for it, and then the telemetry is
-    /// flushed, so the wide event is the last thing the run produces and
-    /// the last line of its file, and the transcript it names is whole, or
-    /// its failure logged, when it arrives. Both are whole when this
-    /// returns.
+    /// when the config names a place for it, and then the wide event is
+    /// emitted and the telemetry flushed once, so the transcript the wide
+    /// event names is whole, or its failure logged, when it arrives. Both
+    /// are whole when this returns, and the file holds the run's one wide
+    /// event.
     ///
     /// A run is stopped through its [`CancelHandle`]. Dropping the future
     /// abandons it with no outcome. Dropped before the loop returns, it
@@ -238,8 +240,8 @@ impl Lablet {
     /// transcript write or the flush has begun, it may still leave both,
     /// since neither stops part-way. The spans it had open are exported
     /// unfilled, to its own destination, when this `Lablet`'s next run
-    /// starts, which waits up to one flush bound for them before it reads
-    /// the clock.
+    /// starts, which waits up to one flush for them before it reads the
+    /// clock.
     ///
     /// Never fails: every way a run can go wrong is a stop reason of its
     /// outcome. A transcript that can't be written and telemetry that can't
@@ -293,17 +295,18 @@ impl Lablet {
         // reaches this one.
         self.cancellation.set(cancellation);
 
-        // From the empty context, never the caller's current one, so a run
-        // is a trace of its own whatever span its caller is in. The span
+        // From the inbound context, never the caller's current one, so the
+        // span its caller is in has no part in the run's trace. The span
         // goes into the context by value so that, once the loop has
         // returned, it can be read back from there to be filled and ended.
+        let parent = &self.fixed.inbound.parent;
         let root = self
             .tracer
             .span_builder(root_span::name())
             .with_kind(LabletInvokeAgent::KIND)
             .with_start_time(context.started)
-            .start_with_context(&self.tracer, &Context::new());
-        let within = Context::new().with_span(root);
+            .start_with_context(&self.tracer, parent);
+        let within = parent.with_span(root);
         let finished = self
             .service
             .run(context.clone(), prompts)
@@ -320,23 +323,12 @@ impl Lablet {
         root.end_with_timestamp(end);
         let root_context = root.span_context().clone();
 
-        // Everything but each destination's own count of what it lost, which
-        // the destination fills once it has flushed.
-        let filled = wide::wide_event(&context, summary);
+        let wide = wide::wide_event(&context, summary).record(end, &root_context);
         if let Some((file, shown)) = transcript {
             self.write_transcript(file, &shown, context, task_prompt, &finished)
                 .await;
         }
-        let flushed = self
-            .telemetry
-            .flush(Box::new(move |lost| {
-                LabletRun {
-                    lablet_telemetry_dropped_records: count_of(lost),
-                    ..filled.clone()
-                }
-                .record(end, &root_context)
-            }))
-            .await;
+        let flushed = self.telemetry.flush(wide).await;
         if let Err(error) = flushed {
             tracing::warn!(
                 run_id = %summary.outcome.run_id,
@@ -349,8 +341,8 @@ impl Lablet {
     }
 
     /// Flushes the telemetry and stops its exporters. A destination that
-    /// doesn't answer is given seconds, and what couldn't be exported is
-    /// reported on the diagnostic log.
+    /// doesn't answer is given about five seconds, and what couldn't be
+    /// exported is reported on the diagnostic log.
     pub async fn shutdown(self) {
         if let Err(error) = self.telemetry.shutdown().await {
             tracing::warn!(

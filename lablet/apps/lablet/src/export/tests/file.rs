@@ -6,7 +6,7 @@ use lablet_test_support::Scratch;
 
 use super::harness::{
     CONTENT, CONTENT_PER_RUN, OTHER_RUN, RUN, RUN_KEY, Records, SPANS_PER_RUN, Settings, WIDE,
-    built, emit_run, file_of, queues, run, runs_of,
+    built, emit_run, file_of, providers, run, runs_of,
 };
 use crate::export::FileTarget;
 
@@ -21,8 +21,7 @@ async fn the_file_of_a_run_is_whole_when_the_flush_after_the_run_returns() {
     assert_eq!(exported.spans.len(), SPANS_PER_RUN);
     assert_eq!(exported.records_of(CONTENT).len(), CONTENT_PER_RUN);
     assert_eq!(runs_of(&exported), [RUN]);
-    assert_eq!(exported.records.last().unwrap().event_name, WIDE);
-    assert_eq!(exported.records.last().unwrap().line, exported.lines);
+    assert_eq!(exported.records_of(WIDE).len(), 1);
     telemetry.shutdown().await.unwrap();
 }
 
@@ -73,7 +72,6 @@ async fn two_runs_of_one_telemetry_are_appended_to_the_one_file_it_was_given() {
     assert_eq!(after_both.spans[..SPANS_PER_RUN], after_the_first.spans[..]);
     assert_eq!(after_both.spans.len(), 2 * SPANS_PER_RUN);
     assert_eq!(runs_of(&after_both), [RUN, OTHER_RUN]);
-    assert_eq!(after_both.records.last().unwrap().line, after_both.lines);
 }
 
 #[tokio::test]
@@ -107,7 +105,7 @@ async fn a_file_that_was_moved_after_a_run_holds_that_run_and_its_path_the_run_a
 }
 
 #[tokio::test]
-async fn a_destination_that_cannot_be_written_reports_its_three_queues_and_names_no_path() {
+async fn a_destination_that_cannot_be_written_fails_both_flushes_and_names_no_path() {
     let scratch = Scratch::new("unwritable");
     let missing = scratch.at("never-made");
     let telemetry = built(Settings {
@@ -120,10 +118,7 @@ async fn a_destination_that_cannot_be_written_reports_its_three_queues_and_names
     let flushed = run(&telemetry, RUN, Records::Captured).await;
 
     let failures = flushed.unwrap_err();
-    assert_eq!(
-        queues(&failures),
-        ["spans", "log records", "the wide event"]
-    );
+    assert_eq!(providers(&failures), ["spans", "log records"]);
     let failures = failures.to_string();
     assert!(
         failures.contains("the telemetry file couldn't be written: "),

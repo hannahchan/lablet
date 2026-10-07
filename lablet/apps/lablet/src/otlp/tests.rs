@@ -6,6 +6,7 @@ use std::ffi::OsString;
 
 use super::*;
 use crate::config::Format;
+use crate::otel_env::Exporter;
 
 /// A collector the environment names, which no message may show.
 const FROM_THE_ENVIRONMENT: &str = "http://collector.internal:4317";
@@ -38,7 +39,7 @@ fn settled(
     held: &dyn Fn(&str) -> Option<OsString>,
 ) -> Result<Option<OtlpSettings>, Refusal> {
     let config = config(text);
-    settings(&config, &config, held)
+    settings(&config, &config, held, &Exporter::default())
 }
 
 fn on(text: &str, held: &dyn Fn(&str) -> Option<OsString>) -> OtlpSettings {
@@ -232,7 +233,7 @@ fn the_refused_protocol_is_shown_under_its_key_as_the_config_writes_it() {
         ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json"),
     ]);
 
-    let refused = settings(&written, &written, &held).unwrap_err();
+    let refused = settings(&written, &written, &held, &Exporter::default()).unwrap_err();
 
     assert_eq!(
         written.refused(refused).to_string(),
@@ -253,6 +254,7 @@ fn an_endpoint_of_nothing_states_none_whether_written_so_or_given_by_a_variable(
         &written,
         &written,
         &env(&[("OTEL_EXPORTER_OTLP_ENDPOINT", FROM_THE_ENVIRONMENT)]),
+        &Exporter::default(),
     )
     .unwrap()
     .unwrap();
@@ -265,13 +267,18 @@ fn an_endpoint_of_nothing_states_none_whether_written_so_or_given_by_a_variable(
     let written = config("telemetry: { otlp: { endpoint: '${COLLECTOR}' } }");
     let held = env(&[("COLLECTOR", "")]);
     let real = written.substituted(&held).unwrap();
-    assert!(matches!(settings(&written, &real, &held), Ok(None)));
+    assert!(matches!(
+        settings(&written, &real, &held, &Exporter::default()),
+        Ok(None)
+    ));
     let held = env(&[
         ("COLLECTOR", ""),
         ("OTEL_EXPORTER_OTLP_ENDPOINT", FROM_THE_ENVIRONMENT),
     ]);
     let real = written.substituted(&held).unwrap();
-    let on = settings(&written, &real, &held).unwrap().unwrap();
+    let on = settings(&written, &real, &held, &Exporter::default())
+        .unwrap()
+        .unwrap();
     assert_eq!(on.endpoint, None);
     assert!(!on.strip_environment_headers);
 }

@@ -77,8 +77,6 @@ pub struct LabletRun {
     pub lablet_run_turns: i64,
     /// Number of skill files appended to the system prompt.
     pub lablet_skills_count: i64,
-    /// Number of spans and log records of the run that the exporters to this destination refused or dropped before the wide event was made.
-    pub lablet_telemetry_dropped_records: i64,
     /// Number of tool calls that returned an error result.
     pub lablet_tool_calls_errors: i64,
     /// Sum of the sizes of every tool call's input, in bytes.
@@ -202,7 +200,6 @@ impl LabletRun {
             Attribute::of(key::LABLET_RUN_TIMEOUT_MS, self.lablet_run_timeout_ms),
             Attribute::of(key::LABLET_RUN_TURNS, self.lablet_run_turns),
             Attribute::of(key::LABLET_SKILLS_COUNT, self.lablet_skills_count),
-            Attribute::of(key::LABLET_TELEMETRY_DROPPED_RECORDS, self.lablet_telemetry_dropped_records),
             Attribute::of(key::LABLET_TOOL_CALLS_ERRORS, self.lablet_tool_calls_errors),
             Attribute::of(key::LABLET_TOOL_CALLS_INPUT_BYTES_TOTAL, self.lablet_tool_calls_input_bytes_total),
             Attribute::of(key::LABLET_TOOL_CALLS_LATENCY_MS_TOTAL, self.lablet_tool_calls_latency_ms_total),

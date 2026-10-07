@@ -3,15 +3,15 @@
 //! `testing.rs`, then flushed and read back.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use lablet_conformance::otlp::Exported;
 
 pub(super) use crate::export::testing::{
     CONTENT, CONTENT_PER_RUN, OTHER_RUN, RUN, RUN_KEY, Records, SPANS_PER_RUN, Scratch, VERSION,
-    WIDE, after, emit_run, scope,
+    WIDE, after, emit_run, scope, sdk_of,
 };
-use crate::export::{FileTarget, FlushError, OtlpSettings, Telemetry};
+use crate::export::{FileTarget, FlushError, OtlpSettings, Telemetry, resource};
+use crate::otel_env::{self, Sdk};
 
 /// The file of the run `run` in `scratch`, when each run has its own.
 pub(super) fn file_of(scratch: &Scratch, run: &str) -> PathBuf {
@@ -26,17 +26,15 @@ pub(super) struct Settings {
     pub(super) otlp: Option<OtlpSettings>,
     /// The composer's resource attributes.
     pub(super) resource: Vec<(String, String)>,
-    /// How long a flush waits for a destination, in place of the builder's
-    /// five seconds.
-    pub(super) flush_timeout: Option<Duration>,
-    /// How long a shutdown waits, in place of the builder's five seconds.
-    pub(super) shutdown_timeout: Option<Duration>,
+    /// The sampler, the span limits and the batch processors' settings.
+    pub(super) sdk: Sdk,
 }
 
 impl Settings {
-    /// A file of its own for each run in `scratch`, no collector, and a
+    /// A file of its own for each run in `scratch`, no collector, a
     /// resource the composer adds `team: evals` and
-    /// `deployment.environment.name: ci` to.
+    /// `deployment.environment.name: ci` to, and the specification's
+    /// defaults for the SDK.
     pub(super) fn in_scratch(scratch: &Scratch) -> Self {
         Self {
             target: Some(FileTarget::EachRun {
@@ -47,8 +45,7 @@ impl Settings {
                 ("team".to_owned(), "evals".to_owned()),
                 ("deployment.environment.name".to_owned(), "ci".to_owned()),
             ],
-            flush_timeout: None,
-            shutdown_timeout: None,
+            sdk: Sdk::default(),
         }
     }
 }
@@ -59,22 +56,17 @@ pub(super) fn built(settings: Settings) -> Telemetry {
     let Settings {
         target,
         otlp,
-        resource,
-        flush_timeout,
-        shutdown_timeout,
+        resource: attributes,
+        sdk,
     } = settings;
-    let mut builder = Telemetry::builder(VERSION, scope()).resource(resource);
+    let mut builder = Telemetry::builder(scope())
+        .resource(resource(VERSION, attributes, &otel_env::Context::default()))
+        .sdk(sdk);
     if let Some(target) = target {
         builder = builder.file(target);
     }
     if let Some(settings) = otlp {
         builder = builder.otlp(settings);
-    }
-    if let Some(timeout) = flush_timeout {
-        builder = builder.flush_timeout(timeout);
-    }
-    if let Some(timeout) = shutdown_timeout {
-        builder = builder.shutdown_timeout(timeout);
     }
     builder.build().unwrap()
 }
@@ -99,8 +91,8 @@ pub(super) fn runs_of(exported: &Exported) -> Vec<&str> {
         .collect()
 }
 
-/// The queues each failure of `error` names.
-pub(super) fn queues(error: &FlushError) -> Vec<&str> {
+/// The providers each failure of `error` names.
+pub(super) fn providers(error: &FlushError) -> Vec<&str> {
     error
         .failures()
         .iter()

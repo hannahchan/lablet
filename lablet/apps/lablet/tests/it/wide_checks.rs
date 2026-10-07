@@ -150,15 +150,10 @@ pub fn assert_the_wide_event_counts_the_tokens_the_run_returned(
 }
 
 /// Holds `first` and `second` to the same spans and the same log records,
-/// as multisets, and to one wide event of the run `run` each, whose count
-/// of dropped records is nothing.
+/// as multisets, and to one wide event of the run `run` each.
 pub fn assert_hold_the_same_run(first: &Exported, second: &Exported, run: &str) {
     for exported in [first, second] {
-        let wide = the_wide_event(exported, run);
-        assert_eq!(
-            counted(&wide.attributes, key::LABLET_TELEMETRY_DROPPED_RECORDS),
-            Some(0)
-        );
+        the_wide_event(exported, run);
     }
     let (first, second) = (first.ungrouped(), second.ungrouped());
     assert!(!first.spans.is_empty(), "the run has spans");

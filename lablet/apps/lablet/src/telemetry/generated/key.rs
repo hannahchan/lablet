@@ -162,9 +162,6 @@ pub const LABLET_RUN_TURNS: &str = "lablet.run.turns";
 /// Number of skill files appended to the system prompt.
 pub const LABLET_SKILLS_COUNT: &str = "lablet.skills.count";
 
-/// Number of spans and log records of the run that the exporters to this destination refused or dropped before the wide event was made.
-pub const LABLET_TELEMETRY_DROPPED_RECORDS: &str = "lablet.telemetry.dropped_records";
-
 /// Number of calls to one tool, `<key>` being the tool name.
 ///
 /// A template: the emitted key is this prefix, a dot, and `<key>`.
@@ -287,7 +284,6 @@ pub const LABLET_RUN_REQUIRED: &[&str] = &[
     "lablet.run.timeout_ms",
     "lablet.run.turns",
     "lablet.skills.count",
-    "lablet.telemetry.dropped_records",
     "lablet.tool_calls.errors",
     "lablet.tool_calls.input_bytes.total",
     "lablet.tool_calls.latency_ms.total",
@@ -358,7 +354,6 @@ pub const LABLET_RUN_KEYS: &[&str] = &[
     "lablet.run.turns",
     "lablet.skills.count",
     "lablet.task.id",
-    "lablet.telemetry.dropped_records",
     "lablet.tool_calls.errors",
     "lablet.tool_calls.input_bytes.total",
     "lablet.tool_calls.latency_ms.total",

@@ -1,0 +1,16 @@
+//! The canaries: tests of the OpenTelemetry crates themselves, each of
+//! which pins a gap in the pinned release that lablet fills with code of
+//! its own. A canary passes while the gap is there and fails on the release
+//! that closes it.
+//!
+//! Each runs in a child process, since what it pins is the crates' reading
+//! of the process environment, which `cargo xtask test` strips and a test
+//! can't set for its own process.
+//!
+//! The commit that upgrades the crates bumps their pins alone and lets the
+//! canaries fail. For each one that fails, that commit, or one right after
+//! it, deletes lablet's code and lets the crate decide, or records in
+//! `product/decisions.md` why lablet keeps it.
+
+mod context;
+mod exporter;

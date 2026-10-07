@@ -8,8 +8,7 @@ events:
     note: >
       Emitted once, after the run ends and whatever the stop reason, in the trace context of the
       root span. The shape is flat and fixed. Values are raw counts, bytes, tokens, and
-      durations; ratios and averages belong to the aggregation. It's exported alone, after the
-      run's other records, so a batch of them that a collector refuses can't take it along.
+      durations; ratios and averages belong to the aggregation.
     attributes:
       # Identity
       - ref_group: attributes.lablet.join
@@ -119,8 +118,6 @@ events:
       - ref: lablet.run.transcript_path
         requirement_level:
           conditionally_required: If `run.transcript_path` is set.
-      - ref: lablet.telemetry.dropped_records
-        requirement_level: required
       # Provider
       - ref: lablet.provider.retries
         requirement_level: required

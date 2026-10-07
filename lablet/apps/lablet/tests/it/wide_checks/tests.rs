@@ -614,19 +614,25 @@ fn a_signal_that_lacks_a_required_key_or_holds_an_undeclared_one_is_refused() {
 }
 
 #[test]
-fn two_exports_that_differ_or_that_lost_a_record_are_not_the_same_run() {
+fn two_exports_that_differ_or_that_lost_the_wide_event_are_not_the_same_run() {
     let differs = |first: &Exported, second: &Exported| {
         catch_unwind(AssertUnwindSafe(|| {
             assert_hold_the_same_run(first, second, RUN);
         }))
         .is_err()
     };
-    let whole = with(key::LABLET_TELEMETRY_DROPPED_RECORDS, Some(json!(0)));
+    let whole = exported();
 
     assert!(!differs(&whole, &whole));
-    let lossy = with(key::LABLET_TELEMETRY_DROPPED_RECORDS, Some(json!(1)));
-    assert!(differs(&whole, &lossy));
+    let other = with(key::LABLET_RUN_TURNS, Some(json!(9)));
+    assert!(differs(&whole, &other));
     let mut shorter = whole.clone();
     shorter.spans.remove(2);
     assert!(differs(&whole, &shorter));
+    let mut without = whole.clone();
+    without.records.remove(0);
+    assert!(
+        differs(&without, &without),
+        "each holds its run's wide event"
+    );
 }

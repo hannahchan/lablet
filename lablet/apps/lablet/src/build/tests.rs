@@ -385,6 +385,39 @@ telemetry: {{ capture_content: true, file: {{ path: '{}' }} }}
     );
 }
 
+/// The SDK's settings a build reads from its environment reach the
+/// providers it makes: with the sampler `always_off`, a run exports no
+/// span, and its wide event still.
+#[tokio::test]
+async fn the_sampler_the_environment_names_reaches_the_providers_a_build_makes() {
+    let scratch = lablet_test_support::Scratch::new("build-sampler");
+    let script = scratch.write("script.yaml", ENDS);
+    let path = scratch.at("telemetry.otlp.jsonl");
+    let text = format!(
+        "
+model: {{ provider: fake, script: '{}', name: scripted-1 }}
+prompt: {{ system: 'You fix tests.' }}
+telemetry: {{ file: {{ path: '{}' }} }}
+",
+        script.display(),
+        path.display()
+    );
+    let held = holding("OTEL_TRACES_SAMPLER", "always_off");
+
+    let mut lablet = build_in(config(&text), &held).await.unwrap();
+    lablet.run(crate::RunRequest::new("Fix it.").unwrap()).await;
+    lablet.shutdown().await;
+
+    let exported = lablet_conformance::otlp::Exported::read(&path).unwrap();
+    assert!(exported.spans.is_empty(), "{:?}", exported.spans);
+    assert_eq!(
+        exported
+            .records_of(crate::telemetry::generated::LabletRun::NAME)
+            .len(),
+        1
+    );
+}
+
 /// C16: a value a variable gave is refused as the config writes it, and
 /// nothing of what the variable holds is in the message.
 #[tokio::test]

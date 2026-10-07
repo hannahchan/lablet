@@ -1,6 +1,6 @@
 //! The network exporter against the in-process receiver: what both
 //! destinations hold of one run, what a closed port costs, what a collector
-//! that accepts and never answers costs the flush and leaves the file, the
+//! that accepts and never answers costs a run's end and leaves the file, the
 //! headers on the wire, which pins what the exporter does with the environment's and
 //! what lablet does after it, and TLS to the collector with the trust roots
 //! the environment names.
@@ -24,8 +24,8 @@ use opentelemetry_sdk::trace::{SpanData, SpanEvents, SpanExporter as _, SpanLink
 use tonic::metadata::{MetadataMap, MetadataValue};
 
 use super::harness::{
-    CONTENT, CONTENT_PER_RUN, RUN, Records, SPANS_PER_RUN, Settings, VERSION, WIDE, built, queues,
-    run, scope,
+    CONTENT, CONTENT_PER_RUN, RUN, Records, SPANS_PER_RUN, Settings, WIDE, built, emit_run,
+    providers, run, scope,
 };
 use crate::export::{
     FileTarget, OtelBuildError, OtlpSettings, Signal, Telemetry, Transport, validate,
@@ -95,7 +95,10 @@ async fn the_file_and_the_http_receiver_hold_the_same_spans_and_records() {
 
 // O3: what a port nothing listens on costs
 
-async fn a_closed_port_costs_under_five_seconds(transport: Transport, test: &str) {
+async fn a_run_end_with_a_port_that_refuses_costs_seconds_and_changes_nothing(
+    transport: Transport,
+    test: &str,
+) {
     let closed = Receiver::closed();
     let scratch = Scratch::new(test);
     let path = scratch.at("runs.otlp.jsonl");
@@ -112,9 +115,9 @@ async fn a_closed_port_costs_under_five_seconds(transport: Transport, test: &str
 
     let failures = flushed.unwrap_err();
     assert_eq!(
-        queues(&failures),
-        ["otlp spans", "the otlp wide event"],
-        "the run has no log records, so that queue had nothing to fail: {failures}"
+        providers(&failures),
+        ["spans", "log records"],
+        "the run's only log record is its wide event, which failed with the spans: {failures}"
     );
     assert!(
         !failures.to_string().contains(&closed.to_string()),
@@ -135,59 +138,79 @@ async fn a_closed_port_costs_under_five_seconds(transport: Transport, test: &str
 }
 
 #[tokio::test]
-async fn a_grpc_port_nothing_listens_on_costs_the_flush_and_the_shutdown_under_five_seconds() {
-    a_closed_port_costs_under_five_seconds(Transport::Grpc, "network-closed-grpc").await;
+async fn a_run_end_with_a_grpc_port_that_refuses_costs_seconds_and_changes_nothing() {
+    a_run_end_with_a_port_that_refuses_costs_seconds_and_changes_nothing(
+        Transport::Grpc,
+        "network-closed-grpc",
+    )
+    .await;
 }
 
 #[tokio::test]
-async fn an_http_port_nothing_listens_on_costs_the_flush_and_the_shutdown_under_five_seconds() {
-    a_closed_port_costs_under_five_seconds(Transport::HttpProtobuf, "network-closed-http").await;
+async fn a_run_end_with_an_http_port_that_refuses_costs_seconds_and_changes_nothing() {
+    a_run_end_with_a_port_that_refuses_costs_seconds_and_changes_nothing(
+        Transport::HttpProtobuf,
+        "network-closed-http",
+    )
+    .await;
 }
 
 // O16: a collector that accepts and never answers, with the file beside it
 
-/// How long the flush below is given, so that a collector that hangs costs
-/// it that and not the SDK's seconds.
-const FLUSH_BOUND: Duration = Duration::from_millis(500);
+/// How long the SDK gives a processor's flush, and a processor's shutdown.
+const SDK_BOUND: Duration = Duration::from_secs(5);
 
-/// How long the shutdown below is given. The flush that gave up left its
-/// thread waiting on the exporter, which the shutdown waits for, so it
-/// gives up too.
-const SHUTDOWN_BOUND: Duration = Duration::from_millis(700);
+/// What a test allows beyond a bound, for the threads and the runtime.
+const TOLERANCE: Duration = Duration::from_millis(1_500);
 
-async fn a_receiver_that_never_answers_leaves_the_file_whole(transport: Transport, test: &str) {
+/// The run's end flushes the file's processors before the network's, and
+/// the two providers side by side, so the file is whole while the flush
+/// still waits on the network, and it waits for one bound of the SDK's,
+/// once.
+async fn a_receiver_that_never_answers_holds_the_run_end_under_one_flush_bound(
+    transport: Transport,
+    test: &str,
+) {
     let receiver = Receiver::start(Mode::NeverAnswers).await;
     let scratch = Scratch::new(test);
     let path = scratch.at("runs.otlp.jsonl");
     let telemetry = built(Settings {
         target: Some(FileTarget::Path(path.clone())),
         otlp: Some(settings(transport, endpoint_of(&receiver, transport), &[])),
-        flush_timeout: Some(FLUSH_BOUND),
-        shutdown_timeout: Some(SHUTDOWN_BOUND),
         ..Settings::in_scratch(&scratch)
     });
+    let wide = emit_run(&telemetry, RUN, Records::Captured);
 
     let began = Instant::now();
-    let flushed = run(&telemetry, RUN, Records::Captured).await;
+    let flushing = tokio::spawn({
+        let telemetry = telemetry.clone();
+        async move { telemetry.flush(wide).await }
+    });
+    let whole = loop {
+        let whole = Exported::read(&path).is_ok_and(|read| {
+            read.spans.len() == SPANS_PER_RUN && read.records_of(WIDE).len() == 1
+        });
+        if whole || began.elapsed() > Duration::from_secs(1) {
+            break whole;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    assert!(
+        whole && !flushing.is_finished(),
+        "the file wasn't whole within a second, while the flush waited on the network"
+    );
+    let flushed = flushing.await.unwrap();
     let waited = began.elapsed();
 
-    assert_eq!(
-        flushed.unwrap_err().to_string(),
-        "telemetry wasn't exported whole: otlp: the flush didn't end within 500ms",
-        "the network destination alone is named, by its bound, and the file isn't"
-    );
-    assert!(waited >= FLUSH_BOUND, "the flush gave up after {waited:?}");
-    // A flush that waited on the exporter, in place of the bound it was
-    // given, costs at least the SDK's five seconds, which the tolerance
-    // rules out.
+    let failures = flushed.unwrap_err();
+    assert_eq!(providers(&failures), ["spans", "log records"], "{failures}");
     assert!(
-        waited < FLUSH_BOUND + Duration::from_secs(1),
-        "the flush waited {waited:?}, past the bound it was given"
+        waited < SDK_BOUND + TOLERANCE,
+        "the run's end waited {waited:?}, past one flush bound"
     );
     // A port that refused the connection, or a listener never bound, would
-    // hold the flush for its bound just the same: the receiver kept each
-    // request before it hung, so what it kept says the connection was
-    // accepted and the spans read.
+    // fail at once: the receiver kept each request before it hung, so what
+    // it kept says the connection was accepted and the spans read.
     let over = match transport {
         Transport::Grpc => receiver::Transport::Grpc,
         Transport::HttpProtobuf => receiver::Transport::Http,
@@ -202,41 +225,37 @@ async fn a_receiver_that_never_answers_leaves_the_file_whole(transport: Transpor
     let file = Exported::read(&path).unwrap();
     assert_eq!(file.spans.len(), SPANS_PER_RUN);
     assert_eq!(file.records_of(CONTENT).len(), CONTENT_PER_RUN);
-    assert_eq!(file.records_of(WIDE).len(), 1);
-    let last = file.records.last().unwrap();
     assert_eq!(
-        last.event_name, WIDE,
-        "the wide event is the file's last line"
-    );
-    assert_eq!(last.line, file.lines);
-    assert!(
-        receiver.exported().unwrap().records_of(WIDE).is_empty(),
-        "the receiver that never answered holds no wide event"
+        file.records_of(WIDE).len(),
+        1,
+        "the file holds the wide event"
     );
 
-    // The shutdown waits for the thread the flush left, which the receiver
-    // still holds, so it gives up by its own bound and nothing else.
+    // The exports the flush gave up on still hold the processors' threads,
+    // so the shutdown gives up on them by the SDK's bound.
     let began = Instant::now();
-    let shut = telemetry.shutdown().await;
+    let _ = telemetry.shutdown().await;
     let waited = began.elapsed();
-    assert_eq!(
-        shut.unwrap_err().failures(),
-        ["the shutdown didn't end within 700ms"]
-    );
     assert!(
-        waited < SHUTDOWN_BOUND + Duration::from_secs(1),
-        "the shutdown waited {waited:?}, past the bound it was given"
+        waited < SDK_BOUND + TOLERANCE,
+        "the shutdown waited {waited:?}, past its bound"
     );
 }
 
 #[tokio::test]
-async fn a_grpc_receiver_that_never_answers_holds_the_flush_for_its_bound_and_the_file_is_whole() {
-    a_receiver_that_never_answers_leaves_the_file_whole(Transport::Grpc, "network-hang-grpc").await;
+async fn a_grpc_receiver_that_never_answers_holds_the_run_end_under_one_flush_bound_and_the_file_is_whole()
+ {
+    a_receiver_that_never_answers_holds_the_run_end_under_one_flush_bound(
+        Transport::Grpc,
+        "network-hang-grpc",
+    )
+    .await;
 }
 
 #[tokio::test]
-async fn an_http_receiver_that_never_answers_holds_the_flush_for_its_bound_and_the_file_is_whole() {
-    a_receiver_that_never_answers_leaves_the_file_whole(
+async fn an_http_receiver_that_never_answers_holds_the_run_end_under_one_flush_bound_and_the_file_is_whole()
+ {
+    a_receiver_that_never_answers_holds_the_run_end_under_one_flush_bound(
         Transport::HttpProtobuf,
         "network-hang-http",
     )
@@ -622,7 +641,7 @@ fn a_child_process_with_no_roots_to_trust_makes_no_exporter_that_speaks_tls() {
             let settings = settings(Transport::Grpc, endpoint.to_owned(), &[]);
             assert_eq!(validate(&settings), Ok(()), "{endpoint}");
 
-            let built = Telemetry::builder(VERSION, scope()).otlp(settings).build();
+            let built = Telemetry::builder(scope()).otlp(settings).build();
 
             if becomes == "made" {
                 built.unwrap().shutdown().await.unwrap();

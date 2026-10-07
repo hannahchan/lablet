@@ -33,7 +33,6 @@
         "lablet.run.timeout_ms": 600000,
         "lablet.run.turns": 1,
         "lablet.skills.count": 0,
-        "lablet.telemetry.dropped_records": 0,
         "lablet.tool_calls.errors": 0,
         "lablet.tool_calls.input_bytes.total": 0,
         "lablet.tool_calls.latency_ms.total": 0,

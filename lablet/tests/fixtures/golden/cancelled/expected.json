@@ -270,7 +270,6 @@
         "lablet.run.timeout_ms": 600000,
         "lablet.run.turns": 1,
         "lablet.skills.count": 0,
-        "lablet.telemetry.dropped_records": 0,
         "lablet.tool.calls.bash": 1,
         "lablet.tool.calls.read_file": 2,
         "lablet.tool.errors.bash": 1,

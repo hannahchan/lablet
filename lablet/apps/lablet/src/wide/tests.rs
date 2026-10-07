@@ -374,8 +374,7 @@ fn held_of_the_setup() -> Vec<(&'static str, Value)> {
     ]
 }
 
-/// What the same wide event holds to say what came of the run, when 901
-/// records were lost.
+/// What the same wide event holds to say what came of the run.
 fn held_of_the_outcome() -> Vec<(&'static str, Value)> {
     vec![
         (key::LABLET_RUN_STOP_REASON, text("completed")),
@@ -387,7 +386,6 @@ fn held_of_the_outcome() -> Vec<(&'static str, Value)> {
             key::LABLET_RUN_TRANSCRIPT_PATH,
             text("runs/01K5F3Z8/transcript.json"),
         ),
-        (key::LABLET_TELEMETRY_DROPPED_RECORDS, Value::Int(901)),
         (key::LABLET_RESULT_TEXT, text("Forty-two.")),
         (key::LABLET_RESULT_STRUCTURED, text(r#"{"answer":42}"#)),
         (key::LABLET_PROVIDER_RETRIES, Value::Int(301)),
@@ -441,12 +439,7 @@ fn held_of_the_outcome() -> Vec<(&'static str, Value)> {
 
 #[test]
 fn every_key_holds_what_the_runs_context_and_its_summary_hold_for_it() {
-    let filled = wide_event(&every_part_of_a_context(), &every_part_of_a_summary());
-    // The count of lost records is each destination's to fill.
-    let event = LabletRun {
-        lablet_telemetry_dropped_records: 901,
-        ..filled
-    };
+    let event = wide_event(&every_part_of_a_context(), &every_part_of_a_summary());
 
     let expected: BTreeMap<String, Value> = [held_of_the_setup(), held_of_the_outcome()]
         .concat()
@@ -535,7 +528,6 @@ fn a_key_a_run_has_nothing_for_is_left_out_and_a_count_of_nothing_is_written() {
         key::LABLET_PROVIDER_RETRIES,
         key::LABLET_TOOLS_COUNT,
         key::LABLET_SKILLS_COUNT,
-        key::LABLET_TELEMETRY_DROPPED_RECORDS,
     ] {
         assert_eq!(attributes.get(key), Some(&Value::Int(0)), "{key}");
     }

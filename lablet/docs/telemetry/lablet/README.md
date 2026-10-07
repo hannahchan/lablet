@@ -72,29 +72,28 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 | <a id="lablet-run-turns">`lablet.run.turns`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of turns the run took. [42] | `7` |
 | <a id="lablet-skills-count">`lablet.skills.count`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of skill files appended to the system prompt. [43] | `2` |
 | <a id="lablet-task-id">`lablet.task.id`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | The task the run attempts, as the run request named it. [44] | `fix-failing-test`; `swe-bench/django-11099` |
-| <a id="lablet-telemetry-dropped-records">`lablet.telemetry.dropped_records`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of spans and log records of the run that the exporters to this destination refused or dropped before the wide event was made. [45] | `0` |
-| <a id="lablet-tool-calls">`lablet.tool.calls`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of calls to one tool, `<key>` being the tool name. [46] | `[3]` |
-| <a id="lablet-tool-errors">`lablet.tool.errors`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of error results from one tool, `<key>` being the tool name. [47] | `[1]` |
-| <a id="lablet-tool-input-bytes">`lablet.tool.input.bytes`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Size of a tool call's input in bytes. [48] | `96` |
-| <a id="lablet-tool-is-error">`lablet.tool.is_error`</a> | ![Development](https://img.shields.io/badge/-development-blue) | boolean | Whether the tool call returned an error result to the model. [49] | `false` |
-| <a id="lablet-tool-latency-ms">`lablet.tool.latency_ms`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Sum of the latencies of the calls to one tool, in milliseconds, `<key>` being the tool name. [50] | `[2100]` |
-| <a id="lablet-tool-output-bytes">`lablet.tool.output.bytes`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Size in bytes of a tool call's output as the model was sent it, after the output cap. [51] | `20480` |
-| <a id="lablet-tool-output-original-bytes">`lablet.tool.output.original_bytes`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Size in bytes of a tool call's output before the output cap cut it. [52] | `5242880` |
-| <a id="lablet-tool-output-truncated">`lablet.tool.output.truncated`</a> | ![Development](https://img.shields.io/badge/-development-blue) | boolean | Whether the output cap cut the tool call's output short. [53] | `false` |
-| <a id="lablet-tool-source">`lablet.tool.source`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | Where a tool comes from. [54] | `builtin`; `mcp` |
-| <a id="lablet-tool-status">`lablet.tool.status`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | How a tool call ended. [55] | `ok`; `tool_error` |
-| <a id="lablet-tool-calls-errors">`lablet.tool_calls.errors`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tool calls that returned an error result. [56] | `1` |
-| <a id="lablet-tool-calls-input-bytes-total">`lablet.tool_calls.input_bytes.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Sum of the sizes of every tool call's input, in bytes. [57] | `1820` |
-| <a id="lablet-tool-calls-latency-ms-total">`lablet.tool_calls.latency_ms.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Sum of the latencies of every tool call, in milliseconds. [58] | `3100` |
-| <a id="lablet-tool-calls-output-bytes-total">`lablet.tool_calls.output_bytes.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Sum of the sizes of every tool call's output, in bytes. [59] | `56012` |
-| <a id="lablet-tool-calls-total">`lablet.tool_calls.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tool calls executed. The intercepted `task_complete` call isn't one, and neither is a call that was never run. [60] | `5` |
-| <a id="lablet-tool-calls-truncated">`lablet.tool_calls.truncated`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tool calls whose output the output cap cut short. [61] | `0` |
-| <a id="lablet-tool-calls-unknown">`lablet.tool_calls.unknown`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tool calls that named a tool the run didn't offer. [62] | `0` |
-| <a id="lablet-tools-count">`lablet.tools.count`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tools offered to the model. [63] | `3` |
-| <a id="lablet-tools-digest">`lablet.tools.digest`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | SHA-256 of the tool specs as the run offered them, in hex. [64] | `4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a` |
-| <a id="lablet-tools-names">`lablet.tools.names`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string[] | Names of the tools offered to the model, after the allow and deny lists. [65] | `["bash", "read_file", "write_file"]` |
-| <a id="lablet-trial">`lablet.trial`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | Which repetition of the task the run is, as the run request named it. [66] | `1`; `seed-42` |
-| <a id="lablet-turn">`lablet.turn`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | One-based index of the turn a provider call or tool call belongs to. [67] | `1`; `2` |
+| <a id="lablet-tool-calls">`lablet.tool.calls`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of calls to one tool, `<key>` being the tool name. [45] | `[3]` |
+| <a id="lablet-tool-errors">`lablet.tool.errors`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of error results from one tool, `<key>` being the tool name. [46] | `[1]` |
+| <a id="lablet-tool-input-bytes">`lablet.tool.input.bytes`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Size of a tool call's input in bytes. [47] | `96` |
+| <a id="lablet-tool-is-error">`lablet.tool.is_error`</a> | ![Development](https://img.shields.io/badge/-development-blue) | boolean | Whether the tool call returned an error result to the model. [48] | `false` |
+| <a id="lablet-tool-latency-ms">`lablet.tool.latency_ms`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Sum of the latencies of the calls to one tool, in milliseconds, `<key>` being the tool name. [49] | `[2100]` |
+| <a id="lablet-tool-output-bytes">`lablet.tool.output.bytes`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Size in bytes of a tool call's output as the model was sent it, after the output cap. [50] | `20480` |
+| <a id="lablet-tool-output-original-bytes">`lablet.tool.output.original_bytes`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Size in bytes of a tool call's output before the output cap cut it. [51] | `5242880` |
+| <a id="lablet-tool-output-truncated">`lablet.tool.output.truncated`</a> | ![Development](https://img.shields.io/badge/-development-blue) | boolean | Whether the output cap cut the tool call's output short. [52] | `false` |
+| <a id="lablet-tool-source">`lablet.tool.source`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | Where a tool comes from. [53] | `builtin`; `mcp` |
+| <a id="lablet-tool-status">`lablet.tool.status`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | How a tool call ended. [54] | `ok`; `tool_error` |
+| <a id="lablet-tool-calls-errors">`lablet.tool_calls.errors`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tool calls that returned an error result. [55] | `1` |
+| <a id="lablet-tool-calls-input-bytes-total">`lablet.tool_calls.input_bytes.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Sum of the sizes of every tool call's input, in bytes. [56] | `1820` |
+| <a id="lablet-tool-calls-latency-ms-total">`lablet.tool_calls.latency_ms.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Sum of the latencies of every tool call, in milliseconds. [57] | `3100` |
+| <a id="lablet-tool-calls-output-bytes-total">`lablet.tool_calls.output_bytes.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Sum of the sizes of every tool call's output, in bytes. [58] | `56012` |
+| <a id="lablet-tool-calls-total">`lablet.tool_calls.total`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tool calls executed. The intercepted `task_complete` call isn't one, and neither is a call that was never run. [59] | `5` |
+| <a id="lablet-tool-calls-truncated">`lablet.tool_calls.truncated`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tool calls whose output the output cap cut short. [60] | `0` |
+| <a id="lablet-tool-calls-unknown">`lablet.tool_calls.unknown`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tool calls that named a tool the run didn't offer. [61] | `0` |
+| <a id="lablet-tools-count">`lablet.tools.count`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Number of tools offered to the model. [62] | `3` |
+| <a id="lablet-tools-digest">`lablet.tools.digest`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | SHA-256 of the tool specs as the run offered them, in hex. [63] | `4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a` |
+| <a id="lablet-tools-names">`lablet.tools.names`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string[] | Names of the tools offered to the model, after the allow and deny lists. [64] | `["bash", "read_file", "write_file"]` |
+| <a id="lablet-trial">`lablet.trial`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | Which repetition of the task the run is, as the run request named it. [65] | `1`; `seed-42` |
+| <a id="lablet-turn">`lablet.turn`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | One-based index of the turn a provider call or tool call belongs to. [66] | `1`; `2` |
 
 **[1] `lablet.attempt`:** Justification: `http.request.resend_count` counts resends of one HTTP request inside a client; lablet's retry is a new inference call with a span of its own.
 
@@ -184,51 +183,49 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 
 **[44] `lablet.task.id`:** Justification: the conventions identify a conversation and an agent, not the task a run was given. A composer runs one task many times and under many configs, and groups runs by it more than by anything else, so it's declared here rather than left to a resource attribute whose key the registry can't know.
 
-**[45] `lablet.telemetry.dropped_records`:** Justification: the conventions count what an SDK drops as metrics of the SDK, which a consumer of one run's record doesn't have. The count is on the run's one row so that a row whose spans or content are incomplete says so. Each destination, the file and the network, gets the wide event with its own count: the wide event is made for a destination once the run's other records have been flushed to it, and it isn't counted itself.
+**[45] `lablet.tool.calls`:** Justification: per-tool counts on the run's one row answer which tool dominated without a join; the conventions have no per-tool aggregate, and a template is the only dynamic key Weaver allows.
 
-**[46] `lablet.tool.calls`:** Justification: per-tool counts on the run's one row answer which tool dominated without a join; the conventions have no per-tool aggregate, and a template is the only dynamic key Weaver allows.
+**[46] `lablet.tool.errors`:** Justification: per-tool error counts on the run's one row; the conventions have no per-tool aggregate.
 
-**[47] `lablet.tool.errors`:** Justification: per-tool error counts on the run's one row; the conventions have no per-tool aggregate.
+**[47] `lablet.tool.input.bytes`:** Justification: `gen_ai.tool.call.arguments` is opt-in content; the size is needed when content isn't captured, and no convention carries it.
 
-**[48] `lablet.tool.input.bytes`:** Justification: `gen_ai.tool.call.arguments` is opt-in content; the size is needed when content isn't captured, and no convention carries it.
+**[48] `lablet.tool.is_error`:** Justification: the model gets an error result both when the executor fails and when a tool reports an error in its own result; `error.type` classifies a failure, and no convention carries the flag.
 
-**[49] `lablet.tool.is_error`:** Justification: the model gets an error result both when the executor fails and when a tool reports an error in its own result; `error.type` classifies a failure, and no convention carries the flag.
+**[49] `lablet.tool.latency_ms`:** Justification: per-tool latency on the run's one row; the conventions have no per-tool aggregate.
 
-**[50] `lablet.tool.latency_ms`:** Justification: per-tool latency on the run's one row; the conventions have no per-tool aggregate.
+**[50] `lablet.tool.output.bytes`:** Justification: `gen_ai.tool.call.result` is opt-in content; the size is needed when content isn't captured, and no convention carries it.
 
-**[51] `lablet.tool.output.bytes`:** Justification: `gen_ai.tool.call.result` is opt-in content; the size is needed when content isn't captured, and no convention carries it.
+**[51] `lablet.tool.output.original_bytes`:** Justification: once an output is cut, `lablet.tool.output.bytes` is the size sent, and no convention carries the size the tool produced.
 
-**[52] `lablet.tool.output.original_bytes`:** Justification: once an output is cut, `lablet.tool.output.bytes` is the size sent, and no convention carries the size the tool produced.
+**[52] `lablet.tool.output.truncated`:** Justification: no convention says that a tool's output was cut before the model saw it, and `lablet.tool.output.bytes` alone can't tell a cut output from one that fitted.
 
-**[53] `lablet.tool.output.truncated`:** Justification: no convention says that a tool's output was cut before the model saw it, and `lablet.tool.output.bytes` alone can't tell a cut output from one that fitted.
+**[53] `lablet.tool.source`:** Justification: `gen_ai.tool.type` says how a tool is invoked (function, extension, datastore), not which executor serves it.
 
-**[54] `lablet.tool.source`:** Justification: `gen_ai.tool.type` says how a tool is invoked (function, extension, datastore), not which executor serves it.
+**[54] `lablet.tool.status`:** Justification: `error.type` is an open set, so it can't hold lablet's closed one, and a call that ended `ok` has no `error.type` at all. Every value but `ok` and `not_run` is also the call's `error.type`. A call that was never run has no span, so no span carries `not_run`. It's the status the run's transcript gives such a call, and it's a member here so that the transcript's statuses and this attribute's values stay one set.
 
-**[55] `lablet.tool.status`:** Justification: `error.type` is an open set, so it can't hold lablet's closed one, and a call that ended `ok` has no `error.type` at all. Every value but `ok` and `not_run` is also the call's `error.type`. A call that was never run has no span, so no span carries `not_run`. It's the status the run's transcript gives such a call, and it's a member here so that the transcript's statuses and this attribute's values stay one set.
+**[55] `lablet.tool_calls.errors`:** Justification: no convention counts the failed tool calls of an agent run.
 
-**[56] `lablet.tool_calls.errors`:** Justification: no convention counts the failed tool calls of an agent run.
+**[56] `lablet.tool_calls.input_bytes.total`:** Justification: `gen_ai.tool.call.arguments` is opt-in content; no convention carries its size, per call or per run.
 
-**[57] `lablet.tool_calls.input_bytes.total`:** Justification: `gen_ai.tool.call.arguments` is opt-in content; no convention carries its size, per call or per run.
+**[57] `lablet.tool_calls.latency_ms.total`:** Justification: the conventions record one tool call's duration as a span; a per-run sum has no attribute.
 
-**[58] `lablet.tool_calls.latency_ms.total`:** Justification: the conventions record one tool call's duration as a span; a per-run sum has no attribute.
+**[58] `lablet.tool_calls.output_bytes.total`:** Justification: `gen_ai.tool.call.result` is opt-in content; no convention carries its size, per call or per run.
 
-**[59] `lablet.tool_calls.output_bytes.total`:** Justification: `gen_ai.tool.call.result` is opt-in content; no convention carries its size, per call or per run.
+**[59] `lablet.tool_calls.total`:** Justification: no convention counts the tool calls of an agent run.
 
-**[60] `lablet.tool_calls.total`:** Justification: no convention counts the tool calls of an agent run.
+**[60] `lablet.tool_calls.truncated`:** Justification: no convention says that a tool's output was cut before the model saw it, per call or per run; the count tells a run whose tools outgrew the cap from one they fitted.
 
-**[61] `lablet.tool_calls.truncated`:** Justification: no convention says that a tool's output was cut before the model saw it, per call or per run; the count tells a run whose tools outgrew the cap from one they fitted.
+**[61] `lablet.tool_calls.unknown`:** Justification: the model can call any name, so these calls get no per-tool attribute and would otherwise be invisible in the per-tool breakdown; no convention counts them.
 
-**[62] `lablet.tool_calls.unknown`:** Justification: the model can call any name, so these calls get no per-tool attribute and would otherwise be invisible in the per-tool breakdown; no convention counts them.
+**[62] `lablet.tools.count`:** Justification: no convention counts the tools offered, and an array's length can't be aggregated in most backends.
 
-**[63] `lablet.tools.count`:** Justification: no convention counts the tools offered, and an array's length can't be aggregated in most backends.
+**[63] `lablet.tools.digest`:** Justification: `gen_ai.tool.definitions` is opt-in content, and `lablet.config.digest` can't see a tool's description, which a server supplies. The digest tells two runs apart that were offered different tools under one config. It's taken from each spec as compact JSON in lablet's own form, in the order offered, with nothing between them.
 
-**[64] `lablet.tools.digest`:** Justification: `gen_ai.tool.definitions` is opt-in content, and `lablet.config.digest` can't see a tool's description, which a server supplies. The digest tells two runs apart that were offered different tools under one config. It's taken from each spec as compact JSON in lablet's own form, in the order offered, with nothing between them.
+**[64] `lablet.tools.names`:** Justification: `gen_ai.tool.definitions` holds full definitions and is opt-in content; the names alone are needed on every run to compare tool sets.
 
-**[65] `lablet.tools.names`:** Justification: `gen_ai.tool.definitions` holds full definitions and is opt-in content; the names alone are needed on every run to compare tool sets.
+**[65] `lablet.trial`:** Justification: no convention numbers the repetitions of a task. A string, because the composer chooses it and lablet gives it no meaning of its own.
 
-**[66] `lablet.trial`:** Justification: no convention numbers the repetitions of a task. A string, because the composer chooses it and lablet gives it no meaning of its own.
-
-**[67] `lablet.turn`:** Justification: the conventions have no turn; the index groups a turn's chat and tool spans without adding a span level.
+**[66] `lablet.turn`:** Justification: the conventions have no turn; the index groups a turn's chat and tool spans without adding a span level.
 
 ---
 

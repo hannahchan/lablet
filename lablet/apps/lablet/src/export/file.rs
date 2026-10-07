@@ -144,9 +144,9 @@ fn whole(file: &mut impl io::Write, text: &str, torn: &mut bool) -> io::Result<(
     Ok(())
 }
 
-/// What the file exporters of one `Telemetry` write to. The spans, the log
-/// records and the wide event each have an exporter of their own, and one
-/// line is written at a time whichever of them writes it.
+/// What the file exporters of one `Telemetry` write to. The spans and the
+/// log records each have an exporter of their own, and one line is written
+/// at a time whichever of them writes it.
 #[derive(Debug, Clone)]
 pub(crate) struct Sink {
     target: FileTarget,

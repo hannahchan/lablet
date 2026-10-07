@@ -3,9 +3,7 @@
 //!
 //! The record's struct is generated from the registry, so a key the registry
 //! adds to `lablet.run` is a field this module must fill before the crate
-//! builds again, and a key it drops is a field that no longer compiles. What
-//! only the export module knows, each destination's count of lost records,
-//! is filled there, from the struct this module hands over.
+//! builds again, and a key it drops is a field that no longer compiles.
 
 use std::collections::BTreeMap;
 
@@ -16,10 +14,9 @@ use lablet_run::telemetry::generated::Join;
 use crate::telemetry::generated::LabletRun;
 use crate::telemetry::spellings::run_error_type;
 
-/// The wide event of a run of `context` that came to `summary`, with every
-/// key but `lablet.telemetry.dropped_records`, which each destination fills
-/// with its own count once it has flushed. A key whose condition doesn't
-/// hold of the run is left out, and never written as a zero or as nothing.
+/// The wide event of a run of `context` that came to `summary`, whole. A
+/// key whose condition doesn't hold of the run is left out, and never
+/// written as a zero or as nothing.
 ///
 /// The per-tool keys are made for the tools the run offered, each when it
 /// was called. So the names the record lists as its tools bound them,
@@ -75,7 +72,6 @@ pub(crate) fn wide_event(context: &RunContext, summary: &RunSummary) -> LabletRu
         lablet_run_timeout_ms: count_of(summary.timeout_ms),
         lablet_run_turns: i64::from(outcome.turns),
         lablet_skills_count: i64::from(context.skills_count),
-        lablet_telemetry_dropped_records: 0,
         lablet_tool_calls_errors: count_of(summary.tool_calls.errors),
         lablet_tool_calls_input_bytes_total: count_of(summary.tool_calls.input_bytes),
         lablet_tool_calls_latency_ms_total: count_of(summary.tool_calls.latency_ms),

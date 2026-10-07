@@ -124,12 +124,12 @@ fn a_port_nothing_listens_on_changes_nothing_and_the_process_exits_within_five_s
     assert_eq!(outcome["stop_reason"], "completed");
     assert_eq!(outcome["stop_reason"], plain_outcome["stop_reason"]);
     assert_eq!(outcome["usage"], plain_outcome["usage"]);
-    assert!(
-        ran.stderr
-            .contains("an export of spans failed, and the spans are lost"),
-        "{}",
-        ran.stderr
-    );
+    for said in [
+        "BatchSpanProcessor.ExportError",
+        "the run's telemetry wasn't exported whole",
+    ] {
+        assert!(ran.stderr.contains(said), "{said}: {}", ran.stderr);
+    }
     assert!(
         !ran.stderr.contains(&closed.to_string()),
         "the endpoint is in no diagnostic line: {}",

@@ -12,6 +12,7 @@ use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
 use lablet_run::{FilterList, RunService, ToolExecutor, ToolSet, ToolSetError};
 use lablet_tools_builtin::{BuiltinTools, SettingsError};
 use opentelemetry::InstrumentationScope;
+use opentelemetry_sdk::Resource;
 
 use crate::cancel::RunCancellation;
 use crate::clock::TokioClock;
@@ -21,7 +22,9 @@ use crate::config::{
 };
 use crate::export::{self, FileTarget, OtelBuildError, OtlpSettings, Telemetry};
 use crate::lablet::{Fixed, Lablet, Played, TranscriptPath};
+use crate::otel_env::{OtelEnv, Sdk};
 use crate::otlp;
+use crate::propagation::{self, Inbound};
 use crate::root::{self, OwnFile};
 use crate::secrets::{self, Derived, Named};
 use crate::settings::{Selected, Settings, System};
@@ -446,6 +449,12 @@ struct Prepared {
     target: Option<FileTarget>,
     /// What the network exporter is built from, when the run has one.
     otlp: Option<OtlpSettings>,
+    /// The sampler, the span limits and the batch processors' settings.
+    sdk: Sdk,
+    /// What every export describes itself with.
+    resource: Resource,
+    /// The context every run starts from.
+    inbound: Inbound,
     tools: Arc<ToolSet>,
     /// lablet's secrets: what's withheld, what's cut, and the values when
     /// the run has an executor to hand them to.
@@ -490,7 +499,20 @@ async fn prepare(written: &Config, env: Env<'_>) -> Result<Prepared, BuildError>
         }
     };
 
-    let otlp = otlp::settings(written, &real, env).map_err(refused)?;
+    // Read once, here, so a check and a build warn of the same values and
+    // agree on what they come to.
+    let OtelEnv {
+        sdk,
+        exporter,
+        context,
+    } = OtelEnv::read(env);
+    let resource = export::resource(
+        crate::VERSION,
+        real.telemetry.resource.clone().into_iter().collect(),
+        &context,
+    );
+    let inbound = propagation::inbound(&context);
+    let otlp = otlp::settings(written, &real, env, &exporter).map_err(refused)?;
     if let Some(settings) = &otlp {
         // What the exporter would refuse is refused here, so a check refuses
         // what a build refuses but for what only making the exporter finds,
@@ -549,6 +571,9 @@ async fn prepare(written: &Config, env: Env<'_>) -> Result<Prepared, BuildError>
         system,
         target,
         otlp,
+        sdk,
+        resource,
+        inbound,
         tools,
         secrets,
     })
@@ -603,6 +628,9 @@ fn assemble(config: &Config, env: Env<'_>, prepared: Prepared) -> Result<Lablet,
         system,
         target,
         otlp,
+        sdk,
+        resource,
+        inbound,
         tools,
         secrets,
     } = prepared;
@@ -617,8 +645,7 @@ fn assemble(config: &Config, env: Env<'_>, prepared: Prepared) -> Result<Lablet,
         .with_version(crate::VERSION)
         .with_schema_url(crate::telemetry::generated::SCHEMA_URL)
         .build();
-    let mut telemetry = Telemetry::builder(crate::VERSION, scope)
-        .resource(real.telemetry.resource.clone().into_iter().collect());
+    let mut telemetry = Telemetry::builder(scope).resource(resource).sdk(sdk);
     if let Some(target) = target {
         telemetry = telemetry.file(target);
     }
@@ -664,6 +691,7 @@ fn assemble(config: &Config, env: Env<'_>, prepared: Prepared) -> Result<Lablet,
                 .clone()
                 .zip(config.run.transcript_path.clone())
                 .map(|(real, written)| TranscriptPath { real, written }),
+            inbound,
         },
     ))
 }

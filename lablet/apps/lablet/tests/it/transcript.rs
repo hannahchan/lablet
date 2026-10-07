@@ -603,11 +603,9 @@ async fn the_transcript_a_wide_event_names_is_whole_when_the_wide_event_arrives(
         [(transcript.display().to_string(), true)],
         "the wide event reached the collector once, after its transcript was written"
     );
-    let exported = scratch.exported();
-    let last = exported.records.iter().max_by_key(|record| record.line);
     assert_eq!(
-        last.map(|record| record.event_name.as_str()),
-        Some(key::WIDE_EVENT),
-        "and it's the last line of the file"
+        scratch.exported().records_of(key::WIDE_EVENT).len(),
+        1,
+        "and the file holds it"
     );
 }
