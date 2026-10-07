@@ -8,7 +8,7 @@ Lablet exists to be measured, so its telemetry is part of the product, not a deb
 
 - **Spans.** The root span `invoke_agent lablet` covers the run, and each provider call attempt (`chat`) and each tool call (`execute_tool`) has a span beneath it. Spans are for drilling into one run.
 - **Log records.** A failed provider attempt has a record beside its span, and when the run captures content, the conversation is in records of its own. No span holds content.
-- **The wide event.** One record, `lablet.run`, carries everything worth knowing about the run as flat attributes, so an analyst can answer most questions from one row per run. It's the last thing the run produces.
+- **The wide event.** One record, `lablet.run`, carries everything worth knowing about the run as flat attributes, so an analyst can answer most questions from one row per run. It's emitted once, after the run's transcript is written, and the run's telemetry is flushed once after it.
 
 Every one of these is a contract: a consumer builds queries and dashboards on the names and values, so a change to them is a breaking change, versioned like a change to the config schema.
 
@@ -35,7 +35,7 @@ The domain has no clock and does no I/O, so it has nothing to instrument. The SD
 
 **4. Time comes from the loop.** The loop measures every call on its injected `Clock`, and each span and record gets exactly those times: a span is opened with an explicit start time and ended with an explicit end time, and a record carries the time the thing it reports happened. Never let the SDK read the system clock for a span or record. The times are the loop's `Duration`s added to the run's start whole, never their whole milliseconds, so a span is as fine as the clock and the API allow, and each `*_ms` value is the whole milliseconds of the time or the length it measures, and a total sums those. This keeps lablet's own overhead out of the agent's measured latency, makes the latency the transcript and the wide event report the whole milliseconds of what the spans measured, lets tests drive time with a fake clock, and keeps a mid-run clock adjustment from skewing durations. [README.md](README.md#telemetry-is-contract-first) says what holds this and the next rule, and where each is a review convention.
 
-**5. No global state.** The tracer and lablet's logger are injected, never taken from OpenTelemetry's global providers, because one process may hold several `Lablet`s, each with its own destinations, and tests run in parallel. The root span starts from an empty context, so a run is a trace of its own even when a caller has a span open. Every trace is sampled, whatever `OTEL_TRACES_SAMPLER` says, because the wide event counts every span and a sampled-out span would make the record and the trace disagree.
+**5. No global state.** The tracer and lablet's logger are injected, never taken from OpenTelemetry's global providers, and the propagators are lablet's own, never the global propagator, because one process may hold several `Lablet`s, each with its own destinations, and tests run in parallel. The root `clippy.toml` refuses a call to `opentelemetry::global`'s tracer, meter and propagator functions. The root span is the child of the inbound context the environment names through `TRACEPARENT` and the propagators, when there is one, and starts from an empty context when there isn't, so a run never joins a span its caller has open in the process. The sampler is the SDK's, as the environment names it, and parent-based by default: `parentbased_always_on` unless `OTEL_TRACES_SAMPLER` says otherwise. So a run under an inbound parent that isn't sampled records no span, while its records, the wide event among them, are still exported, and the wide event's sums then have no spans to agree with.
 
 **6. A host owes lablet nothing.** An application that runs lablet as a library installs no layer and configures nothing for lablet's telemetry. Its own `tracing` subscriber sees lablet's diagnostics and none of its telemetry, and nothing plugs into a `Lablet`: the library has no observer and no extension point for telemetry. A tool executor finds the span of its own call in the current OpenTelemetry context.
 
@@ -81,27 +81,30 @@ The generated code is data, not logic. Each struct lists its attributes as pairs
 4. Fill the field where the crate builds the struct. If you skip this, the build fails at that call site, which is the point.
 5. Add the CHANGELOG entry the registry change needs, and run `cargo xtask weaver live-check` to see the new attribute on the wire.
 
-A call site fills a struct and hands it on; it never writes a key or calls an API by hand. For a chat attempt, the loop builds the generated `LabletChat` with the run's `Join`, the attempt's values and its `error.type` class, and records it on the span it opened, then ends the span at the time it measured. The composition root does the same for the root span and the wide event in `Lablet::run`: it opens the root span from the empty context, runs the loop in it, fills `LabletInvokeAgent` from the finished run and ends the span with the run's measured duration, and fills `LabletRun` from the run's context and summary, all but each destination's count of lost records, which the composition root's export module fills once it has flushed that destination.
+A call site fills a struct and hands it on; it never writes a key or calls an API by hand. For a chat attempt, the loop builds the generated `LabletChat` with the run's `Join`, the attempt's values and its `error.type` class, and records it on the span it opened, then ends the span at the time it measured. The composition root does the same for the root span and the wide event in `Lablet::run`: it opens the root span from the inbound context, or the empty one when there's none, runs the loop in it, fills `LabletInvokeAgent` from the finished run and ends the span with the run's measured duration, and fills `LabletRun` whole from the run's context and summary and emits it once, before the run's one flush.
 
 ## What holds it
 
-| Check                                 | When                     | What it catches                                                                                      |
-| ------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `cargo xtask weaver check`            | pre-commit, pre-push, CI | a registry that breaks the conventions or lablet's policies, annotations included                    |
-| `cargo xtask weaver generate --check` | pre-commit, pre-push, CI | generated code or reference pages that differ from what the registry renders to                      |
-| The build                             | always                   | a call site that doesn't fill a field the registry added or now requires                             |
-| `cargo xtask lint-layers`             | pre-commit, pre-push, CI | the API in the domain, the SDK outside the composition root                                          |
-| The golden comparison                 | tests                    | a change in what a run emits, with ids, times and attribute order normalised                         |
-| The policy tests in `xtask`           | tests                    | a rule of lablet's policies that no longer refuses the mistake it's there for                        |
-| `lablet-run`'s timing scenarios       | tests                    | a loop span or record timed off the run's clock, or cut to the millisecond                           |
-| The library's timing test             | tests                    | the root span or the wide event timed off the run's clock, or cut to the millisecond                 |
-| The `hosts` tests                     | tests                    | a `Lablet` whose telemetry reaches a host's subscriber or tracer, or another `Lablet`'s destinations |
-| `cargo xtask weaver live-check`       | CI                       | an emitted attribute or record the registry doesn't declare, or one of the wrong type                |
-| The coverage and mutation floors      | CI, daily                | generated or hand-written telemetry code that no test reaches or checks                              |
+| Check                                 | When                     | What it catches                                                                                                                   |
+| ------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo xtask weaver check`            | pre-commit, pre-push, CI | a registry that breaks the conventions or lablet's policies, annotations included                                                 |
+| `cargo xtask weaver generate --check` | pre-commit, pre-push, CI | generated code or reference pages that differ from what the registry renders to                                                   |
+| The build                             | always                   | a call site that doesn't fill a field the registry added or now requires                                                          |
+| `cargo xtask lint-layers`             | pre-commit, pre-push, CI | the API in the domain, the SDK outside the composition root                                                                       |
+| The golden comparison                 | tests                    | a change in what a run emits, with ids, times and attribute order normalised                                                      |
+| The policy tests in `xtask`           | tests                    | a rule of lablet's policies that no longer refuses the mistake it's there for                                                     |
+| `lablet-run`'s timing scenarios       | tests                    | a loop span or record timed off the run's clock, or cut to the millisecond                                                        |
+| The library's timing test             | tests                    | the root span or the wide event timed off the run's clock, or cut to the millisecond                                              |
+| The `hosts` tests                     | tests                    | a `Lablet` whose telemetry reaches a host's subscriber or tracer, or another `Lablet`'s destinations                              |
+| `cargo xtask clippy`                  | pre-commit, pre-push, CI | a call to OpenTelemetry's global tracer, meter or propagator functions                                                            |
+| The canaries                          | tests                    | an OpenTelemetry crate that, after an upgrade, closes a gap lablet fills, so lablet's code for it can go or must say why it stays |
+| The hostile golden run                | tests                    | an OpenTelemetry crate that starts reading a variable lablet decides, or one it doesn't read                                      |
+| `cargo xtask weaver live-check`       | CI                       | an emitted attribute or record the registry doesn't declare, or one of the wrong type                                             |
+| The coverage and mutation floors      | CI, daily                | generated or hand-written telemetry code that no test reaches or checks                                                           |
 
 ## Further reading
 
-- `product/decisions.md`, the entries of 2026-10-03 to 2026-10-06, from "The application and the adapters instrument with the OpenTelemetry API" onward, record each choice above and what it replaced.
+- `product/decisions.md`, the entries of 2026-10-03 to 2026-10-07, from "The application and the adapters instrument with the OpenTelemetry API" onward, record each choice above and what it replaced; "Lablet is configured as OpenTelemetry configures an SDK" records where the sampler, the inbound context and the rest of the environment come from.
 - `product/research/weaver/typed-codegen.md` holds the spike that tried the registry's layout and the generated code.
 - `product/spec.md`, §6, lists every span, record and attribute.
 - The OpenTelemetry Rust project's guidance: [`docs/traces.md`](https://github.com/open-telemetry/opentelemetry-rust/blob/main/docs/traces.md) and [`docs/logs.md`](https://github.com/open-telemetry/opentelemetry-rust/blob/main/docs/logs.md).

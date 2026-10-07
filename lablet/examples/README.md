@@ -2,7 +2,7 @@
 
 Configs to run lablet with, and a collector to send the runs to. A relative path in a config starts at the directory lablet runs in, so run each config from its own directory. The `cargo run` lines below build lablet on their first use.
 
-Lablet takes the OpenTelemetry settings of the environment it runs in, so run these steps in a shell where no `OTEL_*` variable is set: an endpoint there turns the network exporter on and stops the file, and a protocol there changes the transport. `env | grep ^OTEL_` lists any.
+Lablet takes the OpenTelemetry settings of the environment it runs in, so run these steps in a shell where no `OTEL_*` variable is set, nor `TRACEPARENT`: an endpoint there changes where the runs are sent, a protocol changes the transport, and a `TRACEPARENT` makes each run its child. `env | grep -E '^(OTEL_|TRACEPARENT)'` lists any.
 
 ## A two-turn run (`two-turns/`)
 
@@ -13,7 +13,7 @@ cd lablet/examples/two-turns
 cargo run --locked --manifest-path ../../Cargo.toml --bin lablet -- run --config lablet.yaml --prompt "Read notes.md and say what it holds."
 ```
 
-With no endpoint set, the run writes `lablet-<run_id>.otlp.jsonl` beside the config, which git ignores. `cargo xtask weaver live-check` runs this config too, against the registry's live checker.
+The config names no file and no collector, so the run sends its telemetry to `localhost:4318`, the OpenTelemetry default, and with nothing listening there its end waits about a second and the diagnostic log says the telemetry was lost. To keep it in a file instead, add `--set telemetry.file.path=lablet-run.otlp.jsonl --set telemetry.otlp.enabled=false`; git ignores a file named `lablet-*.otlp.jsonl`. `cargo xtask weaver live-check` runs this config too, against the registry's live checker.
 
 ## A collector and Jaeger (`docker-compose.yaml`)
 
@@ -41,11 +41,11 @@ In Jaeger, select the service `lablet`, put `lablet.turn=2` in the Tags field, a
 
 ### A file replayed through the collector
 
-Run the config with its file in `replay/`, where the collector reads it:
+Run the config with its file in `replay/`, where the collector reads it, and no network export, since the collector isn't on the default port:
 
 ```bash
 cd lablet/examples/two-turns
-cargo run --locked --manifest-path ../../Cargo.toml --bin lablet -- run --config lablet.yaml --prompt "Read notes.md and say what it holds." --set telemetry.file.path=../replay/lablet-replay.otlp.jsonl
+cargo run --locked --manifest-path ../../Cargo.toml --bin lablet -- run --config lablet.yaml --prompt "Read notes.md and say what it holds." --set telemetry.file.path=../replay/lablet-replay.otlp.jsonl --set telemetry.otlp.enabled=false
 ```
 
 The collector's OTLP/JSON file receiver reads the file from its start, and the run reaches Jaeger within seconds. It reads lines of up to 64 MiB, as `otel-collector.yaml` sets: the receiver's default is 1 MiB, and it drops a longer line without a message, which one export of a long run's content records can be. Its run id is in the outcome the run printed; find it with the tag `session.id=<run id>`, or as the newest trace of the service `lablet`.

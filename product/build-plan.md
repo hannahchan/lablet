@@ -27,7 +27,7 @@ Sequencing rationale: the loop is proven against fakes before any real adapter e
 | 11    | Hardening and release                               | Not started      |
 | 12    | After the release                                   | Not started      |
 
-A date is the date of the `decisions.md` entry that closed the phase. Spec §6 and §7 describe what phases 4 to 10 build: the parts of phases 4 to 6a are built, and the rest is ahead of the code. Phase 6b's documents commit rewrites the telemetry in §1, §5, §6 and §7 once its landings are in; until then those sections describe it as phase 6a left it, and `decisions.md` holds what changes.
+A date is the date of the `decisions.md` entry that closed the phase. Spec §6 and §7 describe what phases 4 to 10 build: the parts of phases 4 to 6b are built, and the rest is ahead of the code.
 
 ## Phase 0: Scaffold
 
