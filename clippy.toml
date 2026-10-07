@@ -10,13 +10,19 @@ doc-valid-idents = ["..", "GenAI", "OpenAI"]
 
 # OpenTelemetry's globals are one per process, and a process may hold several
 # `Lablet`s, each with destinations of its own, so lablet's tracer, logger and
-# propagators are injected and never set or taken from them. `allow-invalid`
-# because a crate that doesn't depend on `opentelemetry` can't resolve the path.
+# propagators are injected and never set or taken from them, and it emits no
+# metrics. The metrics functions are compiled in because `opentelemetry-otlp`'s
+# HTTP features turn on its `metrics` feature. `allow-invalid` because a crate
+# that doesn't depend on `opentelemetry` can't resolve the path.
 disallowed-methods = [
   { path = "opentelemetry::global::set_tracer_provider", reason = "lablet's tracer is injected; a global provider is shared by every Lablet in the process", allow-invalid = true },
   { path = "opentelemetry::global::tracer_provider", reason = "lablet's tracer is injected; a global provider is shared by every Lablet in the process", allow-invalid = true },
   { path = "opentelemetry::global::tracer", reason = "lablet's tracer is injected; a global provider is shared by every Lablet in the process", allow-invalid = true },
   { path = "opentelemetry::global::tracer_with_scope", reason = "lablet's tracer is injected; a global provider is shared by every Lablet in the process", allow-invalid = true },
+  { path = "opentelemetry::global::set_meter_provider", reason = "lablet emits no metrics; a global provider is shared by every Lablet in the process", allow-invalid = true },
+  { path = "opentelemetry::global::meter_provider", reason = "lablet emits no metrics; a global provider is shared by every Lablet in the process", allow-invalid = true },
+  { path = "opentelemetry::global::meter", reason = "lablet emits no metrics; a global provider is shared by every Lablet in the process", allow-invalid = true },
+  { path = "opentelemetry::global::meter_with_scope", reason = "lablet emits no metrics; a global provider is shared by every Lablet in the process", allow-invalid = true },
   { path = "opentelemetry::global::set_text_map_propagator", reason = "lablet's propagators are its own; the global one is shared by every Lablet in the process", allow-invalid = true },
   { path = "opentelemetry::global::get_text_map_propagator", reason = "lablet's propagators are its own; the global one is shared by every Lablet in the process", allow-invalid = true },
 ]
