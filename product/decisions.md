@@ -1456,6 +1456,12 @@ Left open for the owner:
 
 - The two deferred context items. A library run can't be given a parent of its own, since the inbound context is the process's. With an inbound parent, a `bash` child's spans join the caller's trace beside the run's root rather than beneath its tool span.
 - What the starter config and the examples say about telemetry, now that a run with no collector pays for failed exports and warnings. Phase 6b measures the cost and its cause and brings it to the owner in its gap report; until then they state nothing new.
-- Whether a clippy `disallowed-methods` list names `opentelemetry::global::set_text_map_propagator`, so that the rule never to set the global propagator is a lint. Lablet has no such list, and adding one is a new code rule, which this entry doesn't make.
+- Whether a clippy `disallowed-methods` list names `opentelemetry::global::set_text_map_propagator`, so that the rule never to set the global propagator is a lint. Lablet has no such list, and adding one is a new code rule, which this entry doesn't make. _Answered on 2026-10-07 by "A lint keeps OpenTelemetry's global functions out": the list is added._
 
 Phase 6b builds it before phase 7, so the Anthropic adapter is built on telemetry configured as the ecosystem configures it.
+
+## 2026-10-07 A lint keeps OpenTelemetry's global functions out
+
+Decided by the owner, answering the question "Lablet is configured as OpenTelemetry configures an SDK" left open. The root `clippy.toml` gains a `disallowed-methods` list: `opentelemetry::global`'s `set_tracer_provider`, `tracer_provider`, `tracer` and `tracer_with_scope`, and its `set_text_map_propagator` and `get_text_map_propagator`. Rule 5 of `contributing/instrumentation.md` already kept the tracer and the logger off the global providers, as a review convention. Phase 6b's propagators are lablet's own for the same reason, one process holding several `Lablet`s, and a crate helper that set the global propagator could otherwise change what lablet does without a line of lablet's changing. So calling any of them is a build error now, and the code conventions in `contributing/README.md` say so.
+
+Each entry carries `allow-invalid`, since a crate that doesn't depend on `opentelemetry`, `xtask` and the domain among them, can't resolve the path and clippy would warn there. The 0.33 API has no global logger provider, so none is listed, and its global metrics functions aren't compiled into lablet, which emits no metrics. A probe in a scratch clone that called `global::tracer` and `global::get_text_map_propagator` from the composition root failed clippy on both.
