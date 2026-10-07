@@ -57,7 +57,11 @@ impl Lab {
     }
 
     /// The config, as a tree, of a fake model that plays the YAML script
-    /// `script`, with `more` stated over it.
+    /// `script`, with `more` stated over it. Its telemetry goes to the
+    /// lab's file and nowhere else: a test that exports to a receiver
+    /// states `telemetry.otlp.enabled: true` beside the receiver's
+    /// endpoint, so no test sends to a collector on the developer's
+    /// `localhost:4318`.
     pub fn tree(&self, script: &str, more: Value) -> Value {
         let mut tree = json!({
             "model": {
@@ -68,6 +72,7 @@ impl Lab {
             "prompt": { "system": SYSTEM },
             "telemetry": {
                 "file": { "path": self.telemetry() },
+                "otlp": { "enabled": false },
                 "resource": { "team": "evals" },
             },
         });

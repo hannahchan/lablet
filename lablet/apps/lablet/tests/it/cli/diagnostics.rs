@@ -109,16 +109,17 @@ async fn a_debug_log_holds_neither_the_endpoint_nor_a_header_value_a_variable_ga
     let token = "tok-0123456789abcdef-no-stderr";
     let environments = "x-env=env-0123456789abcdef-no-stderr";
 
-    for protocol in ["grpc", "http"] {
+    for protocol in ["grpc", "http/protobuf"] {
         let receiver = Receiver::start(Mode::Answers).await;
         let endpoint = match protocol {
             "grpc" => receiver.grpc_endpoint(),
             _ => receiver.http_endpoint(),
         };
-        let lab = Lab::new(&format!("diagnostics-otlp-{protocol}"));
+        let lab = Lab::new(&format!("diagnostics-otlp-{}", protocol.replace('/', "-")));
         lab.write_config(
             ENDS,
             json!({ "telemetry": { "otlp": {
+                "enabled": true,
                 "endpoint": format!("${{{ENDPOINT}}}"),
                 "protocol": protocol,
                 "headers": { "authorization": format!("Bearer ${{{TOKEN}}}") },

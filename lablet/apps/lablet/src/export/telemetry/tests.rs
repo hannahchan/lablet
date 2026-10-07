@@ -4,19 +4,20 @@ use lablet_conformance::otlp::Exported;
 use lablet_run::telemetry::Record;
 use opentelemetry::logs::{AnyValue, Severity};
 use opentelemetry::trace::{
-    Span as _, SpanContext, SpanId, TraceFlags, TraceId, TraceState, Tracer as _,
+    Span as _, SpanContext, SpanId, TraceContextExt as _, TraceFlags, TraceId, TraceState,
+    Tracer as _,
 };
 use opentelemetry::{Context, Key, KeyValue, Value};
 use opentelemetry_sdk::trace::SpanData;
 
 use super::*;
-use crate::export::network::{OtelBuildError, OtlpSettings, Transport};
+use crate::export::network::OtelBuildError;
 use crate::export::resource;
 use crate::export::testing::memory::{Logged, Memory};
 use crate::export::testing::{
     CONTENT, DURATION_MS, EXCEPTION, OTHER_RUN, RECORDS_PER_CAPTURED_RUN, RECORDS_PER_RUN, RUN,
-    RUN_KEY, Records, SCHEMA_URL, SPANS_PER_RUN, Scratch, VERSION, WIDE, after, emit_run, scope,
-    sdk_of, wide_event,
+    RUN_KEY, Records, SCHEMA_URL, SPANS_PER_RUN, Scratch, VERSION, WIDE, after, emit_run, otlp_of,
+    scope, sdk_of, wide_event,
 };
 use crate::otel_env;
 
@@ -659,37 +660,26 @@ fn a_builder_prints_what_it_was_given() {
 
 #[test]
 fn a_builder_prints_neither_the_endpoint_nor_a_header_value_it_was_given() {
-    let builder = Telemetry::builder(scope()).otlp(OtlpSettings {
-        transport: Transport::HttpProtobuf,
-        endpoint: Some("http://user:hunter2hunter2@collector:4318".to_owned()),
-        headers: vec![(
-            "authorization".to_owned(),
-            "Bearer hunter2hunter2".to_owned(),
-        )],
-        strip_environment_headers: true,
-    });
+    let builder = Telemetry::builder(scope()).otlp(otlp_of(
+        "telemetry: { otlp: { endpoint: 'http://user:hunter2hunter2@collector:4318', headers: \
+         { authorization: Bearer hunter2hunter2 } } }",
+        &[],
+    ));
 
     let shown = format!("{builder:?}");
 
     assert!(!shown.contains("hunter2"), "{shown}");
-    assert!(
-        shown.contains(
-            "otlp: Some(OtlpSettings { transport: HttpProtobuf, endpoint: Some(\"..\"), \
-             headers: [\"authorization\"], strip_environment_headers: true })"
-        ),
-        "{shown}"
-    );
+    assert!(!shown.contains("collector"), "{shown}");
+    assert!(shown.contains("headers: [\"authorization\"]"), "{shown}");
 }
 
 #[tokio::test]
 async fn a_header_that_is_not_one_fails_the_build_and_names_the_header() {
     let refused = Telemetry::builder(scope())
-        .otlp(OtlpSettings {
-            transport: Transport::Grpc,
-            endpoint: Some("http://127.0.0.1:1".to_owned()),
-            headers: vec![("no spaces allowed".to_owned(), "v".to_owned())],
-            strip_environment_headers: true,
-        })
+        .otlp(otlp_of(
+            "telemetry: { otlp: { headers: { no spaces allowed: v } } }",
+            &[],
+        ))
         .build()
         .err()
         .unwrap();
@@ -701,4 +691,43 @@ async fn a_header_that_is_not_one_fails_the_build_and_names_the_header() {
             reason: "its name isn't one a header may have",
         }
     );
+}
+
+// OTEL_SDK_DISABLED: the API's no-ops
+
+#[tokio::test]
+async fn with_the_sdk_disabled_a_span_carries_its_parents_context_and_no_id_of_its_own() {
+    let memory = Memory::default();
+    let scratch = Scratch::new("disabled");
+    let path = scratch.at("runs.otlp.jsonl");
+    let telemetry = Telemetry::builder(scope())
+        .disabled()
+        .file(FileTarget::Path(path.clone()))
+        .exporting_to(memory.spans(), memory.records())
+        .build()
+        .unwrap();
+    let inbound = SpanContext::new(
+        TraceId::from_bytes([7; 16]),
+        SpanId::from_bytes([8; 8]),
+        TraceFlags::SAMPLED,
+        true,
+        TraceState::from_key_value([("vendor", "value")]).unwrap(),
+    );
+    let parent = Context::new().with_remote_span_context(inbound.clone());
+
+    let tracer = telemetry.tracer();
+    let span = tracer
+        .span_builder("invoke_agent lablet")
+        .start_with_context(&tracer, &parent);
+    let within = parent.with_span(span);
+    let child = tracer.start_with_context("chat scripted-1", &within);
+    let wide = emit_run(&telemetry, RUN, Records::Captured);
+    let flushed = telemetry.flush(wide).await;
+    let shut = telemetry.shutdown().await;
+
+    assert_eq!(within.span().span_context(), &inbound);
+    assert_eq!(child.span_context(), &inbound);
+    assert_eq!((flushed, shut), (Ok(()), Ok(())));
+    assert!(memory.exports().is_empty(), "nothing reached a destination");
+    assert!(!path.exists(), "no file was written");
 }

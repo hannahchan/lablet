@@ -4,19 +4,19 @@
 
 use std::time::Duration;
 
-use lablet_model::RunId;
 use lablet_run::telemetry::{Bridge, Logger, Record};
 use opentelemetry::InstrumentationScope;
 use opentelemetry::global::BoxedTracer;
-use opentelemetry::logs::LoggerProvider as _;
+use opentelemetry::logs::{LoggerProvider as _, NoopLoggerProvider};
 use opentelemetry::trace::TracerProvider as _;
+use opentelemetry::trace::noop::NoopTracer;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::logs::{BatchLogProcessor, LogExporter, SdkLoggerProvider};
 use opentelemetry_sdk::trace::{BatchSpanProcessor, SdkTracerProvider, SpanExporter};
 
 use super::file::{FileLogExporter, FileSpanExporter, FileTarget, Sink};
-use super::network::{Network, OtelBuildError, OtlpSettings, validate};
+use super::network::{OtelBuildError, OtlpSettings, exporters};
 use crate::otel_env::Sdk;
 
 /// What a flush or a shutdown couldn't export, as the SDK said it. Nothing
@@ -51,6 +51,7 @@ pub(crate) struct TelemetryBuilder {
     file: Option<FileTarget>,
     otlp: Option<OtlpSettings>,
     sdk: Sdk,
+    disabled: bool,
     #[cfg(test)]
     hooked: Vec<Hooked>,
 }
@@ -63,6 +64,7 @@ impl std::fmt::Debug for TelemetryBuilder {
             .field("file", &self.file)
             .field("otlp", &self.otlp)
             .field("sdk", &self.sdk)
+            .field("disabled", &self.disabled)
             .finish_non_exhaustive()
     }
 }
@@ -100,6 +102,17 @@ impl TelemetryBuilder {
         self
     }
 
+    /// No telemetry at all, whatever else is said: the API's no-op tracer
+    /// and a logger that drops what it's handed, as the specification's
+    /// no-op SDK is, so nothing is written or sent and no span has an id of
+    /// its own. A span opened in a context with a span keeps that span's
+    /// context.
+    #[must_use]
+    pub(crate) fn disabled(mut self) -> Self {
+        self.disabled = true;
+        self
+    }
+
     /// Exports to `spans` and `records` too, as a destination registered
     /// where the network's is, after the file's.
     #[cfg(test)]
@@ -122,8 +135,9 @@ impl TelemetryBuilder {
     /// # Errors
     ///
     /// Returns an [`OtelBuildError`] when the network exporters can't be
-    /// made: the endpoint isn't one the exporter accepts, a header isn't
-    /// one a header may have, or TLS to the endpoint can't be set up.
+    /// made: an endpoint isn't one the exporter accepts, a header isn't one
+    /// a header may have, TLS to an endpoint can't be set up, or a client
+    /// can't be made.
     pub(crate) fn build(self) -> Result<Telemetry, OtelBuildError> {
         let Self {
             scope,
@@ -131,66 +145,85 @@ impl TelemetryBuilder {
             file,
             otlp,
             sdk,
+            disabled,
             #[cfg(test)]
             hooked,
         } = self;
+        if disabled {
+            return Ok(Telemetry {
+                scope,
+                providers: None,
+                sink: None,
+            });
+        }
 
         // A provider flushes and stops its processors one after the other,
         // in the order they were added, so the file's come first: it never
         // waits on the network.
         let sink = file.map(Sink::new);
-        let mut destinations = Vec::new();
+        let mut span_processors = Vec::new();
+        let mut log_processors = Vec::new();
         if let Some(sink) = &sink {
-            destinations.push(processors(
-                &sdk,
-                FileSpanExporter::new(sink.clone()),
-                FileLogExporter::new(sink.clone()),
-            ));
+            span_processors.push(span_processor(&sdk, FileSpanExporter::new(sink.clone())));
+            log_processors.push(log_processor(&sdk, FileLogExporter::new(sink.clone())));
         }
         if let Some(settings) = otlp {
-            // What a check of the settings refuses, the build refuses first,
-            // so the two can't come apart. Only what the check can't do
-            // without making it is the build's alone: the trust roots of a
-            // gRPC exporter that speaks TLS, and the HTTP client.
-            validate(&settings)?;
-            let (spans, records) = Network::new(&settings)?.exporters()?;
-            destinations.push(processors(&sdk, spans, records));
+            let (spans, records) = exporters(&settings)?;
+            span_processors.extend(spans.map(|spans| span_processor(&sdk, spans)));
+            log_processors.extend(records.map(|records| log_processor(&sdk, records)));
         }
         #[cfg(test)]
-        destinations.extend(hooked.into_iter().map(|hook| hook(&sdk)));
+        for hook in hooked {
+            let (spans, records) = hook(&sdk);
+            span_processors.push(spans);
+            log_processors.push(records);
+        }
 
         let mut tracer_provider = SdkTracerProvider::builder()
             .with_sampler(sdk.sampling.sampler())
             .with_span_limits(sdk.limits.span_limits())
             .with_resource(resource.clone());
+        for processor in span_processors {
+            tracer_provider = tracer_provider.with_span_processor(processor);
+        }
         let mut logger_provider = SdkLoggerProvider::builder().with_resource(resource);
-        for (spans, records) in destinations {
-            tracer_provider = tracer_provider.with_span_processor(spans);
-            logger_provider = logger_provider.with_log_processor(records);
+        for processor in log_processors {
+            logger_provider = logger_provider.with_log_processor(processor);
         }
         Ok(Telemetry {
             scope,
-            tracer_provider: tracer_provider.build(),
-            logger_provider: logger_provider.build(),
+            providers: Some(Providers {
+                tracer: tracer_provider.build(),
+                logger: logger_provider.build(),
+            }),
             sink,
         })
     }
 }
 
+/// The batch span processor of one destination, as the SDK's settings say.
+fn span_processor(sdk: &Sdk, spans: impl SpanExporter + 'static) -> BatchSpanProcessor {
+    BatchSpanProcessor::builder(spans)
+        .with_batch_config(sdk.spans.span_config())
+        .build()
+}
+
+/// The batch log record processor of one destination, as the SDK's
+/// settings say.
+fn log_processor(sdk: &Sdk, records: impl LogExporter + 'static) -> BatchLogProcessor {
+    BatchLogProcessor::builder(records)
+        .with_batch_config(sdk.logs.log_config())
+        .build()
+}
+
 /// The batch processors of one destination, as the SDK's settings say.
+#[cfg(test)]
 fn processors<S, L>(sdk: &Sdk, spans: S, records: L) -> (BatchSpanProcessor, BatchLogProcessor)
 where
     S: SpanExporter + 'static,
     L: LogExporter + 'static,
 {
-    (
-        BatchSpanProcessor::builder(spans)
-            .with_batch_config(sdk.spans.span_config())
-            .build(),
-        BatchLogProcessor::builder(records)
-            .with_batch_config(sdk.logs.log_config())
-            .build(),
-    )
+    (span_processor(sdk, spans), log_processor(sdk, records))
 }
 
 /// The providers a run's telemetry goes through, and the destinations
@@ -208,9 +241,16 @@ where
 #[derive(Debug, Clone)]
 pub(crate) struct Telemetry {
     scope: InstrumentationScope,
-    tracer_provider: SdkTracerProvider,
-    logger_provider: SdkLoggerProvider,
+    /// `None` when there's no telemetry at all.
+    providers: Option<Providers>,
     sink: Option<Sink>,
+}
+
+/// The two providers every destination is behind.
+#[derive(Debug, Clone)]
+struct Providers {
+    tracer: SdkTracerProvider,
+    logger: SdkLoggerProvider,
 }
 
 impl Telemetry {
@@ -223,6 +263,7 @@ impl Telemetry {
             file: None,
             otlp: None,
             sdk: Sdk::default(),
+            disabled: false,
             #[cfg(test)]
             hooked: Vec::new(),
         }
@@ -233,29 +274,36 @@ impl Telemetry {
     /// say.
     #[must_use]
     pub(crate) fn tracer(&self) -> BoxedTracer {
-        BoxedTracer::new(Box::new(
-            self.tracer_provider.tracer_with_scope(self.scope.clone()),
-        ))
+        match &self.providers {
+            Some(providers) => BoxedTracer::new(Box::new(
+                providers.tracer.tracer_with_scope(self.scope.clone()),
+            )),
+            None => BoxedTracer::new(Box::new(NoopTracer::new())),
+        }
     }
 
     /// Lablet's logger, of the scope the composition root handed over,
     /// whose records reach every destination.
     #[must_use]
     pub(crate) fn logger(&self) -> Box<dyn Logger> {
-        Box::new(Bridge::new(
-            self.logger_provider.logger_with_scope(self.scope.clone()),
-        ))
+        match &self.providers {
+            Some(providers) => Box::new(Bridge::new(
+                providers.logger.logger_with_scope(self.scope.clone()),
+            )),
+            None => Box::new(Bridge::new(
+                NoopLoggerProvider::new().logger_with_scope(self.scope.clone()),
+            )),
+        }
     }
 
-    /// Called before every run, whatever the file target. With a directory
-    /// of per-run files it names the run's file; with a fixed path or
-    /// standard error it lets go of the file that's open, so that the run's
-    /// first line opens the path again and a file moved between two runs
-    /// keeps the first run while the path gets the second. Nothing is
-    /// opened here, and a `Telemetry` with no file does nothing.
-    pub(crate) fn begin_run(&self, run_id: &RunId) {
+    /// Called before every run. It lets go of the file that's open, so
+    /// that the run's first line opens the path again and a file moved
+    /// between two runs keeps the first run while the path gets the
+    /// second. Nothing is opened here, and a `Telemetry` with no file does
+    /// nothing.
+    pub(crate) fn begin_run(&self) {
         if let Some(sink) = &self.sink {
-            sink.start(run_id);
+            sink.start();
         }
     }
 
@@ -284,8 +332,10 @@ impl Telemetry {
     ///
     /// As [`Self::flush`].
     pub(crate) async fn flush_leftovers(&self) -> Result<(), FlushError> {
-        let (spans, records) = (self.tracer_provider.clone(), self.logger_provider.clone());
-        both(move || spans.force_flush(), move || records.force_flush()).await
+        let Some(Providers { tracer, logger }) = self.providers.clone() else {
+            return Ok(());
+        };
+        both(move || tracer.force_flush(), move || logger.force_flush()).await
     }
 
     /// Flushes what the processors still hold and stops them, both
@@ -300,10 +350,12 @@ impl Telemetry {
     /// processor that failed to export or to stop in time, or that the
     /// provider was shut down already.
     pub(crate) async fn shutdown(&self) -> Result<(), FlushError> {
-        let (spans, records) = (self.tracer_provider.clone(), self.logger_provider.clone());
+        let Some(Providers { tracer, logger }) = self.providers.clone() else {
+            return Ok(());
+        };
         both(
-            move || spans.shutdown_with_timeout(SHUTDOWN),
-            move || records.shutdown_with_timeout(SHUTDOWN),
+            move || tracer.shutdown_with_timeout(SHUTDOWN),
+            move || logger.shutdown_with_timeout(SHUTDOWN),
         )
         .await
     }

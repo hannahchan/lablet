@@ -239,9 +239,9 @@ impl Lablet {
     /// leaves no transcript or wide event either; dropped once the
     /// transcript write or the flush has begun, it may still leave both,
     /// since neither stops part-way. The spans it had open are exported
-    /// unfilled, to its own destination, when this `Lablet`'s next run
-    /// starts, which waits up to one flush for them before it reads the
-    /// clock.
+    /// unfilled, with the providers' next export, and before this
+    /// `Lablet`'s next run reads the clock, which waits up to one flush for
+    /// them.
     ///
     /// Never fails: every way a run can go wrong is a stop reason of its
     /// outcome. A transcript that can't be written and telemetry that can't
@@ -255,8 +255,8 @@ impl Lablet {
             cancellation,
         } = request;
         if self.unflushed {
-            // What a dropped run left is queued, and the sink still names
-            // that run's destination until the next run names its own. It
+            // What a dropped run left is queued, and goes before the next
+            // run's first line, so the two runs' lines don't interleave. It
             // goes before the clock is read, since the loop's offsets count
             // from its own reading after this, and the run's times would
             // otherwise be early by the wait.
@@ -286,7 +286,7 @@ impl Lablet {
             capture_content: self.fixed.capture_content,
         };
 
-        self.telemetry.begin_run(&context.run_id);
+        self.telemetry.begin_run();
         self.unflushed = true;
         self.provider.begin_run();
         let task_prompt = task.task().to_owned();

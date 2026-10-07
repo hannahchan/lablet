@@ -205,8 +205,8 @@ telemetry: { resource: { team: evals } }
     assert_eq!(
         resolved["telemetry"],
         json!({
-            "capture_content": false,
-            "otlp": { "enabled": true, "endpoint": null, "protocol": null, "headers": {} },
+            "capture_content": null,
+            "otlp": { "enabled": null, "endpoint": null, "protocol": null, "headers": null },
             "file": { "path": null },
             "resource": { "team": "evals" },
         })
@@ -287,7 +287,8 @@ fn two_configs_that_differ_only_in_where_they_write_share_a_digest() {
         "run: { transcript_format: atif }",
         "telemetry: { capture_content: true }",
         "telemetry: { file: { path: out/telemetry.jsonl } }",
-        "telemetry: { otlp: { endpoint: 'http://localhost:4317', protocol: http, headers: { a: b } } }",
+        "telemetry: { otlp: { endpoint: 'http://localhost:4318', protocol: http/json, headers: { a: b } } }",
+        "telemetry: { otlp: { headers: {} } }",
         "telemetry: { otlp: { enabled: false } }",
         "telemetry: { otlp: { protocol: grpc } }",
         "telemetry: { resource: { team: evals } }",

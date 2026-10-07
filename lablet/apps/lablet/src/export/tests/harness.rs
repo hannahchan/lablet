@@ -8,14 +8,15 @@ use lablet_conformance::otlp::Exported;
 
 pub(super) use crate::export::testing::{
     CONTENT, CONTENT_PER_RUN, OTHER_RUN, RUN, RUN_KEY, Records, SPANS_PER_RUN, Scratch, VERSION,
-    WIDE, after, emit_run, scope, sdk_of,
+    WIDE, after, emit_run, otlp_of, scope, sdk_of,
 };
 use crate::export::{FileTarget, FlushError, OtlpSettings, Telemetry, resource};
 use crate::otel_env::{self, Sdk};
 
-/// The file of the run `run` in `scratch`, when each run has its own.
-pub(super) fn file_of(scratch: &Scratch, run: &str) -> PathBuf {
-    scratch.at(&format!("lablet-{run}.otlp.jsonl"))
+/// The file every run in `scratch` is appended to, unless a test says
+/// otherwise.
+pub(super) fn file_of(scratch: &Scratch) -> PathBuf {
+    scratch.at("telemetry.otlp.jsonl")
 }
 
 /// What a test says of the telemetry it builds.
@@ -31,15 +32,12 @@ pub(super) struct Settings {
 }
 
 impl Settings {
-    /// A file of its own for each run in `scratch`, no collector, a
-    /// resource the composer adds `team: evals` and
-    /// `deployment.environment.name: ci` to, and the specification's
-    /// defaults for the SDK.
+    /// The file of [`file_of`] in `scratch`, no collector, a resource the
+    /// composer adds `team: evals` and `deployment.environment.name: ci`
+    /// to, and the specification's defaults for the SDK.
     pub(super) fn in_scratch(scratch: &Scratch) -> Self {
         Self {
-            target: Some(FileTarget::EachRun {
-                directory: scratch.path().to_owned(),
-            }),
+            target: Some(FileTarget::Path(file_of(scratch))),
             otlp: None,
             resource: vec![
                 ("team".to_owned(), "evals".to_owned()),

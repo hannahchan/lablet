@@ -1,6 +1,8 @@
 //! The network exporter through `build` and `run`, and through the binary:
 //! where the telemetry goes when an endpoint is stated, what a port nothing
 //! listens on costs, and what a refused endpoint or header is shown as.
+//! Each config states `telemetry.otlp.enabled: true` over the lab's
+//! `false`, beside the endpoint it sends to.
 
 use std::time::{Duration, Instant};
 
@@ -10,8 +12,8 @@ use serde_json::json;
 
 use crate::harness::{ENDS, Lab, refusal, request};
 
-/// The name of a run's own telemetry file, in the working directory, which
-/// a run with an endpoint and no path must not write.
+/// The name of a per-run file in the working directory, which a test
+/// checks no run writes.
 fn each_run_file(run_id: &str) -> std::path::PathBuf {
     std::env::current_dir()
         .unwrap()
@@ -26,7 +28,7 @@ async fn a_run_with_an_endpoint_and_no_file_path_goes_to_the_collector_and_to_no
         ENDS,
         json!({ "telemetry": {
             "file": { "path": null },
-            "otlp": { "endpoint": receiver.grpc_endpoint() },
+            "otlp": { "enabled": true, "endpoint": receiver.grpc_endpoint(), "protocol": "grpc" },
         } }),
     );
     assert!(!lablet::telemetry_on_stderr(&config));
@@ -67,8 +69,9 @@ async fn a_run_with_an_endpoint_and_a_file_path_goes_to_both_over_http_when_the_
     let config = scratch.config(
         ENDS,
         json!({ "telemetry": { "otlp": {
+            "enabled": true,
             "endpoint": receiver.http_endpoint(),
-            "protocol": "http",
+            "protocol": "http/protobuf",
             "headers": { "x-token": "a made-up token value" },
         } } }),
     );
@@ -108,7 +111,7 @@ fn a_port_nothing_listens_on_changes_nothing_and_the_process_exits_within_five_s
     let lab = Lab::new("otlp-closed-port");
     lab.write_config(
         ENDS,
-        json!({ "telemetry": { "otlp": { "endpoint": format!("http://{closed}") } } }),
+        json!({ "telemetry": { "otlp": { "enabled": true, "endpoint": format!("http://{closed}") } } }),
     );
     let plain = Lab::new("otlp-closed-port-plain");
     plain.write_config(ENDS, json!({}));
@@ -150,7 +153,7 @@ async fn an_endpoint_the_exporter_refuses_is_refused_by_its_key_as_the_config_wr
     let scratch = Lab::new("otlp-bad-endpoint");
     let config = scratch.config(
         ENDS,
-        json!({ "telemetry": { "otlp": { "endpoint": "http://[not a host" } } }),
+        json!({ "telemetry": { "otlp": { "enabled": true, "endpoint": "http://[not a host" } } }),
     );
 
     let refused = refusal(config).await;
@@ -182,7 +185,7 @@ async fn a_refused_endpoint_that_holds_an_at_is_shown_with_no_value() {
     ] {
         let config = scratch.config(
             ENDS,
-            json!({ "telemetry": { "otlp": { "endpoint": endpoint } } }),
+            json!({ "telemetry": { "otlp": { "enabled": true, "endpoint": endpoint } } }),
         );
 
         let refused = refusal(config).await;
@@ -206,6 +209,7 @@ async fn a_header_that_is_not_one_is_refused_by_its_key_and_its_value_is_shown_n
     let config = scratch.config(
         ENDS,
         json!({ "telemetry": { "otlp": {
+            "enabled": true,
             "endpoint": "http://127.0.0.1:1",
             "headers": { "not a header name": "a made-up secret value" },
         } } }),

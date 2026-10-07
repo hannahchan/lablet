@@ -92,12 +92,12 @@ fn defaults() -> Config {
             max_description_chars: Some(2_048),
         },
         telemetry: Telemetry {
-            capture_content: false,
+            capture_content: None,
             otlp: Otlp {
-                enabled: true,
+                enabled: None,
                 endpoint: None,
                 protocol: None,
-                headers: BTreeMap::new(),
+                headers: None,
             },
             file: TelemetryFile { path: None },
             resource: BTreeMap::new(),
@@ -648,4 +648,21 @@ fn a_message_shows_the_key_variable_only_when_it_is_written_as_a_variable() {
         error.to_string(),
         "model.api_key_env (line 1): its value is refused: expected a string"
     );
+}
+
+/// C21: the config takes the specification's spellings alone.
+#[test]
+fn protocol_http_is_refused_naming_the_three_values() {
+    let refused = Config::from_str("telemetry: { otlp: { protocol: http } }", Format::Yaml);
+
+    assert_eq!(
+        refused.unwrap_err().to_string(),
+        "telemetry.otlp.protocol (line 1): \"http\" is refused: the accepted values are `grpc`, \
+         `http/protobuf`, `http/json`"
+    );
+    for protocol in ["grpc", "http/protobuf", "http/json"] {
+        yaml(&format!(
+            "telemetry: {{ otlp: {{ protocol: {protocol} }} }}"
+        ));
+    }
 }

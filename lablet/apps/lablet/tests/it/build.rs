@@ -266,8 +266,10 @@ async fn a_root_that_holds_a_file_of_lablets_own_is_refused_with_the_file_it_hol
     lablet::build(read(&tree)).await.unwrap();
 }
 
+/// With no file named, a run writes none, so a root that holds the
+/// working directory holds no telemetry of lablet's.
 #[tokio::test]
-async fn a_root_that_holds_the_working_directory_holds_the_telemetry_a_run_has_there() {
+async fn a_root_that_holds_the_working_directory_holds_no_telemetry_when_no_file_is_named() {
     let here = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
     let scratch = Lab::new("root-holds-here");
     let mut tree = scratch.tree(
@@ -276,18 +278,9 @@ async fn a_root_that_holds_the_working_directory_holds_the_telemetry_a_run_has_t
     );
     tree["telemetry"]["file"]["path"] = json!(null);
 
-    assert_eq!(
-        refusal(read(&tree)).await,
-        BuildError::RootHolds {
-            place: LINE,
-            root: here.display().to_string(),
-            holds: OwnFile::Telemetry,
-            path: here
-                .join("lablet-{run_id}.otlp.jsonl")
-                .display()
-                .to_string(),
-        }
-    );
+    let built = lablet::build(read(&tree)).await;
+
+    built.unwrap().shutdown().await;
 }
 
 #[tokio::test]

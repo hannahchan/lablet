@@ -11,7 +11,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use lablet_model::RunId;
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::transform::common::tonic::ResourceAttributesWithSchema;
@@ -25,26 +24,16 @@ use opentelemetry_sdk::trace::{SpanData, SpanExporter};
 /// Where the OTLP/JSON lines of a `Telemetry`'s runs go.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FileTarget {
-    /// Each run has a file of its own in this directory, named
-    /// `lablet-<run_id>.otlp.jsonl`.
-    EachRun {
-        /// The directory, which isn't made when it's missing.
-        directory: PathBuf,
-    },
     /// One file, which every run is appended to.
     Path(PathBuf),
     /// Standard error.
     Stderr,
 }
 
-/// Where the lines of the run in progress go.
+/// Where the lines go.
 #[derive(Debug)]
 enum Destination {
-    /// No run has started, so there's no file to name yet.
-    Unnamed,
     File(PathBuf),
-    /// The run has no file, and why.
-    Refused(String),
     Stderr {
         /// Whether a write that failed left part of a line on standard
         /// error. It's one stream whatever run writes to it, so a run's
@@ -149,47 +138,16 @@ fn whole(file: &mut impl io::Write, text: &str, torn: &mut bool) -> io::Result<(
 /// at a time whichever of them writes it.
 #[derive(Debug, Clone)]
 pub(crate) struct Sink {
-    target: FileTarget,
     open: Arc<Mutex<Open>>,
-}
-
-/// The most bytes a run id may hold in the name of its file: what lablet
-/// holds a run id to before its run, which a file's name has room for
-/// beside `lablet-` and `.otlp.jsonl`.
-const RUN_ID_MAX_BYTES: usize = 128;
-
-/// The name of a run's own file.
-///
-/// # Errors
-///
-/// Returns why the run id can't be part of a file's name: a name that held
-/// a separator would be a path, and would put the file somewhere other than
-/// the directory the target names, and one too long would name no file.
-fn name_of(run_id: &RunId) -> Result<String, String> {
-    let id = run_id.as_str();
-    let reason = if id.contains('/') {
-        "it holds a `/`"
-    } else if id.contains('\0') {
-        "it holds a NUL"
-    } else if id.len() > RUN_ID_MAX_BYTES {
-        "it's longer than 128 bytes"
-    } else {
-        return Ok(format!("lablet-{id}.otlp.jsonl"));
-    };
-    Err(format!(
-        "the run id {id:?} can't be part of the name of the run's telemetry file: {reason}"
-    ))
 }
 
 impl Sink {
     pub(crate) fn new(target: FileTarget) -> Self {
-        let destination = match &target {
-            FileTarget::EachRun { .. } => Destination::Unnamed,
-            FileTarget::Path(path) => Destination::File(path.clone()),
+        let destination = match target {
+            FileTarget::Path(path) => Destination::File(path),
             FileTarget::Stderr => Destination::Stderr { torn: false },
         };
         Self {
-            target,
             open: Arc::new(Mutex::new(Open {
                 destination,
                 held: None,
@@ -197,21 +155,14 @@ impl Sink {
         }
     }
 
-    /// Names the file of the run that's starting, when each run has its
-    /// own, and lets go of the file that's open, so that the run's first
-    /// line opens its path: a file that was moved since it was opened would
-    /// take the lines its path is to hold. Nothing is opened here: the loop
-    /// is waiting.
-    pub(crate) fn start(&self, run_id: &RunId) {
+    /// Lets go of the file that's open, as a run starts, so that the run's
+    /// first line opens its path: a file that was moved since it was opened
+    /// would take the lines its path is to hold. Nothing is opened here: the
+    /// loop is waiting.
+    pub(crate) fn start(&self) {
         let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(held) = &mut open.held {
             held.let_go();
-        }
-        if let FileTarget::EachRun { directory } = &self.target {
-            open.destination = match name_of(run_id) {
-                Ok(name) => Destination::File(directory.join(name)),
-                Err(reason) => Destination::Refused(reason),
-            };
         }
     }
 
@@ -223,10 +174,6 @@ impl Sink {
         let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
         let Open { destination, held } = &mut *open;
         match destination {
-            Destination::Unnamed => {
-                Err("no run has started, so the telemetry has no file to go to".to_owned())
-            }
-            Destination::Refused(reason) => Err(reason.clone()),
             Destination::Stderr { torn } => put(&mut io::stderr().lock(), line, torn)
                 .map_err(|error| format!("standard error couldn't be written: {error}")),
             Destination::File(path) => Held::append(held, path, line, to_append)

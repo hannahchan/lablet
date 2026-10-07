@@ -1,6 +1,7 @@
 //! A traced run that needs no model and no key: a script is played in
 //! place of the model, `bash` works under a root of its own, and the run
-//! leaves its telemetry and its transcript in files.
+//! leaves its telemetry and its transcript in files, and sends nothing to a
+//! collector.
 //!
 //! ```bash
 //! cargo run -p lablet --example traced_run
@@ -59,6 +60,8 @@ tools:
     enabled: [bash]
 telemetry:
   capture_content: true
+  otlp:
+    enabled: false
   file:
     path: {telemetry}
 ",

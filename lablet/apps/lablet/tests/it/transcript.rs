@@ -590,7 +590,11 @@ async fn the_transcript_a_wide_event_names_is_whole_when_the_wide_event_arrives(
         ENDS,
         json!({
             "run": { "transcript_path": transcript },
-            "telemetry": { "otlp": { "endpoint": receiver.grpc_endpoint() } },
+            "telemetry": { "otlp": {
+                "enabled": true,
+                "endpoint": receiver.grpc_endpoint(),
+                "protocol": "grpc",
+            } },
         }),
     );
     let mut lablet = lablet::build(config).await.unwrap();

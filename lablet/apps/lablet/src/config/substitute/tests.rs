@@ -200,7 +200,14 @@ telemetry:
         real.telemetry.otlp.endpoint.as_deref(),
         Some("http://value")
     );
-    assert_eq!(real.telemetry.otlp.headers["H"], "value");
+    assert_eq!(
+        real.telemetry
+            .otlp
+            .headers
+            .as_ref()
+            .map(|headers| &headers["H"]),
+        Some(&"value".to_owned())
+    );
     assert_eq!(real.telemetry.file.path, Some("value.jsonl".into()));
     assert_eq!(real.telemetry.resource["team"], "value");
 

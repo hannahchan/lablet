@@ -17,37 +17,11 @@ async fn the_file_of_a_run_is_whole_when_the_flush_after_the_run_returns() {
 
     run(&telemetry, RUN, Records::Captured).await.unwrap();
 
-    let exported = Exported::read(&file_of(&scratch, RUN)).unwrap();
+    let exported = Exported::read(&file_of(&scratch)).unwrap();
     assert_eq!(exported.spans.len(), SPANS_PER_RUN);
     assert_eq!(exported.records_of(CONTENT).len(), CONTENT_PER_RUN);
     assert_eq!(runs_of(&exported), [RUN]);
     assert_eq!(exported.records_of(WIDE).len(), 1);
-    telemetry.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn two_runs_of_one_telemetry_have_a_file_each() {
-    let scratch = Scratch::new("two-files");
-    let telemetry = built(Settings::in_scratch(&scratch));
-
-    run(&telemetry, RUN, Records::Exception).await.unwrap();
-    run(&telemetry, OTHER_RUN, Records::Exception)
-        .await
-        .unwrap();
-
-    let files = [RUN, OTHER_RUN].map(|run| Exported::read(&file_of(&scratch, run)).unwrap());
-    for (file, run) in files.iter().zip([RUN, OTHER_RUN]) {
-        assert_eq!(file.spans.len(), SPANS_PER_RUN);
-        assert_eq!(runs_of(file), [run]);
-        for span in &file.spans {
-            assert_eq!(span.attributes[RUN_KEY], run);
-        }
-        for record in &file.records {
-            assert_eq!(record.attributes[RUN_KEY], run);
-        }
-    }
-    assert_ne!(files[0].spans[0].trace_id, files[1].spans[0].trace_id);
-    assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 2);
     telemetry.shutdown().await.unwrap();
 }
 
@@ -109,9 +83,7 @@ async fn a_destination_that_cannot_be_written_fails_both_flushes_and_names_no_pa
     let scratch = Scratch::new("unwritable");
     let missing = scratch.at("never-made");
     let telemetry = built(Settings {
-        target: Some(FileTarget::EachRun {
-            directory: missing.clone(),
-        }),
+        target: Some(FileTarget::Path(missing.join("runs.otlp.jsonl"))),
         ..Settings::in_scratch(&scratch)
     });
 
@@ -151,8 +123,8 @@ async fn two_telemetries_in_one_process_each_export_only_what_their_own_tracer_a
     one.flush(wide_of_one).await.unwrap();
     other.flush(wide_of_other).await.unwrap();
 
-    let of_one = Exported::read(&file_of(&first, RUN)).unwrap();
-    let of_other = Exported::read(&file_of(&second, OTHER_RUN)).unwrap();
+    let of_one = Exported::read(&file_of(&first)).unwrap();
+    let of_other = Exported::read(&file_of(&second)).unwrap();
     for (exported, run) in [(&of_one, RUN), (&of_other, OTHER_RUN)] {
         assert_eq!(exported.spans.len(), SPANS_PER_RUN, "{run}");
         assert_eq!(exported.records.len(), 1 + CONTENT_PER_RUN + 1, "{run}");

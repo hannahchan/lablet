@@ -201,12 +201,26 @@ pub(crate) fn sdk_of(held: &[(&str, &str)]) -> Sdk {
     OtelEnv::read(&env).sdk
 }
 
+/// The network settings the config `text`, in YAML, and an environment
+/// that holds `held`, and nothing else, resolve to, read through the seam
+/// as a build reads them. They must export something.
+pub(crate) fn otlp_of(text: &str, held: &[(&str, &str)]) -> super::OtlpSettings {
+    let env = |name: &str| {
+        held.iter()
+            .find(|(variable, _)| *variable == name)
+            .map(|(_, value)| OsString::from(value))
+    };
+    let config = crate::config::Config::from_str(text, crate::config::Format::Yaml)
+        .unwrap_or_else(|error| panic!("{text} is a config: {error}"));
+    crate::otlp::settings(&config, &config, &OtelEnv::read(&env).exporter)
+        .unwrap_or_else(|error| panic!("{text} is refused: {error}"))
+        .unwrap_or_else(|| panic!("{text} exports nothing over the network"))
+}
+
 /// Begins the run `run` on `telemetry`, emits it through a tracer and a
 /// logger of `telemetry`'s own, and returns its wide event.
 pub(crate) fn emit_run(telemetry: &Telemetry, run: &str, records: Records) -> Record {
-    telemetry.begin_run(&lablet_model::RunId::new(run).unwrap_or_else(|error| {
-        panic!("{run} is a run id: {error}");
-    }));
+    telemetry.begin_run();
     emit(
         &telemetry.tracer(),
         telemetry.logger().as_ref(),

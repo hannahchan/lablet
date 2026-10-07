@@ -295,7 +295,9 @@ impl Substitute<'_> {
             capture_content: _,
         } = telemetry;
         self.optional(endpoint, "telemetry.otlp.endpoint")?;
-        self.values(headers, &KeyPath::of("telemetry.otlp.headers"))?;
+        if let Some(headers) = headers {
+            self.values(headers, &KeyPath::of("telemetry.otlp.headers"))?;
+        }
         self.optional_path(path, "telemetry.file.path")?;
         self.values(resource, &KeyPath::of("telemetry.resource"))
     }

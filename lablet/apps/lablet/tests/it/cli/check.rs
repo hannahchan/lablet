@@ -384,10 +384,10 @@ fn a_check_prints_the_names_withheld_and_cut_and_no_value() {
 
 /// C19: a header variable the exporter reads is named among what's cut and
 /// not among what's withheld, with no line holding its value; `--resolved`
-/// prints `enabled: true` and `protocol: null` as written and nothing the
-/// environment holds; a protocol from the environment lablet can't send is
-/// refused under its key, naming the variable and the value; and
-/// `enabled: false` beside an endpoint is refused as a setting without
+/// prints `null` for every field left to the environment, as written, and
+/// nothing the environment holds; a protocol from the environment lablet
+/// doesn't know passes with a warning naming the variable and the value;
+/// and `enabled: false` beside an endpoint is refused as a setting without
 /// effect.
 #[test]
 fn an_otlp_header_variable_is_cut_and_not_withheld_and_what_the_environment_cannot_set_is_refused()
@@ -418,9 +418,10 @@ fn an_otlp_header_variable_is_cut_and_not_withheld_and_what_the_environment_cann
     );
     passed(&printed, NONE, "0 tools");
     assert!(
-        printed
-            .stdout
-            .contains("  otlp:\n    enabled: true\n    endpoint: null\n    protocol: null\n"),
+        printed.stdout.contains(
+            "telemetry:\n  capture_content: null\n  otlp:\n    enabled: null\n    endpoint: \
+             null\n    protocol: null\n    headers: null\n"
+        ),
         "{printed:?}"
     );
     assert!(
@@ -432,16 +433,26 @@ fn an_otlp_header_variable_is_cut_and_not_withheld_and_what_the_environment_cann
         Config::from_str(text, Format::Yaml).unwrap().digest()
     );
 
-    refused(
-        &check(
-            &[],
-            &[
-                ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1"),
-                ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json"),
-            ],
+    let unknown = check(
+        &[],
+        &[
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1"),
+            ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/thrift"),
+        ],
+    );
+    assert_eq!(unknown.code, Some(0), "{unknown:?}");
+    assert!(
+        unknown
+            .stderr
+            .ends_with(&format!("{NONE}\npassed: 0 tools\n")),
+        "{unknown:?}"
+    );
+    assert!(
+        unknown.stderr.contains(
+            "`OTEL_EXPORTER_OTLP_PROTOCOL` holds `http/thrift`, which isn't one lablet serves, so \
+             it's ignored"
         ),
-        "config: telemetry.otlp.protocol: null is refused: `OTEL_EXPORTER_OTLP_PROTOCOL` holds \
-         \"http/json\", which lablet can't send; it sends `grpc` and `http/protobuf`",
+        "{unknown:?}"
     );
 
     lab.write(
@@ -453,7 +464,7 @@ fn an_otlp_header_variable_is_cut_and_not_withheld_and_what_the_environment_cann
     refused(
         &check(&[], &[]),
         "config: telemetry.otlp.enabled (line 8): false is refused: it turns the network \
-         exporter off, and `telemetry.otlp.endpoint: http://localhost:4317` turns it on; a \
-         config that wants it off states no endpoint",
+         exporter off, and `telemetry.otlp.endpoint: http://localhost:4317` names where it \
+         sends; a config that wants it off states no endpoint",
     );
 }

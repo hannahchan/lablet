@@ -8,75 +8,74 @@ use serde::{Deserialize, Serialize};
 
 use super::written::path;
 
-/// The `telemetry` section.
+/// The `telemetry` section. A field that's `null` is the environment's,
+/// read as the OpenTelemetry specification reads it, and then the
+/// specification's default; a field the config states wins.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Telemetry {
-    /// Whether prompts, responses and tool content reach telemetry.
-    pub capture_content: bool,
+    /// Whether prompts, responses and tool content reach telemetry. `None`
+    /// leaves it to `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`,
+    /// which turns it on only when it's `true` in any case.
+    pub capture_content: Option<bool>,
     /// The OTLP network exporter.
     pub otlp: Otlp,
     /// The OTLP/JSON file exporter.
     pub file: TelemetryFile,
     /// The composer's own resource attributes, which every export carries.
-    /// They're stated over those `OTEL_RESOURCE_ATTRIBUTES` names, winning a
-    /// key both name, and `service.name` and `service.version` stay
-    /// lablet's whichever names them.
+    /// They're stated over `OTEL_SERVICE_NAME` and the attributes
+    /// `OTEL_RESOURCE_ATTRIBUTES` names, winning a key both name, and
+    /// `service.version` and the SDK's `telemetry.sdk.*` stay lablet's and
+    /// the SDK's whichever names them.
     pub resource: BTreeMap<String, String>,
 }
 
-/// The `telemetry.otlp` section. A field it leaves out is the
-/// environment's: lablet inherits the `OTEL_*` variables the exporter
-/// reads, and a field the config states wins.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+/// The `telemetry.otlp` section. A field that's `null` is the
+/// environment's, read for each signal: the signal's own variable, else the
+/// generic `OTEL_EXPORTER_OTLP_*` one. The timeout, the compression and TLS
+/// are the environment's alone.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Otlp {
-    /// Whether a run may export over the network at all. `true` leaves it
-    /// to the endpoint, the config's or the environment's. `false` turns
-    /// the exporter off whatever the environment says, and is refused
-    /// beside a stated endpoint, which it would make a setting without
-    /// effect.
-    pub enabled: bool,
-    /// Where the collector listens. An endpoint turns the network exporter
-    /// on, and the headers the environment names aren't sent to it. `None`
-    /// leaves it to `OTEL_EXPORTER_OTLP_ENDPOINT` and the signal variables,
-    /// any of which turns the exporter on, with the environment's headers;
-    /// without one the exporter is off. On `http` it's a base URL, to which
+    /// Whether a run exports over the network. `None` leaves each signal to
+    /// `OTEL_TRACES_EXPORTER` and `OTEL_LOGS_EXPORTER`, which turn it on
+    /// unless they're `none`. `true` turns both on and `false` both off,
+    /// whatever they say. `false` is refused beside a stated endpoint,
+    /// which it would make a setting without effect.
+    pub enabled: Option<bool>,
+    /// Where the collector listens. `None` leaves it to the signal's
+    /// variable and `OTEL_EXPORTER_OTLP_ENDPOINT`, and then to the
+    /// protocol's default, `http://localhost:4318` or
+    /// `http://localhost:4317`. On HTTP it's a base URL, to which
     /// `/v1/traces` and `/v1/logs` are appended. Its user information is a
-    /// secret, cut everywhere and out of the digest; set to nothing it states
-    /// none.
+    /// secret, cut everywhere and out of the digest; set to nothing it
+    /// states none.
     pub endpoint: Option<String>,
-    /// The protocol the collector is sent. `None` leaves it to
-    /// `OTEL_EXPORTER_OTLP_PROTOCOL`, and is gRPC when that isn't set; a
-    /// value lablet can't send, `http/json` among them, is refused.
+    /// The protocol the collector is sent. `None` leaves it to the
+    /// signal's variable and `OTEL_EXPORTER_OTLP_PROTOCOL`, and then
+    /// HTTP/protobuf.
     pub protocol: Option<OtlpProtocol>,
-    /// Headers sent with every export, over any header the environment
-    /// names. Every value is a secret, written or substituted: a variable
-    /// substituted into one is withheld from every command, the value is
-    /// cut out of every tool result, and it's left out of the config
-    /// digest.
-    pub headers: BTreeMap<String, String>,
+    /// Headers sent with every export, and the only ones: none the
+    /// environment names is sent beside them, `{}` included. `None` sends
+    /// the environment's, wherever the endpoint came from. Every value is a
+    /// secret, written or substituted: a variable substituted into one is
+    /// withheld from every command, the value is cut out of every tool
+    /// result, and it's left out of the config digest.
+    pub headers: Option<BTreeMap<String, String>>,
 }
 
-impl Default for Otlp {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            endpoint: None,
-            protocol: None,
-            headers: BTreeMap::new(),
-        }
-    }
-}
-
-/// The protocol an OTLP collector is sent.
+/// The protocol an OTLP collector is sent, as the specification spells it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
 pub enum OtlpProtocol {
     /// OTLP over gRPC.
+    #[serde(rename = "grpc")]
     Grpc,
     /// OTLP over HTTP, as protobuf.
-    Http,
+    #[serde(rename = "http/protobuf")]
+    HttpProtobuf,
+    /// OTLP over HTTP, as JSON.
+    #[serde(rename = "http/json")]
+    HttpJson,
 }
 
 /// The `telemetry.file` section.
@@ -84,10 +83,8 @@ pub enum OtlpProtocol {
 #[serde(default, deny_unknown_fields)]
 pub struct TelemetryFile {
     /// The file every run's OTLP/JSON lines are appended to, or `-` for
-    /// standard error. `None` gives each run a file of its own in the
-    /// working directory, named `lablet-<run_id>.otlp.jsonl`, and no file
-    /// at all when the network exporter is on, by the config's endpoint or
-    /// the environment's.
+    /// standard error. `None` writes no file. No variable names one, and
+    /// the file gets both signals whatever the network does.
     #[serde(serialize_with = "path::optional")]
     pub path: Option<PathBuf>,
 }

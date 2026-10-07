@@ -473,16 +473,19 @@
     },
     "Otlp": {
       "additionalProperties": false,
-      "description": "The `telemetry.otlp` section. A field it leaves out is the\nenvironment's: lablet inherits the `OTEL_*` variables the exporter\nreads, and a field the config states wins.",
+      "description": "The `telemetry.otlp` section. A field that's `null` is the\nenvironment's, read for each signal: the signal's own variable, else the\ngeneric `OTEL_EXPORTER_OTLP_*` one. The timeout, the compression and TLS\nare the environment's alone.",
       "properties": {
         "enabled": {
-          "default": true,
-          "description": "Whether a run may export over the network at all. `true` leaves it\nto the endpoint, the config's or the environment's. `false` turns\nthe exporter off whatever the environment says, and is refused\nbeside a stated endpoint, which it would make a setting without\neffect.",
-          "type": "boolean"
+          "default": null,
+          "description": "Whether a run exports over the network. `None` leaves each signal to\n`OTEL_TRACES_EXPORTER` and `OTEL_LOGS_EXPORTER`, which turn it on\nunless they're `none`. `true` turns both on and `false` both off,\nwhatever they say. `false` is refused beside a stated endpoint,\nwhich it would make a setting without effect.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "endpoint": {
           "default": null,
-          "description": "Where the collector listens. An endpoint turns the network exporter\non, and the headers the environment names aren't sent to it. `None`\nleaves it to `OTEL_EXPORTER_OTLP_ENDPOINT` and the signal variables,\nany of which turns the exporter on, with the environment's headers;\nwithout one the exporter is off. On `http` it's a base URL, to which\n`/v1/traces` and `/v1/logs` are appended. Its user information is a\nsecret, cut everywhere and out of the digest; set to nothing it states\nnone.",
+          "description": "Where the collector listens. `None` leaves it to the signal's\nvariable and `OTEL_EXPORTER_OTLP_ENDPOINT`, and then to the\nprotocol's default, `http://localhost:4318` or\n`http://localhost:4317`. On HTTP it's a base URL, to which\n`/v1/traces` and `/v1/logs` are appended. Its user information is a\nsecret, cut everywhere and out of the digest; set to nothing it\nstates none.",
           "type": [
             "string",
             "null"
@@ -492,9 +495,12 @@
           "additionalProperties": {
             "type": "string"
           },
-          "default": {},
-          "description": "Headers sent with every export, over any header the environment\nnames. Every value is a secret, written or substituted: a variable\nsubstituted into one is withheld from every command, the value is\ncut out of every tool result, and it's left out of the config\ndigest.",
-          "type": "object"
+          "default": null,
+          "description": "Headers sent with every export, and the only ones: none the\nenvironment names is sent beside them, `{}` included. `None` sends\nthe environment's, wherever the endpoint came from. Every value is a\nsecret, written or substituted: a variable substituted into one is\nwithheld from every command, the value is cut out of every tool\nresult, and it's left out of the config digest.",
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "protocol": {
           "anyOf": [
@@ -506,13 +512,13 @@
             }
           ],
           "default": null,
-          "description": "The protocol the collector is sent. `None` leaves it to\n`OTEL_EXPORTER_OTLP_PROTOCOL`, and is gRPC when that isn't set; a\nvalue lablet can't send, `http/json` among them, is refused."
+          "description": "The protocol the collector is sent. `None` leaves it to the\nsignal's variable and `OTEL_EXPORTER_OTLP_PROTOCOL`, and then\nHTTP/protobuf."
         }
       },
       "type": "object"
     },
     "OtlpProtocol": {
-      "description": "The protocol an OTLP collector is sent.",
+      "description": "The protocol an OTLP collector is sent, as the specification spells it.",
       "oneOf": [
         {
           "const": "grpc",
@@ -520,8 +526,13 @@
           "type": "string"
         },
         {
-          "const": "http",
+          "const": "http/protobuf",
           "description": "OTLP over HTTP, as protobuf.",
+          "type": "string"
+        },
+        {
+          "const": "http/json",
+          "description": "OTLP over HTTP, as JSON.",
           "type": "string"
         }
       ]
@@ -754,12 +765,15 @@
     },
     "Telemetry": {
       "additionalProperties": false,
-      "description": "The `telemetry` section.",
+      "description": "The `telemetry` section. A field that's `null` is the environment's,\nread as the OpenTelemetry specification reads it, and then the\nspecification's default; a field the config states wins.",
       "properties": {
         "capture_content": {
-          "default": false,
-          "description": "Whether prompts, responses and tool content reach telemetry.",
-          "type": "boolean"
+          "default": null,
+          "description": "Whether prompts, responses and tool content reach telemetry. `None`\nleaves it to `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`,\nwhich turns it on only when it's `true` in any case.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "file": {
           "$ref": "#/$defs/TelemetryFile",
@@ -771,9 +785,9 @@
         "otlp": {
           "$ref": "#/$defs/Otlp",
           "default": {
-            "enabled": true,
+            "enabled": null,
             "endpoint": null,
-            "headers": {},
+            "headers": null,
             "protocol": null
           },
           "description": "The OTLP network exporter."
@@ -783,7 +797,7 @@
             "type": "string"
           },
           "default": {},
-          "description": "The composer's own resource attributes, which every export carries.\nThey're stated over those `OTEL_RESOURCE_ATTRIBUTES` names, winning a\nkey both name, and `service.name` and `service.version` stay\nlablet's whichever names them.",
+          "description": "The composer's own resource attributes, which every export carries.\nThey're stated over `OTEL_SERVICE_NAME` and the attributes\n`OTEL_RESOURCE_ATTRIBUTES` names, winning a key both name, and\n`service.version` and the SDK's `telemetry.sdk.*` stay lablet's and\nthe SDK's whichever names them.",
           "type": "object"
         }
       },
@@ -795,7 +809,7 @@
       "properties": {
         "path": {
           "default": null,
-          "description": "The file every run's OTLP/JSON lines are appended to, or `-` for\nstandard error. `None` gives each run a file of its own in the\nworking directory, named `lablet-<run_id>.otlp.jsonl`, and no file\nat all when the network exporter is on, by the config's endpoint or\nthe environment's.",
+          "description": "The file every run's OTLP/JSON lines are appended to, or `-` for\nstandard error. `None` writes no file. No variable names one, and\nthe file gets both signals whatever the network does.",
           "type": [
             "string",
             "null"
@@ -1007,14 +1021,14 @@
     "telemetry": {
       "$ref": "#/$defs/Telemetry",
       "default": {
-        "capture_content": false,
+        "capture_content": null,
         "file": {
           "path": null
         },
         "otlp": {
-          "enabled": true,
+          "enabled": null,
           "endpoint": null,
-          "headers": {},
+          "headers": null,
           "protocol": null
         },
         "resource": {}

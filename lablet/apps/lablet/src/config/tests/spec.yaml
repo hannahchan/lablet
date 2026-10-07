@@ -69,12 +69,12 @@ tools:
   max_description_chars: 2048 # a tool description or a server's instructions longer than this is cut; null means no cap (phase 8; until then a value other than the default is refused)
 
 telemetry:
-  capture_content: false
+  capture_content: null # null means OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, on only when it's true in any case; a stated value wins
   otlp:
-    enabled: true # false turns the network exporter off whatever the environment says, and is refused beside an endpoint, which it would make a setting without effect
-    endpoint: null # e.g. http://localhost:4317; an endpoint turns the network exporter on, and the environment's headers aren't sent to it; null leaves it to OTEL_EXPORTER_OTLP_ENDPOINT and the signal variables, any of which turns it on, with the environment's headers; on http it's a base URL to which /v1/traces and /v1/logs are appended, as OTEL_EXPORTER_OTLP_ENDPOINT is
-    protocol: null # grpc | http; null means OTEL_EXPORTER_OTLP_PROTOCOL, then grpc; lablet always chooses the transport, never the exporter, and refuses a value it can't send, http/json among them
-    headers: {} # sent with every export, over any header the environment names; every value is a secret: cut everywhere and left out of the digest
+    enabled: null # null leaves each signal to OTEL_TRACES_EXPORTER and OTEL_LOGS_EXPORTER, on unless none; true turns both on and false both off, whatever they say; false is refused beside an endpoint, which it would make a setting without effect
+    endpoint: null # e.g. http://localhost:4318; null means the signal's variable, then OTEL_EXPORTER_OTLP_ENDPOINT, then http://localhost:4318 on http or http://localhost:4317 on grpc; on http it's a base URL to which /v1/traces and /v1/logs are appended, as OTEL_EXPORTER_OTLP_ENDPOINT is
+    protocol: null # grpc | http/protobuf | http/json; null means the signal's variable, then OTEL_EXPORTER_OTLP_PROTOCOL, then http/protobuf
+    headers: null # null sends the environment's headers, the signal's variable's else OTEL_EXPORTER_OTLP_HEADERS, wherever the endpoint came from; a stated map, {} included, is all that's sent; every value is a secret: cut everywhere and left out of the digest
   file:
-    path: null # OTLP/JSON lines; file path, "-" for stderr, which implies --quiet; null means lablet-<run_id>.otlp.jsonl when the network exporter is off, and no file when it's on by either source
-  resource: {} # extra resource attributes, stated over OTEL_RESOURCE_ATTRIBUTES and winning a key both name; service.name and service.version are lablet's
+    path: null # OTLP/JSON lines; file path, "-" for stderr, which implies --quiet; null writes no file
+  resource: {} # extra resource attributes, stated over OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES and winning a key both name; service.version and telemetry.sdk.* are lablet's and the SDK's

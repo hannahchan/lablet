@@ -11,15 +11,18 @@ publish = false
 [dependencies]
 async-trait.workspace = true
 axum.workspace = true
+flate2.workspace = true
 lablet-model.workspace = true
 lablet-run.workspace = true
 opentelemetry-proto = { workspace = true, features = ["gen-tonic"] }
 prost.workspace = true
 rcgen.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-rustls.workspace = true
 tonic = { workspace = true, features = ["server", "router", "tls-aws-lc"] }
 
 [dev-dependencies]

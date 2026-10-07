@@ -143,10 +143,16 @@ opentelemetry-proto = { version = "=0.33.0", default-features = false, features 
   "logs",
   "with-serde",
 ] }
-# OTLP network exporter over gRPC and HTTP/protobuf, on rustls. `tls-roots` builds tonic with
-# the platform's trust roots, which the composition root turns on for a gRPC endpoint over TLS.
+# OTLP network exporter over gRPC, HTTP/protobuf and HTTP/JSON, on rustls, with gzip on both
+# transports, as the specification's protocols and compression name them. `tls-roots` builds
+# tonic with the platform's trust roots, which the composition root turns on for a gRPC endpoint
+# over TLS when the environment names no certificate. `http-json` makes JSON the crate's own
+# default protocol, so the composition root always states one.
 opentelemetry-otlp = { version = "=0.33.0", default-features = false, features = [
   "grpc-tonic",
+  "gzip-http",
+  "gzip-tonic",
+  "http-json",
   "http-proto",
   "reqwest-blocking-client",
   "reqwest-rustls",
@@ -165,12 +171,21 @@ opentelemetry-http = "=0.33.0"
 secrecy = "=0.10.3"
 # Protobuf bodies in the in-process OTLP HTTP receiver; the line opentelemetry-proto requires.
 prost = "=0.14.4"
-# The request and status types of the OTLP gRPC exporter's interceptor and its TLS in the
-# composition root, and the in-process gRPC receiver in lablet-conformance, which adds the
-# server and TLS features; the line opentelemetry-otlp requires.
-tonic = { version = "=0.14.6", default-features = false }
+# The request and status types of the OTLP gRPC exporter's interceptor, its channel and its TLS
+# in the composition root, and the in-process gRPC receiver in lablet-conformance, which adds the
+# server and TLS features; the line opentelemetry-otlp requires. `gzip` lets the receiver take
+# the compressed requests the exporter sends.
+tonic = { version = "=0.14.6", default-features = false, features = ["gzip"] }
 # In-process OTLP HTTP receiver in lablet-conformance; the line tonic's router uses, so one copy.
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
+# The gzip bodies the in-process OTLP HTTP receiver takes; the line opentelemetry-otlp's
+# `gzip-http` compresses with, so one copy.
+flate2 = "=1.1.10"
+# The in-process OTLP HTTP receiver's TLS listeners, the plain one and the one that asks for a
+# client certificate, on the rustls and the provider tonic's TLS already has, so one copy.
+rustls = { version = "=0.23.45", default-features = false, features = ["aws_lc_rs", "std"] }
+# Accepts the TLS connections of the in-process OTLP HTTP receiver; the line tonic uses.
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["aws_lc_rs"] }
 
 # Diagnostics (not the telemetry contract)
 

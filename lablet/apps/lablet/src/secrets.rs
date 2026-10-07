@@ -10,19 +10,22 @@
 //! `env`. The framework that set any other variable is the party that can
 //! name it, and a pattern would cut path-valued and URL-valued variables
 //! from every record. The one secret found rather than told is what the
-//! exporter reads from the environment: the OTLP header variables, and
-//! the user information of the OTLP endpoint variables when they have any,
-//! inherited by every command, since the exporter in a child reads them
-//! too, and cut.
+//! exporter reads from the environment: the OTLP header variables, the
+//! user information of the OTLP endpoint variables when they have any, and
+//! what the file a client key variable names holds, when the exporter that
+//! reads it is on. The variables are inherited by every command, since the
+//! exporter in a child reads them too, and what's secret of them is cut.
 
 use std::collections::BTreeSet;
 use std::fmt;
 
 use lablet_model::Secrets;
+use secrecy::{ExposeSecret as _, SecretString};
 
 use crate::config::{Config, Env, KeyPath, McpServer, Substituted};
 use crate::export::decode_headers;
-use crate::otlp;
+use crate::otel_env::Exporter;
+use crate::otlp::OtlpSettings;
 
 /// What a run withholds and cuts, derived from its config.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,8 +34,9 @@ pub(crate) struct Derived {
     pub(crate) withheld: BTreeSet<String>,
     /// The names whose values no tool result shows, in the order they're
     /// printed. A variable here and not in `withheld` is inherited by every
-    /// command and cut, which is the class of the OTLP header and endpoint
-    /// variables the exporter reads from the environment.
+    /// command and cut, which is the class of the OTLP header, endpoint and
+    /// client key variables the exporter reads from the environment; what's
+    /// cut of a client key variable is what its file holds.
     pub(crate) cut: Vec<Named>,
     /// The values, behind a `Debug` form that shows none of them. Empty
     /// when the run has no executor to hand them to, since nothing would
@@ -93,7 +97,8 @@ impl fmt::Display for Named {
 }
 
 /// Lablet's secrets as `written` and `real`, the same config with `${VAR}`
-/// substituted, define them, with each variable's value read from `env`.
+/// substituted, define them, with each variable's value read from `env`,
+/// and the client keys the network exporters `otlp` read.
 ///
 /// Every variable named is read, to say whether its value is cut, as the
 /// check of the key's variable reads it. The values are held, in
@@ -103,6 +108,7 @@ pub(crate) fn derived(
     written: &Config,
     real: &Substituted,
     env: Env<'_>,
+    otlp: Option<&OtlpSettings>,
     with_values: bool,
 ) -> Derived {
     let mut set = Set {
@@ -115,11 +121,9 @@ pub(crate) fn derived(
     if let Some(variable) = real.model.key_variable() {
         set.variable(variable);
     }
-    set.headers(
-        &KeyPath::of("telemetry.otlp.headers"),
-        &real.telemetry.otlp.headers,
-        real,
-    );
+    if let Some(headers) = &real.telemetry.otlp.headers {
+        set.headers(&KeyPath::of("telemetry.otlp.headers"), headers, real);
+    }
     set.url(
         &KeyPath::of("telemetry.otlp.endpoint"),
         written.telemetry.otlp.endpoint.as_deref(),
@@ -147,11 +151,14 @@ pub(crate) fn derived(
             McpServer::Stdio { .. } => set.env(&key.key("env"), real),
         }
     }
-    for variable in otlp::HEADER_VARIABLES {
+    for variable in Exporter::HEADER_VARIABLES {
         set.inherited(variable);
     }
-    for variable in otlp::ENDPOINT_VARIABLES {
+    for variable in Exporter::ENDPOINT_VARIABLES {
         set.inherited_url(variable);
+    }
+    for (variable, key) in otlp.map(OtlpSettings::client_keys).unwrap_or_default() {
+        set.read(variable, key);
     }
     set.finish()
 }
@@ -198,6 +205,18 @@ impl Set<'_> {
         for (_, decoded) in decode_headers(&value) {
             self.value(&decoded);
         }
+        self.cut.push(Named {
+            source: Source::Variable(name.to_owned()),
+            held,
+        });
+    }
+
+    /// A variable every command inherits that names a file lablet reads a
+    /// secret from: what the file holds is cut, the whole and each line,
+    /// and the name is listed without being withheld, since what it holds
+    /// is a path.
+    fn read(&mut self, name: &str, contents: &SecretString) {
+        let held = self.value(contents.expose_secret());
         self.cut.push(Named {
             source: Source::Variable(name.to_owned()),
             held,

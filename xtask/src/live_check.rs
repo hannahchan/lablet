@@ -195,8 +195,9 @@ fn run_configs(
     Ok(runs.len() - 1)
 }
 
-/// The arguments of one run against `endpoint`, over gRPC as the protocol
-/// defaults to, with no file written since `telemetry.file.path` stays null.
+/// The arguments of one run against `endpoint`, over gRPC, which is what
+/// weaver listens for, with no file written since `telemetry.file.path`
+/// stays null.
 fn run_args(prompt: &str, endpoint: &str) -> Vec<String> {
     [
         "run",
@@ -207,6 +208,8 @@ fn run_args(prompt: &str, endpoint: &str) -> Vec<String> {
         "--quiet",
         "--set",
         &format!("telemetry.otlp.endpoint={endpoint}"),
+        "--set",
+        "telemetry.otlp.protocol=grpc",
         "--set",
         "telemetry.capture_content=true",
     ]
@@ -1207,6 +1210,8 @@ mod tests {
                 "--quiet",
                 "--set",
                 &endpoint,
+                "--set",
+                "telemetry.otlp.protocol=grpc",
                 "--set",
                 "telemetry.capture_content=true",
             ];

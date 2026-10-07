@@ -8,7 +8,7 @@ use serde_json::json;
 use super::harness::{Lab, ran};
 use crate::key;
 
-/// The telemetry files a run left in `lab`, each named for its run.
+/// The files a run left in `lab` that hold telemetry.
 fn telemetry_files(lab: &Lab) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(lab.path())
         .unwrap()
@@ -16,21 +16,36 @@ fn telemetry_files(lab: &Lab) -> Vec<PathBuf> {
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("lablet-") && name.ends_with(".otlp.jsonl"))
+                .is_some_and(|name| name.ends_with(".otlp.jsonl"))
         })
         .collect();
     files.sort();
     files
 }
 
+/// `lablet` with `args` in `lab`, with both exporter selectors `none`, so
+/// a config that states nothing of the network sends to no collector.
+fn without_a_collector(lab: &Lab, args: &[&str]) -> super::harness::Ran {
+    let mut command = lab.lablet(args);
+    command
+        .env("OTEL_TRACES_EXPORTER", "none")
+        .env("OTEL_LOGS_EXPORTER", "none");
+    ran(command, "")
+}
+
+/// The starter names no file, so a run of it as it's written leaves none;
+/// one that names a file finds the run there.
 #[test]
-fn a_fake_starter_runs_as_init_wrote_it_and_leaves_its_telemetry_in_a_file() {
+fn a_fake_starter_runs_as_init_wrote_it_and_writes_no_telemetry_file() {
     let lab = Lab::new("init-run");
 
     let init = lab.run(&["init", "--provider", "fake"]);
     assert_eq!(init.code, Some(0), "{init:?}");
     assert!(init.stdout.is_empty(), "{init:?}");
-    let run = lab.run(&["run", "--config", "lablet.yaml", "--prompt", "Say hello."]);
+    let run = without_a_collector(
+        &lab,
+        &["run", "--config", "lablet.yaml", "--prompt", "Say hello."],
+    );
 
     assert_eq!(run.code, Some(0), "{run:?}");
     let outcome = run.outcome();
@@ -39,9 +54,25 @@ fn a_fake_starter_runs_as_init_wrote_it_and_leaves_its_telemetry_in_a_file() {
         outcome["result"]["text"],
         json!("Hello from the scripted model. Change what I say in lablet-script.yaml.")
     );
-    let run_id = outcome["run_id"].as_str().unwrap();
+    assert_eq!(telemetry_files(&lab), Vec::<PathBuf>::new());
+
+    let run = without_a_collector(
+        &lab,
+        &[
+            "run",
+            "--config",
+            "lablet.yaml",
+            "--prompt",
+            "Say hello.",
+            "--set",
+            "telemetry.file.path=starter.otlp.jsonl",
+        ],
+    );
+
+    assert_eq!(run.code, Some(0), "{run:?}");
+    let run_id = run.outcome()["run_id"].as_str().unwrap().to_owned();
     let files = telemetry_files(&lab);
-    assert_eq!(files, [lab.at(&format!("lablet-{run_id}.otlp.jsonl"))]);
+    assert_eq!(files, [lab.at("starter.otlp.jsonl")]);
     let exported = Exported::read(&files[0]).unwrap();
     let wide = exported.records_of("lablet.run");
     assert_eq!(wide.len(), 1);
@@ -68,7 +99,9 @@ fn init_writes_into_the_directory_it_names_and_the_config_runs_from_there() {
     );
 
     let mut run = lab.lablet(&["run", "--config", "lablet.yaml", "--prompt", "Say hello."]);
-    run.current_dir(lab.at("trials/first"));
+    run.current_dir(lab.at("trials/first"))
+        .env("OTEL_TRACES_EXPORTER", "none")
+        .env("OTEL_LOGS_EXPORTER", "none");
     let run = ran(run, "");
     assert_eq!(run.code, Some(0), "{run:?}");
     assert_eq!(run.outcome()["stop_reason"], json!("completed"));

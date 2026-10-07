@@ -152,7 +152,7 @@ impl Golden {
         // The `telemetry` section is left out of the config digest, so this
         // changes nothing a fixture holds, and the file is the only
         // destination whatever the environment names.
-        config.telemetry.otlp.enabled = false;
+        config.telemetry.otlp.enabled = Some(false);
         config.telemetry.file.path = Some(telemetry);
         config
     }

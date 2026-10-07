@@ -13,16 +13,10 @@ use serde_json::json;
 use super::*;
 use crate::export::testing::{SCHEMA_URL, Scratch};
 
-const FIRST: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
-const SECOND: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNED";
 const TRACE: TraceId = TraceId::from_bytes([0xab; 16]);
 const SPAN: SpanId = SpanId::from_bytes([0xcd; 8]);
 const PARENT: SpanId = SpanId::from_bytes([0xef; 8]);
 const STARTED_UNIX_MS: u64 = 1_790_000_000_000;
-
-fn id(run: &str) -> RunId {
-    RunId::new(run).unwrap()
-}
 
 fn resource() -> Resource {
     Resource::builder_empty()
@@ -138,30 +132,6 @@ fn lines(path: &Path) -> Vec<String> {
 // Where the lines go
 
 #[tokio::test]
-async fn each_run_has_a_file_of_its_own_named_for_the_run() {
-    let scratch = Scratch::new("each-run");
-    let sink = Sink::new(FileTarget::EachRun {
-        directory: scratch.path().to_owned(),
-    });
-    let exporter = spans_to(&sink);
-
-    sink.start(&id(FIRST));
-    exporter.export(vec![span("chat first")]).await.unwrap();
-    exporter.export(vec![span("chat first")]).await.unwrap();
-    sink.start(&id(SECOND));
-    exporter.export(vec![span("chat second")]).await.unwrap();
-
-    let first = Exported::read(&scratch.at(&format!("lablet-{FIRST}.otlp.jsonl"))).unwrap();
-    let second = Exported::read(&scratch.at(&format!("lablet-{SECOND}.otlp.jsonl"))).unwrap();
-    assert_eq!(first.lines, 2);
-    let names: Vec<_> = first.spans.iter().map(|span| span.name.as_str()).collect();
-    assert_eq!(names, ["chat first", "chat first"]);
-    assert_eq!(second.lines, 1);
-    assert_eq!(second.spans[0].name, "chat second");
-    assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 2);
-}
-
-#[tokio::test]
 async fn one_path_is_appended_to_by_every_run_and_keeps_what_it_held() {
     let scratch = Scratch::new("one-path");
     let path = scratch.at("runs.otlp.jsonl");
@@ -169,9 +139,9 @@ async fn one_path_is_appended_to_by_every_run_and_keeps_what_it_held() {
     let sink = Sink::new(FileTarget::Path(path.clone()));
     let (spans, records) = (spans_to(&sink), records_to(&sink));
 
-    sink.start(&id(FIRST));
+    sink.start();
     spans.export(vec![span("chat first")]).await.unwrap();
-    sink.start(&id(SECOND));
+    sink.start();
     export_records(&records, &["lablet.run"]).await.unwrap();
 
     let exported = Exported::read(&path).unwrap();
@@ -193,107 +163,13 @@ async fn one_path_needs_no_run_to_have_started() {
 }
 
 #[tokio::test]
-async fn a_file_for_each_run_has_no_name_until_a_run_starts() {
-    let scratch = Scratch::new("unnamed");
-    let exporter = spans_to(&Sink::new(FileTarget::EachRun {
-        directory: scratch.path().to_owned(),
-    }));
-
-    let refused = exporter.export(vec![span("chat first")]).await;
-
-    assert_eq!(
-        refused.unwrap_err().to_string(),
-        "Operation failed: no run has started, so the telemetry has no file to go to"
-    );
-    assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);
-}
-
-#[tokio::test]
-async fn a_run_id_that_would_be_a_path_has_no_file_and_the_run_after_it_has_its_own() {
-    let scratch = Scratch::new("separator");
-    let inner = scratch.at("inner");
-    std::fs::create_dir_all(&inner).unwrap();
-    let sink = Sink::new(FileTarget::EachRun {
-        directory: inner.clone(),
-    });
-    let exporter = spans_to(&sink);
-
-    let mut refused = Vec::new();
-    for run in ["../escaped", "with\0nul"] {
-        sink.start(&id(run));
-        refused.push(
-            exporter
-                .export(vec![span("chat first")])
-                .await
-                .unwrap_err()
-                .to_string(),
-        );
-    }
-    sink.start(&id(".."));
-    exporter.export(vec![span("chat dots")]).await.unwrap();
-
-    assert_eq!(
-        refused,
-        [
-            "Operation failed: the run id \"../escaped\" can't be part of the name of the \
-             run's telemetry file: it holds a `/`",
-            "Operation failed: the run id \"with\\0nul\" can't be part of the name of the \
-             run's telemetry file: it holds a NUL",
-        ]
-    );
-    assert_eq!(
-        std::fs::read_dir(scratch.path()).unwrap().count(),
-        1,
-        "nothing was written beside the directory the target names"
-    );
-    assert_eq!(
-        lines(&inner.join("lablet-...otlp.jsonl")).len(),
-        1,
-        "a name that's the run id between two others is a file's, whatever the id"
-    );
-}
-
-/// A run id is held to the bytes lablet holds it to before its run, which
-/// a name has room for beside `lablet-` and `.otlp.jsonl`.
-#[tokio::test]
-async fn a_run_id_longer_than_128_bytes_has_no_file_and_one_as_long_as_that_has_its_own() {
-    let scratch = Scratch::new("long-run-id");
-    let sink = Sink::new(FileTarget::EachRun {
-        directory: scratch.path().to_owned(),
-    });
-    let exporter = spans_to(&sink);
-    let at_the_cap = "é".repeat(64);
-    let over = format!("{at_the_cap}r");
-
-    sink.start(&id(&over));
-    let refused = exporter.export(vec![span("chat over")]).await.unwrap_err();
-    sink.start(&id(&at_the_cap));
-    exporter.export(vec![span("chat at")]).await.unwrap();
-
-    assert_eq!(
-        refused.to_string(),
-        format!(
-            "Operation failed: the run id {over:?} can't be part of the name of the run's \
-             telemetry file: it's longer than 128 bytes"
-        )
-    );
-    assert_eq!(
-        lines(&scratch.at(&format!("lablet-{at_the_cap}.otlp.jsonl"))).len(),
-        1
-    );
-    assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 1);
-}
-
-#[tokio::test]
 async fn a_file_that_cannot_be_written_is_an_error_that_names_no_path_and_is_tried_again() {
     let scratch = Scratch::new("missing-directory");
     let directory = scratch.at("not-made-yet");
-    let sink = Sink::new(FileTarget::EachRun {
-        directory: directory.clone(),
-    });
+    let path = directory.join("runs.otlp.jsonl");
+    let sink = Sink::new(FileTarget::Path(path.clone()));
     let exporter = spans_to(&sink);
-    sink.start(&id(FIRST));
-    let path = directory.join(format!("lablet-{FIRST}.otlp.jsonl"));
+    sink.start();
 
     let refused = exporter.export(vec![span("chat first")]).await;
     std::fs::create_dir_all(&directory).unwrap();
@@ -315,10 +191,10 @@ async fn a_file_that_was_moved_between_two_runs_is_not_written_to_by_the_second(
     let sink = Sink::new(FileTarget::Path(path.clone()));
     let exporter = spans_to(&sink);
 
-    sink.start(&id(FIRST));
+    sink.start();
     exporter.export(vec![span("chat first")]).await.unwrap();
     std::fs::rename(&path, &moved).unwrap();
-    sink.start(&id(SECOND));
+    sink.start();
     exporter.export(vec![span("chat second")]).await.unwrap();
     exporter.export(vec![span("chat second")]).await.unwrap();
 
@@ -581,7 +457,7 @@ fn a_line_put_after_part_of_another_begins_a_line_of_its_own() {
 #[tokio::test]
 async fn standard_error_stays_the_destination_when_a_run_starts_and_is_left_whole() {
     let sink = Sink::new(FileTarget::Stderr);
-    sink.start(&id(FIRST));
+    sink.start();
 
     spans_to(&sink).export(Vec::new()).await.unwrap();
 
@@ -591,7 +467,7 @@ async fn standard_error_stays_the_destination_when_a_run_starts_and_is_left_whol
 fn stderr_is_torn(sink: &Sink) -> bool {
     match sink.open.lock().unwrap().destination {
         Destination::Stderr { torn } => torn,
-        ref other => panic!("{other:?} isn't standard error"),
+        Destination::File(ref path) => panic!("{} isn't standard error", path.display()),
     }
 }
 
@@ -602,7 +478,7 @@ async fn standard_error_ends_the_part_of_a_line_a_failed_write_left_whatever_run
     let sink = Sink::new(FileTarget::Stderr);
     sink.open.lock().unwrap().destination = Destination::Stderr { torn: true };
 
-    sink.start(&id(SECOND));
+    sink.start();
 
     assert!(stderr_is_torn(&sink), "a run's start leaves it as it was");
     spans_to(&sink).export(Vec::new()).await.unwrap();

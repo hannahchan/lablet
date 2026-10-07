@@ -240,58 +240,91 @@ async fn the_check_names_an_otlp_endpoint_variable_with_credentials_among_the_cu
     assert!(!format!("{checked:?}").contains(PASSWORD), "{checked:?}");
 }
 
-/// Where the telemetry file goes: no file only with the network exporter
-/// on and no path stated, and `-` standard error either way.
+/// Where the telemetry file goes: no file for a null path, standard error
+/// for `-`, and no file at all when `OTEL_SDK_DISABLED` turns telemetry
+/// off, whatever the path.
 #[test]
-fn a_null_path_writes_no_file_only_when_the_network_exporter_is_on_and_a_dash_is_standard_error() {
-    let target = |path: &str, network_on: bool| {
+fn a_null_path_writes_no_file_a_dash_is_standard_error_and_a_disabled_sdk_writes_none() {
+    let target = |path: &str, disabled: bool| {
         file_target(
             &config(&format!("telemetry: {{ file: {{ path: {path} }} }}")),
-            network_on,
+            disabled,
         )
     };
 
-    assert_eq!(target("null", true), None);
-    assert!(matches!(
-        target("null", false),
-        Some(FileTarget::EachRun { .. })
-    ));
-    for network_on in [true, false] {
-        assert_eq!(target(r#""-""#, network_on), Some(FileTarget::Stderr));
-        assert_eq!(
-            target("out.jsonl", network_on),
-            Some(FileTarget::Path("out.jsonl".into()))
-        );
+    assert_eq!(target("null", false), None);
+    assert_eq!(target(r#""-""#, false), Some(FileTarget::Stderr));
+    assert_eq!(
+        target("out.jsonl", false),
+        Some(FileTarget::Path("out.jsonl".into()))
+    );
+    for path in ["null", r#""-""#, "out.jsonl"] {
+        assert_eq!(target(path, true), None, "{path}");
     }
 }
 
-/// O17 before the wire: an endpoint the environment names turns the
-/// exporter on, with the endpoint left to the exporter and the
-/// environment's headers with it, and a null path then writes no file.
-#[tokio::test]
-async fn an_endpoint_from_the_environment_turns_the_exporter_on_and_a_null_path_then_writes_no_file()
- {
-    let scratch = lablet_test_support::Scratch::new("env-endpoint");
+/// A config of the fake provider ending at once, with `telemetry` stated
+/// beside it, in `scratch`.
+fn ending(scratch: &lablet_test_support::Scratch, telemetry: &str) -> Config {
     let script = scratch.write("script.yaml", ENDS);
-    let text = format!(
-        "model: {{ provider: fake, script: '{}' }}\nprompt: {{ system: Hi. }}",
+    config(&format!(
+        "model: {{ provider: fake, script: '{}' }}\nprompt: {{ system: Hi. }}\ntelemetry: {telemetry}",
         script.display()
+    ))
+}
+
+/// O29 before the wire: `OTEL_SDK_DISABLED=true` wins over a config that
+/// names a file and an endpoint, so a build makes neither.
+#[tokio::test]
+async fn otel_sdk_disabled_wins_over_a_named_file_and_endpoint() {
+    let scratch = lablet_test_support::Scratch::new("sdk-disabled");
+    let config = ending(
+        &scratch,
+        "{ file: { path: runs.otlp.jsonl }, otlp: { endpoint: 'http://127.0.0.1:1' } }",
     );
-    let held = holding(
-        "OTEL_EXPORTER_OTLP_ENDPOINT",
-        "http://collector.internal:4317",
-    );
 
-    let prepared = prepare(&config(&text), &held).await.unwrap();
+    let disabled = prepare(&config, &holding("OTEL_SDK_DISABLED", "true"))
+        .await
+        .unwrap();
+    let enabled = prepare(&config, &nothing).await.unwrap();
 
-    assert_eq!(prepared.target, None);
-    let otlp = prepared.otlp.unwrap();
-    assert_eq!(otlp.endpoint, None);
-    assert!(!otlp.strip_environment_headers);
+    assert!(disabled.disabled);
+    assert_eq!(disabled.target, None);
+    assert!(disabled.otlp.is_none());
+    assert!(!enabled.disabled);
+    assert!(enabled.target.is_some());
+    assert!(enabled.otlp.is_some());
+}
 
-    let prepared = prepare(&config(&text), &nothing).await.unwrap();
-    assert!(matches!(prepared.target, Some(FileTarget::EachRun { .. })));
-    assert!(prepared.otlp.is_none());
+/// The GenAI instrumentation's switch for capturing content.
+const CAPTURE: &str = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT";
+
+#[tokio::test]
+async fn the_genai_capture_variable_decides_when_the_config_states_nothing() {
+    let scratch = lablet_test_support::Scratch::new("capture-variable");
+    let config = ending(&scratch, "{ otlp: { enabled: false } }");
+
+    for (value, captured) in [("TRUE", true), ("false", false), ("1", false)] {
+        let held = |name: &str| (name == CAPTURE).then(|| value.into());
+        let prepared = prepare(&config, &held).await.unwrap();
+        assert_eq!(prepared.capture_content, captured, "{value}");
+    }
+    assert!(!prepare(&config, &nothing).await.unwrap().capture_content);
+}
+
+#[tokio::test]
+async fn a_stated_capture_content_wins() {
+    let scratch = lablet_test_support::Scratch::new("capture-stated");
+
+    for (stated, value, captured) in [("false", "true", false), ("true", "false", true)] {
+        let config = ending(
+            &scratch,
+            &format!("{{ capture_content: {stated}, otlp: {{ enabled: false }} }}"),
+        );
+        let held = |name: &str| (name == CAPTURE).then(|| value.into());
+        let prepared = prepare(&config, &held).await.unwrap();
+        assert_eq!(prepared.capture_content, captured, "{stated}");
+    }
 }
 
 const ENDS: &str = "
@@ -312,7 +345,7 @@ async fn two_runs_whose_variables_differ_share_a_config_digest_and_run_with_thei
         "
 model: {{ provider: fake, script: '{}', name: '${{MODEL}}' }}
 prompt: {{ system: 'You fix ${{LANGUAGE}} tests.' }}
-telemetry: {{ capture_content: true, file: {{ path: '{}' }} }}
+telemetry: {{ capture_content: true, file: {{ path: '{}' }}, otlp: {{ enabled: false }} }}
 ",
         script.display(),
         scratch.at("telemetry.otlp.jsonl").display()
@@ -397,7 +430,7 @@ async fn the_sampler_the_environment_names_reaches_the_providers_a_build_makes()
         "
 model: {{ provider: fake, script: '{}', name: scripted-1 }}
 prompt: {{ system: 'You fix tests.' }}
-telemetry: {{ file: {{ path: '{}' }} }}
+telemetry: {{ file: {{ path: '{}' }}, otlp: {{ enabled: false }} }}
 ",
         script.display(),
         path.display()
@@ -550,6 +583,11 @@ fn the_telemetry_is_on_standard_error_when_its_path_is_a_dash_once_variables_are
         telemetry_on_stderr_in(&config, env)
     };
 
+    assert!(
+        !on_stderr(r#""-""#, &holding("OTEL_SDK_DISABLED", "true")),
+        "no telemetry is written at all"
+    );
+
     assert!(on_stderr(r#""-""#, &nothing));
     assert!(on_stderr("'${T}'", &holding("T", "-")));
 
@@ -574,7 +612,7 @@ fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_or_names_the_var
     let refused = |signal| OtelBuildError::Endpoint { signal };
 
     let written = config("telemetry: { otlp: { endpoint: 'http://[not a host' } }");
-    let shown = otlp_refused(&written, &nothing, true, refused(Signal::Traces));
+    let shown = otlp_refused(&written, [None, None], refused(Signal::Traces));
     assert_eq!(
         shown.to_string(),
         "telemetry.otlp.endpoint (line 1): \"http://[not a host\" is refused: it isn't a URL the \
@@ -589,7 +627,7 @@ fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_or_names_the_var
         let written = config(&format!(
             "telemetry: {{ otlp: {{ endpoint: '{endpoint}' }} }}"
         ));
-        let shown = otlp_refused(&written, &nothing, true, refused(Signal::Traces));
+        let shown = otlp_refused(&written, [None, None], refused(Signal::Traces));
         assert_eq!(
             shown.to_string(),
             "telemetry.otlp.endpoint (line 1): its value is refused: it isn't a URL the exporter \
@@ -600,13 +638,11 @@ fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_or_names_the_var
     }
 
     let written = config("telemetry: { otlp: { headers: { a: b } } }");
-    let held = |name: &str| match name {
-        "OTEL_EXPORTER_OTLP_ENDPOINT" | "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT" => {
-            Some("http://[not a host".into())
-        }
-        _ => None,
-    };
-    let shown = otlp_refused(&written, &held, false, refused(Signal::Traces));
+    let read = [
+        Some("OTEL_EXPORTER_OTLP_ENDPOINT"),
+        Some("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"),
+    ];
+    let shown = otlp_refused(&written, read, refused(Signal::Traces));
     assert_eq!(
         shown,
         BuildError::Config(ConfigError::Invalid {
@@ -618,13 +654,28 @@ fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_or_names_the_var
                 .to_owned(),
         })
     );
-    let shown = otlp_refused(&written, &held, false, refused(Signal::Logs));
+    let shown = otlp_refused(&written, read, refused(Signal::Logs));
     assert_eq!(
         shown.to_string(),
         "telemetry.otlp.endpoint: its value is refused: `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`, which \
          is read since the config states no endpoint, holds what isn't a URL the exporter accepts"
     );
     assert!(!format!("{shown:?}").contains("not a host"), "{shown:?}");
+
+    let shown = otlp_refused(
+        &written,
+        [None, None],
+        OtelBuildError::HttpClient {
+            signal: Signal::Traces,
+            reason: "it failed".to_owned(),
+        },
+    );
+    assert_eq!(
+        shown.to_string(),
+        "telemetry.otlp.endpoint: its value is refused: the HTTP client couldn't be made: it \
+         failed",
+        "the default endpoint, which the config doesn't state, isn't shown as `null`"
+    );
 }
 
 /// TLS to the collector that can't be set up is refused with what stood in
@@ -641,7 +692,7 @@ fn tls_that_cannot_be_set_up_is_refused_by_the_endpoint_as_written_or_the_variab
     };
 
     let written = config("telemetry: { otlp: { endpoint: 'https://collector.internal:4317' } }");
-    let shown = otlp_refused(&written, &nothing, true, tls(Signal::Traces));
+    let shown = otlp_refused(&written, [None, None], tls(Signal::Traces));
     assert_eq!(
         shown.to_string(),
         "telemetry.otlp.endpoint (line 1): \"https://collector.internal:4317\" is refused: TLS to \
@@ -649,11 +700,11 @@ fn tls_that_cannot_be_set_up_is_refused_by_the_endpoint_as_written_or_the_variab
     );
 
     let written = config("telemetry: { otlp: { headers: { a: b } } }");
-    let held = holding(
-        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-        "https://collector.internal:4317",
+    let shown = otlp_refused(
+        &written,
+        [None, Some("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")],
+        tls(Signal::Logs),
     );
-    let shown = otlp_refused(&written, &held, false, tls(Signal::Logs));
     assert_eq!(
         shown,
         BuildError::Config(ConfigError::Invalid {
