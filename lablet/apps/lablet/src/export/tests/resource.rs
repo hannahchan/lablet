@@ -1,59 +1,81 @@
-//! The resource every export carries, from a child process whose
-//! environment states attributes of its own, since a test can't set a
-//! variable of its own process: the environment's are defaults beneath
-//! the composer's, and lablet's own keys are lablet's.
+//! The resource every export carries is the one the environment lablet is
+//! given says, and only that: the SDK's own reading of the process
+//! environment adds nothing to it, which a child process whose environment
+//! says otherwise holds, since a test can't set a variable of its own
+//! process.
 
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::process::{Command, Stdio};
 
 use lablet_conformance::otlp::Exported;
 use lablet_test_support::Scratch;
 use serde_json::json;
 
-use super::harness::{CONTENT, RUN, Records, Settings, VERSION, WIDE, built, run};
-use crate::export::FileTarget;
+use super::harness::{CONTENT, RUN, Records, VERSION, WIDE, run, scope};
+use crate::export::{FileTarget, Telemetry, resource};
+use crate::otel_env::OtelEnv;
 
 /// Set in the environment of the child process the test below starts, to
 /// the file the child exports its run to.
 const CHILD: &str = "LABLET_TEST_RESOURCE_CHILD";
 
-/// What the child's environment sets `OTEL_RESOURCE_ATTRIBUTES` to: a key
-/// nothing else states, a key the composer states too, and a key of
-/// lablet's own.
-const ENVIRONMENT: &str = "deployment.environment=test,team=a,service.name=other";
+/// What the environment the child's lablet is given holds: a service name,
+/// and pairs whose values are escaped, one of them a key the composer
+/// states too.
+const GIVEN: [(&str, &str); 2] = [
+    ("OTEL_SERVICE_NAME", "given-service"),
+    (
+        "OTEL_RESOURCE_ATTRIBUTES",
+        "deployment.environment=given%2Cdecoded,team=a",
+    ),
+];
 
 /// The child's side, which does nothing unless the test below started it:
 /// one run, its content captured, exported to the file the parent named,
-/// with the composer stating `team: b`.
+/// with the resource of [`GIVEN`] and the composer stating `team: b`.
 #[tokio::test]
-async fn a_child_process_exports_a_run_with_the_resource_its_environment_and_its_composer_state() {
+async fn a_child_process_exports_a_run_with_the_resource_of_the_environment_it_is_given() {
     let Some(path) = std::env::var_os(CHILD) else {
         return;
     };
-    let scratch = Scratch::new("resource-child");
-    let telemetry = built(Settings {
-        target: Some(FileTarget::Path(path.into())),
-        resource: vec![("team".to_owned(), "b".to_owned())],
-        ..Settings::in_scratch(&scratch)
-    });
+    let env = |name: &str| {
+        GIVEN
+            .iter()
+            .find(|(variable, _)| *variable == name)
+            .map(|(_, value)| OsString::from(value))
+    };
+    let context = OtelEnv::read(&env).context;
+    let telemetry = Telemetry::builder(scope())
+        .resource(resource(
+            VERSION,
+            vec![("team".to_owned(), "b".to_owned())],
+            &context,
+        ))
+        .file(FileTarget::Path(path.into()))
+        .build()
+        .unwrap();
 
     run(&telemetry, RUN, Records::Captured).await.unwrap();
     telemetry.shutdown().await.unwrap();
 }
 
 #[test]
-fn the_environments_resource_attributes_are_defaults_beneath_the_composers_and_lablets_own() {
+fn the_process_environments_resource_variables_add_nothing_to_the_resource() {
     let scratch = Scratch::new("resource-environment");
     let path = scratch.at("runs.otlp.jsonl");
     let child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "export::tests::resource::a_child_process_exports_a_run_with_the_resource_its_environment_and_its_composer_state",
+            "export::tests::resource::a_child_process_exports_a_run_with_the_resource_of_the_environment_it_is_given",
             "--test-threads=1",
         ])
         .env(CHILD, &path)
-        .env("OTEL_RESOURCE_ATTRIBUTES", ENVIRONMENT)
-        .env("OTEL_SERVICE_NAME", "other")
+        .env(
+            "OTEL_RESOURCE_ATTRIBUTES",
+            "leaked=yes,service.name=process-pairs,team=process",
+        )
+        .env("OTEL_SERVICE_NAME", "process-service")
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -78,21 +100,16 @@ fn the_environments_resource_attributes_are_defaults_beneath_the_composers_and_l
         .chain(exported.records.iter().map(|record| &record.resource));
     for resource in resources {
         assert_eq!(
-            resource.get("deployment.environment"),
-            Some(&json!("test")),
-            "a key only the environment states is the environment's: {resource:?}"
-        );
-        assert_eq!(
-            resource.get("team"),
-            Some(&json!("b")),
-            "a key the composer states too is the composer's: {resource:?}"
-        );
-        assert_eq!(
             resource.get("service.name"),
-            Some(&json!("lablet")),
-            "lablet's own key is lablet's, whatever `OTEL_RESOURCE_ATTRIBUTES` and \
-             `OTEL_SERVICE_NAME` say: {resource:?}"
+            Some(&json!("given-service")),
+            "{resource:?}"
         );
+        assert_eq!(
+            resource.get("deployment.environment"),
+            Some(&json!("given,decoded")),
+            "{resource:?}"
+        );
+        assert_eq!(resource.get("team"), Some(&json!("b")), "{resource:?}");
         assert_eq!(resource.get("service.version"), Some(&json!(VERSION)));
         let keys: BTreeSet<&str> = resource.keys().map(String::as_str).collect();
         assert_eq!(
@@ -106,7 +123,7 @@ fn the_environments_resource_attributes_are_defaults_beneath_the_composers_and_l
                 "telemetry.sdk.name",
                 "telemetry.sdk.version",
             ]),
-            "nothing else"
+            "nothing of the process's own"
         );
     }
 }

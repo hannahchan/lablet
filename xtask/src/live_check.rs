@@ -98,7 +98,10 @@ impl Programs for Real {
 
     fn cargo(&mut self, directory: &Path, args: &[&str]) -> Result<Output, Error> {
         let mut command = process::command_in(directory, "cargo", args)?;
-        without_otel(&mut command, std::env::vars_os().map(|(name, _)| name));
+        without_the_opentelemetry_environment(
+            &mut command,
+            std::env::vars_os().map(|(name, _)| name),
+        );
         command
             .output()
             .map_err(Invocation::new(directory, "cargo", args).not_started())
@@ -261,16 +264,16 @@ fn lablet(
     Err(Failure::Verdict(verdict))
 }
 
-/// Strips every `OTEL_*` variable from `command`'s environment, `names`
-/// being the environment's names: an endpoint or an `OTEL_TRACES_EXPORTER`
-/// there could redirect or silence the export, and the step would judge a
-/// run the listener never saw.
-fn without_otel(command: &mut Command, names: impl IntoIterator<Item = OsString>) {
-    for name in names {
-        if name.to_string_lossy().starts_with("OTEL_") {
-            command.env_remove(name);
-        }
-    }
+/// Strips from `command`'s environment, `names` being the environment's
+/// names, what's kept from the tests: an endpoint or an
+/// `OTEL_TRACES_EXPORTER` there could redirect or silence the export, and
+/// the step would judge a run the listener never saw, and a `TRACEPARENT`
+/// that isn't sampled would leave it no span to judge.
+fn without_the_opentelemetry_environment(
+    command: &mut Command,
+    names: impl IntoIterator<Item = OsString>,
+) {
+    process::stripped(command, names, process::KEPT_FROM_TESTS);
 }
 
 /// Copies the files under `from` to `to`, which is made.
@@ -993,12 +996,15 @@ mod tests {
         let names = [
             "OTEL_EXPORTER_OTLP_ENDPOINT",
             "OTEL_TRACES_EXPORTER",
+            "TRACEPARENT",
+            "TRACESTATE",
+            "BAGGAGE",
             "OTEL",
             "HOME",
             "NOT_OTEL_X",
         ]
         .map(OsString::from);
-        without_otel(&mut command, names);
+        without_the_opentelemetry_environment(&mut command, names);
         let removed: BTreeSet<String> = command
             .get_envs()
             .filter(|(_, value)| value.is_none())
@@ -1006,11 +1012,17 @@ mod tests {
             .collect();
         assert_eq!(
             removed,
-            ["OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_TRACES_EXPORTER"]
-                .map(String::from)
-                .into()
+            [
+                "BAGGAGE",
+                "OTEL_EXPORTER_OTLP_ENDPOINT",
+                "OTEL_TRACES_EXPORTER",
+                "TRACEPARENT",
+                "TRACESTATE"
+            ]
+            .map(String::from)
+            .into()
         );
-        assert_eq!(command.get_envs().count(), 2);
+        assert_eq!(command.get_envs().count(), 5);
     }
 
     const FAKE_WEAVER: &str = "XTASK_TEST_FAKE_WEAVER";

@@ -20,9 +20,10 @@ impl Lab {
     }
 
     /// The binary with `args`, to be run in the directory, with no
-    /// `RUST_LOG` of the test's and none of its `OTEL_*` variables, since
-    /// an endpoint among them would turn the network exporter on under
-    /// every test; a test that needs one sets it with `env` after.
+    /// `RUST_LOG` of the test's and none of its `OTEL_*` or context
+    /// variables, since an endpoint among them would turn the network
+    /// exporter on under every test, and a `TRACEPARENT` would give every
+    /// run a parent; a test that needs one sets it with `env` after.
     pub fn lablet(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_lablet"));
         command
@@ -34,23 +35,29 @@ impl Lab {
     }
 }
 
-/// Takes every `OTEL_*` variable among `names`, the environment's names,
-/// off `command`'s environment. The names alone are read, never a value.
+/// Takes every `OTEL_*` variable and every context variable among
+/// `names`, the environment's names, off `command`'s environment. The names
+/// alone are read, never a value.
 fn without_otel(command: &mut Command, names: impl IntoIterator<Item = OsString>) {
     for name in names {
-        if name.to_string_lossy().starts_with("OTEL_") {
+        let text = name.to_string_lossy();
+        if text.starts_with("OTEL_") || ["TRACEPARENT", "TRACESTATE", "BAGGAGE"].contains(&&*text) {
             command.env_remove(name);
         }
     }
 }
 
 #[test]
-fn the_binary_inherits_no_otel_variable_of_the_test_and_a_test_may_set_one_after() {
+fn the_binary_inherits_no_otel_or_context_variable_of_the_test_and_a_test_may_set_one_after() {
     let mut command = Command::new("lablet");
     let names = [
         "OTEL_EXPORTER_OTLP_ENDPOINT",
         "OTEL_TRACES_EXPORTER",
+        "TRACEPARENT",
+        "TRACESTATE",
+        "BAGGAGE",
         "NOT_OTEL_X",
+        "traceparent",
         "RUST_LOG",
     ];
 
@@ -69,8 +76,11 @@ fn the_binary_inherits_no_otel_variable_of_the_test_and_a_test_may_set_one_after
     assert_eq!(
         given,
         [
+            ("BAGGAGE".to_owned(), None),
             ("OTEL_EXPORTER_OTLP_ENDPOINT".to_owned(), None),
             ("OTEL_TRACES_EXPORTER".to_owned(), Some("none".to_owned())),
+            ("TRACEPARENT".to_owned(), None),
+            ("TRACESTATE".to_owned(), None),
         ]
     );
 }

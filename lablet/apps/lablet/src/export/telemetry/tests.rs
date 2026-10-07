@@ -465,7 +465,7 @@ async fn every_signal_is_of_the_scope_the_composition_root_handed_over() {
 }
 
 #[tokio::test]
-async fn every_exporter_is_told_the_service_the_sdk_and_what_the_composer_added() {
+async fn every_exporter_is_told_the_sdk_and_what_the_composer_added_its_service_name_among_it() {
     let memory = Memory::default();
 
     let telemetry = Telemetry::builder(scope())
@@ -489,7 +489,7 @@ async fn every_exporter_is_told_the_service_the_sdk_and_what_the_composer_added(
     assert_eq!(resources.len(), 2, "the two exporters of one destination");
     for resource in resources {
         let said = |key: &'static str| resource.get(&Key::new(key));
-        assert_eq!(said("service.name"), Some(Value::from("lablet")));
+        assert_eq!(said("service.name"), Some(Value::from("not-lablet")));
         assert_eq!(said("service.version"), Some(Value::from(VERSION)));
         assert_eq!(said("team"), Some(Value::from("evals")));
         assert_eq!(said("deployment.environment.name"), Some(Value::from("ci")));

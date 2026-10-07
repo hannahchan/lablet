@@ -55,6 +55,7 @@ fn span(name: &str, lasted_ms: u64, more: Value) -> Span {
         },
         parent_span_id: None,
         flags: 1,
+        trace_state: String::new(),
         name: name.to_owned(),
         kind: SpanKind::Internal,
         start_unix_nano,

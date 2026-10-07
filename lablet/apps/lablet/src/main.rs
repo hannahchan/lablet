@@ -13,6 +13,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use lablet::CancelHandle;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 use cli::args::{CheckArgs, Cli, Command, InitArgs, RunArgs};
 use cli::refusal::{self, Refusal};
@@ -220,11 +221,7 @@ fn log(filter: Option<EnvFilter>) {
         return;
     };
     // Only fails when a log is installed already, which is then the log.
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(io::stderr)
-        .with_ansi(io::stderr().is_terminal())
-        .try_init();
+    let _ = diagnostics::subscriber(filter, io::stderr, io::stderr().is_terminal()).try_init();
 }
 
 fn rust_log() -> Option<OsString> {

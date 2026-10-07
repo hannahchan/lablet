@@ -815,7 +815,12 @@ mod tests {
     #[test]
     fn the_test_steps_keep_every_otel_variable_from_the_tests_and_the_other_steps_keep_none() {
         for step in test_steps() {
-            assert_eq!(kept_from(&step), ["OTEL_"], "{}", step.label);
+            assert_eq!(
+                kept_from(&step),
+                ["OTEL_", "TRACEPARENT", "TRACESTATE", "BAGGAGE"],
+                "{}",
+                step.label
+            );
         }
         for step in check_steps().iter().chain(doc_steps().iter()) {
             assert!(kept_from(step).is_empty(), "{}", step.label);

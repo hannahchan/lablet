@@ -204,9 +204,11 @@ pub const GIT_REPOSITORY_ENV: &[&str] = &[
 
 /// The variables, by prefix, kept from every command that runs the
 /// workspace's tests. An `OTEL_*` variable in the shell would turn the
-/// network exporter on, or add to the resource, in every test that builds a
-/// `Lablet` in its own process, and a test can't scrub its own environment.
-pub const KEPT_FROM_TESTS: &[&str] = &["OTEL_"];
+/// network exporter on, or add to the resource, and `TRACEPARENT`,
+/// `TRACESTATE` or `BAGGAGE` would give every run a parent, in every test
+/// that builds a `Lablet` in its own process, and a test can't scrub its own
+/// environment.
+pub const KEPT_FROM_TESTS: &[&str] = &["OTEL_", "TRACEPARENT", "TRACESTATE", "BAGGAGE"];
 
 /// Takes every variable of `names`, the environment's names, whose name
 /// begins with one of `prefixes` off `command`'s environment. The names
@@ -685,6 +687,31 @@ mod tests {
             command.get_envs().count(),
             2,
             "the others are left as they are"
+        );
+    }
+
+    #[test]
+    fn kept_from_tests_strips_the_opentelemetry_and_the_context_variables() {
+        let mut command = Command::new("sh");
+        let names = [
+            "OTEL_SERVICE_NAME",
+            "TRACEPARENT",
+            "TRACESTATE",
+            "BAGGAGE",
+            "traceparent",
+            "NOT_OTEL_X",
+            "RUST_LOG",
+        ];
+
+        stripped(&mut command, names.map(OsString::from), KEPT_FROM_TESTS);
+
+        let removed: Vec<String> = command
+            .get_envs()
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            removed,
+            ["BAGGAGE", "OTEL_SERVICE_NAME", "TRACEPARENT", "TRACESTATE"]
         );
     }
 

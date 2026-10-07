@@ -328,8 +328,8 @@ async fn every_export_carries_the_resource_the_config_states() {
         assert_eq!(resource["team"], json!("evals"));
         assert_eq!(
             resource[key::SERVICE_NAME],
-            json!("lablet"),
-            "a key of lablet's own keeps lablet's value"
+            json!("mine"),
+            "the config's service name wins"
         );
         assert_eq!(resource[key::SERVICE_VERSION], json!(lablet::VERSION));
     }

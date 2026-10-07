@@ -3,8 +3,11 @@
 
 use std::ffi::OsStr;
 
+use tracing::{Metadata, Subscriber};
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::filter::{LevelFilter, filter_fn};
+use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::layer::SubscriberExt as _;
 
 /// The crates whose own events are held to `warn` unless `RUST_LOG` names
 /// one: at `debug` the exporter prints the endpoint it resolved, and the
@@ -45,6 +48,38 @@ pub(crate) fn filter(rust_log: Option<&OsStr>, telemetry_on_stderr: bool) -> Opt
             .with_default_directive(LevelFilter::WARN.into())
             .parse_lossy(directives),
     )
+}
+
+/// The diagnostic log: what `filter` lets through but the SDK's warnings
+/// about the configuration it read itself, written to `writer`, in colour
+/// when `ansi` says so.
+pub(crate) fn subscriber<W>(
+    filter: EnvFilter,
+    writer: W,
+    ansi: bool,
+) -> impl Subscriber + Send + Sync + 'static
+where
+    W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
+{
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(writer)
+        .with_ansi(ansi)
+        .finish()
+        .with(filter_fn(not_the_sdks_own_configuration))
+}
+
+/// Whether an event isn't one of the SDK's warnings about a setting it read
+/// from the environment itself. Its tracer provider's builder reads the
+/// sampler variables, case-sensitively, and warns of a value it doesn't
+/// take, naming the sampler it falls back to. Lablet reads the same
+/// variables through the seam and states the sampler on that builder, so
+/// such a warning describes a sampler that decides nothing, and stands
+/// beside lablet's own warning when the value is one lablet can't use
+/// either.
+fn not_the_sdks_own_configuration(metadata: &Metadata<'_>) -> bool {
+    !(metadata.target() == "opentelemetry_sdk"
+        && metadata.name().starts_with("TracerProvider.Config."))
 }
 
 /// `asked` with each of [`FLOORED`] that it doesn't name, as a target or as

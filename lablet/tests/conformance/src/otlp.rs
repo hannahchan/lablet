@@ -11,8 +11,8 @@
 //! and the scope of the export it came in, and the number of its line, so
 //! a test can say what was exported with what and in what order.
 //!
-//! What the reader doesn't carry, it refuses: a span's links and trace
-//! state, a scope's attributes, and every count of what the SDK dropped.
+//! What the reader doesn't carry, it refuses: a span's links, a scope's
+//! attributes, and every count of what the SDK dropped.
 //! Lablet emits none of them, and a reader that read past one would let a
 //! change to that pass every test unseen, the golden comparison among them.
 
@@ -125,6 +125,9 @@ pub struct Span {
     pub parent_span_id: Option<String>,
     /// The flags, of which the lowest eight bits are the W3C trace flags.
     pub flags: u32,
+    /// The W3C trace state, as a `tracestate` header writes it; empty when
+    /// the span has none.
+    pub trace_state: String,
     /// The span's name.
     pub name: String,
     /// The span's kind.
@@ -217,10 +220,9 @@ impl Exported {
     /// key but the one that says what it exports, that doesn't read as the
     /// request its key names, or that gives a span, a record, an event, a
     /// resource or a nested value one key twice, or that holds what the
-    /// reader doesn't carry: a span's links or trace state, a scope's
-    /// attributes, or a count of what the SDK dropped. The last line ends
-    /// in a newline like the rest, so text that ends elsewhere was cut
-    /// short.
+    /// reader doesn't carry: a span's links, a scope's attributes, or a
+    /// count of what the SDK dropped. The last line ends in a newline like
+    /// the rest, so text that ends elsewhere was cut short.
     pub fn parse(text: &str) -> Result<Self, ReadError> {
         let mut exported = Self::default();
         let mut rest = text;
@@ -289,6 +291,7 @@ impl Exported {
                         parent_span_id: Some(hex(&span.parent_span_id))
                             .filter(|parent| !parent.is_empty()),
                         flags: span.flags,
+                        trace_state: span.trace_state,
                         kind: kind(span.kind)?,
                         name: span.name,
                         start_unix_nano: span.start_time_unix_nano,
@@ -449,7 +452,6 @@ const DROPPED_ATTRIBUTES: &str = "a count of dropped attributes";
 fn whole_span(span: &trace::Span) -> Result<(), String> {
     let has = [
         (!span.links.is_empty(), "links"),
-        (!span.trace_state.is_empty(), "a trace state"),
         (span.dropped_attributes_count != 0, DROPPED_ATTRIBUTES),
         (span.dropped_events_count != 0, "a count of dropped events"),
         (span.dropped_links_count != 0, "a count of dropped links"),

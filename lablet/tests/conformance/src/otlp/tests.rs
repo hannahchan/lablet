@@ -110,10 +110,11 @@ fn a_span_holds_the_resource_and_the_scope_of_its_export() {
 }
 
 #[test]
-fn a_span_is_read_with_its_ids_its_times_its_events_and_its_status() {
+fn a_span_is_read_with_its_ids_its_trace_state_its_times_its_events_and_its_status() {
     let exported = Exported::parse(&line_of_spans(&[span(&json!({
         "parentSpanId": "efefefefefefefef",
         "flags": 257,
+        "traceState": "vendor=opaque,other=1",
         "attributes": [{ "key": "lablet.turn", "value": { "intValue": "2" } }],
         "events": [{
             "timeUnixNano": "1790000000255000000",
@@ -138,6 +139,7 @@ fn a_span_is_read_with_its_ids_its_times_its_events_and_its_status() {
             span_id: "cdcdcdcdcdcdcdcd".to_owned(),
             parent_span_id: Some("efefefefefefefef".to_owned()),
             flags: 257,
+            trace_state: "vendor=opaque,other=1".to_owned(),
             name: "chat scripted-1".to_owned(),
             kind: SpanKind::Client,
             start_unix_nano: 1_790_000_000_005_000_000,
@@ -155,7 +157,7 @@ fn a_span_is_read_with_its_ids_its_times_its_events_and_its_status() {
 }
 
 #[test]
-fn a_root_span_has_no_parent_and_a_span_that_says_nothing_of_its_end_has_no_status() {
+fn a_root_span_has_no_parent_and_a_span_that_says_nothing_of_its_end_or_its_state_has_none() {
     let exported = Exported::parse(&line_of_spans(&[
         span(&json!({})),
         span(&json!({ "parentSpanId": "", "status": {} })),
@@ -166,14 +168,20 @@ fn a_root_span_has_no_parent_and_a_span_that_says_nothing_of_its_end_has_no_stat
     let read: Vec<_> = exported
         .spans
         .iter()
-        .map(|span| (span.parent_span_id.clone(), span.status.clone()))
+        .map(|span| {
+            (
+                span.parent_span_id.clone(),
+                span.status.clone(),
+                span.trace_state.as_str(),
+            )
+        })
         .collect();
     assert_eq!(
         read,
         [
-            (None, Status::Unset),
-            (None, Status::Unset),
-            (None, Status::Ok)
+            (None, Status::Unset, ""),
+            (None, Status::Unset, ""),
+            (None, Status::Ok, "")
         ]
     );
 }
@@ -453,10 +461,6 @@ fn what_the_reader_does_not_carry_is_refused_and_named() {
         (
             line_of_spans(&[span(&json!({ "links": [link] }))]),
             "the span `chat scripted-1` has links",
-        ),
-        (
-            line_of_spans(&[span(&json!({ "traceState": "lablet=1" }))]),
-            "the span `chat scripted-1` has a trace state",
         ),
         (
             line_of_spans(&[span(&json!({ "droppedAttributesCount": 1 }))]),

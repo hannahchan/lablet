@@ -29,19 +29,32 @@
 //! version bump regenerates it.
 //!
 //! An `OTEL_*` variable in the environment would change the resource or add
-//! a network destination, so the test refuses to run with one set; `cargo
-//! xtask test` strips them. `LABLET_UPDATE_GOLDEN=1 cargo test -p lablet
-//! --test it golden` writes the fixtures instead of comparing. CI never sets
-//! it, and the test refuses it there.
+//! a network destination, and `TRACEPARENT`, `TRACESTATE` or `BAGGAGE`
+//! would give every run a parent, so the test refuses to run with one set;
+//! `cargo xtask test` strips them. `LABLET_UPDATE_GOLDEN=1 cargo test -p
+//! lablet --test it golden` writes the fixtures instead of comparing. CI
+//! never sets it, and the test refuses it there.
+//!
+//! A fourth run is the two-turns run again in a child process whose
+//! environment sets every variable of the specification's SDK and exporter
+//! pages, and the context variables, each to a value that would change
+//! what's exported if it were read: those lablet honours to values whose
+//! effect its fixture holds, those the config overrides to the opposite of
+//! what it states, and those nothing reads to values that would show. It's
+//! held to a fixture of its own, so the OpenTelemetry crates coming to read
+//! a variable lablet doesn't decide shows as a difference, which the runs
+//! above, under an environment with none of them, can't show.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crate::key;
 use lablet::config::Provider;
 use lablet::{CancelHandle, Config, FinishedRun, Format, RunId, RunRequest, StopReason};
 use lablet_conformance::otlp::{Attributes, Exported, LogRecord, Span, SpanKind, Status};
+use lablet_conformance::receiver::Receiver;
 use lablet_run::telemetry::generated::GenAiClientOperationException;
 use lablet_test_support::Scratch;
 use serde_json::{Value, json};
@@ -103,6 +116,12 @@ const TWO_TURNS: Golden = Golden {
     records: 1,
 };
 
+/// The two-turns run under [`hostile`], in a child process.
+const HOSTILE: Golden = Golden {
+    name: "hostile",
+    ..TWO_TURNS
+};
+
 /// The cancellation comes while `bash` runs: the earliest timer then, since
 /// a call may take 120 s and the run 600 s.
 const CANCELLED: Golden = Golden {
@@ -118,13 +137,14 @@ const CANCELLED: Golden = Golden {
 
 impl Golden {
     /// The config, with its paths rebased on its directory, its network
-    /// exporter off and its telemetry written to `telemetry`.
+    /// exporter off, its telemetry written to `telemetry`, and whether it
+    /// captures content stated.
     ///
     /// `model.script` and `tools.builtin.root` are the only relative paths a
     /// golden config may hold: the others a config takes are checked to be
     /// unset, since one that was set would start at the test's directory
     /// with nothing to say so.
-    fn config(&self, telemetry: PathBuf) -> Config {
+    fn config(&self, telemetry: &Path) -> Config {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"))
             .canonicalize()
             .unwrap();
@@ -151,9 +171,11 @@ impl Golden {
         config.tools.builtin.root = rebased(config.tools.builtin.root.take());
         // The `telemetry` section is left out of the config digest, so this
         // changes nothing a fixture holds, and the file is the only
-        // destination whatever the environment names.
+        // destination and the config's word on content the only one,
+        // whatever the environment says.
         config.telemetry.otlp.enabled = Some(false);
-        config.telemetry.file.path = Some(telemetry);
+        config.telemetry.file.path = Some(telemetry.to_path_buf());
+        config.telemetry.capture_content = Some(config.telemetry.capture_content.unwrap_or(false));
         config
     }
 
@@ -165,7 +187,13 @@ impl Golden {
     async fn run(&self) -> (FinishedRun, Exported) {
         let scratch = Scratch::new(&format!("golden-{}", self.name));
         let telemetry = scratch.at("telemetry.otlp.jsonl");
-        let mut lablet = lablet::build(self.config(telemetry.clone())).await.unwrap();
+        let finished = self.run_to(&telemetry).await;
+        (finished, Exported::read(&telemetry).unwrap())
+    }
+
+    /// Runs once, under its own id, exporting to `telemetry`.
+    async fn run_to(&self, telemetry: &Path) -> FinishedRun {
+        let mut lablet = lablet::build(self.config(telemetry)).await.unwrap();
         let mut request = RunRequest::new(self.prompt)
             .unwrap()
             .run_id(RunId::new(format!("golden-{}", self.name)).unwrap())
@@ -182,8 +210,7 @@ impl Golden {
 
         let finished = lablet.run(request).await;
         lablet.shutdown().await;
-
-        (finished, Exported::read(&telemetry).unwrap())
+        finished
     }
 
     /// Runs, holds what the run must come to, and compares the normalised
@@ -192,8 +219,15 @@ impl Golden {
     async fn check(&self) -> (FinishedRun, Exported) {
         refuse_the_environment();
         let (finished, exported) = self.run().await;
-
         assert_eq!(finished.summary.outcome.stop_reason(), self.stop);
+        self.compare(&exported);
+        (finished, exported)
+    }
+
+    /// Holds what the run exported to the counts it must come to, and
+    /// compares its normalised form with the fixture, or writes the fixture
+    /// when [`UPDATE`] is set.
+    fn compare(&self, exported: &Exported) {
         assert_eq!(exported.spans.len(), self.spans, "{}: spans", self.name);
         assert_eq!(
             exported.records.len(),
@@ -203,7 +237,7 @@ impl Golden {
         );
         assert_eq!(exported.records_of("lablet.run").len(), 1, "{}", self.name);
 
-        let normalised = normalised(&exported);
+        let normalised = normalised(exported);
         let fixture = self.fixture();
         if std::env::var_os(UPDATE).is_some() {
             let written = serde_json::to_string_pretty(&normalised).unwrap() + "\n";
@@ -229,24 +263,24 @@ impl Golden {
                 regenerate()
             );
         }
-        (finished, exported)
     }
 }
 
+/// The variables that give every run a parent, read by the propagators.
+const CONTEXT: [&str; 3] = ["TRACEPARENT", "TRACESTATE", "BAGGAGE"];
+
 /// Refuses an environment the comparison can't be trusted in: an `OTEL_*`
-/// variable, which the SDK and the exporter read, and [`UPDATE`] in CI,
-/// where a regeneration would pass whatever the run emitted. Names are
-/// read, never a value.
+/// variable, which lablet, the SDK and the exporter read, one of
+/// [`CONTEXT`], and [`UPDATE`] in CI, where a regeneration would pass
+/// whatever the run emitted. Names are read, never a value.
 fn refuse_the_environment() {
-    let otel: BTreeSet<String> = std::env::vars_os()
-        .map(|(name, _)| name.to_string_lossy().into_owned())
-        .filter(|name| name.starts_with("OTEL_"))
-        .collect();
+    let set = refused(std::env::vars_os().map(|(name, _)| name.to_string_lossy().into_owned()));
     assert!(
-        otel.is_empty(),
-        "{} is set, and an `OTEL_*` variable changes the resource or the exporter of every run; \
-         unset it, or run `cargo xtask test`, which strips them",
-        otel.into_iter().collect::<Vec<_>>().join(", ")
+        set.is_empty(),
+        "{} is set, and an `OTEL_*` variable changes the resource or the exporter of every run, \
+         and a context variable its parent; unset it, or run `cargo xtask test`, which strips \
+         them",
+        set.into_iter().collect::<Vec<_>>().join(", ")
     );
     if std::env::var_os(UPDATE).is_some() {
         assert!(
@@ -254,6 +288,64 @@ fn refuse_the_environment() {
             "{UPDATE} is set in CI, and the fixtures are regenerated locally, never there"
         );
     }
+}
+
+/// Those of `names` the golden runs refuse.
+fn refused(names: impl Iterator<Item = String>) -> BTreeSet<String> {
+    names
+        .filter(|name| name.starts_with("OTEL_") || CONTEXT.contains(&name.as_str()))
+        .collect()
+}
+
+/// Set in the environment of the child process the refusal's test starts.
+const REFUSAL_CHILD: &str = "LABLET_TEST_GOLDEN_REFUSAL_CHILD";
+
+/// The child's side, which does nothing unless the test below started it.
+#[test]
+fn a_child_process_checks_its_environment_as_a_golden_run_does() {
+    if std::env::var_os(REFUSAL_CHILD).is_some() {
+        refuse_the_environment();
+    }
+}
+
+/// The refusal is held in a child process, since what it reads is the
+/// process's own environment.
+#[test]
+fn the_golden_runs_refuse_every_otel_variable_and_the_context_variables() {
+    refuse_the_environment();
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "golden::a_child_process_checks_its_environment_as_a_golden_run_does",
+            "--test-threads=1",
+        ])
+        .env(REFUSAL_CHILD, "1")
+        .envs(
+            [
+                "OTEL_SERVICE_NAME",
+                "TRACEPARENT",
+                "TRACESTATE",
+                "BAGGAGE",
+                "traceparent",
+                "TRACEPARENTS",
+                "NOT_OTEL_X",
+            ]
+            .map(|name| (name, "1")),
+        )
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+
+    assert!(!child.status.success(), "the child ran:\n{output}");
+    assert!(
+        output.contains("\nBAGGAGE, OTEL_SERVICE_NAME, TRACEPARENT, TRACESTATE is set,"),
+        "{output}"
+    );
 }
 
 /// What a difference says to do: a change to what lablet emits is a change
@@ -311,13 +403,170 @@ async fn the_cancelled_run_emits_what_its_fixture_holds() {
     );
 }
 
+/// Set in the environment of the child process the hostile run starts, to
+/// the file the child exports its run to.
+const HOSTILE_CHILD: &str = "LABLET_TEST_HOSTILE_GOLDEN_CHILD";
+
+/// The trace and the span of the sampled parent the hostile environment's
+/// `TRACEPARENT` names.
+const INBOUND_TRACE: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
+const INBOUND_SPAN: &str = "00f067aa0ba902b7";
+
+/// The hostile environment: every variable of the specification's SDK and
+/// OTLP exporter pages, and the context variables, each set to a value that
+/// would change what the run exports if it were read. Two are left out,
+/// since their honoured values would leave the fixture empty:
+/// `OTEL_SDK_DISABLED`, which a canary and the command line's tests hold,
+/// and `OTEL_TRACES_SAMPLER`, which the export module's tests hold.
+fn hostile() -> Vec<(String, String)> {
+    let refused = format!("http://{}", Receiver::closed());
+    let missing = "/nonexistent/lablet-hostile-golden";
+    let mut env: Vec<(String, String)> = [
+        // Honoured: the fixture holds each one's effect.
+        ("OTEL_SERVICE_NAME", "hostile-service"),
+        (
+            "OTEL_RESOURCE_ATTRIBUTES",
+            "service.name=not-this,service.version=9.9.9,telemetry.sdk.name=not-this,\
+             deployment.environment.name=hostile%2Cdecoded,team=a%20b",
+        ),
+        ("OTEL_PROPAGATORS", " TraceContext , baggage "),
+        (
+            "TRACEPARENT",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        ),
+        ("TRACESTATE", "hostile=1"),
+        ("BAGGAGE", "hostile=baggage"),
+        ("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "32"),
+        ("OTEL_SPAN_EVENT_COUNT_LIMIT", "0"),
+        ("OTEL_SPAN_LINK_COUNT_LIMIT", "0"),
+        ("OTEL_EVENT_ATTRIBUTE_COUNT_LIMIT", "1"),
+        ("OTEL_LINK_ATTRIBUTE_COUNT_LIMIT", "1"),
+        ("OTEL_ATTRIBUTE_COUNT_LIMIT", "1"),
+        ("OTEL_BSP_SCHEDULE_DELAY", "3600000"),
+        ("OTEL_BSP_MAX_QUEUE_SIZE", "64"),
+        ("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "1"),
+        ("OTEL_BLRP_SCHEDULE_DELAY", "3600000"),
+        ("OTEL_BLRP_MAX_QUEUE_SIZE", "64"),
+        ("OTEL_BLRP_MAX_EXPORT_BATCH_SIZE", "1"),
+        // The config overrides these: it states its file, no network and
+        // no content.
+        ("OTEL_LOGS_EXPORTER", "otlp"),
+        ("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true"),
+        // Read by nothing lablet uses, or inert in the crates.
+        ("OTEL_TRACES_EXPORTER", "none"),
+        ("OTEL_METRICS_EXPORTER", "otlp"),
+        ("OTEL_TRACES_SAMPLER_ARG", "0"),
+        ("OTEL_BSP_EXPORT_TIMEOUT", "1"),
+        ("OTEL_BLRP_EXPORT_TIMEOUT", "1"),
+        ("OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT", "1"),
+        ("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", "1"),
+        ("OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT", "1"),
+        ("OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT", "1"),
+        ("OTEL_LOG_LEVEL", "debug"),
+        ("OTEL_CONFIG_FILE", missing),
+        ("OTEL_EXPERIMENTAL_CONFIG_FILE", missing),
+        ("OTEL_METRIC_EXPORT_INTERVAL", "1"),
+        ("OTEL_METRIC_EXPORT_TIMEOUT", "1"),
+        ("OTEL_METRICS_EXEMPLAR_FILTER", "always_on"),
+        ("OTEL_EXPORTER_PROMETHEUS_HOST", "127.0.0.1"),
+        ("OTEL_EXPORTER_PROMETHEUS_PORT", "4"),
+        ("OTEL_EXPORTER_ZIPKIN_ENDPOINT", &refused),
+        ("OTEL_EXPORTER_ZIPKIN_PROTOCOL", "http/json"),
+        ("OTEL_EXPORTER_ZIPKIN_TIMEOUT", "1"),
+        ("OTEL_EXPORTER_OTLP_SPAN_INSECURE", "true"),
+        ("OTEL_EXPORTER_OTLP_METRIC_INSECURE", "true"),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.to_owned(), value.to_owned()))
+    .collect();
+    // Each OTLP exporter variable, generic and for each signal, metrics
+    // included.
+    for signal in ["", "TRACES_", "LOGS_", "METRICS_"] {
+        for (setting, value) in [
+            ("ENDPOINT", refused.as_str()),
+            ("PROTOCOL", "grpc"),
+            ("HEADERS", "x-hostile=1"),
+            ("TIMEOUT", "1"),
+            ("COMPRESSION", "gzip"),
+            ("INSECURE", "true"),
+            ("CERTIFICATE", missing),
+            ("CLIENT_KEY", missing),
+            ("CLIENT_CERTIFICATE", missing),
+        ] {
+            env.push((
+                format!("OTEL_EXPORTER_OTLP_{signal}{setting}"),
+                value.to_owned(),
+            ));
+        }
+    }
+    env
+}
+
+/// The child's side, which does nothing unless the test below started it:
+/// the two-turns run, exported to the file the parent named.
+#[tokio::test(start_paused = true)]
+async fn a_child_process_runs_the_two_turns_run_under_a_hostile_environment() {
+    let Some(telemetry) = std::env::var_os(HOSTILE_CHILD) else {
+        return;
+    };
+    let finished = HOSTILE.run_to(Path::new(&telemetry)).await;
+    assert_eq!(finished.summary.outcome.stop_reason(), HOSTILE.stop);
+}
+
+#[test]
+fn the_two_turns_run_under_a_hostile_environment_emits_what_its_fixture_holds() {
+    refuse_the_environment();
+    let scratch = Scratch::new("golden-hostile");
+    let telemetry = scratch.at("telemetry.otlp.jsonl");
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "golden::a_child_process_runs_the_two_turns_run_under_a_hostile_environment",
+            "--test-threads=1",
+        ])
+        .env(HOSTILE_CHILD, &telemetry)
+        .envs(hostile())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&child.stdout);
+    assert!(
+        child.status.success() && stdout.contains("1 passed"),
+        "the child failed:\n{stdout}\n{}",
+        String::from_utf8_lossy(&child.stderr)
+    );
+
+    let exported = Exported::read(&telemetry).unwrap();
+    HOSTILE.compare(&exported);
+    assert_eq!(
+        exported.lines,
+        exported.spans.len() + exported.records.len(),
+        "a batch of one signal to a line"
+    );
+    for span in &exported.spans {
+        assert_eq!(span.trace_id, INBOUND_TRACE, "{}", span.name);
+    }
+    for record in &exported.records {
+        assert_eq!(record.trace_id, INBOUND_TRACE, "{}", record.event_name);
+    }
+    let root = &exported.spans_of(key::INVOKE_AGENT)[0];
+    assert_eq!(root.parent_span_id.as_deref(), Some(INBOUND_SPAN));
+}
+
 /// The export in its normalised form, as the fixture holds it.
 fn normalised(exported: &Exported) -> Value {
     let ungrouped = exported.ungrouped();
+    let ids: BTreeSet<&str> = ungrouped.spans.iter().map(|span| &*span.span_id).collect();
+    // A root's parent is no span of the run: none, or the inbound one.
+    let is_root = |span: &Span| {
+        span.parent_span_id
+            .as_deref()
+            .is_none_or(|id| !ids.contains(id))
+    };
     let roots: Vec<&Span> = ungrouped
         .spans
         .iter()
-        .filter(|span| span.parent_span_id.is_none())
+        .filter(|span| is_root(span))
         .collect();
     assert_eq!(roots.len(), 1, "one run has one root span");
     let origin = roots[0].start_unix_nano;
@@ -337,7 +586,7 @@ fn normalised(exported: &Exported) -> Value {
     spans.sort_by_cached_key(|span| {
         (
             span.start_unix_nano,
-            span.parent_span_id.is_some(),
+            !is_root(span),
             span.end_unix_nano,
             span.name.clone(),
             text(&span.attributes),
@@ -373,7 +622,7 @@ fn normalised(exported: &Exported) -> Value {
                     })
                 })
                 .collect();
-            json!({
+            let normalised = json!({
                 "trace_id": trace_id,
                 "span_id": span_id,
                 "parent_span_id": parent_span_id,
@@ -387,7 +636,8 @@ fn normalised(exported: &Exported) -> Value {
                 "resource": resource(&span.resource),
                 "attributes": span.attributes,
                 "events": events,
-            })
+            });
+            with_trace_state(normalised, &span.trace_state)
         })
         .collect();
     let records: Vec<Value> = records
@@ -412,6 +662,16 @@ fn normalised(exported: &Exported) -> Value {
         })
         .collect();
     json!({ "spans": spans, "records": records })
+}
+
+/// `normalised` with `trace_state` beside its other keys, when the span has
+/// one: only a run under an inbound parent does, so the runs without one
+/// hold no key for it.
+fn with_trace_state(mut normalised: Value, trace_state: &str) -> Value {
+    if !trace_state.is_empty() {
+        normalised["trace_state"] = json!(trace_state);
+    }
+    normalised
 }
 
 /// The attributes as one text, which orders two signals that share a start,

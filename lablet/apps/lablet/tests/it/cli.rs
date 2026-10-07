@@ -6,6 +6,8 @@ mod cancel;
 #[cfg(test)]
 mod check;
 #[cfg(test)]
+mod context;
+#[cfg(test)]
 mod diagnostics;
 #[cfg(test)]
 mod digests;

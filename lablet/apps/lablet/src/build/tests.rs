@@ -162,14 +162,14 @@ async fn the_check_names_what_a_run_withholds_and_cuts_and_never_a_value() {
     assert!(!format!("{checked:?}").contains(KEY), "{checked:?}");
 }
 
-/// The `OTEL_*` variables are the one exception: read for every config,
-/// since lablet inherits them and the exporter reads them whatever the
-/// config names.
+/// The `OTEL_*` variables and the context variables are the one
+/// exception: read for every config, since lablet inherits them and they
+/// configure its telemetry whatever the config names.
 #[tokio::test]
-async fn a_config_that_names_no_secret_reads_nothing_of_the_environment_but_the_otel_variables() {
+async fn a_config_that_names_no_secret_reads_only_the_opentelemetry_variables() {
     let never = |name: &str| -> Option<OsString> {
         assert!(
-            name.starts_with("OTEL_"),
+            name.starts_with("OTEL_") || ["TRACEPARENT", "TRACESTATE", "BAGGAGE"].contains(&name),
             "the environment was read: {name}"
         );
         None

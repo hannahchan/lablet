@@ -12,6 +12,7 @@ use lablet_conformance::receiver::{self, Mode, Received, Receiver};
 use serde_json::{Value, json};
 
 use super::harness::{CONFIG, ENDS, Lab, PROMPT, Ran, ran};
+use crate::key;
 
 /// The authorization the config states.
 const CONFIGS_AUTHORIZATION: &str = "Bearer config-0123456789abcdef";
@@ -319,12 +320,12 @@ async fn each_signal_takes_its_own_selector_enabled_wins_over_both_and_the_file_
     }
 }
 
-/// O21, the part the exporter's environment settles: the attributes
-/// `OTEL_RESOURCE_ATTRIBUTES` names go beneath the config's
-/// `telemetry.resource`, which wins a key both name, in the file and over
-/// the network alike.
+/// O21: `OTEL_RESOURCE_ATTRIBUTES` gives every export the attributes it
+/// names beneath the config's `telemetry.resource`, which wins a key both
+/// name, and `OTEL_SERVICE_NAME` names the service over the `service.name`
+/// it names, in the file and over the network alike.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_environments_resource_attributes_go_beneath_the_configs_in_both_destinations() {
+async fn the_resource_variables_go_beneath_the_configs_and_otel_service_name_names_the_service() {
     let receiver = Receiver::start(Mode::Answers).await;
     let lab = Lab::new("otlp-resource-attributes");
 
@@ -334,10 +335,13 @@ async fn the_environments_resource_attributes_go_beneath_the_configs_in_both_des
             "otlp": { "enabled": true, "endpoint": receiver.grpc_endpoint(), "protocol": "grpc" },
             "resource": { "team": "b" },
         } }),
-        &[(
-            "OTEL_RESOURCE_ATTRIBUTES",
-            "deployment.environment=test,team=a",
-        )],
+        &[
+            (
+                "OTEL_RESOURCE_ATTRIBUTES",
+                "deployment.environment=test,team=a,service.name=pairs",
+            ),
+            ("OTEL_SERVICE_NAME", "other"),
+        ],
     );
 
     received(&receiver, Over::Grpc);
@@ -362,6 +366,11 @@ async fn the_environments_resource_attributes_go_beneath_the_configs_in_both_des
                 resource.get("team"),
                 Some(&json!("b")),
                 "{destination}: the config's wins a key both name: {resource:?}"
+            );
+            assert_eq!(
+                resource.get(key::SERVICE_NAME),
+                Some(&json!("other")),
+                "{destination}: `OTEL_SERVICE_NAME` over the pairs' and lablet's: {resource:?}"
             );
         }
     }
