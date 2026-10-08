@@ -411,7 +411,7 @@ impl RunService {
     /// agrees with what came back.
     ///
     /// Every span of the run is a child of the context this is called in,
-    /// which is the root span's when the composition root runs the loop.
+    /// which is the root span's when the runner runs the loop.
     pub async fn run(&mut self, context: RunContext, prompts: Prompts) -> FinishedRun {
         let started = self.clock.now();
         let parent = Context::current();

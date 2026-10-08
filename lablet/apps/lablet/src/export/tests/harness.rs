@@ -1,5 +1,5 @@
 //! A `Telemetry` built from a test's settings, and a run emitted through its
-//! tracer and its logger as the loop and the composition root emit one, by
+//! tracer and its logger as the loop and lablet-run's runner emit one, by
 //! `testing.rs`, then flushed and read back.
 
 use std::path::PathBuf;

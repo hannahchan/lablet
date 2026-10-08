@@ -15,23 +15,15 @@ use lablet_model::{
     ProviderResponse, ProviderTotals, Rates, RequestParams, Responded, Run, RunContext, RunId,
     RunLabels, RunOutcome, RunSetup, StopReason, TaskResult, ToolCallTotals, Usage,
 };
-use lablet_run::telemetry::{Attribute, Value};
-use lablet_test_support::{PROMPT, SYSTEM};
 use opentelemetry::trace::{SpanContext, SpanId, TraceFlags, TraceId, TraceState};
 use serde_json::json;
 
 use super::*;
+use crate::telemetry::generated::key;
+use crate::telemetry::{Attribute, Value};
 
-/// Every key the wide event carries: the root's own, and the join keys,
-/// which `lablet-run`'s module declares.
-mod key {
-    pub use lablet_run::telemetry::generated::key::{
-        GEN_AI_CONVERSATION_ID, LABLET_CONFIG_DIGEST, LABLET_EXPERIMENT_ID, LABLET_TASK_ID,
-        LABLET_TRIAL, SESSION_ID,
-    };
-
-    pub use crate::telemetry::generated::key::*;
-}
+const SYSTEM: &str = "You fix tests, tersely.";
+const PROMPT: &str = "Fix the failing test in the parser.";
 
 const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 const STARTED_UNIX_MS: u64 = 1_790_000_000_000;

@@ -4,17 +4,17 @@
 use std::num::NonZeroU32;
 use std::time::{Duration, UNIX_EPOCH};
 
+use super::*;
+use crate::telemetry::Value;
+use crate::telemetry::generated::{LabletInvokeAgentErrorType, LabletRunStopReason, key};
 use lablet_model::{
     CacheScope, CompletionMode, ConfigDigest, Cost, FinishReason, ModelRef, Prompts, ProviderApi,
     ProviderResponse, RequestParams, Responded, Run, RunId, RunLabels, RunSetup, Thinking,
     ToolName, Usage,
 };
-use lablet_run::telemetry::Value;
-use lablet_run::telemetry::generated::key;
-use lablet_test_support::{PROMPT, SYSTEM};
 
-use super::*;
-use crate::telemetry::generated::{LabletInvokeAgentErrorType, LabletRunStopReason};
+const SYSTEM: &str = "You fix tests, tersely.";
+const PROMPT: &str = "Fix the failing test in the parser.";
 
 const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 const CONFIG_DIGEST: &str = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use lablet_conformance::otlp::Exported;
 use lablet_conformance::receiver::{Mode, Receiver};
+use lablet_run::telemetry::generated::{LabletInvokeAgent, LabletRun, key};
 use lablet_test_support::Scratch;
 use opentelemetry::InstrumentationScope;
 use opentelemetry::logs::AnyValue;
@@ -20,8 +21,7 @@ use serde_json::{Value, json};
 
 use crate::export::Telemetry;
 use crate::otel_env::OtelEnv;
-use crate::telemetry::generated::{LabletInvokeAgent, LabletRun, key};
-use crate::{CancelHandle, Config, Format, RunId, RunRequest};
+use crate::{CancelHandle, Config, Format, RunId, RunRequest, build};
 
 /// A response that comes at once.
 const ENDS: &str = "
@@ -213,15 +213,20 @@ async fn the_transcript_a_wide_event_names_is_whole_when_an_exporter_is_handed_t
             "telemetry": { "otlp": { "enabled": false } },
         }),
     );
-    let mut lablet = crate::build(config).await.unwrap();
+    let (_, wiring) = build::prepare(&config, &build::environment)
+        .await
+        .unwrap()
+        .split()
+        .unwrap();
     let one_at_a_time =
         |name: &str| (name == "OTEL_BLRP_MAX_EXPORT_BATCH_SIZE").then(|| OsString::from("1"));
     let looking = Looking::default();
-    lablet.telemetry = Telemetry::builder(InstrumentationScope::builder("lablet").build())
+    let telemetry = Telemetry::builder(InstrumentationScope::builder("lablet").build())
         .sdk(OtelEnv::read(&one_at_a_time).sdk)
         .exporting_to(InMemorySpanExporter::default(), looking.clone())
         .build()
         .unwrap();
+    let mut lablet = build::wire(&config, wiring, telemetry);
 
     lablet.run(request("run-a")).await;
     lablet.shutdown().await;

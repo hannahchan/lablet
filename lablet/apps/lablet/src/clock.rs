@@ -1,8 +1,8 @@
-//! The run's clock and its cancellation, as a library has them.
+//! The run's clock, as a library has it.
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use lablet_run::{Cancellation, Clock};
+use lablet_run::Clock;
 
 /// The runtime's clock, which is also the one the adapters hold their
 /// deadlines on.
@@ -14,22 +14,19 @@ impl Clock for TokioClock {
         tokio::time::Instant::now().into_std()
     }
 
+    fn wall(&self) -> SystemTime {
+        at_or_after_epoch(SystemTime::now())
+    }
+
     async fn sleep(&self, duration: Duration) {
         tokio::time::sleep(duration).await;
     }
 }
 
-/// A run of the library ends for its own reasons: nothing here asks one to
-/// stop.
-pub(crate) struct NeverCancelled;
-
-#[async_trait::async_trait]
-impl Cancellation for NeverCancelled {
-    fn is_cancelled(&self) -> bool {
-        false
-    }
-
-    async fn cancelled(&self) {
-        std::future::pending::<()>().await;
-    }
+/// `time`, or the epoch for a time before it, as the documents give it.
+fn at_or_after_epoch(time: SystemTime) -> SystemTime {
+    time.max(UNIX_EPOCH)
 }
+
+#[cfg(test)]
+mod tests;

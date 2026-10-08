@@ -3,7 +3,7 @@
 //! where lablet holds the SDK.
 //!
 //! The loop opens its spans through a tracer and emits its records through
-//! lablet's logger, and the composition root opens the root span and fills
+//! lablet's logger, and `lablet-run`'s runner opens the root span and fills
 //! the wide event; this module renders none of them. It builds the providers
 //! those come from, sampled and limited as the environment says, and the
 //! resource they describe themselves with, and takes what they emit to each

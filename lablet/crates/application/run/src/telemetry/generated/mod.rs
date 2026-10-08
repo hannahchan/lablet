@@ -21,13 +21,14 @@ use crate::telemetry::{Attribute, Value};
 pub use enums::{
     GenAiClientInferenceOperationDetailsGenAiOperationName,
     GenAiClientOperationExceptionExceptionType, LabletChatErrorType, LabletExecuteToolErrorType,
-    LabletExecuteToolGenAiToolType, LabletExecuteToolNetworkTransport, LabletToolSource,
-    LabletToolStatus,
+    LabletExecuteToolGenAiToolType, LabletExecuteToolNetworkTransport, LabletInvokeAgentErrorType,
+    LabletMcpLifetime, LabletRequestApi, LabletRequestCacheScope, LabletRunCompletionMode,
+    LabletRunErrorType, LabletRunStopReason, LabletToolSource, LabletToolStatus,
 };
 pub use events::{
-    GenAiClientInferenceOperationDetails, GenAiClientOperationException, LabletRetry,
+    GenAiClientInferenceOperationDetails, GenAiClientOperationException, LabletRetry, LabletRun,
 };
-pub use spans::{LabletChat, LabletExecuteTool};
+pub use spans::{LabletChat, LabletExecuteTool, LabletInvokeAgent};
 
 /// The schema URL of the registry, for the instrumentation scope.
 pub const SCHEMA_URL: &str = "https://lablet.dev/schemas/0.1.0";

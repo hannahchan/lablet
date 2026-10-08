@@ -1,6 +1,6 @@
 //! Time and cancellation, as ports, so a test can drive both.
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// The loop's only source of time.
 ///
@@ -13,6 +13,15 @@ use std::time::{Duration, Instant};
 pub trait Clock: Send + Sync {
     /// The instant now.
     fn now(&self) -> Instant;
+
+    /// The time now on the wall clock, which a run reads once, as it
+    /// starts, and times every span and record by, with the offsets
+    /// [`Clock::now`] measures.
+    ///
+    /// Never before the Unix epoch: an implementation reads a clock that's
+    /// earlier as the epoch, since an exporter puts any time before it at
+    /// 0, which would leave every span of the run no length.
+    fn wall(&self) -> SystemTime;
 
     /// Waits for `duration`.
     async fn sleep(&self, duration: Duration);

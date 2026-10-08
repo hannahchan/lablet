@@ -379,7 +379,9 @@ telemetry: {{ capture_content: true, file: {{ path: '{}' }}, otlp: {{ enabled: f
                     == Some(&serde_json::Value::String(run_id.to_string()))
             };
             let root = exported
-                .spans_of(crate::telemetry::generated::LabletInvokeAgent::GEN_AI_OPERATION_NAME)
+                .spans_of(
+                    lablet_run::telemetry::generated::LabletInvokeAgent::GEN_AI_OPERATION_NAME,
+                )
                 .into_iter()
                 .find(|span| of_run(&span.attributes))
                 .unwrap();
@@ -445,7 +447,7 @@ telemetry: {{ file: {{ path: '{}' }}, otlp: {{ enabled: false }} }}
     assert!(exported.spans.is_empty(), "{:?}", exported.spans);
     assert_eq!(
         exported
-            .records_of(crate::telemetry::generated::LabletRun::NAME)
+            .records_of(lablet_run::telemetry::generated::LabletRun::NAME)
             .len(),
         1
     );

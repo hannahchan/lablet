@@ -1,8 +1,5 @@
-//! Secondary adapter: writes a run's transcript document to a JSON file.
-//!
-//! It implements no port. One format is nothing to generalise from, so the
-//! composition root calls it directly, after the run and where effects
-//! belong.
+//! Secondary adapter: writes a run's transcript document to a JSON file,
+//! as `lablet-run`'s [`TranscriptWriter`].
 
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
@@ -14,6 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use lablet_documents::TranscriptDocument;
 use lablet_model::RunId;
+use lablet_run::{RunTranscript, TranscriptError, TranscriptWriter};
 
 /// What a configured path holds where the run id belongs.
 const RUN_ID: &[u8] = b"{run_id}";
@@ -179,6 +177,66 @@ impl TranscriptFile {
             let _ = std::fs::remove_file(&temporary);
         }
         replaced
+    }
+}
+
+/// The transcripts of a config that names a place for them, each written
+/// to its run's [`TranscriptFile`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonTranscripts {
+    /// The path, with `${VAR}` substituted, that's written to.
+    real: PathBuf,
+    /// The path before substitution, which is the one a message shows, so
+    /// that nothing a variable holds reaches the diagnostic log.
+    written: PathBuf,
+}
+
+impl JsonTranscripts {
+    /// The transcripts of runs at `real`, the path the config names with
+    /// its variables substituted, which `written` is before substitution.
+    #[must_use]
+    pub fn new(real: PathBuf, written: PathBuf) -> Self {
+        Self { real, written }
+    }
+}
+
+#[async_trait::async_trait]
+impl TranscriptWriter for JsonTranscripts {
+    fn place(&self, run_id: &RunId) -> Result<PathBuf, TranscriptError> {
+        TranscriptFile::for_run(&self.real, run_id)
+            .map(|file| file.path)
+            .map_err(|error| TranscriptError::NoPlace(error.to_string()))
+    }
+
+    async fn write(
+        &self,
+        place: PathBuf,
+        transcript: RunTranscript,
+    ) -> Result<(), TranscriptError> {
+        let RunTranscript {
+            context,
+            model,
+            tools,
+            task,
+            transcript,
+        } = transcript;
+        let document = TranscriptDocument::new(context, model, tools, task, transcript);
+        let file = TranscriptFile { path: place };
+        // A file is written where waiting is allowed, as the telemetry's
+        // files are.
+        tokio::task::spawn_blocking(move || file.write(&document))
+            .await
+            .map_err(|error| format!("the transcript's write didn't run to its end: {error}"))
+            .and_then(|written| {
+                written.map_err(|error| match error {
+                    TranscriptWriteError::Unwritable { reason, .. } => format!(
+                        "the transcript couldn't be written to {}: {reason}",
+                        self.written.display()
+                    ),
+                    error @ TranscriptWriteError::RunIdNotOneComponent { .. } => error.to_string(),
+                })
+            })
+            .map_err(TranscriptError::Unwritten)
     }
 }
 

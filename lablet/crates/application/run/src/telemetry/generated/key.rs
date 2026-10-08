@@ -13,6 +13,12 @@ pub const EXCEPTION_MESSAGE: &str = "exception.message";
 /// The type of the exception (its fully-qualified class name, if applicable). The dynamic type of the exception should be preferred over the static type in languages that support it.
 pub const EXCEPTION_TYPE: &str = "exception.type";
 
+/// Human-readable name of the GenAI agent provided by the application.
+pub const GEN_AI_AGENT_NAME: &str = "gen_ai.agent.name";
+
+/// The version of the GenAI agent.
+pub const GEN_AI_AGENT_VERSION: &str = "gen_ai.agent.version";
+
 /// The unique identifier for a conversation (session, thread), used to store and correlate messages within this conversation.
 pub const GEN_AI_CONVERSATION_ID: &str = "gen_ai.conversation.id";
 
@@ -106,8 +112,88 @@ pub const LABLET_CONFIG_DIGEST: &str = "lablet.config.digest";
 /// The experiment the run is part of, as the run request named it.
 pub const LABLET_EXPERIMENT_ID: &str = "lablet.experiment.id";
 
+/// How long the run's MCP servers live.
+pub const LABLET_MCP_LIFETIME: &str = "lablet.mcp.lifetime";
+
+/// The version each MCP server gave of itself when it started, in the order of `lablet.mcp.servers`.
+pub const LABLET_MCP_SERVER_VERSIONS: &str = "lablet.mcp.server_versions";
+
+/// Names of the configured MCP servers.
+pub const LABLET_MCP_SERVERS: &str = "lablet.mcp.servers";
+
+/// The price of a million input tokens served from the prompt cache, in US dollars.
+pub const LABLET_PRICING_CACHE_READ_USD_PER_MTOK: &str = "lablet.pricing.cache_read_usd_per_mtok";
+
+/// The price of a million input tokens written to the prompt cache, in US dollars.
+pub const LABLET_PRICING_CACHE_WRITE_USD_PER_MTOK: &str = "lablet.pricing.cache_write_usd_per_mtok";
+
+/// The price of a million uncached input tokens, in US dollars.
+pub const LABLET_PRICING_INPUT_USD_PER_MTOK: &str = "lablet.pricing.input_usd_per_mtok";
+
+/// The price of a million output tokens, in US dollars. Reasoning tokens bill at this rate.
+pub const LABLET_PRICING_OUTPUT_USD_PER_MTOK: &str = "lablet.pricing.output_usd_per_mtok";
+
+/// Size of the system prompt in bytes, skills included.
+pub const LABLET_PROMPT_SYSTEM_BYTES: &str = "lablet.prompt.system_bytes";
+
+/// SHA-256 of the system prompt as it was sent, in hex.
+pub const LABLET_PROMPT_SYSTEM_DIGEST: &str = "lablet.prompt.system_digest";
+
+/// Size of the tool specs in bytes, as the run offered them.
+pub const LABLET_PROMPT_TOOLS_BYTES: &str = "lablet.prompt.tools_bytes";
+
+/// Size of the task prompt in bytes.
+pub const LABLET_PROMPT_USER_BYTES: &str = "lablet.prompt.user_bytes";
+
+/// The part of `lablet.provider.failed.input_tokens` served from the provider's prompt cache.
+pub const LABLET_PROVIDER_FAILED_CACHE_READ_INPUT_TOKENS: &str =
+    "lablet.provider.failed.cache_read.input_tokens";
+
+/// The part of `lablet.provider.failed.input_tokens` written to the provider's prompt cache.
+pub const LABLET_PROVIDER_FAILED_CACHE_WRITE_INPUT_TOKENS: &str =
+    "lablet.provider.failed.cache_write.input_tokens";
+
+/// Input tokens that failed provider call attempts reported, summed, cached tokens included.
+pub const LABLET_PROVIDER_FAILED_INPUT_TOKENS: &str = "lablet.provider.failed.input_tokens";
+
+/// Output tokens that failed provider call attempts reported, summed.
+pub const LABLET_PROVIDER_FAILED_OUTPUT_TOKENS: &str = "lablet.provider.failed.output_tokens";
+
+/// Latency of the slowest provider call attempt, in milliseconds.
+pub const LABLET_PROVIDER_LATENCY_MS_MAX: &str = "lablet.provider.latency_ms.max";
+
+/// Sum of the latencies of every provider call attempt, in milliseconds.
+pub const LABLET_PROVIDER_LATENCY_MS_TOTAL: &str = "lablet.provider.latency_ms.total";
+
+/// Number of provider call attempts made beyond the first of their call.
+pub const LABLET_PROVIDER_RETRIES: &str = "lablet.provider.retries";
+
+/// The API the run reached its model through.
+pub const LABLET_REQUEST_API: &str = "lablet.request.api";
+
 /// Size in bytes of the system prompt, messages, and tool specs sent in a provider call.
 pub const LABLET_REQUEST_BYTES: &str = "lablet.request.bytes";
+
+/// Which runs share what the provider caches of the run's requests.
+pub const LABLET_REQUEST_CACHE_SCOPE: &str = "lablet.request.cache_scope";
+
+/// Whether the reasoning of earlier responses was sent back on later calls.
+pub const LABLET_REQUEST_REASONING_REPLAYED: &str = "lablet.request.reasoning_replayed";
+
+/// How the model was asked to reason, as the config spells it.
+pub const LABLET_REQUEST_THINKING: &str = "lablet.request.thinking";
+
+/// Whether the run produced a structured result, the `task_complete` argument.
+pub const LABLET_RESULT_HAS_STRUCTURED: &str = "lablet.result.has_structured";
+
+/// The structured result, the `task_complete` argument, as a JSON string.
+pub const LABLET_RESULT_STRUCTURED: &str = "lablet.result.structured";
+
+/// The final assistant text.
+pub const LABLET_RESULT_TEXT: &str = "lablet.result.text";
+
+/// Size of the final assistant text in bytes.
+pub const LABLET_RESULT_TEXT_BYTES: &str = "lablet.result.text_bytes";
 
 /// How long the loop waits before the next attempt, in milliseconds.
 pub const LABLET_RETRY_BACKOFF_MS: &str = "lablet.retry.backoff_ms";
@@ -115,14 +201,59 @@ pub const LABLET_RETRY_BACKOFF_MS: &str = "lablet.retry.backoff_ms";
 /// Whether the loop decided to retry the failed provider call.
 pub const LABLET_RETRY_WILL_RETRY: &str = "lablet.retry.will_retry";
 
+/// How the run decides that the model has finished.
+pub const LABLET_RUN_COMPLETION_MODE: &str = "lablet.run.completion_mode";
+
+/// Cost of the run in US dollars, from the configured pricing.
+pub const LABLET_RUN_COST_USD: &str = "lablet.run.cost_usd";
+
+/// Wall-clock duration of the run, in milliseconds.
+pub const LABLET_RUN_DURATION_MS: &str = "lablet.run.duration_ms";
+
+/// The message of the error that ended the run.
+pub const LABLET_RUN_ERROR: &str = "lablet.run.error";
+
+/// The configured cap on turns.
+pub const LABLET_RUN_MAX_TURNS: &str = "lablet.run.max_turns";
+
+/// Why the run ended.
+pub const LABLET_RUN_STOP_REASON: &str = "lablet.run.stop_reason";
+
+/// The configured run timeout, in milliseconds.
+pub const LABLET_RUN_TIMEOUT_MS: &str = "lablet.run.timeout_ms";
+
+/// Where the run's transcript is written.
+pub const LABLET_RUN_TRANSCRIPT_PATH: &str = "lablet.run.transcript_path";
+
+/// Number of turns the run took.
+pub const LABLET_RUN_TURNS: &str = "lablet.run.turns";
+
+/// Number of skill files appended to the system prompt.
+pub const LABLET_SKILLS_COUNT: &str = "lablet.skills.count";
+
 /// The task the run attempts, as the run request named it.
 pub const LABLET_TASK_ID: &str = "lablet.task.id";
+
+/// Number of calls to one tool, `<key>` being the tool name.
+///
+/// A template: the emitted key is this prefix, a dot, and `<key>`.
+pub const LABLET_TOOL_CALLS: &str = "lablet.tool.calls";
+
+/// Number of error results from one tool, `<key>` being the tool name.
+///
+/// A template: the emitted key is this prefix, a dot, and `<key>`.
+pub const LABLET_TOOL_ERRORS: &str = "lablet.tool.errors";
 
 /// Size of a tool call's input in bytes.
 pub const LABLET_TOOL_INPUT_BYTES: &str = "lablet.tool.input.bytes";
 
 /// Whether the tool call returned an error result to the model.
 pub const LABLET_TOOL_IS_ERROR: &str = "lablet.tool.is_error";
+
+/// Sum of the latencies of the calls to one tool, in milliseconds, `<key>` being the tool name.
+///
+/// A template: the emitted key is this prefix, a dot, and `<key>`.
+pub const LABLET_TOOL_LATENCY_MS: &str = "lablet.tool.latency_ms";
 
 /// Size in bytes of a tool call's output as the model was sent it, after the output cap.
 pub const LABLET_TOOL_OUTPUT_BYTES: &str = "lablet.tool.output.bytes";
@@ -138,6 +269,36 @@ pub const LABLET_TOOL_SOURCE: &str = "lablet.tool.source";
 
 /// How a tool call ended.
 pub const LABLET_TOOL_STATUS: &str = "lablet.tool.status";
+
+/// Number of tool calls that returned an error result.
+pub const LABLET_TOOL_CALLS_ERRORS: &str = "lablet.tool_calls.errors";
+
+/// Sum of the sizes of every tool call's input, in bytes.
+pub const LABLET_TOOL_CALLS_INPUT_BYTES_TOTAL: &str = "lablet.tool_calls.input_bytes.total";
+
+/// Sum of the latencies of every tool call, in milliseconds.
+pub const LABLET_TOOL_CALLS_LATENCY_MS_TOTAL: &str = "lablet.tool_calls.latency_ms.total";
+
+/// Sum of the sizes of every tool call's output, in bytes.
+pub const LABLET_TOOL_CALLS_OUTPUT_BYTES_TOTAL: &str = "lablet.tool_calls.output_bytes.total";
+
+/// Number of tool calls executed. The intercepted `task_complete` call isn't one, and neither is a call that was never run.
+pub const LABLET_TOOL_CALLS_TOTAL: &str = "lablet.tool_calls.total";
+
+/// Number of tool calls whose output the output cap cut short.
+pub const LABLET_TOOL_CALLS_TRUNCATED: &str = "lablet.tool_calls.truncated";
+
+/// Number of tool calls that named a tool the run didn't offer.
+pub const LABLET_TOOL_CALLS_UNKNOWN: &str = "lablet.tool_calls.unknown";
+
+/// Number of tools offered to the model.
+pub const LABLET_TOOLS_COUNT: &str = "lablet.tools.count";
+
+/// SHA-256 of the tool specs as the run offered them, in hex.
+pub const LABLET_TOOLS_DIGEST: &str = "lablet.tools.digest";
+
+/// Names of the tools offered to the model, after the allow and deny lists.
+pub const LABLET_TOOLS_NAMES: &str = "lablet.tools.names";
 
 /// Which repetition of the task the run is, as the run request named it.
 pub const LABLET_TRIAL: &str = "lablet.trial";
@@ -262,6 +423,46 @@ pub const LABLET_EXECUTE_TOOL_KEYS: &[&str] = &[
     "session.id",
 ];
 
+/// The keys the registry requires of `lablet.invoke_agent`.
+pub const LABLET_INVOKE_AGENT_REQUIRED: &[&str] = &[
+    "gen_ai.agent.name",
+    "gen_ai.agent.version",
+    "gen_ai.conversation.id",
+    "gen_ai.operation.name",
+    "gen_ai.request.model",
+    "gen_ai.usage.input_tokens",
+    "gen_ai.usage.output_tokens",
+    "lablet.config.digest",
+    "lablet.run.stop_reason",
+    "lablet.run.turns",
+    "lablet.tool_calls.total",
+    "session.id",
+];
+
+/// Every key the registry declares for `lablet.invoke_agent`.
+pub const LABLET_INVOKE_AGENT_KEYS: &[&str] = &[
+    "error.type",
+    "gen_ai.agent.name",
+    "gen_ai.agent.version",
+    "gen_ai.conversation.id",
+    "gen_ai.operation.name",
+    "gen_ai.request.model",
+    "gen_ai.usage.cache_read.input_tokens",
+    "gen_ai.usage.cache_write.input_tokens",
+    "gen_ai.usage.input_tokens",
+    "gen_ai.usage.output_tokens",
+    "gen_ai.usage.reasoning.output_tokens",
+    "lablet.config.digest",
+    "lablet.experiment.id",
+    "lablet.run.cost_usd",
+    "lablet.run.stop_reason",
+    "lablet.run.turns",
+    "lablet.task.id",
+    "lablet.tool_calls.total",
+    "lablet.trial",
+    "session.id",
+];
+
 /// The keys the registry requires of `gen_ai.client.inference.operation.details`.
 pub const GEN_AI_CLIENT_INFERENCE_OPERATION_DETAILS_REQUIRED: &[&str] = &[
     "gen_ai.conversation.id",
@@ -329,4 +530,129 @@ pub const LABLET_RETRY_KEYS: &[&str] = &[
     "lablet.attempt",
     "lablet.retry.backoff_ms",
     "lablet.retry.will_retry",
+];
+
+/// The keys the registry requires of `lablet.run`.
+pub const LABLET_RUN_REQUIRED: &[&str] = &[
+    "gen_ai.agent.name",
+    "gen_ai.agent.version",
+    "gen_ai.conversation.id",
+    "gen_ai.provider.name",
+    "gen_ai.request.max_tokens",
+    "gen_ai.request.model",
+    "gen_ai.response.finish_reasons",
+    "gen_ai.usage.input_tokens",
+    "gen_ai.usage.output_tokens",
+    "lablet.config.digest",
+    "lablet.prompt.system_bytes",
+    "lablet.prompt.system_digest",
+    "lablet.prompt.tools_bytes",
+    "lablet.prompt.user_bytes",
+    "lablet.provider.latency_ms.max",
+    "lablet.provider.latency_ms.total",
+    "lablet.provider.retries",
+    "lablet.request.api",
+    "lablet.request.cache_scope",
+    "lablet.request.reasoning_replayed",
+    "lablet.request.thinking",
+    "lablet.result.has_structured",
+    "lablet.result.text_bytes",
+    "lablet.run.completion_mode",
+    "lablet.run.duration_ms",
+    "lablet.run.stop_reason",
+    "lablet.run.timeout_ms",
+    "lablet.run.turns",
+    "lablet.skills.count",
+    "lablet.tool_calls.errors",
+    "lablet.tool_calls.input_bytes.total",
+    "lablet.tool_calls.latency_ms.total",
+    "lablet.tool_calls.output_bytes.total",
+    "lablet.tool_calls.total",
+    "lablet.tool_calls.truncated",
+    "lablet.tool_calls.unknown",
+    "lablet.tools.count",
+    "lablet.tools.digest",
+    "lablet.tools.names",
+    "session.id",
+];
+
+/// Every key the registry declares for `lablet.run`, beside its templates.
+pub const LABLET_RUN_KEYS: &[&str] = &[
+    "error.type",
+    "gen_ai.agent.name",
+    "gen_ai.agent.version",
+    "gen_ai.conversation.id",
+    "gen_ai.provider.name",
+    "gen_ai.request.max_tokens",
+    "gen_ai.request.model",
+    "gen_ai.request.reasoning.level",
+    "gen_ai.request.seed",
+    "gen_ai.request.temperature",
+    "gen_ai.response.finish_reasons",
+    "gen_ai.usage.cache_read.input_tokens",
+    "gen_ai.usage.cache_write.input_tokens",
+    "gen_ai.usage.input_tokens",
+    "gen_ai.usage.output_tokens",
+    "gen_ai.usage.reasoning.output_tokens",
+    "lablet.config.digest",
+    "lablet.experiment.id",
+    "lablet.mcp.lifetime",
+    "lablet.mcp.server_versions",
+    "lablet.mcp.servers",
+    "lablet.pricing.cache_read_usd_per_mtok",
+    "lablet.pricing.cache_write_usd_per_mtok",
+    "lablet.pricing.input_usd_per_mtok",
+    "lablet.pricing.output_usd_per_mtok",
+    "lablet.prompt.system_bytes",
+    "lablet.prompt.system_digest",
+    "lablet.prompt.tools_bytes",
+    "lablet.prompt.user_bytes",
+    "lablet.provider.failed.cache_read.input_tokens",
+    "lablet.provider.failed.cache_write.input_tokens",
+    "lablet.provider.failed.input_tokens",
+    "lablet.provider.failed.output_tokens",
+    "lablet.provider.latency_ms.max",
+    "lablet.provider.latency_ms.total",
+    "lablet.provider.retries",
+    "lablet.request.api",
+    "lablet.request.cache_scope",
+    "lablet.request.reasoning_replayed",
+    "lablet.request.thinking",
+    "lablet.result.has_structured",
+    "lablet.result.structured",
+    "lablet.result.text",
+    "lablet.result.text_bytes",
+    "lablet.run.completion_mode",
+    "lablet.run.cost_usd",
+    "lablet.run.duration_ms",
+    "lablet.run.error",
+    "lablet.run.max_turns",
+    "lablet.run.stop_reason",
+    "lablet.run.timeout_ms",
+    "lablet.run.transcript_path",
+    "lablet.run.turns",
+    "lablet.skills.count",
+    "lablet.task.id",
+    "lablet.tool_calls.errors",
+    "lablet.tool_calls.input_bytes.total",
+    "lablet.tool_calls.latency_ms.total",
+    "lablet.tool_calls.output_bytes.total",
+    "lablet.tool_calls.total",
+    "lablet.tool_calls.truncated",
+    "lablet.tool_calls.unknown",
+    "lablet.tools.count",
+    "lablet.tools.digest",
+    "lablet.tools.names",
+    "lablet.trial",
+    "server.address",
+    "server.port",
+    "session.id",
+];
+
+/// The templates the registry declares for `lablet.run`: each emitted key
+/// is one of these prefixes, a dot, and `<key>`.
+pub const LABLET_RUN_TEMPLATES: &[&str] = &[
+    "lablet.tool.calls",
+    "lablet.tool.errors",
+    "lablet.tool.latency_ms",
 ];

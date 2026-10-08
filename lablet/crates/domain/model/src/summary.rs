@@ -1,4 +1,4 @@
-//! The two halves of the wide event: what the composition root knows about a
+//! The two halves of the wide event: what lablet-run's runner knows about a
 //! run, and what the loop knew and measured.
 
 use std::collections::BTreeMap;
@@ -12,7 +12,7 @@ use crate::{
     ToolStats, Transcript, Usage, whole_ms,
 };
 
-/// What only the composition root knows about a run: its part of the wide
+/// What only lablet-run's runner knows about a run: its part of the wide
 /// event. What the loop is built from, such as the limits and the request
 /// parameters, it reports itself, in [`RunSummary`].
 ///
@@ -24,8 +24,8 @@ pub struct RunContext {
     /// The run's id.
     pub run_id: RunId,
     /// What the run request named the run's task, experiment and trial. The
-    /// loop copies them to the outcome, and the composition root reads them
-    /// here for the root span and the wide event.
+    /// loop copies them to the outcome, and the runner reads them here for
+    /// the root span and the wide event.
     pub labels: RunLabels,
     /// When the run started, as the wall clock said it, whole: every span
     /// and record of the run is timed from it. It's read where the context
@@ -47,7 +47,7 @@ pub struct RunContext {
     pub mcp: Option<McpServers>,
     /// Whether prompts, responses, and tool content may reach telemetry. The
     /// loop reads it to fill the content fields of its records, and the
-    /// composition root reads it before putting the result from the summary
+    /// runner reads it before putting the result from the summary
     /// into the wide event.
     pub capture_content: bool,
 }
@@ -90,7 +90,7 @@ pub struct PromptSizes {
 /// `provider`, and what's under `lablet.tool_calls` in `tool_calls`. The
 /// groups are for reading. Two numbers of one group can still be taken for
 /// each other, and what holds each to its attribute is the field of the wide
-/// event's generated struct that the composition root fills from it, with the
+/// event's generated struct that lablet-run's runner fills from it, with the
 /// tests of what each field holds.
 ///
 /// It has no written form of its own: the wide event is a mapping of its

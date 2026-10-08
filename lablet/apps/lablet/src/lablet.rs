@@ -1,26 +1,15 @@
 //! The `Lablet`: one loop and its adapters, which runs a task at a time.
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use lablet_documents::TranscriptDocument;
-use lablet_model::{
-    BlankTask, ConfigDigest, FinishedRun, Prompts, RunContext, RunId, RunLabels, ToolSpec,
-};
+use lablet_model::{BlankTask, ConfigDigest, FinishedRun, Prompts, RunId, RunLabels, ToolSpec};
 use lablet_provider_fake::FakeProvider;
-use lablet_run::telemetry::{span_attributes, time_at};
-use lablet_run::{RunService, ToolSet};
-use lablet_transcript_json::{TranscriptFile, TranscriptWriteError};
-use opentelemetry::global::BoxedTracer;
-use opentelemetry::trace::{FutureExt as _, TraceContextExt as _, Tracer as _};
-use ulid::Ulid;
+use lablet_run::{Cancellation, Ran, RunStart, Runner, ToolSet, TranscriptError};
+use opentelemetry::trace::FutureExt as _;
 
-use crate::cancel::{CancelHandle, RunCancellation};
+use crate::cancel::CancelHandle;
 use crate::export::Telemetry;
 use crate::propagation::Inbound;
-use crate::telemetry::generated::LabletInvokeAgent;
-use crate::{root_span, wide};
 
 /// What a run is asked to do, what it's known by, and what may stop it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +108,18 @@ impl RunRequest {
     pub fn labels(self, labels: RunLabels) -> Self {
         Self { labels, ..self }
     }
+
+    /// The run's start, as the runner takes it.
+    fn into_start(self) -> RunStart {
+        RunStart {
+            task: self.task,
+            run_id: self.run_id,
+            labels: self.labels,
+            cancellation: self
+                .cancellation
+                .map(|handle| Arc::new(handle) as Arc<dyn Cancellation>),
+        }
+    }
 }
 
 /// The provider, as whoever starts a run knows it.
@@ -137,27 +138,6 @@ impl Played {
     }
 }
 
-/// What every run of one `Lablet` shares, beside the loop.
-pub(crate) struct Fixed {
-    pub(crate) system: String,
-    pub(crate) config_digest: ConfigDigest,
-    pub(crate) capture_content: bool,
-    /// Where a transcript goes, when the config names a place for one.
-    pub(crate) transcript: Option<TranscriptPath>,
-    /// The context every run's root span is opened in.
-    pub(crate) inbound: Inbound,
-}
-
-/// Where a run's transcript goes, as it's written to and as the config
-/// writes it.
-pub(crate) struct TranscriptPath {
-    /// The path, with `${VAR}` substituted, that's written to.
-    pub(crate) real: PathBuf,
-    /// The path before substitution, which is the one a message shows, so
-    /// that nothing a variable holds reaches the diagnostic log.
-    pub(crate) written: PathBuf,
-}
-
 /// One loop with its adapters, built from a config.
 ///
 /// It runs many times, one run at a time, and every run has an id, a start
@@ -166,15 +146,13 @@ pub(crate) struct TranscriptPath {
 /// the `OTEL_*`, `TRACEPARENT`, `TRACESTATE` and `BAGGAGE` variables of the
 /// environment it's built in.
 pub struct Lablet {
-    service: RunService,
+    runner: Runner,
     provider: Played,
     tools: Arc<ToolSet>,
-    /// The tracer the root span is opened with, of the same scope the
-    /// loop's is.
-    tracer: BoxedTracer,
     telemetry: Telemetry,
-    cancellation: Arc<RunCancellation>,
-    fixed: Fixed,
+    /// The context every run's root span is opened in.
+    inbound: Inbound,
+    config_digest: ConfigDigest,
     /// Whether a run began and its telemetry wasn't flushed: its future was
     /// dropped before it ended, and the spans it had open were queued,
     /// unfilled, as they were dropped.
@@ -183,36 +161,34 @@ pub struct Lablet {
 
 #[expect(
     clippy::missing_fields_in_debug,
-    reason = "the loop, the tracer and the provider hold trait objects with nothing to print, and the system prompt is content"
+    reason = "the runner and the provider hold trait objects with nothing to print, and the system prompt is content"
 )]
 impl core::fmt::Debug for Lablet {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Lablet")
             .field("tools", &self.tools)
             .field("telemetry", &self.telemetry)
-            .field("config_digest", &self.fixed.config_digest)
+            .field("config_digest", &self.config_digest)
             .finish()
     }
 }
 
 impl Lablet {
     pub(crate) fn new(
-        service: RunService,
+        runner: Runner,
         provider: Played,
         tools: Arc<ToolSet>,
-        tracer: BoxedTracer,
         telemetry: Telemetry,
-        cancellation: Arc<RunCancellation>,
-        fixed: Fixed,
+        inbound: Inbound,
+        config_digest: ConfigDigest,
     ) -> Self {
         Self {
-            service,
+            runner,
             provider,
             tools,
-            tracer,
             telemetry,
-            cancellation,
-            fixed,
+            inbound,
+            config_digest,
             unflushed: false,
         }
     }
@@ -252,12 +228,6 @@ impl Lablet {
     /// exported are reported on the diagnostic log, and the run measured what
     /// it measured either way.
     pub async fn run(&mut self, request: RunRequest) -> FinishedRun {
-        let RunRequest {
-            task,
-            run_id,
-            labels,
-            cancellation,
-        } = request;
         if self.unflushed {
             // What a dropped run left is queued, and goes before the next
             // run's first line, so the two runs' lines don't interleave. It
@@ -271,71 +241,31 @@ impl Lablet {
                 );
             }
         }
-        // One reading of the clock, so a fresh id holds the time its run
-        // started. A clock before the epoch is read as the epoch, as the
-        // documents give it: an exporter puts any time before the epoch at
-        // 0, which would leave every span no length.
-        let started = SystemTime::now().max(UNIX_EPOCH);
-        let run_id = run_id.unwrap_or_else(|| RunId::ulid(Ulid::from_datetime(started).0));
-        let transcript = self.transcript_file(&run_id);
-        let context = RunContext {
-            run_id,
-            labels,
-            started,
-            config_digest: self.fixed.config_digest.clone(),
-            agent_version: crate::VERSION.to_owned(),
-            transcript_path: transcript.as_ref().map(|(file, _)| file.path().to_owned()),
-            skills_count: 0,
-            mcp: None,
-            capture_content: self.fixed.capture_content,
-        };
-
         self.telemetry.begin_run();
         self.unflushed = true;
         self.provider.begin_run();
-        let task_prompt = task.task().to_owned();
-        let prompts = task.with_system(self.fixed.system.as_str());
-        // Every run sets its own, so a handle of an earlier run never
-        // reaches this one.
-        self.cancellation.set(cancellation);
 
-        // From the inbound context, never the caller's current one, so the
-        // span its caller is in has no part in the run's trace. The span
-        // goes into the context by value so that, once the loop has
-        // returned, it can be read back from there to be filled and ended.
-        let parent = &self.fixed.inbound.parent;
-        let root = self
-            .tracer
-            .span_builder(root_span::name())
-            .with_kind(LabletInvokeAgent::KIND)
-            .with_start_time(context.started)
-            .start_with_context(&self.tracer, parent);
-        let within = parent.with_span(root);
-        let finished = self
-            .service
-            .run(context.clone(), prompts)
-            .with_context(within.clone())
+        // In the inbound context, never the caller's current one, so the
+        // span its caller is in has no part in the run's trace.
+        let Ran {
+            finished,
+            transcript,
+        } = self
+            .runner
+            .run(request.into_start())
+            .with_context(self.inbound.parent.clone())
             .await;
-
-        let summary = &finished.summary;
-        let end = time_at(context.started, finished.duration);
-        let root = within.span();
-        root.set_attributes(span_attributes(
-            root_span::invoke_agent(&context, summary).attributes(),
-        ));
-        root.set_status(root_span::status(&summary.outcome));
-        root.end_with_timestamp(end);
-        let root_context = root.span_context().clone();
-
-        let wide = wide::wide_event(&context, summary).record(end, &root_context);
-        if let Some((file, shown)) = transcript {
-            self.write_transcript(file, &shown, context, task_prompt, &finished)
-                .await;
+        let run_id = &finished.summary.outcome.run_id;
+        match transcript {
+            Some(TranscriptError::NoPlace(error)) => {
+                tracing::warn!(%run_id, %error, "the run has no transcript file");
+            }
+            Some(TranscriptError::Unwritten(error)) => tracing::warn!(%run_id, "{error}"),
+            None => {}
         }
-        let flushed = self.telemetry.flush(wide).await;
-        if let Err(error) = flushed {
+        if let Err(error) = self.telemetry.flush_leftovers().await {
             tracing::warn!(
-                run_id = %summary.outcome.run_id,
+                %run_id,
                 failures = ?error.failures(),
                 "the run's telemetry wasn't exported whole"
             );
@@ -355,56 +285,6 @@ impl Lablet {
                 failures = ?error.failures(),
                 "the telemetry wasn't exported whole at shutdown"
             );
-        }
-    }
-
-    /// The file of the run's transcript, when the config names a place for
-    /// one and the run id can be part of it, and its path as the config
-    /// writes it.
-    fn transcript_file(&self, run_id: &RunId) -> Option<(TranscriptFile, PathBuf)> {
-        let path = self.fixed.transcript.as_ref()?;
-        TranscriptFile::for_run(&path.real, run_id)
-            .inspect_err(|error| {
-                tracing::warn!(%run_id, %error, "the run has no transcript file");
-            })
-            .ok()
-            .map(|file| (file, path.written.clone()))
-    }
-
-    /// Writes the run's transcript to `file`, and warns of a write that
-    /// failed with `shown`, the path as the config writes it.
-    async fn write_transcript(
-        &self,
-        file: TranscriptFile,
-        shown: &Path,
-        context: RunContext,
-        task_prompt: String,
-        run: &FinishedRun,
-    ) {
-        let run_id = context.run_id.clone();
-        let document = TranscriptDocument::new(
-            context,
-            run.summary.model.clone(),
-            self.tools.specs().to_vec(),
-            task_prompt,
-            run.transcript.clone(),
-        );
-        // A file is written where waiting is allowed, as the telemetry's
-        // files are.
-        let written = tokio::task::spawn_blocking(move || file.write(&document))
-            .await
-            .map_err(|error| format!("the transcript's write didn't run to its end: {error}"))
-            .and_then(|written| {
-                written.map_err(|error| match error {
-                    TranscriptWriteError::Unwritable { reason, .. } => format!(
-                        "the transcript couldn't be written to {}: {reason}",
-                        shown.display()
-                    ),
-                    error @ TranscriptWriteError::RunIdNotOneComponent { .. } => error.to_string(),
-                })
-            });
-        if let Err(error) = written {
-            tracing::warn!(%run_id, "{error}");
         }
     }
 }

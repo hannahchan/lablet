@@ -13,10 +13,20 @@ use opentelemetry::trace::{
 };
 use opentelemetry::{Context, InstrumentationScope, KeyValue};
 
-use super::telemetry::Telemetry;
+use super::telemetry::{FlushError, Telemetry};
 use crate::otel_env::{OtelEnv, Sdk};
 
 pub(crate) use lablet_test_support::Scratch;
+
+impl Telemetry {
+    /// Emits `wide`, a run's wide event, through lablet's logger, and then
+    /// flushes both providers, as a `Lablet` does once its runner has
+    /// emitted the wide event.
+    pub(crate) async fn flush(&self, wide: Record) -> Result<(), FlushError> {
+        self.logger().emit(wide);
+        self.flush_leftovers().await
+    }
+}
 
 pub(crate) const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 pub(crate) const OTHER_RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNED";
@@ -89,11 +99,11 @@ fn record(name: &'static str, at: SystemTime, span: SpanContext, run: &str) -> R
 }
 
 /// Emits one run under the id `run` through `tracer` and `logger`, as the
-/// loop and the composition root do: the root span, opened from an empty
+/// loop and lablet-run's runner do: the root span, opened from an empty
 /// context, two chat spans and a tool span beneath it, and the `records`
 /// in their spans' contexts, each timed on the run's clock. Returns the
-/// run's wide event as the composition root hands it over, in the root
-/// span's context, timed at the run's end.
+/// run's wide event as the runner hands it over, in the root span's
+/// context, timed at the run's end.
 pub(crate) fn emit(
     tracer: &BoxedTracer,
     logger: &dyn Logger,
@@ -179,7 +189,7 @@ pub(crate) fn emit(
     wide_event(run, root_context)
 }
 
-/// The wide event of the run `run`, as the composition root hands it over.
+/// The wide event of the run `run`, as lablet-run's runner hands it over.
 pub(crate) fn wide_event(run: &str, root: SpanContext) -> Record {
     Record {
         name: WIDE,

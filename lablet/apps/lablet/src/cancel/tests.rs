@@ -53,23 +53,3 @@ fn waiting_ends_when_the_handle_is_fired_and_at_once_once_it_has_been() {
     let mut fired = pin!(handle.cancelled());
     assert_eq!(fired.as_mut().poll(&mut context), Poll::Ready(()));
 }
-
-#[test]
-fn a_lablet_answers_for_the_handle_of_the_run_in_progress_and_for_none_before_any() {
-    let cancellation = RunCancellation::default();
-    let fired = CancelHandle::new();
-    fired.cancel();
-    assert!(!cancellation.is_cancelled());
-
-    cancellation.set(Some(fired));
-    assert!(cancellation.is_cancelled());
-
-    let later = CancelHandle::new();
-    cancellation.set(Some(later.clone()));
-    assert!(!cancellation.is_cancelled());
-    later.cancel();
-    assert!(cancellation.is_cancelled());
-
-    cancellation.set(None);
-    assert!(!cancellation.is_cancelled());
-}

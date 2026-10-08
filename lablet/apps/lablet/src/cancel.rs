@@ -1,11 +1,9 @@
 //! Asking a run to stop, from outside it.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use lablet_run::Cancellation;
 use tokio::sync::watch;
-
-use crate::clock::NeverCancelled;
 
 /// Asks a run to stop. A caller gives one to a run with
 /// [`crate::RunRequest::cancellation`], keeps a clone, and fires it with
@@ -73,48 +71,6 @@ impl Cancellation for CancelHandle {
 
     async fn cancelled(&self) {
         Self::cancelled(self).await;
-    }
-}
-
-/// The cancellation a `Lablet`'s loop is built with: the handle of the run
-/// in progress, which each run sets from its request.
-pub(crate) struct RunCancellation {
-    current: Mutex<Arc<dyn Cancellation>>,
-}
-
-impl Default for RunCancellation {
-    fn default() -> Self {
-        Self {
-            current: Mutex::new(Arc::new(NeverCancelled)),
-        }
-    }
-}
-
-impl RunCancellation {
-    /// Answers for `handle` until the next run sets its own, or for no
-    /// handle when `handle` is `None`.
-    pub(crate) fn set(&self, handle: Option<CancelHandle>) {
-        let current: Arc<dyn Cancellation> = match handle {
-            Some(handle) => Arc::new(handle),
-            None => Arc::new(NeverCancelled),
-        };
-        *self.current.lock().unwrap_or_else(PoisonError::into_inner) = current;
-    }
-
-    fn current(&self) -> Arc<dyn Cancellation> {
-        Arc::clone(&self.current.lock().unwrap_or_else(PoisonError::into_inner))
-    }
-}
-
-#[async_trait::async_trait]
-impl Cancellation for RunCancellation {
-    fn is_cancelled(&self) -> bool {
-        self.current().is_cancelled()
-    }
-
-    async fn cancelled(&self) {
-        let current = self.current();
-        current.cancelled().await;
     }
 }
 

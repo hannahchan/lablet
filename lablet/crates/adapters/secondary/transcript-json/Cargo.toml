@@ -11,10 +11,13 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
 lablet-documents.workspace = true
 lablet-model.workspace = true
+lablet-run.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 lablet-test-support.workspace = true

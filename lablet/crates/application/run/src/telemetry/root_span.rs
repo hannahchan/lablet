@@ -1,14 +1,12 @@
-//! The root span `invoke_agent lablet`, as the composition root fills it from
-//! the run it covers. Not to be confused with `root`, the directory the
-//! built-in tools work under.
+//! The root span `invoke_agent lablet`, as the runner fills it from the run
+//! it covers.
 
 use lablet_model::{RunContext, RunOutcome, RunSummary, StopReason};
-use lablet_run::telemetry::count_of;
-use lablet_run::telemetry::generated::Join;
 use opentelemetry::trace::Status;
 
-use crate::telemetry::generated::LabletInvokeAgent;
-use crate::telemetry::spellings::invoke_agent_error_type;
+use super::count_of;
+use super::generated::{Join, LabletInvokeAgent};
+use super::spellings::invoke_agent_error_type;
 
 /// The span's name, as the registry builds it from the operation and the
 /// agent's name, which are fixed before the run has a struct to ask.

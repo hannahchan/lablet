@@ -1,6 +1,6 @@
 //! The loop's time and cancellation, as the tests of adapters drive them.
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lablet_run::{Cancellation, Clock};
 
@@ -13,6 +13,10 @@ pub struct TokioClock;
 impl Clock for TokioClock {
     fn now(&self) -> Instant {
         tokio::time::Instant::now().into_std()
+    }
+
+    fn wall(&self) -> SystemTime {
+        SystemTime::now().max(UNIX_EPOCH)
     }
 
     async fn sleep(&self, duration: Duration) {

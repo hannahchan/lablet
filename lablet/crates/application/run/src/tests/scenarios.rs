@@ -6,7 +6,8 @@
 //! `cache_scope`, the name of an MCP tool's server and the wait a server
 //! asked for are all read from the summary a run returns, which the
 //! summary's own scenarios hold, since no signal of the loop's is the place
-//! for them. The run's own span and its one row are the composition root's.
+//! for them. The run's own span and its one row are the runner's, whose
+//! tests are beside it.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -258,8 +259,8 @@ impl Harness {
         }
     }
 
-    /// Runs the loop inside a root span of the test's own, as the
-    /// composition root runs it inside the run's, so every span has the
+    /// Runs the loop inside a root span of the test's own, as the runner
+    /// runs it inside the run's, so every span has the
     /// parent a real run's has, and keeps what the loop emitted.
     ///
     /// The span's context is read from the context the loop ran in, and

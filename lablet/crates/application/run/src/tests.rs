@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 mod errors;
-mod fakes;
+pub(crate) mod fakes;
 mod scenarios;
 mod toolset;
 

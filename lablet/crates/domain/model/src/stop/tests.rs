@@ -6,9 +6,9 @@ use crate::{
 };
 
 // The literal spellings below are the members of `lablet.run.stop_reason` and
-// `lablet.run.completion_mode` in the composition root's generated telemetry
-// module, which the domain can't depend on. A spelling that changes on either
-// side must change on both.
+// `lablet.run.completion_mode` in lablet-run's generated telemetry module,
+// which the domain can't depend on. A spelling that changes on either side
+// must change on both.
 const fn stop_reason_spelling(reason: StopReason) -> &'static str {
     match reason {
         StopReason::Completed => "completed",

@@ -142,11 +142,9 @@ mod otel_env;
 mod otlp;
 mod propagation;
 mod root;
-mod root_span;
 mod secrets;
 mod settings;
 pub mod telemetry;
-mod wide;
 
 pub use build::{BuildError, Checked, ErrorClass, Unsupported, build, check, telemetry_on_stderr};
 pub use cancel::CancelHandle;

@@ -1,5 +1,5 @@
 //! Lablet's telemetry, hand-written once: what every span and log record
-//! the loop emits is built from.
+//! a run emits is built from.
 //!
 //! A generated module lists each span and event as a struct whose
 //! `attributes()` is pairs of key and value, with no branch, so the floors
@@ -13,13 +13,16 @@
 //!
 //! [`generated`] is the module `cargo xtask weaver generate` writes from the
 //! registry folder `lablet/telemetry/registry/application/run/`,
-//! [`spellings`] holds the domain's enums to its enums, and the crate's own
+//! [`spellings`] holds the domain's enums to its enums, the crate's own
 //! `conversation` module rebuilds the content the records carry from what
-//! the loop saw.
+//! the loop saw, and its `root_span` and `wide` modules fill the run's own
+//! span and its wide event from what the run came to.
 
 pub(crate) mod conversation;
 pub mod generated;
+pub(crate) mod root_span;
 pub mod spellings;
+pub(crate) mod wide;
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -28,6 +31,11 @@ use std::time::{Duration, SystemTime};
 use opentelemetry::logs::{AnyValue, LogRecord as _, Severity};
 use opentelemetry::trace::SpanContext;
 use opentelemetry::{Array, KeyValue, StringValue};
+
+/// The name of lablet's instrumentation scope, which every span and record
+/// of a run is emitted under, with lablet's version and the registry's
+/// [`generated::SCHEMA_URL`].
+pub const SCOPE: &str = "lablet";
 
 /// `count` as the wire carries it: an `i64`, of which one too large is the
 /// largest the wire can say.

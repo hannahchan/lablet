@@ -54,7 +54,7 @@ impl TranscriptDocument {
     /// and held `transcript`.
     ///
     /// What names the run is read from the context, which is where the
-    /// composition root states it; the outcome's copy of the id and the
+    /// runner of lablet-run states it; the outcome's copy of the id and the
     /// labels is the loop's copy of these.
     #[must_use]
     pub fn new(

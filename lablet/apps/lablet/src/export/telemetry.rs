@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use lablet_run::telemetry::{Bridge, Logger, Record};
+use lablet_run::telemetry::{Bridge, Logger};
 use opentelemetry::InstrumentationScope;
 use opentelemetry::global::BoxedTracer;
 use opentelemetry::logs::{LoggerProvider as _, NoopLoggerProvider};
@@ -232,8 +232,8 @@ where
 /// The loop opens its spans through [`Telemetry::tracer`] and emits its
 /// records through [`Telemetry::logger`], which only queue what they're
 /// handed, so neither waits for an export. Whoever runs the loop calls
-/// [`Telemetry::begin_run`] before a run and [`Telemetry::flush`] when it
-/// has returned, with the run's wide event, and [`Telemetry::shutdown`]
+/// [`Telemetry::begin_run`] before a run and [`Telemetry::flush_leftovers`]
+/// once the run has emitted its wide event, and [`Telemetry::shutdown`]
 /// before the process exits. A `Telemetry` dropped without a shutdown is
 /// shut down by the SDK on the thread that drops it, which exports what the
 /// processors hold but costs that thread up to five seconds for each
@@ -307,10 +307,11 @@ impl Telemetry {
         }
     }
 
-    /// Emits `wide`, the run's wide event, through lablet's logger, and
-    /// then flushes both providers, side by side. Each flushes the file's
+    /// Flushes both providers, side by side. Each flushes the file's
     /// processor before the network's, so when this returns the file holds
-    /// the run whole, its wide event included, whatever a collector did.
+    /// what the providers held whole, whatever a collector did: after a run,
+    /// the run and its wide event, and before one, what a run whose future
+    /// was dropped left, its open spans ended as they were dropped.
     ///
     /// The SDK gives each processor's flush five seconds, so a collector
     /// that never answers costs this about five seconds.
@@ -319,18 +320,6 @@ impl Telemetry {
     ///
     /// Returns a [`FlushError`] holding what each provider's processors
     /// said of a flush that failed or gave up.
-    pub(crate) async fn flush(&self, wide: Record) -> Result<(), FlushError> {
-        self.logger().emit(wide);
-        self.flush_leftovers().await
-    }
-
-    /// Flushes both providers, side by side, as [`Self::flush`] does, with
-    /// no wide event: what a run whose future was dropped left, its open
-    /// spans ended as they were dropped.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::flush`].
     pub(crate) async fn flush_leftovers(&self) -> Result<(), FlushError> {
         let Some(Providers { tracer, logger }) = self.providers.clone() else {
             return Ok(());

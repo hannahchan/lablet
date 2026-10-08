@@ -15,8 +15,9 @@ const POLICY: &str = "lablet/telemetry/policies/annotations.rego";
 const RUN_EVENTS: &str = "application/run/events.yaml";
 const GROUPS: &str = "shared/groups.yaml";
 const ATTRIBUTES: &str = "shared/attributes.yaml";
-const ROOT_EVENTS: &str = "apps/lablet/events.yaml";
+const RUN_SPANS: &str = "application/run/spans.yaml";
 
+const WIDE_JOIN: &str = "      # Identity\n      - ref_group: attributes.lablet.join\n";
 const CHAT_VALUE: &str = "            value: chat\n      - ref: gen_ai.provider.name";
 const RETRY: &str = "      lablet:\n        emit: span_event\n";
 const EXCEPTION: &str = "      lablet:\n        severity: warn\n";
@@ -145,9 +146,9 @@ fn cases() -> Vec<Case> {
         ),
         case(
             "lablet_join_missing",
-            ROOT_EVENTS,
-            "      - ref_group: attributes.lablet.join\n",
-            String::new(),
+            RUN_EVENTS,
+            WIDE_JOIN,
+            "      # Identity\n".to_owned(),
         ),
         case(
             "lablet_join_inconsistent",
@@ -200,7 +201,7 @@ fn cases() -> Vec<Case> {
         Case {
             rule: "lablet_signal_in_shared",
             change: Change::Move {
-                from: "apps/lablet/spans.yaml",
+                from: RUN_SPANS,
                 to: "shared/spans.yaml",
             },
         },

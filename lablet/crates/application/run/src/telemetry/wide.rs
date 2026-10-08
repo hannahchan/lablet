@@ -8,11 +8,10 @@
 use std::collections::BTreeMap;
 
 use lablet_model::{FinishReason, RunContext, RunSummary, Thinking, ToolName, ToolStats};
-use lablet_run::telemetry::count_of;
-use lablet_run::telemetry::generated::Join;
 
-use crate::telemetry::generated::LabletRun;
-use crate::telemetry::spellings::run_error_type;
+use super::count_of;
+use super::generated::{Join, LabletRun};
+use super::spellings::run_error_type;
 
 /// The wide event of a run of `context` that came to `summary`, whole. A
 /// key whose condition doesn't hold of the run is left out, and never

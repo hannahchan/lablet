@@ -28,6 +28,18 @@ fn model() -> ModelRef {
 /// as much of a run as a writer needs: its id, and a prompt to tell one
 /// document from another by.
 fn document(run: &str, system: &str) -> TranscriptDocument {
+    let RunTranscript {
+        context,
+        model,
+        tools,
+        task,
+        transcript,
+    } = handed(run, system);
+    TranscriptDocument::new(context, model, tools, task, transcript)
+}
+
+/// What the runner hands a writer of the run [`document`] is of.
+fn handed(run: &str, system: &str) -> RunTranscript {
     let setup = RunSetup {
         run_id: id(run),
         labels: RunLabels::default(),
@@ -72,13 +84,13 @@ fn document(run: &str, system: &str) -> TranscriptDocument {
         None,
         None,
     );
-    TranscriptDocument::new(
+    RunTranscript {
         context,
-        model(),
-        Vec::new(),
-        "Fix the failing test.".to_owned(),
-        finished.transcript,
-    )
+        model: model(),
+        tools: Vec::new(),
+        task: "Fix the failing test.".to_owned(),
+        transcript: finished.transcript,
+    }
 }
 
 fn compact(document: &TranscriptDocument) -> String {
@@ -637,5 +649,55 @@ fn a_write_that_fails_part_way_is_an_error_wherever_it_fails() {
     assert_eq!(
         render(&document, NeverFlushes).unwrap_err().to_string(),
         "the device went away"
+    );
+}
+
+// The transcripts of a config, as the runner asks for them
+
+#[test]
+fn the_place_of_a_run_s_transcript_is_its_file_and_a_run_id_the_path_cannot_take_has_none() {
+    let configured = Path::new("out/{run_id}/transcript.json");
+    let transcripts = JsonTranscripts::new(configured.to_owned(), "${OUT}/transcript.json".into());
+
+    assert_eq!(
+        transcripts.place(&id(FIRST)),
+        Ok(PathBuf::from(format!("out/{FIRST}/transcript.json")))
+    );
+    let refused = TranscriptFile::for_run(configured, &id(".."))
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        transcripts.place(&id("..")),
+        Err(TranscriptError::NoPlace(refused))
+    );
+}
+
+#[tokio::test]
+async fn a_transcript_is_written_at_its_place_and_a_failed_write_names_the_path_as_written() {
+    let scratch = Scratch::new("port");
+    let configured = scratch.at("{run_id}.json");
+    let transcripts = JsonTranscripts::new(configured, "${OUT}/{run_id}.json".into());
+    let place = transcripts.place(&id(FIRST)).unwrap();
+
+    let written = transcripts
+        .write(place.clone(), handed(FIRST, "You fix tests."))
+        .await;
+
+    assert_eq!(written, Ok(()));
+    assert_eq!(
+        std::fs::read_to_string(&place).unwrap(),
+        compact(&document(FIRST, "You fix tests."))
+    );
+
+    let unwritable = JsonTranscripts::new(scratch.path().to_owned(), "${OUT}".into());
+    let place = unwritable.place(&id(FIRST)).unwrap();
+    let failed = unwritable
+        .write(place, handed(FIRST, "You fix tests."))
+        .await;
+    assert_eq!(
+        failed,
+        Err(TranscriptError::Unwritten(
+            "the transcript couldn't be written to ${OUT}: Is a directory (os error 21)".to_owned()
+        ))
     );
 }

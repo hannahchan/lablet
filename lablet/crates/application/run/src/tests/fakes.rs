@@ -10,7 +10,7 @@ use std::future::poll_fn;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lablet_model::{
     Endpoint, KeptOutput, ModelRef, ProviderErrorKind, ProviderResponse, ToolName, ToolSpec,
@@ -37,11 +37,17 @@ async fn hold_on() {
     }
 }
 
+/// When a [`FakeClock`] reads zero on the wall clock: a fraction of a
+/// millisecond past a whole one, so a time cut to the millisecond anywhere
+/// is a time that differs.
+pub const WALL_AT_ZERO: Duration = Duration::from_nanos(1_790_000_000_000_123_456);
+
 /// A clock that only moves when a test moves it, and never waits.
 ///
 /// `sleep` adds the wait to the reading instead of blocking, so a run with a
 /// ten-minute backoff finishes in microseconds and the transcript still says
-/// ten minutes passed.
+/// ten minutes passed. Its wall clock reads [`WALL_AT_ZERO`] past the epoch
+/// plus what has passed.
 pub struct FakeClock {
     origin: Instant,
     elapsed: Mutex<Duration>,
@@ -89,6 +95,10 @@ impl FakeClock {
 impl Clock for FakeClock {
     fn now(&self) -> Instant {
         self.origin + *self.elapsed.lock().expect("the fake clock isn't poisoned")
+    }
+
+    fn wall(&self) -> SystemTime {
+        UNIX_EPOCH + WALL_AT_ZERO + *self.elapsed.lock().expect("the fake clock isn't poisoned")
     }
 
     async fn sleep(&self, duration: Duration) {

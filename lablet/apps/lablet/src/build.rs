@@ -9,30 +9,30 @@ use std::sync::Arc;
 
 use lablet_model::{RunOutcome, StopReason, ToolSpec};
 use lablet_provider_fake::{FakeProvider, Script, ScriptFormat, ScriptSource};
-use lablet_run::{FilterList, RunService, ToolExecutor, ToolSet, ToolSetError};
+use lablet_run::telemetry::SCOPE;
+use lablet_run::telemetry::generated::SCHEMA_URL;
+use lablet_run::{
+    Clock, FilterList, RunCancellation, RunService, Runner, Shared, ToolExecutor, ToolSet,
+    ToolSetError, TranscriptWriter,
+};
 use lablet_tools_builtin::{BuiltinTools, SettingsError};
+use lablet_transcript_json::JsonTranscripts;
 use opentelemetry::InstrumentationScope;
 use opentelemetry_sdk::Resource;
 
-use crate::cancel::RunCancellation;
 use crate::clock::TokioClock;
 use crate::config::{
     Config, ConfigError, Context, Env, Format, KeyPath, Model, Place, Provider, Refusal,
     ResolvedConfig, Substituted, Tools, TranscriptFormat, shown,
 };
 use crate::export::{self, FileTarget, OtelBuildError, OtlpSettings, Signal, Telemetry};
-use crate::lablet::{Fixed, Lablet, Played, TranscriptPath};
+use crate::lablet::{Lablet, Played};
 use crate::otel_env::{Exporter, OtelEnv, Sdk};
 use crate::otlp;
 use crate::propagation::{self, Inbound};
 use crate::root::{self, OwnFile};
 use crate::secrets::{self, Derived, Named};
 use crate::settings::{Selected, Settings, System};
-
-/// The name of lablet's instrumentation scope, which every span and record
-/// of a run is emitted under, with lablet's version and the registry's
-/// schema URL.
-const SCOPE: &str = "lablet";
 
 /// What a config may state that this lablet has no adapter for yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -265,7 +265,7 @@ impl Checked {
 }
 
 /// What lablet reads of where it runs: its own environment.
-fn environment(name: &str) -> Option<OsString> {
+pub(crate) fn environment(name: &str) -> Option<OsString> {
     std::env::var_os(name)
 }
 
@@ -448,7 +448,7 @@ pub async fn build(config: Config) -> Result<Lablet, BuildError> {
 }
 
 /// What checking a config comes to, which a build goes on from.
-struct Prepared {
+pub(crate) struct Prepared {
     /// The config with `${VAR}` substituted, which is what runs.
     real: Substituted,
     settings: Settings,
@@ -485,7 +485,7 @@ enum Ready {
 /// Checks `written` whole, on the config it comes to once `${VAR}` is
 /// substituted, and shows each refusal from `written`, so no message holds
 /// what a variable holds.
-async fn prepare(written: &Config, env: Env<'_>) -> Result<Prepared, BuildError> {
+pub(crate) async fn prepare(written: &Config, env: Env<'_>) -> Result<Prepared, BuildError> {
     let refused = |refusal| BuildError::Config(written.refused(refusal));
     let real = written.substituted(env).map_err(refused)?;
     let settings = Settings::of(&real).map_err(refused)?;
@@ -642,53 +642,132 @@ fn unknown_tool(real: &Config, written: &Config, list: FilterList, name: &str) -
 
 async fn build_in(config: Config, env: Env<'_>) -> Result<Lablet, BuildError> {
     let prepared = prepare(&config, env).await?;
-    assemble(&config, prepared)
+    let (exports, wiring) = prepared.split()?;
+    let telemetry = exports.telemetry(&config)?;
+    Ok(wire(&config, wiring, telemetry))
 }
 
-/// The `Lablet` a checked config comes to.
-fn assemble(config: &Config, prepared: Prepared) -> Result<Lablet, BuildError> {
-    let Prepared {
+/// What a checked config's telemetry is built from.
+pub(crate) struct Exports {
+    target: Option<FileTarget>,
+    otlp: Option<OtlpSettings>,
+    disabled: bool,
+    sdk: Sdk,
+    resource: Resource,
+}
+
+/// What a checked config's `Lablet` is wired from, beside its telemetry.
+pub(crate) struct Wiring {
+    real: Substituted,
+    settings: Settings,
+    /// The fake provider's script, the one provider there's an adapter for.
+    script: Script,
+    system: String,
+    capture_content: bool,
+    inbound: Inbound,
+    tools: Arc<ToolSet>,
+    secrets: Derived,
+}
+
+impl Prepared {
+    /// What the telemetry is built from, and what the rest is wired from.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::Unsupported`] for a provider there's no
+    /// adapter for yet, before any telemetry is built.
+    pub(crate) fn split(self) -> Result<(Exports, Wiring), BuildError> {
+        let Self {
+            real,
+            settings,
+            provider,
+            system,
+            target,
+            otlp,
+            disabled,
+            capture_content,
+            sdk,
+            resource,
+            inbound,
+            tools,
+            secrets,
+        } = self;
+        let script = match provider {
+            Ready::Fake(script) => script,
+            Ready::Anthropic => return Err(Unsupported::Anthropic.into()),
+            Ready::Openai => return Err(Unsupported::Openai.into()),
+        };
+        Ok((
+            Exports {
+                target,
+                otlp,
+                disabled,
+                sdk,
+                resource,
+            },
+            Wiring {
+                real,
+                settings,
+                script,
+                system,
+                capture_content,
+                inbound,
+                tools,
+                secrets,
+            },
+        ))
+    }
+}
+
+impl Exports {
+    /// The telemetry of every run of `config`'s `Lablet`, under lablet's
+    /// instrumentation scope.
+    fn telemetry(self, config: &Config) -> Result<Telemetry, BuildError> {
+        let Self {
+            target,
+            otlp,
+            disabled,
+            sdk,
+            resource,
+        } = self;
+        let scope = InstrumentationScope::builder(SCOPE)
+            .with_version(crate::VERSION)
+            .with_schema_url(SCHEMA_URL)
+            .build();
+        let mut telemetry = Telemetry::builder(scope).resource(resource).sdk(sdk);
+        if disabled {
+            telemetry = telemetry.disabled();
+        }
+        if let Some(target) = target {
+            telemetry = telemetry.file(target);
+        }
+        let variables = otlp
+            .as_ref()
+            .map_or([None; 2], OtlpSettings::endpoint_variables);
+        if let Some(settings) = otlp {
+            telemetry = telemetry.otlp(settings);
+        }
+        telemetry
+            .build()
+            .map_err(|error| otlp_refused(config, variables, error))
+    }
+}
+
+/// The `Lablet` a checked config comes to, whose runs go through
+/// `telemetry`.
+pub(crate) fn wire(config: &Config, wiring: Wiring, telemetry: Telemetry) -> Lablet {
+    let Wiring {
         real,
         settings,
-        provider,
+        script,
         system,
-        target,
-        otlp,
-        disabled,
         capture_content,
-        sdk,
-        resource,
         inbound,
         tools,
         secrets,
-    } = prepared;
-    let script = match provider {
-        Ready::Fake(script) => script,
-        Ready::Anthropic => return Err(Unsupported::Anthropic.into()),
-        Ready::Openai => return Err(Unsupported::Openai.into()),
-    };
+    } = wiring;
     let provider = Arc::new(FakeProvider::new(real.model.name.clone(), script));
-
-    let scope = InstrumentationScope::builder(SCOPE)
-        .with_version(crate::VERSION)
-        .with_schema_url(crate::telemetry::generated::SCHEMA_URL)
-        .build();
-    let mut telemetry = Telemetry::builder(scope).resource(resource).sdk(sdk);
-    if disabled {
-        telemetry = telemetry.disabled();
-    }
-    if let Some(target) = target {
-        telemetry = telemetry.file(target);
-    }
-    let variables = otlp
-        .as_ref()
-        .map_or([None; 2], OtlpSettings::endpoint_variables);
-    if let Some(settings) = otlp {
-        telemetry = telemetry.otlp(settings);
-    }
-    let telemetry = telemetry
-        .build()
-        .map_err(|error| otlp_refused(config, variables, error))?;
+    let clock: Arc<dyn Clock> = Arc::new(TokioClock);
 
     let cancellation = Arc::new(RunCancellation::default());
     let service = RunService::new(
@@ -696,7 +775,7 @@ fn assemble(config: &Config, prepared: Prepared) -> Result<Lablet, BuildError> {
         Arc::clone(&tools),
         telemetry.tracer(),
         telemetry.logger(),
-        Arc::new(TokioClock),
+        Arc::clone(&clock),
         Arc::clone(&cancellation) as _,
         settings.stop,
         settings.retry,
@@ -705,26 +784,38 @@ fn assemble(config: &Config, prepared: Prepared) -> Result<Lablet, BuildError> {
         settings.calls,
         Arc::new(secrets.values),
     );
-    Ok(Lablet::new(
+    let config_digest = config.digest();
+    let transcript = real
+        .run
+        .transcript_path
+        .clone()
+        .zip(config.run.transcript_path.clone())
+        .map(|(real, written)| {
+            Arc::new(JsonTranscripts::new(real, written)) as Arc<dyn TranscriptWriter>
+        });
+    let runner = Runner::new(
         service,
+        Arc::clone(&tools),
+        telemetry.tracer(),
+        telemetry.logger(),
+        clock,
+        cancellation,
+        Shared {
+            system,
+            config_digest: config_digest.clone(),
+            capture_content,
+            transcript,
+            agent_version: crate::VERSION.to_owned(),
+        },
+    );
+    Lablet::new(
+        runner,
         Played::Script(provider),
         tools,
-        telemetry.tracer(),
         telemetry,
-        cancellation,
-        Fixed {
-            system,
-            config_digest: config.digest(),
-            capture_content,
-            transcript: real
-                .run
-                .transcript_path
-                .clone()
-                .zip(config.run.transcript_path.clone())
-                .map(|(real, written)| TranscriptPath { real, written }),
-            inbound,
-        },
-    ))
+        inbound,
+        config_digest,
+    )
 }
 
 /// Holds `model.api_key_env` to a variable that's set, for a provider that

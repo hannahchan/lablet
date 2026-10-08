@@ -1136,7 +1136,6 @@ dependencies = [
  "tonic",
  "tracing",
  "tracing-subscriber",
- "ulid",
 ]
 
 [[package]]
@@ -1231,6 +1230,7 @@ dependencies = [
  "sha2",
  "thiserror",
  "tokio",
+ "ulid",
 ]
 
 [[package]]
@@ -1275,11 +1275,14 @@ version = "0.1.0"
 name = "lablet-transcript-json"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "lablet-documents",
  "lablet-model",
+ "lablet-run",
  "lablet-test-support",
  "serde_json",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
