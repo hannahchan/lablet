@@ -24,11 +24,11 @@ pub struct RunRequest {
 
 /// The most bytes a run id may hold. A file's name is at most 255 bytes
 /// where lablet runs, and a run's files put text of their own beside its id
-/// in one name: `lablet-` and `.otlp.jsonl` for its telemetry, and whatever
-/// a transcript's path writes around `{run_id}`, which this leaves 127
-/// bytes. It holds a ULID, a UUID, or a run's labels joined with a digest.
-/// The transcript writer and the telemetry file hold a run id to the same
-/// number.
+/// in one name: `lablet-` and `.otlp.jsonl` for its telemetry in the
+/// command line, and whatever a transcript's path writes around
+/// `{run_id}`, which this leaves 127 bytes. It holds a ULID, a UUID, or a
+/// run's labels joined with a digest. The transcript writer and the
+/// command line's telemetry file hold a run id to the same number.
 const RUN_ID_MAX_BYTES: usize = 128;
 
 /// Why a run id was refused for a run: a run's files are named with its
@@ -67,10 +67,11 @@ impl RunRequest {
     ///
     /// Returns [`RunIdRefused`] when `id` isn't one component of a path:
     /// when it's `.` or `..`, or holds a `/` or a NUL. The run's telemetry
-    /// file and its transcript may be named with its id, and such an id
-    /// would put them in another directory than the config names, or name
-    /// no file at all. So does an id longer than 128 bytes, which leaves a
-    /// file's name no room for what's written beside it.
+    /// file in the command line, and its transcript, may be named with its
+    /// id, and such an id would put them in another directory than the
+    /// config names, or name no file at all. So does an id longer than 128
+    /// bytes, which leaves a file's name no room for what's written beside
+    /// it.
     pub fn run_id(self, id: RunId) -> Result<Self, RunIdRefused> {
         let reason = match id.as_str() {
             "." => "it names the directory itself",

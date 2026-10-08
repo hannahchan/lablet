@@ -69,8 +69,8 @@ id! {
     /// Identifies one run. A ULID when lablet-run's runner makes one, or
     /// whatever the caller names, as `lablet run --run-id` does; the domain
     /// only requires it to be non-empty and trimmed. The rule that a run's
-    /// files can be named with it is the composition root's and the writers',
-    /// which name those files.
+    /// files can be named with it is the `lablet-run-request` kernel's and
+    /// the writers', which name those files.
     RunId, run_id
 }
 

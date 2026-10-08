@@ -20,7 +20,10 @@ fn model(text: &str) -> Config {
 
 /// Whether the key's variable is set, for the config as it runs and as
 /// it's written, which here are one.
-fn key_set(config: &Config, held: impl Fn(&str) -> Option<OsString>) -> Result<(), BuildError> {
+fn key_set(
+    config: &Config,
+    held: impl Fn(&str) -> Option<OsString> + Sync,
+) -> Result<(), BuildError> {
     key_is_set(&config.model, config, &held)
 }
 
@@ -33,7 +36,7 @@ fn nothing(_: &str) -> Option<OsString> {
     None
 }
 
-fn refusal(model: &Config, held: impl Fn(&str) -> Option<OsString>) -> String {
+fn refusal(model: &Config, held: impl Fn(&str) -> Option<OsString> + Sync) -> String {
     let error = key_set(model, held).unwrap_err();
     assert!(matches!(error, BuildError::KeyVariable { .. }), "{error:?}");
     assert!(!format!("{error:?}").contains(PASTED), "{error:?}");

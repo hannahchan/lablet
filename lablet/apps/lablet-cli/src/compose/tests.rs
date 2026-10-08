@@ -33,7 +33,7 @@ const ENDS: &str = "
 async fn a_config_that_names_no_secret_reads_only_the_opentelemetry_variables() {
     let never = |name: &str| -> Option<OsString> {
         assert!(
-            name.starts_with("OTEL_") || ["TRACEPARENT", "TRACESTATE", "BAGGAGE"].contains(&name),
+            name.starts_with("OTEL_") || lablet_env_carrier::CONTEXT_VARIABLES.contains(&name),
             "the environment was read: {name}"
         );
         None

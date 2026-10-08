@@ -29,8 +29,9 @@
 //! version bump regenerates it.
 //!
 //! An `OTEL_*` variable in the environment would change the resource or add
-//! a network destination, and `TRACEPARENT`, `TRACESTATE` or `BAGGAGE`
-//! would give every run a parent, so the test refuses to run with one set;
+//! a network destination, and a context variable, `TRACEPARENT`,
+//! `TRACESTATE`, `BAGGAGE`, `B3` or an `X_B3_*` one, would give every run a
+//! parent, so the test refuses to run with one set;
 //! `cargo xtask test` strips them. `LABLET_UPDATE_GOLDEN=1 cargo test -p
 //! lablet --test it golden` writes the fixtures instead of comparing. CI
 //! never sets it, and the test refuses it there.
@@ -55,6 +56,7 @@ use lablet::config::Provider;
 use lablet::{CancelHandle, Config, FinishedRun, Format, RunId, RunRequest, StopReason};
 use lablet_conformance::otlp::{Attributes, Exported, LogRecord, Span, SpanKind, Status};
 use lablet_conformance::receiver::Receiver;
+use lablet_env_carrier::CONTEXT_VARIABLES;
 use lablet_run::telemetry::generated::GenAiClientOperationException;
 use lablet_test_support::Scratch;
 use serde_json::{Value, json};
@@ -268,12 +270,10 @@ impl Golden {
     }
 }
 
-/// The variables that give every run a parent, read by the propagators.
-const CONTEXT: [&str; 3] = ["TRACEPARENT", "TRACESTATE", "BAGGAGE"];
-
 /// Refuses an environment the comparison can't be trusted in: an `OTEL_*`
 /// variable, which lablet, the SDK and the exporter read, one of
-/// [`CONTEXT`], and [`UPDATE`] in CI, where a regeneration would pass
+/// [`CONTEXT_VARIABLES`], which the propagators read a run's parent from,
+/// and [`UPDATE`] in CI, where a regeneration would pass
 /// whatever the run emitted. Names are read, never a value.
 fn refuse_the_environment() {
     let set = refused(std::env::vars_os().map(|(name, _)| name.to_string_lossy().into_owned()));
@@ -295,7 +295,7 @@ fn refuse_the_environment() {
 /// Those of `names` the golden runs refuse.
 fn refused(names: impl Iterator<Item = String>) -> BTreeSet<String> {
     names
-        .filter(|name| name.starts_with("OTEL_") || CONTEXT.contains(&name.as_str()))
+        .filter(|name| name.starts_with("OTEL_") || CONTEXT_VARIABLES.contains(&name.as_str()))
         .collect()
 }
 
@@ -328,6 +328,12 @@ fn the_golden_runs_refuse_every_otel_variable_and_the_context_variables() {
                 "TRACEPARENT",
                 "TRACESTATE",
                 "BAGGAGE",
+                "B3",
+                "X_B3_TRACEID",
+                "X_B3_SPANID",
+                "X_B3_PARENTSPANID",
+                "X_B3_SAMPLED",
+                "X_B3_FLAGS",
                 "traceparent",
                 "TRACEPARENTS",
                 "NOT_OTEL_X",
@@ -345,7 +351,10 @@ fn the_golden_runs_refuse_every_otel_variable_and_the_context_variables() {
 
     assert!(!child.status.success(), "the child ran:\n{output}");
     assert!(
-        output.contains("\nBAGGAGE, OTEL_SERVICE_NAME, TRACEPARENT, TRACESTATE is set,"),
+        output.contains(
+            "\nB3, BAGGAGE, OTEL_SERVICE_NAME, TRACEPARENT, TRACESTATE, X_B3_FLAGS, \
+             X_B3_PARENTSPANID, X_B3_SAMPLED, X_B3_SPANID, X_B3_TRACEID is set,"
+        ),
         "{output}"
     );
 }

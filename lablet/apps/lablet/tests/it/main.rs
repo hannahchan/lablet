@@ -26,6 +26,8 @@ mod library_mode;
 #[cfg(test)]
 mod schema;
 #[cfg(test)]
+mod send;
+#[cfg(test)]
 mod tools;
 #[cfg(test)]
 mod transcript;

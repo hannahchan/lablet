@@ -13,6 +13,7 @@ members = [
   "crates/domain/model",
   "crates/domain/policy",
   "crates/application/run",
+  "crates/adapters/secondary/clock-tokio",
   "crates/adapters/secondary/provider-anthropic",
   "crates/adapters/secondary/provider-openai",
   "crates/adapters/secondary/provider-fake",
@@ -45,6 +46,8 @@ lablet-model = { path = "crates/domain/model", version = "0.1.0" }
 lablet-policy = { path = "crates/domain/policy", version = "0.1.0" }
 # Application: RunService (the loop) and its secondary ports
 lablet-run = { path = "crates/application/run", version = "0.1.0" }
+# Adapter: Clock on tokio's time, the one both roots run on
+lablet-clock-tokio = { path = "crates/adapters/secondary/clock-tokio", version = "0.1.0" }
 # Adapter: ModelProvider over the Anthropic Messages API
 lablet-provider-anthropic = { path = "crates/adapters/secondary/provider-anthropic", version = "0.1.0" }
 # Adapter: ModelProvider over the OpenAI Responses API and OpenAI-compatible chat completions
@@ -175,9 +178,9 @@ opentelemetry-proto = { version = "=0.33.0", default-features = false, features 
 ] }
 # OTLP network exporter over gRPC, HTTP/protobuf and HTTP/JSON, on rustls, with gzip on both
 # transports, as the specification's protocols and compression name them. `tls-roots` builds
-# tonic with the platform's trust roots, which the composition root turns on for a gRPC endpoint
-# over TLS when the environment names no certificate. `http-json` makes JSON the crate's own
-# default protocol, so the composition root always states one.
+# tonic with the platform's trust roots, which the CLI root turns on for a gRPC endpoint over TLS
+# when the environment names no certificate. `http-json` makes JSON the crate's own default
+# protocol, so the CLI root always states one.
 opentelemetry-otlp = { version = "=0.33.0", default-features = false, features = [
   "grpc-tonic",
   "gzip-http",
@@ -192,8 +195,8 @@ opentelemetry-otlp = { version = "=0.33.0", default-features = false, features =
   "logs",
   "internal-logs",
 ] }
-# The HTTP client trait the OTLP HTTP exporter sends through. The composition root wraps the
-# client behind it, so the config's headers are set after the exporter has merged the
+# The HTTP client trait the OTLP HTTP exporter sends through. The CLI root wraps the client
+# behind it, so the config's headers are set after the exporter has merged the
 # environment's.
 opentelemetry-http = "=0.33.0"
 # The `b3` and `b3multi` propagators `OTEL_PROPAGATORS` may name, in the CLI root alone; never
@@ -205,7 +208,7 @@ secrecy = "=0.10.3"
 # Protobuf bodies in the in-process OTLP HTTP receiver; the line opentelemetry-proto requires.
 prost = "=0.14.4"
 # The request and status types of the OTLP gRPC exporter's interceptor, its channel and its TLS
-# in the composition root, and the in-process gRPC receiver in lablet-conformance, which adds the
+# in the CLI root, and the in-process gRPC receiver in lablet-conformance, which adds the
 # server and TLS features; the line opentelemetry-otlp requires. `gzip` lets the receiver take
 # the compressed requests the exporter sends.
 tonic = { version = "=0.14.6", default-features = false, features = ["gzip"] }

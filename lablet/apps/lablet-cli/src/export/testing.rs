@@ -35,8 +35,8 @@ pub(crate) const STARTED_UNIX_MS: u64 = 1_790_000_000_000;
 /// How long the runs these tests emit last.
 pub(crate) const DURATION_MS: u64 = 12_345;
 
-/// The schema URL the composition root's scope carries in these tests. It
-/// stands for the registry's, which the composition root hands over and
+/// The schema URL the CLI root's scope carries in these tests. It
+/// stands for the registry's, which the CLI root hands over and
 /// this module never reads.
 pub(crate) const SCHEMA_URL: &str = "https://lablet.dev/schemas/test";
 
@@ -71,7 +71,7 @@ pub(crate) enum Records {
     Captured,
 }
 
-/// The scope the composition root hands over.
+/// The scope the CLI root hands over.
 pub(crate) fn scope() -> InstrumentationScope {
     InstrumentationScope::builder("lablet")
         .with_version(VERSION)

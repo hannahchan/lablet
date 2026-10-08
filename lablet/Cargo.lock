@@ -1106,7 +1106,7 @@ dependencies = [
 name = "lablet"
 version = "0.1.0"
 dependencies = [
- "async-trait",
+ "lablet-clock-tokio",
  "lablet-config",
  "lablet-conformance",
  "lablet-documents",
@@ -1136,6 +1136,7 @@ dependencies = [
  "async-trait",
  "clap",
  "lablet",
+ "lablet-clock-tokio",
  "lablet-config",
  "lablet-conformance",
  "lablet-documents",
@@ -1166,6 +1167,15 @@ dependencies = [
  "tonic",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "lablet-clock-tokio"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "lablet-run",
+ "tokio",
 ]
 
 [[package]]
@@ -1353,6 +1363,7 @@ name = "lablet-test-support"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "lablet-clock-tokio",
  "lablet-model",
  "lablet-policy",
  "lablet-provider-fake",

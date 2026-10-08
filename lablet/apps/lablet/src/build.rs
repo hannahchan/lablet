@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use lablet_clock_tokio::TokioClock;
 use lablet_config::{Config, Env, TelemetryFile, environment};
 use lablet_prepare::{BuildError, Checked, Prepared, Telemetry, Wiring, prepare};
 use lablet_run::telemetry::generated::SCHEMA_URL;
@@ -20,7 +21,6 @@ use opentelemetry::trace::noop::NoopTextMapPropagator;
 use opentelemetry::trace::{Span, SpanBuilder, Tracer, TracerProvider};
 use opentelemetry::{Context, InstrumentationScope};
 
-use crate::clock::TokioClock;
 use crate::fallback::{self, GlobalPropagator};
 use crate::lablet::Lablet;
 
@@ -68,7 +68,7 @@ impl Lablet {
     ///
     /// A `Lablet` can't be built without a logger provider:
     ///
-    /// ```compile_fail
+    /// ```compile_fail,E0061
     /// # async fn host(config: lablet::Config) -> Result<(), lablet::BuildError> {
     /// let lablet = lablet::Lablet::builder(config).build().await?;
     /// # Ok(())
@@ -248,6 +248,9 @@ fn prepared(config: &Config, env: Env<'_>) -> Result<Prepared, BuildError> {
 ///
 /// Returns [`BuildError::UnknownTool`] when `tools.allow` or `tools.deny`
 /// names a tool the run doesn't have.
+///
+/// Returns [`BuildError::Tools`] when the tools the run's executors serve
+/// can't be settled into one set.
 pub async fn build<P>(config: Config, logger_provider: P) -> Result<Lablet, BuildError>
 where
     P: LoggerProvider,

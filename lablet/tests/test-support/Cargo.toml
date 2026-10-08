@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 async-trait.workspace = true
+lablet-clock-tokio.workspace = true
 lablet-model.workspace = true
 lablet-policy.workspace = true
 lablet-provider-fake.workspace = true

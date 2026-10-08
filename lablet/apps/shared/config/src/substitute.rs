@@ -21,8 +21,9 @@ use super::{
 };
 
 /// Where lablet runs, as a function from a variable's name to what it
-/// holds, so a test can say what it holds.
-pub type Env<'a> = &'a dyn Fn(&str) -> Option<OsString>;
+/// holds, so a test can say what it holds. It's `Sync`, so a future that
+/// holds one across an await, as a build does, is `Send`.
+pub type Env<'a> = &'a (dyn Fn(&str) -> Option<OsString> + Sync);
 
 /// `text` with each `${NAME}` in it replaced by what the variable `NAME`
 /// holds, and each `$${` by `${`, so a text can hold `${` itself. Any other

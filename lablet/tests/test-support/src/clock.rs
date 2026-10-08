@@ -1,28 +1,10 @@
 //! The loop's time and cancellation, as the tests of adapters drive them.
 
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use lablet_run::{Cancellation, Clock};
+use lablet_run::Cancellation;
 
-/// The loop's clock on tokio's time. In a test that pauses tokio's clock, a
-/// script's latencies and the loop's waits pass at once, and the loop
-/// measures each as exactly what was asked.
-pub struct TokioClock;
-
-#[async_trait::async_trait]
-impl Clock for TokioClock {
-    fn now(&self) -> Instant {
-        tokio::time::Instant::now().into_std()
-    }
-
-    fn wall(&self) -> SystemTime {
-        SystemTime::now().max(UNIX_EPOCH)
-    }
-
-    async fn sleep(&self, duration: Duration) {
-        tokio::time::sleep(duration).await;
-    }
-}
+pub use lablet_clock_tokio::TokioClock;
 
 /// A run nobody asks to stop.
 pub struct NeverCancelled;

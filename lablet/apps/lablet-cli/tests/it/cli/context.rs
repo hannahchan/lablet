@@ -2,9 +2,10 @@
 //! with the variables given to the process, since a test can't set one of
 //! its own: a run under an inbound `TRACEPARENT` is its child, a run under
 //! one that isn't sampled exports no span, a command is under its tool
-//! span, and what the SDK says of a setting it read for itself stays out of
-//! the diagnostic log.
+//! span, a run such a command starts is a child of that span, and what the
+//! SDK says of a setting it read for itself stays out of the diagnostic log.
 
+use lablet_conformance::otlp::Exported;
 use serde_json::{Value, json};
 
 use super::harness::{CONFIG, ENDS, Lab, PROMPT, Ran, ran};
@@ -343,5 +344,48 @@ fn a_traceparent_the_config_states_is_the_one_a_command_gets() {
     assert_eq!(
         printed(&lab),
         format!("TRACEPARENT={stated}\nTRACESTATE={TRACESTATE}\nexit code: 0")
+    );
+}
+
+/// A command that runs lablet again starts a run that's a child of the
+/// command's tool span, in the trace of the run that started it, though
+/// each run has its config and its telemetry file of its own.
+#[test]
+fn a_run_a_command_starts_is_a_child_of_that_command_s_tool_span() {
+    let inner = Lab::new("context-nested-inner");
+    let config = inner.write(CONFIG, &inner.tree(ENDS, json!({})).to_string());
+    let command = format!(
+        "'{}' run --config '{}' --prompt {PROMPT:?} > /dev/null",
+        env!("CARGO_BIN_EXE_lablet"),
+        config.display()
+    );
+    let script = format!(
+        "
+- response:
+    content:
+      - tool_use: {{ id: call_1, name: bash, input: {{ json: {{ command: {} }} }} }}
+    finish: tool_use
+- response:
+    content:
+      - text: The inner run is done.
+    finish: end_turn
+",
+        serde_json::to_string(&command).unwrap()
+    );
+
+    let (outer, _) = completed("context-nested", &script, &[]);
+
+    let printed = printed(&outer);
+    assert!(printed.ends_with("\nexit code: 0"), "{printed}");
+    let exported = outer.exported();
+    let tools = exported.spans_of("execute_tool");
+    assert_eq!(tools.len(), 1, "{:?}", exported.spans);
+    let nested = Exported::read(&inner.telemetry()).unwrap();
+    let roots = nested.spans_of(key::INVOKE_AGENT);
+    assert_eq!(roots.len(), 1, "{:?}", nested.spans);
+    assert_eq!(roots[0].trace_id, tools[0].trace_id);
+    assert_eq!(
+        roots[0].parent_span_id.as_deref(),
+        Some(tools[0].span_id.as_str())
     );
 }

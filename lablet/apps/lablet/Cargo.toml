@@ -11,7 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-async-trait.workspace = true
+lablet-clock-tokio.workspace = true
 lablet-config.workspace = true
 lablet-documents.workspace = true
 lablet-model.workspace = true

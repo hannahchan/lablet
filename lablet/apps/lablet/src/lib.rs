@@ -28,11 +28,20 @@
 //! the context that's current where the run is awaited, so a run under a
 //! span the host has open is in the host's trace, and a command's
 //! environment holds its tool span's context and none it would inherit.
+//! That context is read when the run's future is first polled, so a host
+//! makes its span current on the future itself, with
+//! [`FutureExt::with_context`] as the `traced_run` example does, rather
+//! than through a guard held on another task or thread.
+//! The providers and the propagator a host hands in are those of
+//! `opentelemetry` 0.33, the version lablet depends on, so a host's
+//! OpenTelemetry crates are that version.
 //! The host's SDK samples, exports and flushes: a run returns without
 //! flushing anything, and [`Lablet::shutdown`] does no telemetry work. A
 //! host's `tracing` subscriber sees lablet's diagnostics and none of its
 //! telemetry, and a tool executor finds its call's span in the current
 //! OpenTelemetry context.
+//!
+//! [`FutureExt::with_context`]: opentelemetry::trace::FutureExt::with_context
 //!
 //! What configured an SDK does nothing in library mode, and nothing is said
 //! of it: the config's `telemetry.file`, `telemetry.otlp` and
@@ -162,7 +171,6 @@
 //! ```
 
 mod build;
-mod clock;
 mod fallback;
 mod lablet;
 pub mod telemetry;

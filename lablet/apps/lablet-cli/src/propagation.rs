@@ -21,8 +21,26 @@ use tracing_subscriber::layer::{Context as Subscribed, Layer, SubscriberExt as _
 
 use crate::otel_env;
 
-/// The key the trace context propagator reads its parent from.
-const TRACEPARENT: &str = "traceparent";
+/// The keys each propagator reads a parent from, and what's said when one
+/// of them is set and the propagator can't make a parent of them.
+const PARENTS: [(&[&str], &str); 3] = [
+    (
+        &["traceparent"],
+        "`TRACEPARENT` holds a value that isn't a W3C trace parent, so it's ignored",
+    ),
+    (
+        &["b3"],
+        "`B3` holds a value that isn't a B3 parent, so it's ignored",
+    ),
+    (
+        &["x-b3-traceid", "x-b3-spanid"],
+        "`X_B3_TRACEID` and `X_B3_SPANID` hold no B3 parent, so they're ignored",
+    ),
+];
+
+/// What B3's single header holds when it carries a sampling decision and
+/// no parent, which is no mistake.
+const B3_DECISIONS: [&str; 3] = ["0", "1", "d"];
 
 /// The key the baggage propagator reads its members from.
 const BAGGAGE: &str = "baggage";
@@ -49,9 +67,9 @@ pub struct Inbound {
 /// The inbound context the seam's `context` variables give, extracted
 /// once, through its propagators. With none, a run starts from the empty
 /// context, so it's a trace of its own whatever span its caller has open.
-/// A `TRACEPARENT` the trace context propagator doesn't accept, and a
-/// `BAGGAGE` the baggage propagator can't read in full, are warned about,
-/// never shown.
+/// A `TRACEPARENT`, a `B3`, or an `X_B3_TRACEID` or `X_B3_SPANID`, that
+/// the propagator reading it can't make a parent of, and a `BAGGAGE` the
+/// baggage propagator can't read in full, are warned about, never shown.
 pub fn inbound(context: &otel_env::Context) -> Inbound {
     let environment: BTreeMap<OsString, OsString> = context
         .carried
@@ -67,16 +85,21 @@ pub fn inbound(context: &otel_env::Context) -> Inbound {
         tracing_subscriber::registry().with(unread.clone()),
         || propagator.extract_with_context(&Context::new(), &carrier),
     );
-    if propagator.fields().any(|field| field == TRACEPARENT)
-        && carrier.get(TRACEPARENT).is_some()
-        && !parent.span().span_context().is_valid()
-    {
-        tracing::warn!(
-            target: TARGET,
-            "`{}` holds a value that isn't a W3C trace parent, so it's ignored and each run \
-             starts a trace of its own",
-            variable(TRACEPARENT)
-        );
+    if !parent.span().span_context().is_valid() {
+        for (keys, said) in PARENTS {
+            let set = keys.iter().any(|key| {
+                propagator.fields().any(|field| field == *key)
+                    && carrier
+                        .get(key)
+                        .is_some_and(|value| *key != "b3" || !B3_DECISIONS.contains(&value))
+            });
+            if set {
+                tracing::warn!(
+                    target: TARGET,
+                    "{said} and each run starts a trace of its own"
+                );
+            }
+        }
     }
     if unread.0.load(Ordering::Relaxed) {
         tracing::warn!(

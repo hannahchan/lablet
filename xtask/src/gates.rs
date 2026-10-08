@@ -819,7 +819,14 @@ mod tests {
         for step in test_steps() {
             assert_eq!(
                 kept_from(&step),
-                ["OTEL_", "TRACEPARENT", "TRACESTATE", "BAGGAGE"],
+                [
+                    "OTEL_",
+                    "TRACEPARENT",
+                    "TRACESTATE",
+                    "BAGGAGE",
+                    "B3",
+                    "X_B3_"
+                ],
                 "{}",
                 step.label
             );

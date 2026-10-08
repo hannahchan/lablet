@@ -1,10 +1,11 @@
 //! lablet's own secrets, cut out of a tool's text on its way to the
 //! [`KeptOutput`] that keeps it.
 //!
-//! Which values are secrets is the composition root's to know. This is only
-//! the cut, which every executor makes the same way and with the same
-//! words. It comes before anything is kept, so the size an output reports
-//! and the cut the output cap makes are of the text the model is sent.
+//! Which values are secrets is the `lablet-secrets` kernel's to know. This
+//! is only the cut, which every executor makes the same way and with the
+//! same words. It comes before anything is kept, so the size an output
+//! reports and the cut the output cap makes are of the text the model is
+//! sent.
 
 use std::sync::Arc;
 

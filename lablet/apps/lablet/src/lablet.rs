@@ -60,19 +60,22 @@ impl Lablet {
     /// The run has the id the request names, or a fresh ULID. Its root span
     /// is a child of the context that's current where this is awaited, so a
     /// run under a span the host has open is in the host's trace, and a run
-    /// under none starts a trace of its own. Its spans go to the tracer
-    /// provider this `Lablet` was built with, or OpenTelemetry's global one
-    /// as it was when it was built, and its records to the logger provider
-    /// it was built with. Once the loop has returned, the root span ends
-    /// with the run's measured duration, the run's transcript is written,
-    /// when the config names a place for it, and then the run's wide event
-    /// is emitted, so the transcript it names is whole, or its failure
-    /// logged, when it arrives. Nothing is flushed: the host's SDK decides
-    /// when what the run emitted is exported. A `bash` command starts under
-    /// its tool span, whose context is injected into its environment
-    /// through the propagator this `Lablet` was built with, or
-    /// OpenTelemetry's global one as it is when the command starts, in
-    /// place of every context variable the command would inherit.
+    /// under none starts a trace of its own. That context is read when the
+    /// future is first polled, so a host makes its span current on the
+    /// future, with [`FutureExt::with_context`] as the `traced_run` example
+    /// does, rather than through a guard held on another task or thread.
+    /// Its spans go to the tracer provider this `Lablet` was built with, or
+    /// OpenTelemetry's global one as it was when it was built, and its
+    /// records to the logger provider it was built with. Once the loop has
+    /// returned, the root span ends with the run's measured duration, the
+    /// run's transcript is written, when the config names a place for it,
+    /// and then the run's wide event is emitted, so the transcript it names
+    /// is whole, or its failure logged, when it arrives. Nothing is flushed:
+    /// the host's SDK decides when what the run emitted is exported. A
+    /// `bash` command starts under its tool span, whose context is injected
+    /// into its environment through the propagator this `Lablet` was built
+    /// with, or OpenTelemetry's global one as it is when the command starts,
+    /// in place of every context variable the command would inherit.
     ///
     /// Library mode leaves alone what configured an OpenTelemetry SDK, and
     /// says nothing of it: the config's `telemetry.file`, `telemetry.otlp`
@@ -91,6 +94,8 @@ impl Lablet {
     /// Never fails: every way a run can go wrong is a stop reason of its
     /// outcome. A transcript that can't be written is reported on the
     /// diagnostic log, and the run measured what it measured either way.
+    ///
+    /// [`FutureExt::with_context`]: opentelemetry::trace::FutureExt::with_context
     pub async fn run(&mut self, request: RunRequest) -> FinishedRun {
         self.provider.begin_run();
 

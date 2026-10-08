@@ -5,6 +5,7 @@ use std::ffi::OsString;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+use lablet_env_carrier::CONTEXT_VARIABLES;
 use serde_json::Value;
 
 pub use crate::harness::{ENDS, Lab, PROMPT};
@@ -41,7 +42,7 @@ impl Lab {
 fn without_otel(command: &mut Command, names: impl IntoIterator<Item = OsString>) {
     for name in names {
         let text = name.to_string_lossy();
-        if text.starts_with("OTEL_") || ["TRACEPARENT", "TRACESTATE", "BAGGAGE"].contains(&&*text) {
+        if text.starts_with("OTEL_") || CONTEXT_VARIABLES.contains(&&*text) {
             command.env_remove(name);
         }
     }
@@ -56,8 +57,15 @@ fn the_binary_inherits_no_otel_or_context_variable_of_the_test_and_a_test_may_se
         "TRACEPARENT",
         "TRACESTATE",
         "BAGGAGE",
+        "B3",
+        "X_B3_TRACEID",
+        "X_B3_SPANID",
+        "X_B3_PARENTSPANID",
+        "X_B3_SAMPLED",
+        "X_B3_FLAGS",
         "NOT_OTEL_X",
         "traceparent",
+        "X_B3_OTHER",
         "RUST_LOG",
     ];
 
@@ -76,11 +84,17 @@ fn the_binary_inherits_no_otel_or_context_variable_of_the_test_and_a_test_may_se
     assert_eq!(
         given,
         [
+            ("B3".to_owned(), None),
             ("BAGGAGE".to_owned(), None),
             ("OTEL_EXPORTER_OTLP_ENDPOINT".to_owned(), None),
             ("OTEL_TRACES_EXPORTER".to_owned(), Some("none".to_owned())),
             ("TRACEPARENT".to_owned(), None),
             ("TRACESTATE".to_owned(), None),
+            ("X_B3_FLAGS".to_owned(), None),
+            ("X_B3_PARENTSPANID".to_owned(), None),
+            ("X_B3_SAMPLED".to_owned(), None),
+            ("X_B3_SPANID".to_owned(), None),
+            ("X_B3_TRACEID".to_owned(), None),
         ]
     );
 }

@@ -3,9 +3,9 @@
 /// SHA-256 of a run's resolved config, written as 64 lower-case hex digits:
 /// what groups the runs made from one config.
 ///
-/// The domain hashes nothing. The composition root takes the digest and
-/// hands over its 32 bytes, so every value of this type is a digest's form
-/// and no other text.
+/// The domain hashes nothing. The `lablet-config` kernel, which both roots
+/// take the digest through, hands over its 32 bytes, so every value of this
+/// type is a digest's form and no other text.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ConfigDigest(String);
 

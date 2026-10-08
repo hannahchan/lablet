@@ -204,11 +204,19 @@ pub const GIT_REPOSITORY_ENV: &[&str] = &[
 
 /// The variables, by prefix, kept from every command that runs the
 /// workspace's tests. An `OTEL_*` variable in the shell would turn the
-/// network exporter on, or add to the resource, and `TRACEPARENT`,
-/// `TRACESTATE` or `BAGGAGE` would give every run a parent, in every test
-/// that builds a `Lablet` in its own process, and a test can't scrub its own
-/// environment.
-pub const KEPT_FROM_TESTS: &[&str] = &["OTEL_", "TRACEPARENT", "TRACESTATE", "BAGGAGE"];
+/// network exporter on, or add to the resource, and a context variable,
+/// `TRACEPARENT`, `TRACESTATE`, `BAGGAGE`, `B3` or an `X_B3_*` one, would
+/// give every run a parent under the propagators that read it, in every
+/// test that builds a `Lablet` in its own process, and a test can't scrub
+/// its own environment.
+pub const KEPT_FROM_TESTS: &[&str] = &[
+    "OTEL_",
+    "TRACEPARENT",
+    "TRACESTATE",
+    "BAGGAGE",
+    "B3",
+    "X_B3_",
+];
 
 /// Takes every variable of `names`, the environment's names, whose name
 /// begins with one of `prefixes` off `command`'s environment. The names
@@ -698,7 +706,11 @@ mod tests {
             "TRACEPARENT",
             "TRACESTATE",
             "BAGGAGE",
+            "B3",
+            "X_B3_FLAGS",
+            "X_B3_TRACEID",
             "traceparent",
+            "x_b3_flags",
             "NOT_OTEL_X",
             "RUST_LOG",
         ];
@@ -711,7 +723,15 @@ mod tests {
             .collect();
         assert_eq!(
             removed,
-            ["BAGGAGE", "OTEL_SERVICE_NAME", "TRACEPARENT", "TRACESTATE"]
+            [
+                "B3",
+                "BAGGAGE",
+                "OTEL_SERVICE_NAME",
+                "TRACEPARENT",
+                "TRACESTATE",
+                "X_B3_FLAGS",
+                "X_B3_TRACEID"
+            ]
         );
     }
 

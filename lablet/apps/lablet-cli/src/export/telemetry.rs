@@ -255,7 +255,7 @@ struct Providers {
 
 impl Telemetry {
     /// A builder emitting every span and record under `scope`, the
-    /// instrumentation scope the composition root makes.
+    /// instrumentation scope the CLI root makes.
     #[must_use]
     pub fn builder(scope: InstrumentationScope) -> TelemetryBuilder {
         TelemetryBuilder {
@@ -270,7 +270,7 @@ impl Telemetry {
         }
     }
 
-    /// A tracer of the scope the composition root handed over, whose spans
+    /// A tracer of the scope the CLI root handed over, whose spans
     /// reach every destination, sampled and limited as the SDK's settings
     /// say.
     #[must_use]
@@ -283,7 +283,7 @@ impl Telemetry {
         }
     }
 
-    /// Lablet's logger, of the scope the composition root handed over,
+    /// Lablet's logger, of the scope the CLI root handed over,
     /// whose records reach every destination.
     #[must_use]
     pub fn logger(&self) -> Box<dyn Logger> {

@@ -999,6 +999,8 @@ mod tests {
             "TRACEPARENT",
             "TRACESTATE",
             "BAGGAGE",
+            "B3",
+            "X_B3_SAMPLED",
             "OTEL",
             "HOME",
             "NOT_OTEL_X",
@@ -1013,16 +1015,18 @@ mod tests {
         assert_eq!(
             removed,
             [
+                "B3",
                 "BAGGAGE",
                 "OTEL_EXPORTER_OTLP_ENDPOINT",
                 "OTEL_TRACES_EXPORTER",
                 "TRACEPARENT",
-                "TRACESTATE"
+                "TRACESTATE",
+                "X_B3_SAMPLED"
             ]
             .map(String::from)
             .into()
         );
-        assert_eq!(command.get_envs().count(), 5);
+        assert_eq!(command.get_envs().count(), 7);
     }
 
     const FAKE_WEAVER: &str = "XTASK_TEST_FAKE_WEAVER";

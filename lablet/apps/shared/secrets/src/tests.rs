@@ -36,7 +36,7 @@ fn nothing(_: &str) -> Option<OsString> {
 
 /// What `derived` makes of the config `text` in the environment `held`,
 /// for a run that has an executor.
-fn derived_from(text: &str, held: &dyn Fn(&str) -> Option<OsString>) -> Derived {
+fn derived_from(text: &str, held: &(dyn Fn(&str) -> Option<OsString> + Sync)) -> Derived {
     let written = config(text);
     let real = written.substituted(held).unwrap();
     derived(&written, &real, held, &[], true)

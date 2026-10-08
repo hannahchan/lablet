@@ -21,7 +21,7 @@ pub struct RunTranscript {
 
 /// Why a run's transcript has no place, or wasn't written there. Neither
 /// fails a run: a transcript is a record of one, and the run measured what
-/// it measured. Each carries the text the composition root reports.
+/// it measured. Each carries the text the root that ran the run reports.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TranscriptError {
     /// The place the config names can't take the run's id.

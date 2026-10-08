@@ -8,7 +8,6 @@
 //! kernels under `apps/shared/`, so what a run does doesn't depend on which
 //! root started it.
 
-mod clock;
 pub mod compose;
 mod export;
 mod exports;

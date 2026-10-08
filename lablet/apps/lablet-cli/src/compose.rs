@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use lablet_clock_tokio::TokioClock;
 use lablet_config::{Config, Env, environment};
 use lablet_model::{ConfigDigest, FinishedRun};
 use lablet_prepare::{BuildError, Checked, Wiring, prepare};
@@ -20,7 +21,6 @@ use lablet_run_request::RunRequest;
 use lablet_transcript_json::JsonTranscripts;
 use opentelemetry::trace::FutureExt as _;
 
-use crate::clock::TokioClock;
 use crate::export::Telemetry;
 use crate::exports::{otlp_refused, settle};
 use crate::propagation::Inbound;

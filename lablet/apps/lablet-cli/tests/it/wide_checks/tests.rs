@@ -1,4 +1,4 @@
-//! The checks are what the composition root's tests fail by, so each is held
+//! The checks are what the CLI root's tests fail by, so each is held
 //! to refusing what it's there to refuse: an export built by hand that keeps
 //! the contract passes, and the same export broken in one way is refused.
 

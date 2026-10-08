@@ -22,7 +22,10 @@ fn nothing(_: &str) -> Option<OsString> {
 }
 
 /// `text` substituted in the environment `held`, with the names dropped.
-fn substituted(text: &str, held: &dyn Fn(&str) -> Option<OsString>) -> Result<String, String> {
+fn substituted(
+    text: &str,
+    held: &(dyn Fn(&str) -> Option<OsString> + Sync),
+) -> Result<String, String> {
     replaced(text, held, &mut Vec::new())
 }
 
@@ -91,7 +94,10 @@ fn a_reference_that_names_no_variable_is_refused_with_how_to_write_one() {
 }
 
 /// The config of `text`, substituted in the environment `held`.
-fn config(text: &str, held: &dyn Fn(&str) -> Option<OsString>) -> Result<Substituted, Refusal> {
+fn config(
+    text: &str,
+    held: &(dyn Fn(&str) -> Option<OsString> + Sync),
+) -> Result<Substituted, Refusal> {
     Config::from_str(text, Format::Yaml)
         .unwrap()
         .substituted(held)

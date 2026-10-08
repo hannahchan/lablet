@@ -1,6 +1,6 @@
 [package]
 name = "lablet-prepare"
-description = "What checking a config comes to, which both roots go on from: the checked values, the refusals and lablet's secrets"
+description = "What checking a config comes to, which both roots go on from: the checked values and the refusals"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

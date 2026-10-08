@@ -21,6 +21,7 @@ doc = false
 [dependencies]
 async-trait.workspace = true
 clap.workspace = true
+lablet-clock-tokio.workspace = true
 lablet-config.workspace = true
 lablet-documents.workspace = true
 lablet-env-carrier.workspace = true

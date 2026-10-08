@@ -157,6 +157,52 @@ fn a_traceparent_that_does_not_parse_is_ignored_with_a_warning_that_names_no_val
     }
 }
 
+/// A B3 parent that doesn't parse is warned about by the variables that
+/// hold it, under the propagator that reads them, and a `B3` that holds a
+/// sampling decision alone carries no parent and is no mistake.
+#[test]
+fn a_b3_parent_that_does_not_parse_is_ignored_with_a_warning_that_names_no_value() {
+    let broken = "0AF7651916CD43DD8448EB211C80319C-B7AD6B7169203331-1";
+    let (b3, warnings) = inbound_of(&[("OTEL_PROPAGATORS", "b3"), ("B3", broken)]);
+    assert!(!b3.parent.has_active_span());
+    assert_eq!(
+        warnings,
+        [
+            "`B3` holds a value that isn't a B3 parent, so it's ignored and each run starts a \
+             trace of its own"
+        ]
+    );
+
+    for multiple in [
+        [
+            ("X_B3_TRACEID", "a-secret-of-sorts"),
+            ("X_B3_SPANID", SPAN_ID),
+        ],
+        [("X_B3_TRACEID", TRACE_ID), ("X_B3_SAMPLED", "1")],
+    ] {
+        let (b3multi, warnings) =
+            inbound_of(&[&[("OTEL_PROPAGATORS", "b3multi")][..], &multiple[..]].concat());
+        assert!(!b3multi.parent.has_active_span(), "{multiple:?}");
+        assert_eq!(
+            warnings,
+            [
+                "`X_B3_TRACEID` and `X_B3_SPANID` hold no B3 parent, so they're ignored and each \
+                 run starts a trace of its own"
+            ],
+            "{multiple:?}"
+        );
+    }
+
+    for decision in ["0", "1", "d"] {
+        let (b3, warnings) = inbound_of(&[("OTEL_PROPAGATORS", "b3"), ("B3", decision)]);
+        assert!(!b3.parent.has_active_span(), "{decision}");
+        assert!(warnings.is_empty(), "{decision}: {warnings:?}");
+    }
+    let (b3multi, warnings) = inbound_of(&[("OTEL_PROPAGATORS", "b3multi"), ("X_B3_SAMPLED", "0")]);
+    assert!(!b3multi.parent.has_active_span());
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
 /// Baggage is extracted, since `baggage` is a default propagator, and is
 /// in the context every run's spans are opened in; nothing lablet emits
 /// reads it.

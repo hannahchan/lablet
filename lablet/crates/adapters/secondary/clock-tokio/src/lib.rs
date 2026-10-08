@@ -1,12 +1,15 @@
-//! The run's clock, as a library has it.
+//! Adapter: the run's clock on tokio's time, one clock for both roots, so a
+//! library run and a command line run are timed alike.
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lablet_run::Clock;
 
 /// The runtime's clock, which is also the one the adapters hold their
-/// deadlines on.
-pub(crate) struct TokioClock;
+/// deadlines on. In a test that pauses tokio's clock, a script's latencies
+/// and the loop's waits pass at once, and the loop measures each as exactly
+/// what was asked.
+pub struct TokioClock;
 
 #[async_trait::async_trait]
 impl Clock for TokioClock {
