@@ -1682,3 +1682,22 @@ The risks:
 - **The `Lablet`s of one `Otel` share a tracer and a logger,** where each took its own before. They have the same scope from the same provider, so nothing a run emits changes.
 
 Phase 6d builds it before phase 7.
+
+## 2026-10-08 Phase 6d, closed
+
+Phase 6d made a library host hand lablet all three pieces of its OpenTelemetry, and lablet reads no global, as the owner decided in "Lablet reads no global." It landed in order: the design commit (39077ab), which also placed phase 6e between 6d and 7; the build (24d81d7), with `lablet::Otel`, the inverted `globals` test and the rules she read; and the review's fixes (1e1c41b). The build was checked by two skeptics and fixed before it reached `main`; its findings were all low, so no re-check ran.
+
+Scenarios O32 and O33 pass as reworded. The golden fixtures didn't change, the run under a hostile environment passes, `cargo xtask weaver live-check` gives the same counts as before, and the CLI's output is the same. No floor crate changed, so the `Floors` run on 42a059d stands, and the scheduled run of 2026-10-07 was green. The review's cold clone built three hosts from the documentation alone, one on an SDK of its own, one on OpenTelemetry's global tracer provider and propagator, and one on `Otel::noop()`, and each run landed where its documentation says.
+
+Decided on the way: the owner's answers, in "Lablet reads no global," with the name, the order of `Otel::new`'s arguments and the builder she kept; and what the review changed, all wording.
+
+The build took about 1.58 million tokens: the design 0.87 and the build 0.70. The review read the phase in one lens with a cold clone, 0.24 million, against a budget of 0.55 million, 35 percent of the build, and its fixes were made by hand. The study of the library's configuration and providers that led to the phase came before it and isn't counted, and the design study for phase 6e is phase 6e's.
+
+What the phase leaves:
+
+- **On stable Rust the `compile_fail` doctests' error codes are documentation:** rustdoc checks them only on nightly. Each was checked to fail for its intended error by compiling its positive form.
+- **A host's own stand-in for the global propagator names the global one's fields itself,** since the API lends them only inside a closure; the documentation says so.
+- **Under the API's no-op tracer provider, a command's context is the host's current one,** since the no-op span carries its parent's context; `Otel`'s documentation says so.
+- **Wording in "Lablet reads no global":** `clippy.toml` has four reasons rewritten, not three, and the logger the `Otel` holds is shared in an `Arc` once `Bridge` has boxed it.
+
+Human sign-off: a reviewer runs the `traced_run` example, a host with an SDK of its own, and finds the run beneath the host's span.

@@ -20,8 +20,8 @@ Sequencing rationale: the loop is proven against fakes before any real adapter e
 | 6a    | Direct instrumentation with the OpenTelemetry API   | Done, 2026-10-06 |
 | 6b    | OpenTelemetry-idiomatic telemetry                   | Done, 2026-10-07 |
 | 6c    | The host provides OpenTelemetry                     | Done, 2026-10-08 |
-| 6d    | The library reads no global                         | Next             |
-| 6e    | The caller owns the library's config                | Not started      |
+| 6d    | The library reads no global                         | Done, 2026-10-08 |
+| 6e    | The caller owns the library's config                | Next             |
 | 7     | Anthropic, and the capture of the primary reference | Not started      |
 | 7a    | Context management                                  | Not started      |
 | 8     | MCP, and the first transfer check                   | Not started      |
