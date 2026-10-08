@@ -1,0 +1,24 @@
+[package]
+name = "lablet-config"
+description = "Lablet's config: its wire form, reading, ${VAR} substitution, the schema and the digest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+humantime.workspace = true
+lablet-model.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde-saphyr.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+lablet-test-support.workspace = true

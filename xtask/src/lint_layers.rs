@@ -6,7 +6,9 @@
 //! let through the one crate named like the family: the application and
 //! adapter rings forbid the `opentelemetry` family and allow `opentelemetry`
 //! itself, the API, since instrumented code depends on the API and only the
-//! process that runs it installs the SDK.
+//! process that runs it installs the SDK. The two composition roots never
+//! depend on each other: what both build alike lives in the composition
+//! roots' kernels under `apps/shared/`.
 //!
 //! `lint-manifests` makes every dependency of a member an inherited entry of
 //! `[workspace.dependencies]`, so that table is where a crate's real name and
@@ -25,8 +27,14 @@ pub enum Ring {
     Application,
     /// `crates/adapters/secondary/*`: driven adapters and their shared kernels.
     SecondaryAdapter,
-    /// `apps/*`: the composition root.
-    CompositionRoot,
+    /// `apps/shared/*`: what both composition roots construct alike, one
+    /// capability to a crate. A kernel wires nothing and has no `main()`.
+    RootKernel,
+    /// `apps/lablet`: the library root, lablet's public library API.
+    LibraryRoot,
+    /// `apps/lablet-cli`: the CLI root, `main`, the command line, and the
+    /// SDK it configures from the config and the environment.
+    CliRoot,
     /// `tests/*`: test support, reached only through `[dev-dependencies]`.
     TestSupport,
 }
@@ -37,7 +45,9 @@ impl fmt::Display for Ring {
             Self::Domain => "Domain",
             Self::Application => "Application",
             Self::SecondaryAdapter => "Secondary Adapter",
-            Self::CompositionRoot => "Composition Root",
+            Self::RootKernel => "Root Kernel",
+            Self::LibraryRoot => "Library Root",
+            Self::CliRoot => "CLI Root",
             Self::TestSupport => "Test Support",
         })
     }
@@ -52,12 +62,15 @@ enum Namesake {
 
 /// The prefixes are disjoint, so a member falls in at most one ring; one that
 /// falls in none is a finding. Spec §2 has no primary adapters, so there is no
-/// ring for `crates/adapters/primary/`.
+/// ring for `crates/adapters/primary/`. The two roots are named whole, so a
+/// third crate under `apps/` is in no ring until a rule places it.
 const RINGS: &[(&str, Ring)] = &[
     ("crates/domain/", Ring::Domain),
     ("crates/application/", Ring::Application),
     ("crates/adapters/secondary/", Ring::SecondaryAdapter),
-    ("apps/", Ring::CompositionRoot),
+    ("apps/shared/", Ring::RootKernel),
+    ("apps/lablet/", Ring::LibraryRoot),
+    ("apps/lablet-cli/", Ring::CliRoot),
     ("tests/", Ring::TestSupport),
 ];
 
@@ -67,17 +80,21 @@ impl Ring {
         match self {
             Self::Domain | Self::Application => &[Self::Domain],
             Self::SecondaryAdapter => &[Self::Application, Self::Domain],
-            Self::CompositionRoot => &[
+            // A kernel is the one crate a root shares, so neither root is
+            // in the other's list, and a kernel reaches neither.
+            Self::RootKernel | Self::LibraryRoot | Self::CliRoot => &[
                 Self::Domain,
                 Self::Application,
                 Self::SecondaryAdapter,
-                Self::CompositionRoot,
+                Self::RootKernel,
             ],
             Self::TestSupport => &[
                 Self::Domain,
                 Self::Application,
                 Self::SecondaryAdapter,
-                Self::CompositionRoot,
+                Self::RootKernel,
+                Self::LibraryRoot,
+                Self::CliRoot,
                 Self::TestSupport,
             ],
         }
@@ -88,12 +105,13 @@ impl Ring {
     }
 
     /// External crate families this ring may not use: the runtime, transport,
-    /// and telemetry frameworks belong to adapters and the composition root.
+    /// and telemetry frameworks belong to adapters and the composition roots.
     /// The application and the adapters may name the OpenTelemetry API,
     /// `opentelemetry` itself, and no other member of its family, so the loop
     /// and the adapters instrument themselves while the SDK stays in the
-    /// composition root. `serde` and `serde_json` are allowed everywhere
-    /// (decisions.md, "serde derives allowed in the domain").
+    /// composition roots and their kernels. `serde` and `serde_json` are
+    /// allowed everywhere (decisions.md, "serde derives allowed in the
+    /// domain").
     const fn forbidden_families(self) -> &'static [(&'static str, Namesake)] {
         match self {
             Self::Domain => &[
@@ -116,7 +134,7 @@ impl Ring {
                 ("opentelemetry", Namesake::Allowed),
             ],
             Self::SecondaryAdapter => &[("opentelemetry", Namesake::Allowed)],
-            Self::CompositionRoot | Self::TestSupport => &[],
+            Self::RootKernel | Self::LibraryRoot | Self::CliRoot | Self::TestSupport => &[],
         }
     }
 
@@ -146,12 +164,15 @@ impl Ring {
     }
 }
 
-/// The ring a member path belongs to. A prefix is never the whole path:
-/// [`Workspace::load`] refuses a trailing `/`.
+/// The ring a member path belongs to. [`Workspace::load`] refuses a
+/// trailing `/`, so one is added before matching: a ring's directory then
+/// takes a crate it holds, and a root's takes that root and not one whose
+/// name only begins like it.
 pub fn classify(member_path: &str) -> Option<Ring> {
+    let directory = format!("{member_path}/");
     RINGS
         .iter()
-        .find(|(prefix, _)| member_path.starts_with(prefix))
+        .find(|(prefix, _)| directory.starts_with(prefix))
         .map(|(_, ring)| *ring)
 }
 
@@ -173,6 +194,11 @@ fn edge_rule(from: Ring, to: Ring) -> String {
     if from.is_adapter() && to == from {
         return "an adapter may not depend on a sibling adapter; code two adapters share \
                 belongs in a shared kernel under shared/"
+            .to_owned();
+    }
+    if matches!(to, Ring::LibraryRoot | Ring::CliRoot) {
+        return "a composition root may not be depended on; construction both roots need \
+                belongs in a kernel under apps/shared/"
             .to_owned();
     }
     let allowed: Vec<String> = from
@@ -323,6 +349,9 @@ mod tests {
     const FAKE: &str = "crates/adapters/secondary/provider-fake";
     const MCP: &str = "crates/adapters/secondary/tools-mcp";
     const DOCUMENTS: &str = "crates/adapters/secondary/shared/documents";
+    const LIBRARY: &str = "apps/lablet";
+    const CLI: &str = "apps/lablet-cli";
+    const CONFIG: &str = "apps/shared/config";
 
     /// Declares `ALL_RINGS` beside a match with an arm for each ring it
     /// names and for nothing else, so a ring the enum gains doesn't compile
@@ -342,7 +371,9 @@ mod tests {
         Domain,
         Application,
         SecondaryAdapter,
-        CompositionRoot,
+        RootKernel,
+        LibraryRoot,
+        CliRoot,
         TestSupport
     );
 
@@ -354,8 +385,15 @@ mod tests {
             (FAKE, Some(Ring::SecondaryAdapter)),
             // A shared kernel classifies into its ring like any sibling.
             (DOCUMENTS, Some(Ring::SecondaryAdapter)),
-            ("apps/lablet", Some(Ring::CompositionRoot)),
+            (CONFIG, Some(Ring::RootKernel)),
+            (LIBRARY, Some(Ring::LibraryRoot)),
+            (CLI, Some(Ring::CliRoot)),
             ("tests/mcp-server", Some(Ring::TestSupport)),
+            // A root is named whole, so a crate whose name begins like one,
+            // or a third crate under `apps/`, is in no ring.
+            ("apps/lablet-server", None),
+            ("apps/other", None),
+            ("apps", None),
             ("xtask", None),
             ("crates/foo", None),
             ("crates/adapters/primary/http", None),
@@ -371,7 +409,9 @@ mod tests {
             FAKE,
             "crates/adapters/primary/shared/http-util",
             "crates/domain/shared/model",
-            "apps/shared/config",
+            // The roots' kernels are a ring of their own, which the lint
+            // places by its directory rather than by this test.
+            CONFIG,
         ] {
             assert!(!is_kernel(path), "{path}");
         }
@@ -382,7 +422,7 @@ mod tests {
         let reachable = |from| match from {
             Ring::Domain | Ring::Application => &ALL_RINGS[..1],
             Ring::SecondaryAdapter => &ALL_RINGS[..2],
-            Ring::CompositionRoot => &ALL_RINGS[..4],
+            Ring::RootKernel | Ring::LibraryRoot | Ring::CliRoot => &ALL_RINGS[..4],
             Ring::TestSupport => &ALL_RINGS[..],
         };
         for from in ALL_RINGS {
@@ -406,7 +446,7 @@ mod tests {
             "Application may depend only on Domain"
         );
         assert_eq!(
-            edge_rule(Ring::SecondaryAdapter, Ring::CompositionRoot),
+            edge_rule(Ring::SecondaryAdapter, Ring::RootKernel),
             "Secondary Adapter may depend only on Application, Domain, and shared kernels of \
              its own ring"
         );
@@ -414,6 +454,65 @@ mod tests {
             edge_rule(Ring::SecondaryAdapter, Ring::SecondaryAdapter)
                 .starts_with("an adapter may not depend on a sibling adapter"),
         );
+        for (from, to) in [
+            (Ring::CliRoot, Ring::LibraryRoot),
+            (Ring::LibraryRoot, Ring::CliRoot),
+            (Ring::RootKernel, Ring::LibraryRoot),
+            (Ring::RootKernel, Ring::CliRoot),
+        ] {
+            assert!(
+                edge_rule(from, to).starts_with("a composition root may not be depended on"),
+                "{from} -> {to}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_roots_never_depend_on_each_other_and_both_reach_a_kernel() {
+        let roots = |library: &[&str], cli: &[&str], config: &[&str]| {
+            let workspace = base()
+                .member(CONFIG, "lablet-config", &inherit("dependencies", config))
+                .member(LIBRARY, "lablet", &inherit("dependencies", library))
+                .member(CLI, "lablet-cli", &inherit("dependencies", cli))
+                .load();
+            lint(&workspace)
+        };
+        assert_findings(
+            &roots(
+                &["lablet-config", "lablet-run"],
+                &["lablet-config"],
+                &["lablet-run"],
+            ),
+            &[],
+        );
+        let rule = "Rule: a composition root may not be depended on";
+        assert_findings(
+            &roots(&[], &["lablet"], &[]),
+            &[&format!(
+                "lablet-cli ({CLI}, CLI Root): [dependencies] depends on lablet ({LIBRARY}, \
+                 Library Root). {rule}"
+            )],
+        );
+        assert_findings(
+            &roots(&["lablet-cli"], &[], &[]),
+            &[&format!(
+                "lablet ({LIBRARY}, Library Root): [dependencies] depends on lablet-cli ({CLI}, \
+                 CLI Root). {rule}"
+            )],
+        );
+        assert_findings(
+            &roots(&[], &[], &["lablet"]),
+            &[&format!(
+                "lablet-config ({CONFIG}, Root Kernel): [dependencies] depends on lablet \
+                 ({LIBRARY}, Library Root). {rule}"
+            )],
+        );
+        // A test of either root may drive the other, as any test may.
+        let workspace = base()
+            .member(LIBRARY, "lablet", "")
+            .member(CLI, "lablet-cli", &inherit("dev-dependencies", &["lablet"]))
+            .load();
+        assert_findings(&lint(&workspace), &[]);
     }
 
     #[test]
@@ -484,11 +583,11 @@ mod tests {
         for ring in ALL_RINGS {
             assert_eq!(forbidden_family(ring, "serde"), None, "{ring}");
             assert_eq!(forbidden_family(ring, "serde_json"), None, "{ring}");
-            let emits = matches!(
+            let held = matches!(
                 ring,
                 Ring::Domain | Ring::Application | Ring::SecondaryAdapter
             );
-            assert_eq!(ring.forbidden_families().is_empty(), !emits, "{ring}");
+            assert_eq!(ring.forbidden_families().is_empty(), !held, "{ring}");
         }
     }
 
@@ -542,6 +641,9 @@ lablet-provider-fake = { path = "crates/adapters/secondary/provider-fake", versi
 lablet-documents = { path = "crates/adapters/secondary/shared/documents", version = "0.1.0" }
 lablet-tools-mcp = { path = "crates/adapters/secondary/tools-mcp", version = "0.1.0" }
 lablet-http-util = { path = "crates/adapters/secondary/shared/http-util", version = "0.1.0" }
+lablet-config = { path = "apps/shared/config", version = "0.1.0" }
+lablet = { path = "apps/lablet", version = "0.1.0" }
+lablet-cli = { path = "apps/lablet-cli", version = "0.1.0" }
 lablet-conformance = { path = "tests/conformance", version = "0.1.0" }
 lablet-test-mcp-server = { path = "tests/mcp-server", version = "0.1.0" }
 "#;
@@ -577,7 +679,7 @@ lablet-test-mcp-server = { path = "tests/mcp-server", version = "0.1.0" }
                 "lablet-provider-fake",
                 &inherit("dependencies", &["lablet-run", "lablet-model", "tokio"]),
             )
-            .member("apps/lablet", "lablet", &inherit("dependencies", &app))
+            .member(LIBRARY, "lablet", &inherit("dependencies", &app))
             .load();
         assert_findings(&lint(&workspace), &[]);
     }
@@ -736,7 +838,7 @@ lablet-test-mcp-server = { path = "tests/mcp-server", version = "0.1.0" }
                     "lablet-provider-fake ({FAKE}, Secondary Adapter): [build-dependencies] depends on lablet-conformance (tests/conformance, Test Support). Rule: {rule}"
                 ),
                 &format!(
-                    "lablet (apps/lablet, Composition Root): [dependencies] depends on lablet-conformance (tests/conformance, Test Support). Rule: {rule}"
+                    "lablet (apps/lablet, Library Root): [dependencies] depends on lablet-conformance (tests/conformance, Test Support). Rule: {rule}"
                 ),
             ],
         );

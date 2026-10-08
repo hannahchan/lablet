@@ -1,0 +1,15 @@
+[package]
+name = "lablet-provider-wiring"
+description = "The model provider a checked config selects, built for each root"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lablet-provider-fake.workspace = true
+lablet-run.workspace = true

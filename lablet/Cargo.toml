@@ -2,6 +2,15 @@
 resolver = "3"
 members = [
   "apps/lablet",
+  "apps/lablet-cli",
+  "apps/shared/config",
+  "apps/shared/otel-env",
+  "apps/shared/otel-sdk",
+  "apps/shared/prepare",
+  "apps/shared/provider-wiring",
+  "apps/shared/run-request",
+  "apps/shared/secrets",
+  "apps/shared/tools-wiring",
   "crates/domain/model",
   "crates/domain/policy",
   "crates/application/run",
@@ -50,9 +59,27 @@ lablet-tools-mcp = { path = "crates/adapters/secondary/tools-mcp", version = "0.
 lablet-transcript-json = { path = "crates/adapters/secondary/transcript-json", version = "0.1.0" }
 # Adapter shared kernel: the transcript and outcome documents, and the shapes a script shares with them
 lablet-documents = { path = "crates/adapters/secondary/shared/documents", version = "0.1.0" }
-# Composition root: config, build(), the library surface, and the OpenTelemetry SDK with what
-# lablet adds to it, the tracer and logger providers and their OTLP exporters
+# Library root: build(), check() and the Lablet a host runs, its public library API
 lablet = { path = "apps/lablet", version = "0.1.0" }
+# CLI root: main, the command line and its own composition, as the binary `lablet`
+lablet-cli = { path = "apps/lablet-cli", version = "0.1.0" }
+# Root kernel: the config's wire form, reading, ${VAR} substitution, the schema and the digest
+lablet-config = { path = "apps/shared/config", version = "0.1.0" }
+# Root kernel: the specification's parsing of the OpenTelemetry environment's variables
+lablet-otel-env = { path = "apps/shared/otel-env", version = "0.1.0" }
+# Root kernel until phase 6c's L3: the OpenTelemetry SDK with what lablet adds to it, the
+# tracer and logger providers and their OTLP exporters, which both roots still build
+lablet-otel-sdk = { path = "apps/shared/otel-sdk", version = "0.1.0" }
+# Root kernel: what checking a config comes to, the refusals and the checked values
+lablet-prepare = { path = "apps/shared/prepare", version = "0.1.0" }
+# Root kernel: the model provider a checked config selects, built
+lablet-provider-wiring = { path = "apps/shared/provider-wiring", version = "0.1.0" }
+# Root kernel: what a caller asks of a run, and the handle that stops it
+lablet-run-request = { path = "apps/shared/run-request", version = "0.1.0" }
+# Root kernel: lablet's own secrets, derived from the config
+lablet-secrets = { path = "apps/shared/secrets", version = "0.1.0" }
+# Root kernel: the tools a checked config gives a run, built
+lablet-tools-wiring = { path = "apps/shared/tools-wiring", version = "0.1.0" }
 # Test support: the shared ToolExecutor case set, the reader of OTLP/JSON lines and the in-process OTLP receiver
 lablet-conformance = { path = "tests/conformance", version = "0.1.0" }
 # Test support: one scratch directory, the loop's clock and cancellation on tokio, and a builder of the loop

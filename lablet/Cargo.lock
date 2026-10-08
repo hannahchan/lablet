@@ -1107,35 +1107,69 @@ name = "lablet"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "clap",
- "humantime",
+ "lablet-config",
  "lablet-conformance",
  "lablet-documents",
  "lablet-model",
- "lablet-policy",
- "lablet-provider-fake",
+ "lablet-otel-sdk",
+ "lablet-prepare",
+ "lablet-provider-wiring",
  "lablet-run",
+ "lablet-run-request",
  "lablet-test-support",
- "lablet-tools-builtin",
+ "lablet-tools-wiring",
+ "lablet-transcript-json",
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "serde-saphyr",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "lablet-cli"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "clap",
+ "lablet",
+ "lablet-config",
+ "lablet-conformance",
+ "lablet-documents",
+ "lablet-model",
+ "lablet-otel-sdk",
+ "lablet-prepare",
+ "lablet-provider-fake",
+ "lablet-provider-wiring",
+ "lablet-run",
+ "lablet-run-request",
+ "lablet-test-support",
+ "lablet-tools-wiring",
  "lablet-transcript-json",
  "nix",
  "opentelemetry",
- "opentelemetry-http",
- "opentelemetry-otlp",
- "opentelemetry-proto",
- "opentelemetry_sdk",
- "reqwest",
+ "serde-saphyr",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "lablet-config"
+version = "0.1.0"
+dependencies = [
+ "humantime",
+ "lablet-model",
+ "lablet-test-support",
  "schemars",
- "secrecy",
  "serde",
  "serde-saphyr",
  "serde_json",
  "sha2",
  "thiserror",
- "tokio",
- "tonic",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1182,12 +1216,66 @@ dependencies = [
 ]
 
 [[package]]
+name = "lablet-otel-env"
+version = "0.1.0"
+dependencies = [
+ "lablet-config",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "lablet-otel-sdk"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "lablet",
+ "lablet-config",
+ "lablet-conformance",
+ "lablet-otel-env",
+ "lablet-run",
+ "lablet-test-support",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
+ "opentelemetry-proto",
+ "opentelemetry_sdk",
+ "reqwest",
+ "secrecy",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "lablet-policy"
 version = "0.1.0"
 dependencies = [
  "lablet-model",
  "proptest",
  "thiserror",
+]
+
+[[package]]
+name = "lablet-prepare"
+version = "0.1.0"
+dependencies = [
+ "humantime",
+ "lablet-config",
+ "lablet-model",
+ "lablet-otel-sdk",
+ "lablet-policy",
+ "lablet-provider-fake",
+ "lablet-run",
+ "lablet-secrets",
+ "lablet-test-support",
+ "lablet-tools-builtin",
+ "serde_json",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -1218,6 +1306,14 @@ name = "lablet-provider-openai"
 version = "0.1.0"
 
 [[package]]
+name = "lablet-provider-wiring"
+version = "0.1.0"
+dependencies = [
+ "lablet-provider-fake",
+ "lablet-run",
+]
+
+[[package]]
 name = "lablet-run"
 version = "0.1.0"
 dependencies = [
@@ -1231,6 +1327,30 @@ dependencies = [
  "thiserror",
  "tokio",
  "ulid",
+]
+
+[[package]]
+name = "lablet-run-request"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "lablet-model",
+ "lablet-run",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "lablet-secrets"
+version = "0.1.0"
+dependencies = [
+ "lablet-config",
+ "lablet-conformance",
+ "lablet-model",
+ "lablet-otel-sdk",
+ "lablet-test-support",
+ "secrecy",
+ "tokio",
 ]
 
 [[package]]
@@ -1270,6 +1390,16 @@ dependencies = [
 [[package]]
 name = "lablet-tools-mcp"
 version = "0.1.0"
+
+[[package]]
+name = "lablet-tools-wiring"
+version = "0.1.0"
+dependencies = [
+ "lablet-config",
+ "lablet-prepare",
+ "lablet-run",
+ "lablet-tools-builtin",
+]
 
 [[package]]
 name = "lablet-transcript-json"

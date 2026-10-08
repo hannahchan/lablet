@@ -1,0 +1,17 @@
+[package]
+name = "lablet-tools-wiring"
+description = "The tools a checked config gives a run, built for each root"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lablet-config.workspace = true
+lablet-prepare.workspace = true
+lablet-run.workspace = true
+lablet-tools-builtin.workspace = true

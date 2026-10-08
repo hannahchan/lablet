@@ -23,12 +23,17 @@ const INTERNAL_KEYS: [&str; 2] = ["path", "version"];
 /// Printing is xtask's job, so it allows these where the workspace warns.
 const XTASK_ALLOWED_LINTS: [&str; 2] = ["print_stdout", "print_stderr"];
 
-/// The members whose package is not `lablet-<directory name>` (spec §2).
-const PACKAGE_NAME_EXCEPTIONS: [(&str, &str); 3] = [
+/// The members whose package is not `lablet-<directory name>`
+/// (contributing/README.md, "Architecture rules").
+const PACKAGE_NAME_EXCEPTIONS: [(&str, &str); 4] = [
     ("apps/lablet", "lablet"),
+    ("apps/lablet-cli", "lablet-cli"),
     ("tests/conformance", "lablet-conformance"),
     ("tests/mcp-server", "lablet-test-mcp-server"),
 ];
+
+/// Where the root kernels are, each of which has no `main()`.
+const KERNELS: &str = "apps/shared/";
 
 /// Every finding over the workspace's manifests, xtask's, and the cargo
 /// configuration of the repository at `repo`, one line each.
@@ -42,6 +47,10 @@ pub fn lint(workspace: &Workspace, repo: &Path) -> Vec<String> {
     for member in &workspace.members {
         let label = format!("{prefix}{}/Cargo.toml", member.path);
         findings.extend(check_member(&label, member));
+        if member.path.starts_with(KERNELS) {
+            let directory = workspace.root.join(&member.path);
+            findings.extend(check_kernel_binaries(&label, member, &directory));
+        }
     }
     let label = "xtask/Cargo.toml";
     match std::fs::read_to_string(repo.join(label)) {
@@ -87,8 +96,8 @@ fn check_member(label: &str, member: &Member) -> Vec<String> {
     if expected != member.name {
         findings.push(format!(
             "{label}: [package] `name` is \"{}\", but the crate in `{}` is package \
-             \"{expected}\": directory `foo/bar/` is package `lablet-bar`, apart from the three \
-             exceptions in spec §2",
+             \"{expected}\": directory `foo/bar/` is package `lablet-bar`, apart from the four \
+             exceptions in contributing/README.md",
             member.name, member.path
         ));
     }
@@ -106,6 +115,33 @@ fn check_member(label: &str, member: &Member) -> Vec<String> {
         }
     }
     findings
+}
+
+/// A root kernel holds construction both roots need and has no `main()`, so
+/// any binary target of the member in `directory` is a finding: a `[[bin]]`,
+/// or the `src/main.rs` or `src/bin/` cargo makes one of.
+fn check_kernel_binaries(label: &str, member: &Member, directory: &Path) -> Vec<String> {
+    let mut targets = Vec::new();
+    if !member.manifest.bin.is_empty() {
+        targets.push("a `[[bin]]` table");
+    }
+    if directory.join("src/main.rs").exists() {
+        targets.push("`src/main.rs`");
+    }
+    if directory.join("src/bin").exists() {
+        targets.push("`src/bin/`");
+    }
+    targets
+        .into_iter()
+        .map(|target| {
+            format!(
+                "{label}: {target} makes a binary target in `{}`, a root kernel, which has no \
+                 `main()`; a binary belongs in a composition root, and what both roots need in \
+                 a kernel's library",
+                member.path
+            )
+        })
+        .collect()
 }
 
 fn expected_package_name(member_path: &str) -> String {
@@ -418,14 +454,17 @@ mod tests {
     }
 
     #[test]
-    fn a_package_is_named_after_its_directory_with_three_exceptions() {
+    fn a_package_is_named_after_its_directory_with_four_exceptions() {
         for (path, name) in [
             ("crates/domain/model", "lablet-model"),
             (
                 "crates/adapters/secondary/shared/http-util",
                 "lablet-http-util",
             ),
+            ("apps/shared/config", "lablet-config"),
+            ("apps/shared/tools-wiring", "lablet-tools-wiring"),
             ("apps/lablet", "lablet"),
+            ("apps/lablet-cli", "lablet-cli"),
             ("tests/conformance", "lablet-conformance"),
             ("tests/mcp-server", "lablet-test-mcp-server"),
         ] {
@@ -666,6 +705,44 @@ mod tests {
                 format!(".cargo/config.toml: could not read: {why}"),
                 format!("{root}/.cargo/config.toml: could not read: {why}"),
             ]
+        );
+    }
+
+    #[test]
+    fn a_root_kernel_with_a_binary_target_is_refused_and_a_root_with_one_is_not() {
+        let fixture = FixtureWorkspace::new(&format!("\n{WORKSPACE_LINTS}"))
+            .member(
+                "apps/shared/listed",
+                "lablet-listed",
+                "[[bin]]\nname = \"x\"\n",
+            )
+            .member("apps/shared/main", "lablet-main", "")
+            .member("apps/shared/bins", "lablet-bins", "")
+            .member("apps/shared/library", "lablet-library", "")
+            .member(
+                "apps/lablet-cli",
+                "lablet-cli",
+                "[[bin]]\nname = \"lablet\"\n",
+            );
+        fixture.write("apps/shared/main/src/main.rs", "fn main() {}\n");
+        fixture.write("apps/shared/bins/src/bin/x.rs", "fn main() {}\n");
+        fixture.write("apps/shared/library/src/lib.rs", "");
+        fixture.write("apps/lablet-cli/src/main.rs", "fn main() {}\n");
+        let workspace = fixture.load();
+        let repo = TempDir::new("repo");
+        let xtask = format!("[package]\nname = \"xtask\"\n\n{XTASK_LINTS}");
+        repo.write("xtask/Cargo.toml", &xtask);
+        let root = workspace.root.file_name().unwrap().to_string_lossy();
+        assert_findings(
+            &lint(&workspace, repo.path()),
+            &[
+                &format!(
+                    "{root}/apps/shared/listed/Cargo.toml: a `[[bin]]` table makes a binary \
+                     target in `apps/shared/listed`, a root kernel, which has no `main()`"
+                ),
+                &format!("{root}/apps/shared/main/Cargo.toml: `src/main.rs` makes a binary target"),
+                &format!("{root}/apps/shared/bins/Cargo.toml: `src/bin/` makes a binary target"),
+            ],
         );
     }
 

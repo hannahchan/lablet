@@ -1,0 +1,18 @@
+[package]
+name = "lablet-run-request"
+description = "What a caller asks of a run, and the handle that stops it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+lablet-model.workspace = true
+lablet-run.workspace = true
+thiserror.workspace = true
+tokio.workspace = true

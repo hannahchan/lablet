@@ -96,6 +96,9 @@ pub struct Manifest {
     pub package: Package,
     /// `[lints]`, raw.
     pub lints: Option<toml::Value>,
+    /// `[[bin]]`, raw: each one is a binary target.
+    #[serde(default)]
+    pub bin: Vec<toml::Value>,
     #[serde(flatten)]
     tables: DependencyTables,
     #[serde(default)]

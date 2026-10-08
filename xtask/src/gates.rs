@@ -460,8 +460,10 @@ pub fn deny_steps() -> Vec<Step> {
 }
 
 /// rustdoc without dependencies, warnings denied: the only step that evaluates
-/// the `rustdoc` lints. `cargo doc` skips a binary named like its package's
-/// library, so `apps/lablet/src/main.rs` is not covered.
+/// the `rustdoc` lints. The binary `lablet`, `apps/lablet-cli/src/main.rs`, is
+/// not covered: it has `doc = false`, since rustdoc would write it to
+/// `target/doc/lablet`, where the library root `lablet` goes, a collision
+/// cargo warns of.
 pub fn doc_steps() -> Vec<Step> {
     both(["doc", "doc (xtask)"], "doc", WORKSPACE, &["--no-deps"])
         .map(|step| step.with_env(&[("RUSTDOCFLAGS", "-D warnings")]))

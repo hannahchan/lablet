@@ -19,9 +19,9 @@ use opentelemetry_sdk::logs::{LogBatch, LogExporter};
 use opentelemetry_sdk::trace::InMemorySpanExporter;
 use serde_json::{Value, json};
 
-use crate::export::Telemetry;
-use crate::otel_env::OtelEnv;
 use crate::{CancelHandle, Config, Format, RunId, RunRequest, build};
+use lablet_otel_sdk::export::Telemetry;
+use lablet_otel_sdk::otel_env::OtelEnv;
 
 /// A response that comes at once.
 const ENDS: &str = "
@@ -213,11 +213,11 @@ async fn the_transcript_a_wide_event_names_is_whole_when_an_exporter_is_handed_t
             "telemetry": { "otlp": { "enabled": false } },
         }),
     );
-    let (_, wiring) = build::prepare(&config, &build::environment)
+    let prepared = lablet_prepare::prepare(&config, &lablet_config::environment).unwrap();
+    let tools = lablet_tools_wiring::tools(&config, &prepared)
         .await
-        .unwrap()
-        .split()
         .unwrap();
+    let (_, wiring) = prepared.split().unwrap();
     let one_at_a_time =
         |name: &str| (name == "OTEL_BLRP_MAX_EXPORT_BATCH_SIZE").then(|| OsString::from("1"));
     let looking = Looking::default();
@@ -226,7 +226,7 @@ async fn the_transcript_a_wide_event_names_is_whole_when_an_exporter_is_handed_t
         .exporting_to(InMemorySpanExporter::default(), looking.clone())
         .build()
         .unwrap();
-    let mut lablet = build::wire(&config, wiring, telemetry);
+    let mut lablet = build::wire(&config, wiring, tools, telemetry);
 
     lablet.run(request("run-a")).await;
     lablet.shutdown().await;

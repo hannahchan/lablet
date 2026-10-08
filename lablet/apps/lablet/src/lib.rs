@@ -1,5 +1,6 @@
-//! The composition root as a library: the config, `build`, and the
-//! [`Lablet`] that runs the loop. It's the one place that selects adapters.
+//! The library root: the config, `build`, and the [`Lablet`] that runs the
+//! loop. It selects its adapters through the root kernels it shares with the
+//! command line's root, and depends on no other root.
 //!
 //! A [`Lablet`] is built from a [`Config`] and runs many times. Each run
 //! takes a [`RunRequest`] and returns the [`FinishedRun`] the loop made of
@@ -133,30 +134,44 @@
 //! ```
 
 mod build;
-mod cancel;
 mod clock;
-pub mod config;
-mod export;
 mod lablet;
-mod otel_env;
-mod otlp;
-mod propagation;
-mod root;
-mod secrets;
-mod settings;
 pub mod telemetry;
 
-pub use build::{BuildError, Checked, ErrorClass, Unsupported, build, check, telemetry_on_stderr};
-pub use cancel::CancelHandle;
+pub mod config {
+    //! The config: what a `Lablet` is built from, read from YAML or JSON.
+    //!
+    //! A key the config doesn't know is an error, and that's the whole
+    //! policy: nothing is ignored, so nothing a config states is without
+    //! effect.
+    //!
+    //! A path is taken as the config writes it. One that isn't absolute
+    //! starts at the working directory, wherever the config's own file is,
+    //! so a config read from text and the same config read from a file name
+    //! the same files.
+
+    pub use lablet_config::{
+        Api, Applied, Builtin, BuiltinTool, CacheScope, Completion, Config, ConfigError, Context,
+        Effort, Format, McpLifetime, McpNames, McpResult, McpServer, Model, Otlp, OtlpProtocol,
+        OutputCut, Place, Pricing, Prompt, Provider, RawConfig, ResolvedBuiltin, ResolvedConfig,
+        ResolvedModel, ResolvedTools, Run, SkillsMode, Telemetry, TelemetryFile, Thinking, Tools,
+        TranscriptFormat, schema,
+    };
+}
+
+pub use build::{build, check};
 pub use config::{Config, ConfigError, Format, Place, RawConfig, ResolvedConfig, schema};
-pub use lablet::{Lablet, RunIdRefused, RunRequest};
+pub use lablet::Lablet;
 pub use lablet_documents::OutcomeDocument;
 pub use lablet_model::{
     BlankTask, ConfigDigest, FinishedRun, IdError, RunId, RunLabels, RunOutcome, StopReason,
     ToolSpec,
 };
+pub use lablet_prepare::{
+    BuildError, Checked, ErrorClass, OwnFile, Unsupported, telemetry_on_stderr,
+};
 pub use lablet_run::FilterList;
-pub use root::OwnFile;
+pub use lablet_run_request::{CancelHandle, RunIdRefused, RunRequest};
 
 /// The version of lablet, which a run's record names as
 /// `gen_ai.agent.version`.
