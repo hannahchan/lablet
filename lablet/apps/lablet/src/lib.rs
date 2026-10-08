@@ -22,18 +22,23 @@
 //! `NoopLoggerProvider`. It may hand in the tracer provider its spans go
 //! to, and one it doesn't hand in is OpenTelemetry's global one, read once,
 //! when the `Lablet` is built, so a host sets its globals before it builds
-//! one. Each run's root span is the child of the context that's current
-//! where the run is awaited, so a run under a span the host has open is in
-//! the host's trace. The host's SDK samples, exports and flushes: a run
-//! returns without flushing anything, and [`Lablet::shutdown`] does no
-//! telemetry work. A host's `tracing` subscriber sees lablet's diagnostics
-//! and none of its telemetry, and a tool executor finds its call's span in
-//! the current OpenTelemetry context.
+//! one. It may hand in the propagator a `bash` command's context is
+//! injected through, and one it doesn't hand in is OpenTelemetry's global
+//! one, asked as each command starts. Each run's root span is the child of
+//! the context that's current where the run is awaited, so a run under a
+//! span the host has open is in the host's trace, and a command's
+//! environment holds its tool span's context and none it would inherit.
+//! The host's SDK samples, exports and flushes: a run returns without
+//! flushing anything, and [`Lablet::shutdown`] does no telemetry work. A
+//! host's `tracing` subscriber sees lablet's diagnostics and none of its
+//! telemetry, and a tool executor finds its call's span in the current
+//! OpenTelemetry context.
 //!
 //! What configured an SDK does nothing in library mode, and nothing is said
 //! of it: the config's `telemetry.file`, `telemetry.otlp` and
 //! `telemetry.resource`, every `OTEL_*` variable the SDK reads,
-//! `OTEL_SDK_DISABLED`, and `TRACEPARENT`, `TRACESTATE` and `BAGGAGE`.
+//! `OTEL_SDK_DISABLED`, and `TRACEPARENT`, `TRACESTATE` and `BAGGAGE` as
+//! the run's parent.
 //! Content capture still applies, `telemetry.capture_content` and then
 //! `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`, and so does the cut
 //! of the OTLP header variables' values and of the endpoint variables' user

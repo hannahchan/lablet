@@ -614,9 +614,17 @@ async fn the_root_span_is_the_child_of_the_context_the_run_is_called_in() {
         Some(&opentelemetry::StringValue::from("acme")),
         "the context the run is called in reaches the loop, its baggage with it"
     );
-    assert_eq!(in_host.span().span_context(), &under_host.span_context);
     assert_eq!(in_none.baggage().len(), 0);
-    assert_eq!(in_none.span().span_context(), &alone.span_context);
+    for (found, root) in [(&in_host, &under_host), (&in_none, &alone)] {
+        let span = found.span().span_context().clone();
+        let attempt = lab
+            .traced(root)
+            .into_iter()
+            .find(|exported| exported.span_context == span)
+            .expect("the attempt found a span the run exported");
+        assert!(attempt.name.starts_with("chat "), "{}", attempt.name);
+        assert_eq!(attempt.parent_span_id, root.span_context.span_id());
+    }
 }
 
 #[tokio::test]

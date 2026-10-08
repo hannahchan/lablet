@@ -68,15 +68,19 @@ impl Lablet {
     /// when the config names a place for it, and then the run's wide event
     /// is emitted, so the transcript it names is whole, or its failure
     /// logged, when it arrives. Nothing is flushed: the host's SDK decides
-    /// when what the run emitted is exported.
+    /// when what the run emitted is exported. A `bash` command starts under
+    /// its tool span, whose context is injected into its environment
+    /// through the propagator this `Lablet` was built with, or
+    /// OpenTelemetry's global one as it is when the command starts, in
+    /// place of every context variable the command would inherit.
     ///
     /// Library mode leaves alone what configured an OpenTelemetry SDK, and
     /// says nothing of it: the config's `telemetry.file`, `telemetry.otlp`
     /// and `telemetry.resource`, the `OTEL_*` variables the SDK reads,
-    /// `OTEL_SDK_DISABLED`, and `TRACEPARENT`, `TRACESTATE` and `BAGGAGE`.
-    /// Content capture still applies, and the secrets the config's
-    /// telemetry section names are still withheld from commands and cut
-    /// from what they print.
+    /// `OTEL_SDK_DISABLED`, and `TRACEPARENT`, `TRACESTATE` and `BAGGAGE`
+    /// as the run's parent. Content capture still applies, and the secrets
+    /// the config's telemetry section names are still withheld from
+    /// commands and cut from what they print.
     ///
     /// A run is stopped through its [`CancelHandle`](crate::CancelHandle). Dropping the future
     /// abandons it with no outcome. Dropped before the loop returns, it leaves

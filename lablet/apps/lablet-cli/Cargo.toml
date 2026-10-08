@@ -23,6 +23,7 @@ async-trait.workspace = true
 clap.workspace = true
 lablet-config.workspace = true
 lablet-documents.workspace = true
+lablet-env-carrier.workspace = true
 lablet-model.workspace = true
 lablet-otel-env.workspace = true
 lablet-prepare.workspace = true
@@ -34,6 +35,7 @@ lablet-transcript-json.workspace = true
 opentelemetry.workspace = true
 opentelemetry-http.workspace = true
 opentelemetry-otlp.workspace = true
+opentelemetry-propagator-b3.workspace = true
 opentelemetry-proto.workspace = true
 opentelemetry_sdk.workspace = true
 # The blocking client the OTLP HTTP exporter sends through, from the batch processors' own

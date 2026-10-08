@@ -61,16 +61,18 @@ pub struct Settings {
     /// it.
     pub timeout: Duration,
     /// Variables a command starts with on top of the ones it inherits. One
-    /// that has the name of an inherited variable replaces it, and one that
-    /// has the name of a withheld variable passes it on.
+    /// that has the name of an inherited variable replaces it, one that has
+    /// the name of a withheld variable passes it on, and one that has the
+    /// name of a context variable wins over the one injected.
     pub env: BTreeMap<String, String>,
-    /// Variables of lablet's environment that no command inherits: the
-    /// ones lablet reads its secrets from. Their values aren't here, since
-    /// a command can find a value some other way than its environment, in a
-    /// file or in lablet's own environment through the process table, as
-    /// `ps eww -p $PPID` and `/proc/<pid>/environ` read it. So the values
-    /// come with every call, as [`lablet_run::ToolCall::secrets`], and are
-    /// cut out of every result however the command came by them.
+    /// Variables of lablet's environment that no command inherits, and that
+    /// no context is injected into: the ones lablet reads its secrets from.
+    /// Their values aren't here, since a command can find a value some other
+    /// way than its environment, in a file or in lablet's own environment
+    /// through the process table, as `ps eww -p $PPID` and
+    /// `/proc/<pid>/environ` read it. So the values come with every call, as
+    /// [`lablet_run::ToolCall::secrets`], and are cut out of every result
+    /// however the command came by them.
     pub withheld: BTreeSet<String>,
 }
 

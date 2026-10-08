@@ -10,10 +10,12 @@ use lablet_config::{Config, KeyPath, Refusal};
 use lablet_prepare::{BuildError, OwnFile, Prepared, held};
 use lablet_run::{FilterList, ToolExecutor, ToolSet, ToolSetError};
 use lablet_tools_builtin::{BuiltinTools, SettingsError};
+use opentelemetry::propagation::TextMapPropagator;
 
 /// The tool set of the config `written`, which `prepared` checked: the
 /// built-in tools, when the config enables any, under the secrets it
-/// derived, and the set every run of it is offered.
+/// derived and injecting a command's context through `propagator`, the one
+/// the root resolved, and the set every run of it is offered.
 ///
 /// # Errors
 ///
@@ -23,7 +25,11 @@ use lablet_tools_builtin::{BuiltinTools, SettingsError};
 /// [`BuildError::UnknownTool`] when `tools.allow` or `tools.deny` names a
 /// tool the run doesn't have, and [`BuildError::Tools`] when the tools
 /// can't be settled into one set.
-pub async fn tools(written: &Config, prepared: &Prepared) -> Result<Arc<ToolSet>, BuildError> {
+pub async fn tools(
+    written: &Config,
+    prepared: &Prepared,
+    propagator: Arc<dyn TextMapPropagator + Send + Sync>,
+) -> Result<Arc<ToolSet>, BuildError> {
     let refused = |refusal| BuildError::Config(written.refused(refusal));
     let real = prepared.real();
     let settings = prepared.settings();
@@ -34,7 +40,7 @@ pub async fn tools(written: &Config, prepared: &Prepared) -> Result<Arc<ToolSet>
                 withheld: prepared.withheld().clone(),
                 ..builtin
             };
-            let tools = BuiltinTools::new(builtin).map_err(|error| match error {
+            let tools = BuiltinTools::new(builtin, propagator).map_err(|error| match error {
                 SettingsError::Root { reason, .. } => {
                     refused(Refusal::invalid("tools.builtin.root", reason))
                 }

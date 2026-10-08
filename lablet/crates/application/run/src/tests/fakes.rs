@@ -279,6 +279,7 @@ pub struct FakeProvider {
     deadlines: Mutex<Vec<Duration>>,
     ran_out: AtomicBool,
     dropped: Mutex<Vec<String>>,
+    found: Mutex<Vec<SpanContext>>,
 }
 
 /// What one attempt carried beside the conversation.
@@ -306,7 +307,16 @@ impl FakeProvider {
             deadlines: Mutex::new(Vec::new()),
             ran_out: AtomicBool::new(false),
             dropped: Mutex::new(Vec::new()),
+            found: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The span each attempt found in the current context, in order.
+    pub fn found(&self) -> Vec<SpanContext> {
+        self.found
+            .lock()
+            .expect("the fake provider isn't poisoned")
+            .clone()
     }
 
     /// The attempts that were dropped before they returned, as `x` and the
@@ -371,6 +381,10 @@ impl ModelProvider for FakeProvider {
         request: ProviderRequest<'_>,
     ) -> Result<ProviderResponse, ProviderError> {
         let attempt = self.calls.fetch_add(1, Ordering::Relaxed) + 1;
+        self.found
+            .lock()
+            .expect("the fake provider isn't poisoned")
+            .push(Context::current().span().span_context().clone());
         self.sent
             .lock()
             .expect("the fake provider isn't poisoned")

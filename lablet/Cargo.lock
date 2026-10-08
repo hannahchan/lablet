@@ -1139,6 +1139,7 @@ dependencies = [
  "lablet-config",
  "lablet-conformance",
  "lablet-documents",
+ "lablet-env-carrier",
  "lablet-model",
  "lablet-otel-env",
  "lablet-prepare",
@@ -1153,6 +1154,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-http",
  "opentelemetry-otlp",
+ "opentelemetry-propagator-b3",
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "reqwest",
@@ -1212,6 +1214,13 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "lablet-env-carrier"
+version = "0.1.0"
+dependencies = [
+ "opentelemetry",
 ]
 
 [[package]]
@@ -1359,10 +1368,13 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "lablet-conformance",
+ "lablet-env-carrier",
  "lablet-model",
  "lablet-run",
  "lablet-test-support",
  "nix",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "serde",
  "serde_json",
  "thiserror",
@@ -1381,6 +1393,7 @@ dependencies = [
  "lablet-prepare",
  "lablet-run",
  "lablet-tools-builtin",
+ "opentelemetry",
 ]
 
 [[package]]
@@ -1653,6 +1666,16 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-types",
+]
+
+[[package]]
+name = "opentelemetry-propagator-b3"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9356e156870e7836e72495aaada27424787184069ae45b8c7af05a749542fff"
+dependencies = [
+ "once_cell",
+ "opentelemetry",
 ]
 
 [[package]]

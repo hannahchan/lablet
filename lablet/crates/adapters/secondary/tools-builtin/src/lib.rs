@@ -37,6 +37,15 @@
 //! variable that `env` names is passed on even when it's withheld, which is
 //! how a command that needs the key is given it.
 //!
+//! The context variables are the exception: a command is under the span of
+//! its own call, so it inherits none of `TRACEPARENT`, `TRACESTATE`,
+//! `BAGGAGE`, `B3` and the `X_B3_*` variables, nor any variable the
+//! propagator the executor was built with names, and the OpenTelemetry
+//! context current as the command starts, the call's tool span's, is
+//! injected through that propagator in their place, each key as the
+//! variable its normalised name names, and none with an empty value. A
+//! context variable that `env` names wins over the one injected, key by key.
+//!
 //! Withholding a variable keeps it out of the command's environment and
 //! nowhere else: a command can read lablet's own through the process table,
 //! as `ps eww -p $PPID` and `/proc/<pid>/environ` do, or find a key in a

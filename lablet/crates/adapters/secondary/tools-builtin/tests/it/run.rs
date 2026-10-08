@@ -85,10 +85,13 @@ fn sent(outcome: &ToolCallOutcome) -> (&'static str, String) {
 async fn a_command_past_the_timeout_is_an_error_result_of_kind_timeout_and_the_run_goes_on() {
     let scratch = Root::new("run-timeout");
     scratch.holds("notes.md", "on it goes");
-    let tools = BuiltinTools::new(Settings {
-        timeout: Duration::from_secs(1),
-        ..scratch.settings()
-    })
+    let tools = BuiltinTools::new(
+        Settings {
+            timeout: Duration::from_secs(1),
+            ..scratch.settings()
+        },
+        crate::harness::untraced(),
+    )
     .unwrap();
 
     let (finished, _) = run(
@@ -152,10 +155,13 @@ async fn a_run_is_refused_what_is_outside_the_root_and_kept_from_lablet_s_enviro
     );
     let held = std::env::var(NOT_FOR_A_COMMAND).expect("cargo sets it for a test");
     scratch.holds("key.txt", &held);
-    let tools = BuiltinTools::new(Settings {
-        withheld: [NOT_FOR_A_COMMAND.to_owned()].into(),
-        ..scratch.settings()
-    })
+    let tools = BuiltinTools::new(
+        Settings {
+            withheld: [NOT_FOR_A_COMMAND.to_owned()].into(),
+            ..scratch.settings()
+        },
+        crate::harness::untraced(),
+    )
     .unwrap();
 
     let (finished, provider) = run(

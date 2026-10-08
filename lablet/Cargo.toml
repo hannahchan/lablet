@@ -20,6 +20,7 @@ members = [
   "crates/adapters/secondary/tools-mcp",
   "crates/adapters/secondary/transcript-json",
   "crates/adapters/secondary/shared/documents",
+  "crates/adapters/secondary/shared/env-carrier",
   "tests/conformance",
   "tests/mcp-server",
   "tests/test-support",
@@ -58,6 +59,9 @@ lablet-tools-mcp = { path = "crates/adapters/secondary/tools-mcp", version = "0.
 lablet-transcript-json = { path = "crates/adapters/secondary/transcript-json", version = "0.1.0" }
 # Adapter shared kernel: the transcript and outcome documents, and the shapes a script shares with them
 lablet-documents = { path = "crates/adapters/secondary/shared/documents", version = "0.1.0" }
+# Adapter shared kernel: the environment as a carrier of context, its names normalised, and the
+# variables every propagator lablet serves carries context in
+lablet-env-carrier = { path = "crates/adapters/secondary/shared/env-carrier", version = "0.1.0" }
 # Library root: build(), check() and the Lablet a host runs, its public library API
 lablet = { path = "apps/lablet", version = "0.1.0" }
 # CLI root: main, the command line, its own composition and the OpenTelemetry SDK it
@@ -192,6 +196,9 @@ opentelemetry-otlp = { version = "=0.33.0", default-features = false, features =
 # client behind it, so the config's headers are set after the exporter has merged the
 # environment's.
 opentelemetry-http = "=0.33.0"
+# The `b3` and `b3multi` propagators `OTEL_PROPAGATORS` may name, in the CLI root alone; never
+# its default encoding, the multiple headers, since the specification's `b3` is the single one.
+opentelemetry-propagator-b3 = "=0.33.0"
 # Holds a header value of `telemetry.otlp.headers` from the builder to the request, so no
 # `Debug` or log line prints one.
 secrecy = "=0.10.3"

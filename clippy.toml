@@ -11,8 +11,9 @@ doc-valid-idents = ["..", "GenAI", "OpenAI"]
 # OpenTelemetry's globals are one per process, and a process may hold several
 # `Lablet`s, each given providers of its own, so nothing in lablet sets one,
 # and lablet emits no metrics. The one reader is the library root's fallback,
-# for a host that hands in no tracer provider: a function in
-# `apps/lablet/src/fallback.rs` reads `tracer_provider` under its own
+# for a host that hands in no tracer provider or no propagator: two functions
+# in `apps/lablet/src/fallback.rs` read `tracer_provider` and
+# `get_text_map_propagator`, each under its own
 # `#[expect(clippy::disallowed_methods, reason = "...")]`, so any other reader
 # fails clippy and a function that stops reading fails its expectation. Test
 # code may set or read a global, each call under its own `#[expect]`: the
@@ -32,6 +33,6 @@ disallowed-methods = [
   { path = "opentelemetry::global::meter_provider", reason = "lablet emits no metrics; a global provider is shared by every Lablet in the process", allow-invalid = true },
   { path = "opentelemetry::global::meter", reason = "lablet emits no metrics; a global provider is shared by every Lablet in the process", allow-invalid = true },
   { path = "opentelemetry::global::meter_with_scope", reason = "lablet emits no metrics; a global provider is shared by every Lablet in the process", allow-invalid = true },
-  { path = "opentelemetry::global::set_text_map_propagator", reason = "the global propagator is shared by every Lablet in the process", allow-invalid = true },
-  { path = "opentelemetry::global::get_text_map_propagator", reason = "lablet's propagators are its own; the global one is shared by every Lablet in the process", allow-invalid = true },
+  { path = "opentelemetry::global::set_text_map_propagator", reason = "the global propagator is shared by every Lablet in the process; the CLI root hands its propagators in", allow-invalid = true },
+  { path = "opentelemetry::global::get_text_map_propagator", reason = "read only by the library root's fallback, where a host handed in no propagator", allow-invalid = true },
 ]

@@ -1,14 +1,19 @@
 //! The context a run comes from: what the environment says the command
 //! line's run is the child of, extracted through the propagators
-//! `OTEL_PROPAGATORS` names, once, and made current around the run.
+//! `OTEL_PROPAGATORS` names, once, and made current around the run, and
+//! the propagators each process the run starts is given its context
+//! through.
 //!
 //! The propagators are lablet's own, and never OpenTelemetry's global one,
 //! which one process holding several `Lablet`s would share, and which a
 //! crate could set without a line of lablet's changing.
 
+use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use lablet_env_carrier::{EnvExtractor, variable};
 use opentelemetry::Context;
 use opentelemetry::propagation::{Extractor, TextMapPropagator};
 use opentelemetry::trace::TraceContextExt as _;
@@ -36,6 +41,9 @@ const TARGET: &str = "lablet::propagation";
 pub struct Inbound {
     /// The context each run's root span is opened in.
     pub parent: Context,
+    /// The composite of the propagators, which a command's context is
+    /// injected through.
+    pub propagator: Arc<dyn TextMapPropagator + Send + Sync>,
 }
 
 /// The inbound context the seam's `context` variables give, extracted
@@ -45,7 +53,12 @@ pub struct Inbound {
 /// `BAGGAGE` the baggage propagator can't read in full, are warned about,
 /// never shown.
 pub fn inbound(context: &otel_env::Context) -> Inbound {
-    let carrier = Carrier(&context.carried);
+    let environment: BTreeMap<OsString, OsString> = context
+        .carried
+        .iter()
+        .map(|(name, value)| (name.into(), value.into()))
+        .collect();
+    let carrier = EnvExtractor(&environment);
     let propagator = context.propagator();
     let unread = Unread::default();
     // Under a subscriber of its own, so that the baggage propagator's
@@ -73,7 +86,10 @@ pub fn inbound(context: &otel_env::Context) -> Inbound {
             variable(BAGGAGE)
         );
     }
-    Inbound { parent }
+    Inbound {
+        parent,
+        propagator: Arc::new(propagator),
+    }
 }
 
 /// Whether the baggage propagator warned while extracting.
@@ -86,46 +102,6 @@ impl<S: tracing::Subscriber> Layer<S> for Unread {
             self.0.store(true, Ordering::Relaxed);
         }
     }
-}
-
-/// The environment as a carrier of context: a key a propagator asks for
-/// is read from the variable its normalised name names, and never from one
-/// named as the key is written.
-struct Carrier<'a>(&'a [(&'static str, String)]);
-
-impl Extractor for Carrier<'_> {
-    fn get(&self, key: &str) -> Option<&str> {
-        let name = variable(key);
-        self.0
-            .iter()
-            .find(|(variable, _)| *variable == name)
-            .map(|(_, value)| value.as_str())
-    }
-
-    fn keys(&self) -> Vec<&str> {
-        self.0.iter().map(|(variable, _)| *variable).collect()
-    }
-}
-
-/// The name of the variable that carries `key`, as the specification's
-/// carriers normalise it: ASCII letters upper-cased, any other character
-/// but a digit or `_` made `_`, a leading digit given a `_` before it, and
-/// an empty key `_`.
-fn variable(key: &str) -> String {
-    let mut name: String = key
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character.to_ascii_uppercase()
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if name.is_empty() || name.starts_with(|character: char| character.is_ascii_digit()) {
-        name.insert(0, '_');
-    }
-    name
 }
 
 #[cfg(test)]

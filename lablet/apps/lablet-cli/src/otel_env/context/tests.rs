@@ -12,6 +12,13 @@ const BOTH: [Propagator; 2] = [Propagator::TraceContext, Propagator::Baggage];
 
 const TRACEPARENT: &str = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
 
+fn carried(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect()
+}
+
 #[test]
 fn an_environment_that_sets_nothing_gives_no_service_name_no_attributes_and_both_propagators() {
     let (context, warnings) = read(&[]);
@@ -130,11 +137,11 @@ fn the_context_variables_are_read_by_their_normalised_names() {
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(
         context.carried,
-        [
-            ("TRACEPARENT", TRACEPARENT.to_owned()),
-            ("TRACESTATE", "vendor=1".to_owned()),
-            ("BAGGAGE", "user=1".to_owned()),
-        ]
+        carried(&[
+            ("BAGGAGE", "user=1"),
+            ("TRACEPARENT", TRACEPARENT),
+            ("TRACESTATE", "vendor=1"),
+        ])
     );
 }
 
@@ -177,13 +184,13 @@ fn otel_propagators_none_ignores_the_context_variables() {
 
 #[test]
 fn an_unknown_propagator_is_ignored_with_a_warning() {
-    let (context, warnings) = read(&[(PROPAGATORS, "b3,tracecontext,none")]);
+    let (context, warnings) = read(&[(PROPAGATORS, "xray,tracecontext,none")]);
 
     assert_eq!(context.propagators, [Propagator::TraceContext]);
     assert_eq!(
         warnings,
         [
-            format!("`{PROPAGATORS}` holds `b3`, which isn't one lablet serves, so it's ignored"),
+            format!("`{PROPAGATORS}` holds `xray`, which isn't one lablet serves, so it's ignored"),
             format!("`{PROPAGATORS}` holds `none`, which is beside another value, so it's ignored"),
         ]
     );
@@ -193,9 +200,74 @@ fn an_unknown_propagator_is_ignored_with_a_warning() {
 /// of nothing lablet serves is as if it weren't set, rather than `none`.
 #[test]
 fn a_propagator_list_naming_nothing_lablet_serves_is_read_as_unset() {
-    let (context, warnings) = read(&[(PROPAGATORS, "b3multi,xray"), ("TRACEPARENT", TRACEPARENT)]);
+    let (context, warnings) = read(&[(PROPAGATORS, "jaeger,xray"), ("TRACEPARENT", TRACEPARENT)]);
 
     assert_eq!(context.propagators, BOTH);
-    assert_eq!(context.carried, [("TRACEPARENT", TRACEPARENT.to_owned())]);
+    assert_eq!(context.carried, carried(&[("TRACEPARENT", TRACEPARENT)]));
     assert_eq!(warnings.len(), 2, "{warnings:?}");
+}
+
+/// Each propagator's variables are read, and only theirs: the context
+/// variables are those the composite's fields name, normalised.
+#[test]
+fn b3_and_b3multi_are_served_and_read_the_variables_their_fields_name() {
+    let held = [
+        ("TRACEPARENT", TRACEPARENT),
+        ("B3", "single"),
+        ("X_B3_TRACEID", "trace"),
+        ("X_B3_SPANID", "span"),
+        ("X_B3_PARENTSPANID", "parent"),
+        ("X_B3_SAMPLED", "1"),
+        ("X_B3_FLAGS", "0"),
+    ];
+
+    let (single, warnings) = read(&[&held[..], &[(PROPAGATORS, "b3")]].concat());
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(single.propagators, [Propagator::B3]);
+    assert_eq!(single.carried, carried(&[("B3", "single")]));
+
+    let (multiple, _) = read(&[&held[..], &[(PROPAGATORS, "B3Multi")]].concat());
+    assert_eq!(multiple.propagators, [Propagator::B3Multi]);
+    assert_eq!(
+        multiple.carried,
+        carried(&[
+            ("X_B3_FLAGS", "0"),
+            ("X_B3_SAMPLED", "1"),
+            ("X_B3_SPANID", "span"),
+            ("X_B3_TRACEID", "trace"),
+        ])
+    );
+
+    let (all, _) = read(&[&held[..], &[(PROPAGATORS, "b3multi,tracecontext,b3")]].concat());
+    assert_eq!(
+        all.propagators,
+        [
+            Propagator::B3Multi,
+            Propagator::TraceContext,
+            Propagator::B3
+        ]
+    );
+    assert_eq!(
+        all.carried,
+        carried(&[
+            ("B3", "single"),
+            ("TRACEPARENT", TRACEPARENT),
+            ("X_B3_FLAGS", "0"),
+            ("X_B3_SAMPLED", "1"),
+            ("X_B3_SPANID", "span"),
+            ("X_B3_TRACEID", "trace"),
+        ])
+    );
+}
+
+/// Under `OTEL_SDK_DISABLED=true` with no inbound context, a tool span has
+/// no valid context, and a command gets no B3 variable at all.
+#[test]
+fn b3_and_b3multi_inject_nothing_for_a_context_with_no_valid_span() {
+    for propagator in [Propagator::B3, Propagator::B3Multi] {
+        let mut injected = std::collections::HashMap::new();
+        composite(&[propagator]).inject_context(&OtelContext::new(), &mut injected);
+
+        assert!(injected.is_empty(), "{propagator:?}: {injected:?}");
+    }
 }

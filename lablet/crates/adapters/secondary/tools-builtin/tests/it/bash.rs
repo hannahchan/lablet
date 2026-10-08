@@ -129,10 +129,13 @@ async fn nothing_carries_from_one_command_to_the_next() {
 async fn a_command_inherits_lablet_s_environment_less_what_is_withheld_and_what_is_added() {
     let scratch = Root::new("bash-env");
     let (settings, key) = withholding_the_key(&scratch);
-    let tools = BuiltinTools::new(Settings {
-        env: [("LABLET_ADDED".to_owned(), "by the settings".to_owned())].into(),
-        ..settings
-    })
+    let tools = BuiltinTools::new(
+        Settings {
+            env: [("LABLET_ADDED".to_owned(), "by the settings".to_owned())].into(),
+            ..settings
+        },
+        crate::harness::untraced(),
+    )
     .unwrap();
     let not_a_secret = std::env::var(NOT_A_SECRET).expect("cargo sets it for a test");
     let path = std::env::var("PATH").expect("a test has a PATH");
@@ -168,10 +171,13 @@ async fn a_withheld_variable_the_settings_name_is_passed_on_and_its_value_is_sti
     let scratch = Root::new("bash-env-passed-on");
     let (settings, key) = withholding_the_key(&scratch);
     let given = |value: &str| {
-        BuiltinTools::new(Settings {
-            env: [(KEY_VARIABLE.to_owned(), value.to_owned())].into(),
-            ..settings.clone()
-        })
+        BuiltinTools::new(
+            Settings {
+                env: [(KEY_VARIABLE.to_owned(), value.to_owned())].into(),
+                ..settings.clone()
+            },
+            crate::harness::untraced(),
+        )
         .unwrap()
     };
     let command = json!({ "command": format!("echo \"${{#{KEY_VARIABLE}}} ${KEY_VARIABLE}\"") });
@@ -195,7 +201,7 @@ async fn a_withheld_variable_the_settings_name_is_passed_on_and_its_value_is_sti
 async fn a_secret_a_command_finds_is_cut_from_what_it_wrote_however_it_arrives() {
     let scratch = Root::new("bash-secret");
     let (settings, key) = withholding_the_key(&scratch);
-    let tools = BuiltinTools::new(settings).unwrap();
+    let tools = BuiltinTools::new(settings, crate::harness::untraced()).unwrap();
     scratch.holds("key.txt", &key);
     let command = "head -c 5 key.txt; sleep 0.05; tail -c +6 key.txt; echo; cat key.txt";
 
@@ -215,10 +221,13 @@ async fn a_secret_a_command_finds_is_cut_from_what_it_wrote_however_it_arrives()
 #[tokio::test]
 async fn a_variable_the_settings_add_replaces_the_one_of_lablet_s_environment() {
     let scratch = Root::new("bash-env-replaced");
-    let tools = BuiltinTools::new(Settings {
-        env: [("HOME".to_owned(), "/nowhere".to_owned())].into(),
-        ..scratch.settings()
-    })
+    let tools = BuiltinTools::new(
+        Settings {
+            env: [("HOME".to_owned(), "/nowhere".to_owned())].into(),
+            ..scratch.settings()
+        },
+        crate::harness::untraced(),
+    )
     .unwrap();
 
     let text = said(&tools, "bash", json!({ "command": "echo $HOME" })).await;
@@ -346,10 +355,13 @@ async fn a_command_is_stopped_at_the_call_s_deadline_when_that_is_the_shorter() 
 async fn a_command_is_stopped_at_the_executor_s_timeout_when_that_is_the_shorter() {
     let scratch = Root::new("bash-timeout");
     let timeout = Duration::from_millis(60);
-    let tools = BuiltinTools::new(Settings {
-        timeout,
-        ..scratch.settings()
-    })
+    let tools = BuiltinTools::new(
+        Settings {
+            timeout,
+            ..scratch.settings()
+        },
+        crate::harness::untraced(),
+    )
     .unwrap();
 
     let began = Instant::now();
@@ -401,10 +413,13 @@ async fn a_call_whose_deadline_has_come_starts_nothing() {
         Duration::ZERO,
         call("bash", json!({ "command": "echo started > started" })),
     );
-    let timeout = BuiltinTools::new(Settings {
-        timeout: Duration::ZERO,
-        ..scratch.settings()
-    })
+    let timeout = BuiltinTools::new(
+        Settings {
+            timeout: Duration::ZERO,
+            ..scratch.settings()
+        },
+        crate::harness::untraced(),
+    )
     .unwrap();
 
     let at_the_deadline = tools.execute(none_left).await.unwrap_err();
@@ -441,10 +456,13 @@ async fn a_shell_that_is_not_on_the_path_is_a_failure_of_the_executor_s() {
     let scratch = Root::new("bash-missing");
     let empty = scratch.root().join("bin");
     std::fs::create_dir(&empty).unwrap();
-    let tools = BuiltinTools::new(Settings {
-        env: [("PATH".to_owned(), empty.display().to_string())].into(),
-        ..scratch.settings()
-    })
+    let tools = BuiltinTools::new(
+        Settings {
+            env: [("PATH".to_owned(), empty.display().to_string())].into(),
+            ..scratch.settings()
+        },
+        crate::harness::untraced(),
+    )
     .unwrap();
 
     let error = ask(&tools, "bash", json!({ "command": "echo hello" }))

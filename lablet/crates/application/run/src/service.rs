@@ -633,19 +633,29 @@ impl RunService {
                 // to be filled with what the attempt got when it ends.
                 let chat = running.chat(turn, attempt, request_bytes);
                 let span = self.open(running, chat.name(), LabletChat::KIND, &began);
+                // The attempt runs under its chat span's context, as a tool
+                // call runs under its tool span's, so an adapter that
+                // propagates finds this attempt's span current.
+                let within = running
+                    .parent
+                    .with_remote_span_context(span.span_context().clone());
                 let result = self
-                    .unless_cancelled(self.provider.complete(ProviderRequest {
-                        system: run.transcript().system(),
-                        messages: &messages,
-                        tools: self.tools.specs(),
-                        max_tokens: self.request.max_tokens,
-                        temperature: self.request.temperature,
-                        thinking: self.request.thinking,
-                        effort: self.request.effort,
-                        seed: self.request.seed,
-                        cache_key: self.cache_key(&running.run_id),
-                        deadline: began.left.min(self.calls.provider_timeout),
-                    }))
+                    .unless_cancelled(
+                        self.provider
+                            .complete(ProviderRequest {
+                                system: run.transcript().system(),
+                                messages: &messages,
+                                tools: self.tools.specs(),
+                                max_tokens: self.request.max_tokens,
+                                temperature: self.request.temperature,
+                                thinking: self.request.thinking,
+                                effort: self.request.effort,
+                                seed: self.request.seed,
+                                cache_key: self.cache_key(&running.run_id),
+                                deadline: began.left.min(self.calls.provider_timeout),
+                            })
+                            .with_context(within),
+                    )
                     .await;
                 let opened = Opened {
                     span,

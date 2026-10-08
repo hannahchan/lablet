@@ -120,7 +120,10 @@ pub trait ModelProvider: Send + Sync {
     /// Where the API is served, for `server.address` and `server.port`.
     fn endpoint(&self) -> Option<Endpoint>;
 
-    /// One attempt of one provider call.
+    /// One attempt of one provider call. The attempt's span isn't on the
+    /// request: it's the span of `opentelemetry::Context::current()` while
+    /// this runs, for an adapter that propagates one, and each attempt, a
+    /// retry included, has its own.
     ///
     /// # Errors
     ///

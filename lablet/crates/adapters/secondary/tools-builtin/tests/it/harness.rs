@@ -15,6 +15,8 @@ use lablet_tools_builtin::{BuiltinTools, Settings, Tool};
 use nix::errno::Errno;
 use nix::sys::signal::kill;
 use nix::unistd::Pid;
+use opentelemetry::propagation::TextMapPropagator;
+use opentelemetry::trace::noop::NoopTextMapPropagator;
 use serde_json::Value;
 
 /// The longest a call of these tests may take when it's given no deadline
@@ -72,8 +74,14 @@ impl Root {
 
     /// An executor that serves every tool under the root.
     pub fn tools(&self) -> BuiltinTools {
-        BuiltinTools::new(self.settings()).unwrap()
+        BuiltinTools::new(self.settings(), untraced()).unwrap()
     }
+}
+
+/// What a command's context is injected through where a test doesn't look
+/// at it: nothing.
+pub fn untraced() -> Arc<dyn TextMapPropagator + Send + Sync> {
+    Arc::new(NoopTextMapPropagator::new())
 }
 
 /// A link at `link` that leads to `target`.

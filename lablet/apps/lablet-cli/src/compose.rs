@@ -2,8 +2,9 @@
 //! checked config out. It checks the config through `lablet-prepare`,
 //! settles the telemetry's settings from the config and the SDK's
 //! environment between the check's two halves, builds the tools and the
-//! provider through the wiring kernels, and connects them to the loop and
-//! the runner itself, with the tracer and the logger of the SDK it builds.
+//! provider through the wiring kernels, the tools with the propagators the
+//! environment names, and connects them to the loop and the runner itself,
+//! with the tracer and the logger of the SDK it builds.
 
 use std::sync::Arc;
 
@@ -51,8 +52,8 @@ pub async fn check(config: &Config) -> Result<Checked, BuildError> {
 
 /// [`check`], where `env` is lablet's environment.
 pub(crate) async fn check_in(config: &Config, env: Env<'_>) -> Result<Checked, BuildError> {
-    let (prepared, _, _) = settle(config, prepare(config, env)?, env)?;
-    let tools = lablet_tools_wiring::tools(config, &prepared).await?;
+    let (prepared, _, inbound) = settle(config, prepare(config, env)?, env)?;
+    let tools = lablet_tools_wiring::tools(config, &prepared, inbound.propagator).await?;
     Ok(Checked::new(
         config.resolved(),
         tools.specs().to_vec(),
@@ -74,7 +75,8 @@ pub async fn build(config: Config) -> Result<Composed, BuildError> {
 
 pub(crate) async fn build_in(config: Config, env: Env<'_>) -> Result<Composed, BuildError> {
     let (prepared, exports, inbound) = settle(&config, prepare(&config, env)?, env)?;
-    let tools = lablet_tools_wiring::tools(&config, &prepared).await?;
+    let tools =
+        lablet_tools_wiring::tools(&config, &prepared, Arc::clone(&inbound.propagator)).await?;
     let wiring = prepared.wiring()?;
     let variables = exports.endpoint_variables();
     let telemetry = exports

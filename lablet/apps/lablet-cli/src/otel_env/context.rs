@@ -2,7 +2,16 @@
 //! service's name, the resource's attributes, the propagators, and the
 //! variables those propagators extract a parent from.
 
-use opentelemetry::propagation::{TextMapCompositePropagator, TextMapPropagator};
+use std::collections::BTreeSet;
+
+use lablet_env_carrier::variable;
+use opentelemetry::Context as OtelContext;
+use opentelemetry::propagation::text_map_propagator::FieldIter;
+use opentelemetry::propagation::{
+    Extractor, Injector, TextMapCompositePropagator, TextMapPropagator,
+};
+use opentelemetry::trace::TraceContextExt as _;
+use opentelemetry_propagator_b3::{B3Encoding, Propagator as B3};
 use opentelemetry_sdk::propagation::{BaggagePropagator, TraceContextPropagator};
 
 use super::{Choice, Parse, Variables};
@@ -10,11 +19,6 @@ use super::{Choice, Parse, Variables};
 const SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 const RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
 const PROPAGATORS: &str = "OTEL_PROPAGATORS";
-
-/// The variables the propagators lablet serves extract from, each the
-/// normalised name of a key they ask for: `traceparent`, `tracestate` and
-/// `baggage`.
-const CARRIED: [&str; 3] = ["TRACEPARENT", "TRACESTATE", "BAGGAGE"];
 
 /// The resource's and the inbound context's variables, as the seam reads
 /// them.
@@ -28,9 +32,10 @@ pub struct Context {
     /// The propagators, in the order `OTEL_PROPAGATORS` names them; none
     /// when it's `none`.
     pub(crate) propagators: Vec<Propagator>,
-    /// What each of [`CARRIED`] holds, by its name, for those that are set.
-    /// Read only when there's a propagator to extract with.
-    pub(crate) carried: Vec<(&'static str, String)>,
+    /// What the variable of each key the propagators name holds, by the
+    /// variable's name, for those that are set, in the order of their
+    /// names.
+    pub(crate) carried: Vec<(String, String)>,
 }
 
 /// What an environment that sets nothing gives.
@@ -45,14 +50,11 @@ impl Context {
         let propagators = variables
             .get(PROPAGATORS)
             .unwrap_or_else(|| vec![Propagator::TraceContext, Propagator::Baggage]);
-        let carried = if propagators.is_empty() {
-            Vec::new()
-        } else {
-            CARRIED
-                .into_iter()
-                .filter_map(|name| variables.get(name).map(|value| (name, value)))
-                .collect()
-        };
+        let names: BTreeSet<String> = composite(&propagators).fields().map(variable).collect();
+        let carried = names
+            .into_iter()
+            .filter_map(|name| variables.get(&name).map(|value| (name, value)))
+            .collect();
         Self {
             service_name: variables.get(SERVICE_NAME),
             resource_attributes: variables
@@ -67,17 +69,72 @@ impl Context {
     /// The composite of the propagators, in their order: lablet's own,
     /// never the global one.
     pub(crate) fn propagator(&self) -> TextMapCompositePropagator {
-        TextMapCompositePropagator::new(
-            self.propagators
-                .iter()
-                .map(|propagator| -> Box<dyn TextMapPropagator + Send + Sync> {
-                    match propagator {
-                        Propagator::TraceContext => Box::new(TraceContextPropagator::new()),
-                        Propagator::Baggage => Box::new(BaggagePropagator::new()),
+        composite(&self.propagators)
+    }
+}
+
+/// The composite of `propagators`, in their order.
+fn composite(propagators: &[Propagator]) -> TextMapCompositePropagator {
+    TextMapCompositePropagator::new(
+        propagators
+            .iter()
+            .map(|propagator| -> Box<dyn TextMapPropagator + Send + Sync> {
+                match propagator {
+                    Propagator::TraceContext => Box::new(TraceContextPropagator::new()),
+                    Propagator::Baggage => Box::new(BaggagePropagator::new()),
+                    // The specification's `b3` injects the single header,
+                    // which isn't the crate's default.
+                    Propagator::B3 => {
+                        Box::new(AsSpecified(B3::with_encoding(B3Encoding::SingleHeader)))
                     }
-                })
-                .collect(),
-        )
+                    Propagator::B3Multi => {
+                        Box::new(AsSpecified(B3::with_encoding(B3Encoding::MultipleHeader)))
+                    }
+                }
+            })
+            .collect(),
+    )
+}
+
+/// `P`, injecting nothing for a context with no valid span, and only the
+/// keys its fields name for one with. For a context with no valid span, as
+/// under `OTEL_SDK_DISABLED=true` with no inbound context, the B3 crate
+/// injects a sampled flag of its own, which a child's tracer reads as a
+/// decision, though none was made. Its single header encoding injects the
+/// multiple headers too, which the specification's `b3` doesn't. A canary
+/// pins each.
+#[derive(Debug)]
+struct AsSpecified<P>(P);
+
+impl<P: TextMapPropagator> TextMapPropagator for AsSpecified<P> {
+    fn inject_context(&self, cx: &OtelContext, injector: &mut dyn Injector) {
+        if !cx.span().span_context().is_valid() {
+            return;
+        }
+        let fields = self.0.fields().collect();
+        self.0.inject_context(cx, &mut Fielded { fields, injector });
+    }
+
+    fn extract_with_context(&self, cx: &OtelContext, extractor: &dyn Extractor) -> OtelContext {
+        self.0.extract_with_context(cx, extractor)
+    }
+
+    fn fields(&self) -> FieldIter<'_> {
+        self.0.fields()
+    }
+}
+
+/// An injector that sets the keys of `fields` and drops the rest.
+struct Fielded<'a> {
+    fields: Vec<&'a str>,
+    injector: &'a mut dyn Injector,
+}
+
+impl Injector for Fielded<'_> {
+    fn set(&mut self, key: &str, value: String) {
+        if self.fields.contains(&key) {
+            self.injector.set(key, value);
+        }
     }
 }
 
@@ -88,6 +145,11 @@ pub(crate) enum Propagator {
     TraceContext,
     /// The W3C baggage: `baggage`.
     Baggage,
+    /// B3's single header: `b3`.
+    B3,
+    /// B3's multiple headers: `x-b3-traceid`, `x-b3-spanid`, `x-b3-sampled`
+    /// and `x-b3-flags`.
+    B3Multi,
 }
 
 impl Choice for Propagator {
@@ -95,6 +157,8 @@ impl Choice for Propagator {
         match name {
             "tracecontext" => Some(Self::TraceContext),
             "baggage" => Some(Self::Baggage),
+            "b3" => Some(Self::B3),
+            "b3multi" => Some(Self::B3Multi),
             _ => None,
         }
     }

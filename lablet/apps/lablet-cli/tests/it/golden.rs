@@ -442,6 +442,12 @@ fn hostile() -> Vec<(String, String)> {
         ("BAGGAGE", "hostile=baggage"),
         ("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "1"),
         ("OTEL_BLRP_MAX_EXPORT_BATCH_SIZE", "1"),
+        // Read by `b3` and `b3multi` alone, which the propagators above
+        // aren't: a parent of another trace.
+        ("B3", "11111111111111111111111111111111-2222222222222222-1"),
+        ("X_B3_TRACEID", "11111111111111111111111111111111"),
+        ("X_B3_SPANID", "2222222222222222"),
+        ("X_B3_SAMPLED", "1"),
         // Honoured, with no effect this run can show: it has no span
         // events or links, its spans hold fewer than 32 attributes, the
         // three attribute limits leave none to `OTEL_ATTRIBUTE_COUNT_LIMIT`,

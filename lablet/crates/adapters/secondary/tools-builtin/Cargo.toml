@@ -12,9 +12,11 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+lablet-env-carrier.workspace = true
 lablet-model.workspace = true
 lablet-run.workspace = true
 nix.workspace = true
+opentelemetry.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -23,6 +25,8 @@ tokio.workspace = true
 [dev-dependencies]
 lablet-conformance.workspace = true
 lablet-test-support.workspace = true
+# The W3C propagators a command's context is injected through in the tests.
+opentelemetry_sdk.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 
 [[test]]

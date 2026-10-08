@@ -1,16 +1,20 @@
-//! The library root's fallback to OpenTelemetry's global tracer provider,
-//! which this binary's one test sets: a global is one per process, so its
-//! steps run in sequence in a binary of their own, where no other test sees
-//! what they set.
+//! The library root's fallback to OpenTelemetry's global tracer provider
+//! and propagator, which this binary's one test sets: a global is one per
+//! process, so its steps run in sequence in a binary of their own, where no
+//! other test sees what they set.
 
 #![cfg(test)]
 
-use lablet::{Config, Format, Lablet, RunRequest};
+use lablet::{Config, FinishedRun, Format, Lablet, RunRequest};
 use lablet_conformance::host::Host;
+use lablet_model::ToolResultContent;
 use lablet_test_support::Scratch;
-use opentelemetry::global;
 use opentelemetry::logs::NoopLoggerProvider;
-use opentelemetry::trace::{Span as _, Tracer as _, TracerProvider as _};
+use opentelemetry::propagation::text_map_propagator::FieldIter;
+use opentelemetry::propagation::{Extractor, Injector, TextMapPropagator};
+use opentelemetry::trace::{Span as _, TraceContextExt as _, Tracer as _, TracerProvider as _};
+use opentelemetry::{Context, global};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use serde_json::json;
 
@@ -25,6 +29,64 @@ fn config(scratch: &Scratch) -> Config {
         "prompt": { "system": "You fix failing tests." },
     });
     Config::from_str(&config.to_string(), Format::Json).unwrap()
+}
+
+/// What a command prints of the context variables a step looks for.
+const PRINTS: &str =
+    "printf '%s|%s|%s' \"${TRACEPARENT-unset}\" \"${X_GLOBAL-unset}\" \"${X_LATER-unset}\"";
+
+/// A config of the fake provider playing a run that calls `bash` with
+/// [`PRINTS`] and then ends.
+fn printing(scratch: &Scratch) -> Config {
+    scratch.create_dir("work");
+    let script = scratch.write(
+        "printing.yaml",
+        format!(
+            "- response:\n    content:\n      - tool_use: {{ id: call_1, name: bash, input: {{ json: {{ command: {} }} }} }}\n    finish: tool_use\n- response:\n    content:\n      - text: Done.\n    finish: end_turn\n",
+            json!(PRINTS)
+        ),
+    );
+    let config = json!({
+        "model": { "provider": "fake", "script": script, "name": "scripted-1" },
+        "prompt": { "system": "You fix failing tests." },
+        "tools": { "builtin": { "root": scratch.at("work"), "enabled": ["bash"] } },
+    });
+    Config::from_str(&config.to_string(), Format::Json).unwrap()
+}
+
+/// What the run's one command printed, less its closing line.
+fn printed(finished: &FinishedRun) -> String {
+    let call = &finished.transcript.turns()[0].tool_calls()[0];
+    let text: String = call
+        .content
+        .iter()
+        .map(|ToolResultContent::Text(text)| text.as_str())
+        .collect();
+    text.strip_suffix("\nexit code: 0").unwrap().to_owned()
+}
+
+/// A propagator that injects one key of its own, the current span's id.
+#[derive(Debug)]
+struct Named(Vec<String>);
+
+impl Named {
+    fn new(key: &str) -> Self {
+        Self(vec![key.to_owned()])
+    }
+}
+
+impl TextMapPropagator for Named {
+    fn inject_context(&self, cx: &Context, injector: &mut dyn Injector) {
+        injector.set(&self.0[0], cx.span().span_context().span_id().to_string());
+    }
+
+    fn extract_with_context(&self, cx: &Context, _: &dyn Extractor) -> Context {
+        cx.clone()
+    }
+
+    fn fields(&self) -> FieldIter<'_> {
+        FieldIter::new(&self.0)
+    }
 }
 
 /// A tracer provider of the SDK's over an in-memory exporter, and the
@@ -118,5 +180,70 @@ async fn the_fallback_reads_the_globals_and_a_piece_handed_in_wins() {
         runs(&later_spans),
         0,
         "a global set after the build heard the run"
+    );
+
+    the_propagator_handed_in_wins_and_the_global_one_is_asked_as_a_command_starts(&scratch).await;
+}
+
+/// The propagator's steps, after the tracer provider's, which leave a
+/// global tracer provider set: each `Lablet` here is handed one of its own.
+async fn the_propagator_handed_in_wins_and_the_global_one_is_asked_as_a_command_starts(
+    scratch: &Scratch,
+) {
+    // A propagator handed in wins over a global one: the command's context
+    // is injected through the one handed in.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test sets the global propagator to check the fallback"
+    )]
+    global::set_text_map_propagator(Named::new("x-global"));
+    let (traced, _) = provider();
+    let mut lablet = Lablet::builder(printing(scratch), NoopLoggerProvider::new())
+        .with_tracer_provider(traced.clone())
+        .with_propagator(TraceContextPropagator::new())
+        .build()
+        .await
+        .unwrap();
+    let shown = printed(&lablet.run(request()).await);
+    let [traceparent, global_key, later_key] = shown.split('|').collect::<Vec<_>>()[..] else {
+        panic!("{shown}");
+    };
+    assert!(traceparent.starts_with("00-"), "{shown}");
+    assert_eq!((global_key, later_key), ("unset", "unset"), "{shown}");
+
+    // With none handed in, each command is injected through the global
+    // propagator as it is when the command starts, not as it was at the
+    // build.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test sets the global propagator to check the fallback"
+    )]
+    global::set_text_map_propagator(TraceContextPropagator::new());
+    let mut lablet = Lablet::builder(printing(scratch), NoopLoggerProvider::new())
+        .with_tracer_provider(traced)
+        .build()
+        .await
+        .unwrap();
+    let shown = printed(&lablet.run(request()).await);
+    assert!(shown.starts_with("00-"), "the global of the build: {shown}");
+    assert!(shown.ends_with("|unset|unset"), "{shown}");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test sets the global propagator to check the fallback"
+    )]
+    global::set_text_map_propagator(Named::new("x-later"));
+    let shown = printed(&lablet.run(request()).await);
+    let [traceparent, global_key, later_key] = shown.split('|').collect::<Vec<_>>()[..] else {
+        panic!("{shown}");
+    };
+    assert_eq!(
+        (traceparent, global_key),
+        ("unset", "unset"),
+        "the global of the build injected the command: {shown}"
+    );
+    assert_eq!(
+        later_key.len(),
+        16,
+        "the global set after the build: {shown}"
     );
 }

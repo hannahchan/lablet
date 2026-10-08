@@ -1,17 +1,21 @@
 //! `bash`: one command, in a new process that leads a process group of its
 //! own.
 
-use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::{OsStr, OsString};
 use std::os::fd::OwnedFd;
 use std::process::{ExitStatus, Stdio};
+use std::sync::Arc;
 use std::time::Duration;
 
+use lablet_env_carrier::{CONTEXT_VARIABLES, EnvInjector, variable};
 use lablet_model::ToolConcurrency;
 use lablet_run::{ToolError, ToolOutput};
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
+use opentelemetry::Context;
+use opentelemetry::propagation::TextMapPropagator;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt as _;
@@ -50,10 +54,18 @@ background somewhere else, as in `server > server.log 2>&1 &`. A command that ru
 long as a call may take is killed, with every process it started.";
 
 /// Runs commands in the root, with the environment it's given and nothing
-/// else of lablet's.
+/// else of lablet's, and the context each command starts in.
 pub(crate) struct Bash {
     pub(crate) root: Root,
+    /// lablet's environment less what's withheld, with the settings' own on
+    /// top.
     pub(crate) environment: BTreeMap<OsString, OsString>,
+    /// The names that no context is injected into: the settings' own
+    /// variables, which win over a context variable that's inherited or
+    /// injected, and the withheld ones, which stay withheld.
+    pub(crate) kept: BTreeSet<String>,
+    /// What the context a command starts in is injected through.
+    pub(crate) propagator: Arc<dyn TextMapPropagator + Send + Sync>,
 }
 
 #[derive(Deserialize)]
@@ -151,6 +163,28 @@ impl Drop for Group {
 }
 
 impl Bash {
+    /// The environment a command started in `context` gets: no context
+    /// variable it would inherit, since one that's left is another span's,
+    /// and `context` injected in their place, but for the variables the
+    /// settings state, which stay as they say, and the withheld ones, which
+    /// it doesn't get.
+    fn environment_in(&self, context: &Context) -> BTreeMap<OsString, OsString> {
+        let mut environment = self.environment.clone();
+        let fields = self.propagator.fields().map(variable);
+        for name in CONTEXT_VARIABLES
+            .map(str::to_owned)
+            .into_iter()
+            .chain(fields)
+        {
+            if !self.kept.contains(&name) {
+                environment.remove(OsStr::new(&name));
+            }
+        }
+        self.propagator
+            .inject_context(context, &mut EnvInjector::new(&mut environment, &self.kept));
+        environment
+    }
+
     fn start(&self, command: &str) -> std::io::Result<Started> {
         // One pipe for both streams, so what the command wrote is read in
         // the order it was written. The `Command` holds lablet's copies of
@@ -162,7 +196,9 @@ impl Bash {
             .arg(command)
             .current_dir(self.root.path())
             .env_clear()
-            .envs(&self.environment)
+            // The context current as the command starts, so a span opened
+            // between the call and its start is the one the command is under.
+            .envs(self.environment_in(&Context::current()))
             .stdin(Stdio::null())
             .stdout(writes.try_clone()?)
             .stderr(writes)

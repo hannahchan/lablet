@@ -12,6 +12,8 @@ mod bash;
 #[cfg(test)]
 mod conformance;
 #[cfg(test)]
+mod context;
+#[cfg(test)]
 mod executor;
 #[cfg(test)]
 mod files;

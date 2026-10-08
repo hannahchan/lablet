@@ -3,9 +3,9 @@
 //! its own. A canary passes while the gap is there and fails on the release
 //! that closes it.
 //!
-//! Each runs in a child process, since what it pins is the crates' reading
-//! of the process environment, which `cargo xtask test` strips and a test
-//! can't set for its own process.
+//! Each that pins the crates' reading of the process environment runs in a
+//! child process, since `cargo xtask test` strips that environment and a
+//! test can't set it for its own process.
 //!
 //! The commit that upgrades the crates bumps their pins alone and lets the
 //! canaries fail. For each one that fails, that commit, or one right after
@@ -14,3 +14,4 @@
 
 mod context;
 mod exporter;
+mod propagation;

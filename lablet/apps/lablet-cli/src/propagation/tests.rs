@@ -2,7 +2,7 @@
 //! build reads them, with the warnings caught by a `tracing` subscriber of
 //! the test's own.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -209,44 +209,116 @@ fn a_baggage_member_that_does_not_parse_is_ignored_with_a_warning_that_names_no_
     }
 }
 
-/// The carriers specification's normalisation, with its own example.
-#[test]
-fn a_key_is_read_from_the_variable_its_normalised_name_names() {
-    assert_eq!(variable("traceparent"), "TRACEPARENT");
-    assert_eq!(variable("x-b3-traceid"), "X_B3_TRACEID");
-    assert_eq!(variable("Ünïcode.key"), "_N_CODE_KEY");
-    assert_eq!(variable("1st"), "_1ST");
-    assert_eq!(variable(""), "_");
-
-    let held = [("TRACEPARENT", SAMPLED.to_owned())];
-    let carrier = Carrier(&held);
-    assert_eq!(carrier.get("traceparent"), Some(SAMPLED));
-    assert_eq!(carrier.get("TraceParent"), Some(SAMPLED));
-    assert_eq!(carrier.keys(), ["TRACEPARENT"]);
-}
-
-/// The seam reads the context variables by a list of its own, which must
-/// be the variable of every key the served propagators ask for.
+/// The seam reads the context variables the propagators' fields name,
+/// whichever propagators `OTEL_PROPAGATORS` names.
 #[test]
 fn the_seam_reads_the_variable_of_every_key_the_propagators_ask_for() {
-    let asked: BTreeSet<String> = OtelEnv::read(&|_| None)
-        .context
-        .propagator()
-        .fields()
-        .map(variable)
-        .collect();
-    let env = |name: &str| asked.contains(name).then(|| OsString::from("x"));
+    for named in [
+        None,
+        Some("b3"),
+        Some("b3multi"),
+        Some("tracecontext,baggage,b3,b3multi"),
+    ] {
+        let propagators = |name: &str| {
+            (name == "OTEL_PROPAGATORS")
+                .then(|| named.map(OsString::from))
+                .flatten()
+        };
+        let asked: BTreeSet<String> = OtelEnv::read(&propagators)
+            .context
+            .propagator()
+            .fields()
+            .map(variable)
+            .collect();
+        let env = |name: &str| {
+            propagators(name).or_else(|| asked.contains(name).then(|| OsString::from("x")))
+        };
 
-    let read: BTreeSet<String> = OtelEnv::read(&env)
-        .context
-        .carried
-        .iter()
-        .map(|(name, _)| (*name).to_owned())
-        .collect();
+        let read: BTreeSet<String> = OtelEnv::read(&env)
+            .context
+            .carried
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
 
-    assert_eq!(read, asked);
-    assert_eq!(
-        asked,
-        BTreeSet::from(["BAGGAGE", "TRACEPARENT", "TRACESTATE"].map(String::from))
+        assert_eq!(read, asked, "{named:?}");
+    }
+}
+
+/// A command inherits none of the known context variables, so a
+/// propagator the command line serves whose variable isn't among them
+/// would leave a command another span's.
+#[test]
+fn the_known_context_variables_cover_every_field_of_every_propagator_the_cli_serves() {
+    let every = |name: &str| {
+        (name == "OTEL_PROPAGATORS").then(|| OsString::from("tracecontext,baggage,b3,b3multi"))
+    };
+    let context = OtelEnv::read(&every).context;
+    assert_eq!(context.propagators.len(), 4, "{:?}", context.propagators);
+
+    let fields: BTreeSet<String> = context.propagator().fields().map(variable).collect();
+
+    let known = BTreeSet::from(lablet_env_carrier::CONTEXT_VARIABLES.map(String::from));
+    assert!(fields.is_subset(&known), "{:?}", fields.difference(&known));
+    assert_eq!(fields.len(), 8, "{fields:?}");
+}
+
+/// What `inbound` injects of its own parent into an empty environment.
+fn injected(inbound: &Inbound) -> Vec<(String, String)> {
+    let mut environment = BTreeMap::new();
+    inbound.propagator.inject_context(
+        &inbound.parent,
+        &mut lablet_env_carrier::EnvInjector::new(&mut environment, &BTreeSet::new()),
+    );
+    environment
+        .into_iter()
+        .map(|(name, value)| (name.into_string().unwrap(), value.into_string().unwrap()))
+        .collect()
+}
+
+fn pairs(held: &[(&str, &str)]) -> Vec<(String, String)> {
+    held.iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect()
+}
+
+/// `b3` is the single header and `b3multi` the multiple headers, each
+/// extracting from its own variables and injecting them, and neither
+/// reading the other's.
+#[test]
+fn b3_and_b3multi_extract_and_inject_their_own_variables() {
+    let single = format!("{TRACE_ID}-{SPAN_ID}-1");
+    let multiple = [
+        ("X_B3_SAMPLED", "1"),
+        ("X_B3_SPANID", SPAN_ID),
+        ("X_B3_TRACEID", TRACE_ID),
+    ];
+    let parent = SpanContext::new(
+        TraceId::from_hex(TRACE_ID).unwrap(),
+        SpanId::from_hex(SPAN_ID).unwrap(),
+        TraceFlags::SAMPLED,
+        true,
+        TraceState::default(),
+    );
+
+    let (b3, warnings) = inbound_of(&[("OTEL_PROPAGATORS", "b3"), ("B3", &single)]);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(parent_of(&b3), parent);
+    assert_eq!(injected(&b3), pairs(&[("B3", &single)]));
+
+    let (b3multi, warnings) =
+        inbound_of(&[&[("OTEL_PROPAGATORS", "b3multi")][..], &multiple[..]].concat());
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(parent_of(&b3multi), parent);
+    assert_eq!(injected(&b3multi), pairs(&multiple));
+
+    let (b3, _) = inbound_of(&[&[("OTEL_PROPAGATORS", "b3")][..], &multiple[..]].concat());
+    assert!(!b3.parent.has_active_span(), "b3 reads no X_B3_* variable");
+    let (b3multi, _) = inbound_of(&[("OTEL_PROPAGATORS", "b3multi"), ("B3", &single)]);
+    assert!(!b3multi.parent.has_active_span(), "b3multi reads no B3");
+    let (traced, _) = inbound_of(&[("B3", &single), ("X_B3_TRACEID", TRACE_ID)]);
+    assert!(
+        !traced.parent.has_active_span(),
+        "the default reads neither"
     );
 }

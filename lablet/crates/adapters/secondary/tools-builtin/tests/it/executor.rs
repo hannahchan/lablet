@@ -11,10 +11,13 @@ use crate::harness::{Root, ask, link, said};
 async fn an_executor_serves_no_tool_unless_it_is_built_with_one() {
     let scratch = Root::new("executor-none");
     let by_default = BuiltinTools::default();
-    let with_none = BuiltinTools::new(Settings {
-        enabled: [].into(),
-        ..scratch.settings()
-    })
+    let with_none = BuiltinTools::new(
+        Settings {
+            enabled: [].into(),
+            ..scratch.settings()
+        },
+        crate::harness::untraced(),
+    )
     .unwrap();
 
     for tools in [by_default, with_none] {
@@ -36,10 +39,13 @@ async fn an_executor_serves_no_tool_unless_it_is_built_with_one() {
 async fn an_executor_serves_the_tools_it_was_built_with_and_no_other() {
     let scratch = Root::new("executor-some");
     scratch.holds("plan.txt", "the plan");
-    let tools = BuiltinTools::new(Settings {
-        enabled: [Tool::ReadFile].into(),
-        ..scratch.settings()
-    })
+    let tools = BuiltinTools::new(
+        Settings {
+            enabled: [Tool::ReadFile].into(),
+            ..scratch.settings()
+        },
+        crate::harness::untraced(),
+    )
     .unwrap();
 
     let offered: Vec<String> = tools
@@ -69,11 +75,14 @@ async fn an_executor_serves_the_tools_it_was_built_with_and_no_other() {
 #[tokio::test]
 async fn the_tools_are_offered_in_one_order_each_with_what_a_model_needs_to_call_it() {
     let scratch = Root::new("executor-specs");
-    let tools = BuiltinTools::new(Settings {
-        enabled: [Tool::WriteFile, Tool::ReadFile, Tool::Bash].into(),
-        timeout: Duration::from_secs(120),
-        ..scratch.settings()
-    })
+    let tools = BuiltinTools::new(
+        Settings {
+            enabled: [Tool::WriteFile, Tool::ReadFile, Tool::Bash].into(),
+            timeout: Duration::from_secs(120),
+            ..scratch.settings()
+        },
+        crate::harness::untraced(),
+    )
     .unwrap();
 
     let specs = tools.specs().await.unwrap();
@@ -154,15 +163,21 @@ async fn a_root_that_is_no_directory_that_exists_is_refused() {
     let file = scratch.holds("plan.txt", "the plan");
     let missing = scratch.root().join("missing");
 
-    let of_a_file = BuiltinTools::new(Settings {
-        root: file.clone(),
-        ..scratch.settings()
-    })
+    let of_a_file = BuiltinTools::new(
+        Settings {
+            root: file.clone(),
+            ..scratch.settings()
+        },
+        crate::harness::untraced(),
+    )
     .unwrap_err();
-    let of_nothing = BuiltinTools::new(Settings {
-        root: missing.clone(),
-        ..scratch.settings()
-    })
+    let of_nothing = BuiltinTools::new(
+        Settings {
+            root: missing.clone(),
+            ..scratch.settings()
+        },
+        crate::harness::untraced(),
+    )
     .unwrap_err();
 
     assert_eq!(
@@ -186,10 +201,13 @@ async fn a_root_that_is_a_link_is_the_directory_the_link_leads_to() {
     let file = scratch.holds("plan.txt", "the plan");
     let linked = scratch.outside("linked");
     link(&scratch.root(), &linked);
-    let tools = BuiltinTools::new(Settings {
-        root: linked.clone(),
-        ..scratch.settings()
-    })
+    let tools = BuiltinTools::new(
+        Settings {
+            root: linked.clone(),
+            ..scratch.settings()
+        },
+        crate::harness::untraced(),
+    )
     .unwrap();
 
     let from_the_root = said(&tools, "read_file", json!({ "path": "plan.txt" })).await;
@@ -215,10 +233,13 @@ async fn a_root_that_is_a_link_is_the_directory_the_link_leads_to() {
 async fn a_variable_no_command_can_start_with_is_refused_when_the_executor_is_built() {
     let scratch = Root::new("executor-variable");
 
-    let refused = BuiltinTools::new(Settings {
-        env: [("KEY=VALUE".to_owned(), "1".to_owned())].into(),
-        ..scratch.settings()
-    })
+    let refused = BuiltinTools::new(
+        Settings {
+            env: [("KEY=VALUE".to_owned(), "1".to_owned())].into(),
+            ..scratch.settings()
+        },
+        crate::harness::untraced(),
+    )
     .unwrap_err();
 
     assert_eq!(
@@ -230,16 +251,19 @@ async fn a_variable_no_command_can_start_with_is_refused_when_the_executor_is_bu
 #[tokio::test]
 async fn an_executor_is_shown_as_its_tools_and_its_timeout() {
     let scratch = Root::new("executor-shown");
-    let tools = BuiltinTools::new(Settings {
-        enabled: [Tool::ReadFile, Tool::Bash].into(),
-        env: [(
-            "NPM_TOKEN".to_owned(),
-            "a value no log is to hold".to_owned(),
-        )]
-        .into(),
-        withheld: ["ANTHROPIC_API_KEY".to_owned()].into(),
-        ..scratch.settings()
-    })
+    let tools = BuiltinTools::new(
+        Settings {
+            enabled: [Tool::ReadFile, Tool::Bash].into(),
+            env: [(
+                "NPM_TOKEN".to_owned(),
+                "a value no log is to hold".to_owned(),
+            )]
+            .into(),
+            withheld: ["ANTHROPIC_API_KEY".to_owned()].into(),
+            ..scratch.settings()
+        },
+        crate::harness::untraced(),
+    )
     .unwrap();
 
     assert_eq!(

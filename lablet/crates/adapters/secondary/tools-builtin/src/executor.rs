@@ -1,10 +1,13 @@
 //! The executor: the tools it was built with, and the limit every call is
 //! held to.
 
+use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 use lablet_model::{ToolName, ToolSource, ToolSpec};
 use lablet_run::{ToolCall, ToolError, ToolErrorKind, ToolExecutor, ToolOutput};
+use opentelemetry::propagation::TextMapPropagator;
 
 use crate::bash::Bash;
 use crate::read_file::ReadFile;
@@ -35,16 +38,21 @@ impl core::fmt::Debug for BuiltinTools {
 }
 
 impl BuiltinTools {
-    /// An executor that serves the tools `settings` enables, under its root.
+    /// An executor that serves the tools `settings` enables, under its root,
+    /// and injects the context a command starts in through `propagator`.
     ///
     /// lablet's environment is read here, once, so every command of every
-    /// run starts with the same variables.
+    /// run starts with the same variables, but for the context's: those are
+    /// the command's own, injected as it starts.
     ///
     /// # Errors
     ///
     /// Returns a [`SettingsError`] when the root isn't a directory that
     /// exists, and when a variable is one no process can be started with.
-    pub fn new(settings: Settings) -> Result<Self, SettingsError> {
+    pub fn new(
+        settings: Settings,
+        propagator: Arc<dyn TextMapPropagator + Send + Sync>,
+    ) -> Result<Self, SettingsError> {
         let Settings {
             root,
             enabled,
@@ -53,15 +61,20 @@ impl BuiltinTools {
             withheld,
         } = settings;
         let root = Root::open(&root)?;
+        // A withheld variable is a secret, and a context the command starts in
+        // may carry its value: a trace state or a baggage passes on verbatim.
+        let kept: BTreeSet<String> = env.keys().chain(&withheld).cloned().collect();
         let environment = environment(std::env::vars_os(), &withheld, env)?;
         let tools = enabled
             .into_iter()
-            .map(|tool| -> Box<dyn BuiltIn> {
+            .map(move |tool| -> Box<dyn BuiltIn> {
                 let root = root.clone();
                 match tool {
                     Tool::Bash => Box::new(Bash {
                         root,
                         environment: environment.clone(),
+                        kept: kept.clone(),
+                        propagator: Arc::clone(&propagator),
                     }),
                     Tool::ReadFile => Box::new(ReadFile { root }),
                     Tool::WriteFile => Box::new(WriteFile { root }),

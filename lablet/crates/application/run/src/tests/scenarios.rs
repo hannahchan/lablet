@@ -2387,6 +2387,37 @@ async fn the_span_of_a_call_is_in_the_executor_s_current_context() {
     );
 }
 
+/// The loop runs each provider attempt under its chat span's context, as it
+/// runs each call under its tool span's, so an adapter that propagates
+/// finds the attempt's own span, a retry's included.
+#[tokio::test]
+async fn a_provider_attempt_runs_in_the_context_of_its_own_chat_span() {
+    let run = Harness::new(vec![
+        Answer::now(says("On it.", &["bash"], FinishReason::ToolUse)),
+        Answer::fails(ProviderErrorKind::Retryable),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ])
+    .run()
+    .await;
+
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    let exported: Vec<SpanContext> = run
+        .chats()
+        .iter()
+        .map(|chat| chat.span_context.clone())
+        .collect();
+    assert_eq!(exported.len(), 3);
+    assert_eq!(
+        run.provider.found(),
+        exported,
+        "each attempt found the span it was exported as"
+    );
+    for found in run.provider.found() {
+        assert!(found.is_valid() && found.is_sampled(), "{found:?}");
+        assert_eq!(found.trace_id(), run.root.trace_id());
+    }
+}
+
 /// The clock the run reads is the loop's, so a tool that takes time shows up
 /// in the outcome without a test waiting for it.
 #[tokio::test]
