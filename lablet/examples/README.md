@@ -1,8 +1,8 @@
 # Examples
 
-Configs to run lablet with, and a collector to send the runs to. A relative path in a config starts at the directory lablet runs in, so run each config from its own directory. The `cargo run` lines below build lablet on their first use.
+Configs to run lablet with, a collector to send the runs to, and a host that runs lablet as a library. A relative path in a config starts at the directory lablet runs in, so run each config from its own directory. The `cargo run` lines below build lablet on their first use.
 
-Lablet takes the OpenTelemetry settings of the environment it runs in, so run these steps in a shell where no `OTEL_*` variable is set, nor `TRACEPARENT`: an endpoint there changes where the runs are sent, a protocol changes the transport, and a `TRACEPARENT` makes each run its child. `env | grep -E '^(OTEL_|TRACEPARENT)'` lists any.
+The `lablet` command takes the OpenTelemetry settings of the environment it runs in, and so does the SDK of the library host below, so run these steps in a shell where no `OTEL_*` variable is set, nor a context variable, `TRACEPARENT`, `TRACESTATE`, `BAGGAGE`, `B3` or an `X_B3_*` one: an endpoint there changes where the runs are sent, a protocol changes the transport, and a `TRACEPARENT` makes the command's run its child. `env | grep -E '^(OTEL_|TRACEPARENT|TRACESTATE|BAGGAGE|B3|X_B3_)'` lists any.
 
 ## A two-turn run (`two-turns/`)
 
@@ -49,3 +49,14 @@ cargo run --locked --manifest-path ../../Cargo.toml --bin lablet -- run --config
 ```
 
 The collector's OTLP/JSON file receiver reads the file from its start, and the run reaches Jaeger within seconds. It reads lines of up to 64 MiB, as `otel-collector.yaml` sets: the receiver's default is 1 MiB, and it drops a longer line without a message, which one export of a long run's content records can be. Its run id is in the outcome the run printed; find it with the tag `session.id=<run id>`, or as the newest trace of the service `lablet`.
+
+## A host with an SDK of its own (`traced_run`)
+
+`lablet/apps/lablet/examples/traced_run.rs` runs lablet as a library, as an application instrumented with OpenTelemetry would. It builds an SDK of its own, hands its tracer and logger providers to the `Lablet`, opens a span of its own, and makes a fake-provider run beneath it, whose `bash` call lists an empty directory, so it needs no key. Lablet configures nothing of the host's SDK, which sends over OTLP/HTTP to `http://localhost:4318`, or where `OTEL_EXPORTER_OTLP_ENDPOINT` says, as the SDK reads it. To send to the collector above:
+
+```bash
+cd lablet
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:14318 cargo run --locked -p lablet --example traced_run
+```
+
+It prints the run's outcome, the trace's id and where it left the transcript. In Jaeger, look the trace up by its id, or select the service `traced-run-host`, the host's name: the root span `invoke_agent lablet` is a child of the host's span `host operation`, and `execute_tool bash` is beneath it.
