@@ -6,11 +6,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use lablet::{BuildError, Config, Format, Lablet, RunRequest, Unsupported};
+use lablet::{BuildError, Config, Format, Lablet, Otel, RunRequest, Unsupported};
 use lablet_conformance::host::Host;
 use lablet_conformance::otlp::{Exported, LogRecord, Span};
 use lablet_test_support::Scratch;
-use opentelemetry::logs::NoopLoggerProvider;
+use opentelemetry::trace::noop::NoopTextMapPropagator;
 use serde_json::{Value, json};
 
 pub use lablet_test_support::{PROMPT, SYSTEM};
@@ -43,13 +43,19 @@ impl Lab {
         &self.1
     }
 
-    /// A `Lablet` of `config`, built with the lab's host's tracer and
-    /// logger providers.
+    /// A `Lablet` of `config`, built with the lab's host's [`Lab::otel`].
     pub async fn build(&self, config: Config) -> Result<Lablet, BuildError> {
-        Lablet::builder(config, self.1.logger_provider())
-            .with_tracer_provider(self.1.tracer_provider())
-            .build()
-            .await
+        Lablet::builder(config, self.otel()).build().await
+    }
+
+    /// The lab's host's tracer and logger providers, and the API's no-op
+    /// propagator, since no test of this binary reads a command's context.
+    pub fn otel(&self) -> Otel {
+        Otel::new(
+            self.1.tracer_provider(),
+            self.1.logger_provider(),
+            NoopTextMapPropagator::new(),
+        )
     }
 
     pub fn path(&self) -> &Path {
@@ -134,7 +140,7 @@ pub fn request() -> RunRequest {
 /// A `Lablet` of `config` whose records go nowhere, for a test that reads
 /// none of what a run emits.
 pub async fn quiet(config: Config) -> Result<Lablet, BuildError> {
-    lablet::build(config, NoopLoggerProvider::new()).await
+    lablet::build(config, Otel::noop()).await
 }
 
 /// What `build` refuses `config` with, which `check` refuses it with too,
@@ -142,7 +148,7 @@ pub async fn quiet(config: Config) -> Result<Lablet, BuildError> {
 /// passes since it stops before the provider is selected.
 pub async fn refusal(config: Config) -> BuildError {
     let checked = lablet::check(&config).await.map(drop);
-    let built = lablet::build(config, NoopLoggerProvider::new())
+    let built = lablet::build(config, Otel::noop())
         .await
         .map(drop)
         .unwrap_err();

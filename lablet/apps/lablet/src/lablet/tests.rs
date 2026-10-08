@@ -8,11 +8,12 @@ use std::sync::{Arc, Mutex};
 use lablet_run::telemetry::generated::{LabletRun, key};
 use lablet_test_support::Scratch;
 use opentelemetry::logs::AnyValue;
+use opentelemetry::trace::noop::{NoopTextMapPropagator, NoopTracerProvider};
 use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::logs::{LogBatch, LogExporter, SdkLoggerProvider};
 use serde_json::{Value, json};
 
-use crate::{Config, Format, RunId, RunRequest};
+use crate::{Config, Format, Otel, RunId, RunRequest};
 
 /// A response that comes at once.
 const ENDS: &str = "
@@ -97,14 +98,14 @@ async fn the_transcript_a_wide_event_names_is_whole_when_an_exporter_is_handed_t
         }),
     );
     let looking = Looking::default();
-    let mut lablet = crate::build(
-        config,
+    let otel = Otel::new(
+        NoopTracerProvider::new(),
         SdkLoggerProvider::builder()
             .with_simple_exporter(looking.clone())
             .build(),
-    )
-    .await
-    .unwrap();
+        NoopTextMapPropagator::new(),
+    );
+    let mut lablet = crate::build(config, otel).await.unwrap();
 
     lablet.run(request("run-a")).await;
     lablet.shutdown().await;

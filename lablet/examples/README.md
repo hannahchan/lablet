@@ -52,7 +52,7 @@ The collector's OTLP/JSON file receiver reads the file from its start, and the r
 
 ## A host with an SDK of its own (`traced_run`)
 
-`lablet/apps/lablet/examples/traced_run.rs` runs lablet as a library, as an application instrumented with OpenTelemetry would. It builds an SDK of its own, hands its tracer and logger providers to the `Lablet`, opens a span of its own, and makes a fake-provider run beneath it, whose `bash` call lists an empty directory, so it needs no key. Lablet configures nothing of the host's SDK, which sends over OTLP/HTTP to `http://localhost:4318`, or where `OTEL_EXPORTER_OTLP_ENDPOINT` says, as the SDK reads it. To send to the collector above:
+`lablet/apps/lablet/examples/traced_run.rs` runs lablet as a library, as an application instrumented with OpenTelemetry would. It builds an SDK of its own, hands its tracer and logger providers and a trace-context propagator to the `Lablet`, opens a span of its own, and makes a fake-provider run beneath it, whose `bash` call lists an empty directory, so it needs no key. Lablet configures nothing of the host's SDK, which sends over OTLP/HTTP to `http://localhost:4318`, or where `OTEL_EXPORTER_OTLP_ENDPOINT` says, as the SDK reads it. To send to the collector above:
 
 ```bash
 cd lablet

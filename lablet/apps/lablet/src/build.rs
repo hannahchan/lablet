@@ -1,72 +1,53 @@
 //! `build` and `check`: a config in, a `Lablet` or a checked config out.
 //! The library's composition: it checks the config through
 //! `lablet-prepare`, builds the tools and the provider through the wiring
-//! kernels, resolves the tracer, the logger and the propagator once, from
-//! what the host handed in or else OpenTelemetry's globals, and connects
-//! them to the loop and the runner itself.
+//! kernels with the propagator the host handed in, and connects them, with
+//! the tracer and the logger the host handed in, to the loop and the runner
+//! itself.
 
 use std::sync::Arc;
 
 use lablet_clock_tokio::TokioClock;
 use lablet_config::{Config, Env, TelemetryFile, environment};
 use lablet_prepare::{BuildError, Checked, Prepared, Telemetry, Wiring, prepare};
-use lablet_run::telemetry::generated::SCHEMA_URL;
-use lablet_run::telemetry::{Bridge, Logger, Record, SCOPE};
+use lablet_run::telemetry::{Logger, Record};
 use lablet_run::{Clock, RunCancellation, RunService, Runner, Shared, ToolSet, TranscriptWriter};
 use lablet_transcript_json::JsonTranscripts;
+use opentelemetry::Context;
 use opentelemetry::global::{BoxedSpan, BoxedTracer};
-use opentelemetry::logs::LoggerProvider;
-use opentelemetry::propagation::TextMapPropagator;
 use opentelemetry::trace::noop::NoopTextMapPropagator;
-use opentelemetry::trace::{Span, SpanBuilder, Tracer, TracerProvider};
-use opentelemetry::{Context, InstrumentationScope};
+use opentelemetry::trace::{SpanBuilder, Tracer};
 
-use crate::fallback::{self, GlobalPropagator};
 use crate::lablet::Lablet;
+use crate::otel::Otel;
 
-/// How a [`Lablet`] is built: from a config and the logger provider its
-/// records go to, with the tracer provider its spans go to and the
-/// propagator its context is injected through each handed in or left to
-/// OpenTelemetry's global one. Made by [`Lablet::builder`].
+/// How a [`Lablet`] is built: from a config and the host's [`Otel`]. Made
+/// by [`Lablet::builder`].
+///
+/// It's a builder so that each further input a host can hand in is a
+/// method of its own, which leaves a host that hands in none of them
+/// unchanged.
 pub struct Builder {
     config: Config,
-    /// lablet's logger, taken from the provider the host handed in.
-    logger: Arc<dyn Logger>,
-    /// The tracer of the provider the host handed in, when it handed one in.
-    tracer: Option<BoxedTracer>,
-    /// The propagator the host handed in, when it handed one in.
-    propagator: Option<Arc<dyn TextMapPropagator + Send + Sync>>,
+    otel: Otel,
 }
 
 impl core::fmt::Debug for Builder {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Builder")
             .field("config", &self.config.digest())
-            .field("tracer_provider", &self.tracer.is_some())
-            .field("propagator", &self.propagator.is_some())
-            .finish_non_exhaustive()
+            .field("otel", &self.otel)
+            .finish()
     }
 }
 
 impl Lablet {
-    /// A builder of a `Lablet` that runs as `config` says and emits its
-    /// records through `logger_provider`, from which it takes one logger of
-    /// lablet's instrumentation scope, here, and keeps nothing else. The
-    /// provider is required, since OpenTelemetry's API has no global logger
-    /// provider to fall back to; a host that wants spans and no records
-    /// hands in the API's [`NoopLoggerProvider`].
+    /// A builder of a `Lablet` that runs as `config` says on the host's
+    /// OpenTelemetry, `otel`: its spans go to `otel`'s tracer provider, its
+    /// records to its logger provider, and a command's context is injected
+    /// through its propagator.
     ///
-    /// The spans go to the tracer provider handed to
-    /// [`Builder::with_tracer_provider`], or else to OpenTelemetry's global
-    /// tracer provider as it is when [`Builder::build`] is called, so a host
-    /// sets its global providers before it builds a `Lablet`. A command's
-    /// context is injected through the propagator handed to
-    /// [`Builder::with_propagator`], or else through OpenTelemetry's global
-    /// propagator as it is when the command starts.
-    ///
-    /// [`NoopLoggerProvider`]: opentelemetry::logs::NoopLoggerProvider
-    ///
-    /// A `Lablet` can't be built without a logger provider:
+    /// A `Lablet` can't be built without the host's OpenTelemetry:
     ///
     /// ```compile_fail,E0061
     /// # async fn host(config: lablet::Config) -> Result<(), lablet::BuildError> {
@@ -75,62 +56,13 @@ impl Lablet {
     /// # }
     /// ```
     #[must_use]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "a host hands its provider in, as OpenTelemetry's own setters take one, and lablet keeps the logger it takes from it rather than the provider"
-    )]
-    pub fn builder<P>(config: Config, logger_provider: P) -> Builder
-    where
-        P: LoggerProvider,
-        P::Logger: Send + Sync + 'static,
-    {
-        Builder {
-            config,
-            logger: Arc::new(Bridge::new(logger_provider.logger_with_scope(scope()))),
-            tracer: None,
-            propagator: None,
-        }
+    pub fn builder(config: Config, otel: Otel) -> Builder {
+        Builder { config, otel }
     }
 }
 
 impl Builder {
-    /// Sends the spans of every run to `provider`, from which one tracer of
-    /// lablet's instrumentation scope is taken, here, in place of the global
-    /// tracer provider's.
-    #[must_use]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "a host hands its provider in, as OpenTelemetry's own `set_tracer_provider` takes one, and lablet keeps the tracer it takes from it rather than the provider"
-    )]
-    pub fn with_tracer_provider<P, T, S>(mut self, provider: P) -> Self
-    where
-        P: TracerProvider<Tracer = T> + Send + Sync + 'static,
-        T: Tracer<Span = S> + Send + Sync + 'static,
-        S: Span + Send + Sync + 'static,
-    {
-        self.tracer = Some(BoxedTracer::new(Box::new(
-            provider.tracer_with_scope(scope()),
-        )));
-        self
-    }
-
-    /// Injects the context of each process a run starts through
-    /// `propagator`, in place of OpenTelemetry's global propagator: a
-    /// `bash` command's environment is given the context of its tool span,
-    /// as the command starts.
-    #[must_use]
-    pub fn with_propagator<P>(mut self, propagator: P) -> Self
-    where
-        P: TextMapPropagator + Send + Sync + 'static,
-    {
-        self.propagator = Some(Arc::new(propagator));
-        self
-    }
-
-    /// The `Lablet`. With no tracer provider handed in, OpenTelemetry's
-    /// global tracer provider is read once, here. With no propagator handed
-    /// in, OpenTelemetry's global propagator is asked at each injection, and
-    /// the variables it names are those it names here.
+    /// The `Lablet`.
     ///
     /// # Errors
     ///
@@ -138,15 +70,6 @@ impl Builder {
     pub async fn build(self) -> Result<Lablet, BuildError> {
         build_in(self, &environment).await
     }
-}
-
-/// lablet's instrumentation scope: its name, its version and the schema
-/// URL of the registry its signals are declared in.
-fn scope() -> InstrumentationScope {
-    InstrumentationScope::builder(SCOPE)
-        .with_version(crate::VERSION)
-        .with_schema_url(SCHEMA_URL)
-        .build()
 }
 
 /// Checks `config` whole, as [`build`] does, and stops before the provider
@@ -175,8 +98,7 @@ pub async fn check(config: &Config) -> Result<Checked, BuildError> {
 /// [`check`], where `env` is lablet's environment.
 pub(crate) async fn check_in(config: &Config, env: Env<'_>) -> Result<Checked, BuildError> {
     let prepared = prepared(config, env)?;
-    // A check starts no command, so there's no context to inject, and no
-    // global to read for one.
+    // A check starts no command, so there's no context to inject.
     let untraced = Arc::new(NoopTextMapPropagator::new());
     let tools = lablet_tools_wiring::tools(config, &prepared, untraced).await?;
     Ok(Checked::new(
@@ -206,11 +128,8 @@ fn prepared(config: &Config, env: Env<'_>) -> Result<Prepared, BuildError> {
     ))
 }
 
-/// A `Lablet` that runs as `config` says and emits its records through
-/// `logger_provider`, its spans through OpenTelemetry's global tracer
-/// provider as it is now, and a command's context through OpenTelemetry's
-/// global propagator as it is when the command starts: [`Lablet::builder`]
-/// with nothing else handed in.
+/// A `Lablet` that runs as `config` says on the host's OpenTelemetry,
+/// `otel`: [`Lablet::builder`] with nothing else handed in.
 ///
 /// Library mode configures no OpenTelemetry SDK: the host's SDK samples,
 /// exports and flushes what lablet emits. The config's `telemetry.file`,
@@ -251,26 +170,20 @@ fn prepared(config: &Config, env: Env<'_>) -> Result<Prepared, BuildError> {
 ///
 /// Returns [`BuildError::Tools`] when the tools the run's executors serve
 /// can't be settled into one set.
-pub async fn build<P>(config: Config, logger_provider: P) -> Result<Lablet, BuildError>
-where
-    P: LoggerProvider,
-    P::Logger: Send + Sync + 'static,
-{
-    Lablet::builder(config, logger_provider).build().await
+pub async fn build(config: Config, otel: Otel) -> Result<Lablet, BuildError> {
+    Lablet::builder(config, otel).build().await
 }
 
 pub(crate) async fn build_in(builder: Builder, env: Env<'_>) -> Result<Lablet, BuildError> {
-    let Builder {
-        config,
-        logger,
+    let Builder { config, otel } = builder;
+    let Otel {
         tracer,
+        logger,
         propagator,
-    } = builder;
+    } = otel;
     let prepared = prepared(&config, env)?;
-    let propagator = propagator.unwrap_or_else(|| Arc::new(GlobalPropagator::new()));
     let tools = lablet_tools_wiring::tools(&config, &prepared, propagator).await?;
     let wiring = prepared.wiring()?;
-    let tracer = tracer.unwrap_or_else(|| fallback::global_tracer(scope()));
     Ok(wire(&config, wiring, tools, tracer, logger))
 }
 
@@ -281,7 +194,7 @@ pub(crate) fn wire(
     config: &Config,
     wiring: Wiring,
     tools: Arc<ToolSet>,
-    tracer: BoxedTracer,
+    tracer: Arc<BoxedTracer>,
     logger: Arc<dyn Logger>,
 ) -> Lablet {
     let Wiring {
@@ -294,7 +207,7 @@ pub(crate) fn wire(
     } = wiring;
     let (provider, played) = lablet_provider_wiring::fake(real.model.name.clone(), script);
     let clock: Arc<dyn Clock> = Arc::new(TokioClock);
-    let tracer = SharedTracer(Arc::new(tracer));
+    let tracer = SharedTracer(tracer);
 
     let cancellation = Arc::new(RunCancellation::default());
     let service = RunService::new(
@@ -339,7 +252,8 @@ pub(crate) fn wire(
 }
 
 /// The one tracer a `Lablet` was built with, which the loop and the runner
-/// both open their spans through.
+/// both open their spans through, and every `Lablet` of one [`Otel`]
+/// shares.
 #[derive(Clone)]
 struct SharedTracer(Arc<BoxedTracer>);
 

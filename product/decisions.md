@@ -1655,6 +1655,8 @@ Decided by the orchestrator, within her answers:
 - **Nothing in lablet's code reads or sets a global.** `fallback.rs` goes, and with it the production exception in `clippy.toml`. The exception for test code stays: the `globals` test binary sets the global tracer provider and propagator to show that lablet reads neither, and reads them to show that it sets neither, and the CLI's canary reads the global propagator. The binary stays apart, since a global is one per process.
 - **The CLI doesn't change.** It never used the fallback, and only its parity test, a dev-dependency use of the library, changes.
 
+She kept the name, the order of `Otel::new`'s arguments and the builder on 2026-10-08, and read the exact text of every rule that changes before it landed.
+
 What it reverses or narrows, each marked where it sits:
 
 - 2026-10-03, "The application and the adapters instrument with the OpenTelemetry API": its narrowing note's global ones.
@@ -1675,7 +1677,7 @@ What it reverses or narrows, each marked where it sits:
 The risks:
 
 - **A breaking change for a library host,** before any release, so the `CHANGELOG.md` entries are edited in place.
-- **A host that relied on a global gets nothing from lablet until it hands that global in.** Its code still compiles, so nothing warns it. The documentation of `Otel` says what to hand in, and that a host sets its global tracer provider before it makes the `Otel`, since `global::tracer_provider()` handed in before then stays the no-op one.
+- **A host that relied on a global gets nothing from lablet until it hands that global in.** Its code still compiles, so nothing warns it. The documentation of `Otel` says what to hand in, and that a host sets its global tracer provider before it makes the `Otel`, since `global::tracer_provider()` handed in before then stays the no-op one. _Corrected on 2026-10-08, when the library was built: such a host's code no longer compiles, since `Lablet::builder` and `build` take an `Otel`. The silent case is a host that hands in `global::tracer_provider()` before it sets its global tracer provider: it gets nothing, and nothing warns it._
 - **A host's own stand-in for the global propagator has to name its fields,** since the API lends them only inside a closure: the flaw of lablet's stand-in, now in the host's code, where the host knows what it set.
 - **The `Lablet`s of one `Otel` share a tracer and a logger,** where each took its own before. They have the same scope from the same provider, so nothing a run emits changes.
 

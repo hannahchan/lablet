@@ -179,8 +179,12 @@ telemetry: {{ capture_content: true }}
             _ => None,
         };
         let host = lablet_conformance::host::Host::new();
-        let builder = Lablet::builder(config(&text), host.logger_provider())
-            .with_tracer_provider(host.tracer_provider());
+        let otel = Otel::new(
+            host.tracer_provider(),
+            host.logger_provider(),
+            NoopTextMapPropagator::new(),
+        );
+        let builder = Lablet::builder(config(&text), otel);
         let mut lablet = build_in(builder, &held).await.unwrap();
         let finished = lablet.run(crate::RunRequest::new("Fix it.").unwrap()).await;
         lablet.shutdown().await;

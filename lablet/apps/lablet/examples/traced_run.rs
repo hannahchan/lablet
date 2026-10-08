@@ -1,8 +1,8 @@
 //! A host with an OpenTelemetry SDK of its own runs lablet as a library:
-//! it hands in its tracer and logger providers, opens a span of its own,
-//! and makes a traced run beneath it that needs no model and no key. A
-//! script is played in place of the model, `bash` works under a root of its
-//! own, and the run leaves its transcript in a file.
+//! it hands in its tracer and logger providers and a propagator, opens a
+//! span of its own, and makes a traced run beneath it that needs no model
+//! and no key. A script is played in place of the model, `bash` works under
+//! a root of its own, and the run leaves its transcript in a file.
 //!
 //! The host's SDK sends over OTLP/HTTP to `http://localhost:4318`, or to
 //! where `OTEL_EXPORTER_OTLP_ENDPOINT` says, as the SDK reads it, so the
@@ -15,7 +15,7 @@
 
 use std::error::Error;
 
-use lablet::{Config, Format, Lablet, OutcomeDocument, RunLabels, RunRequest};
+use lablet::{Config, Format, Lablet, Otel, OutcomeDocument, RunLabels, RunRequest};
 use opentelemetry::Context;
 use opentelemetry::trace::{
     FutureExt as _, Span as _, TraceContextExt as _, Tracer as _, TracerProvider as _,
@@ -23,6 +23,7 @@ use opentelemetry::trace::{
 use opentelemetry_otlp::{LogExporter, Protocol, SpanExporter, WithExportConfig as _};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
+use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 
 const SCRIPT: &str = "
@@ -100,10 +101,12 @@ telemetry:
         )
         .build();
 
-    let mut lablet = Lablet::builder(config, logger_provider.clone())
-        .with_tracer_provider(tracer_provider.clone())
-        .build()
-        .await?;
+    let otel = Otel::new(
+        tracer_provider.clone(),
+        logger_provider.clone(),
+        TraceContextPropagator::new(),
+    );
+    let mut lablet = Lablet::builder(config, otel).build().await?;
     let request = RunRequest::new("What's in the directory?")?.labels(RunLabels {
         task: Some("list-the-directory".to_owned()),
         ..RunLabels::default()

@@ -9,30 +9,26 @@ allow-expect-in-tests = true
 doc-valid-idents = ["..", "GenAI", "OpenAI"]
 
 # OpenTelemetry's globals are one per process, and a process may hold several
-# `Lablet`s, each given providers of its own, so nothing in lablet sets one,
-# and lablet emits no metrics. The one reader is the library root's fallback,
-# for a host that hands in no tracer provider or no propagator: two functions
-# in `apps/lablet/src/fallback.rs` read `tracer_provider` and
-# `get_text_map_propagator`, each under its own
-# `#[expect(clippy::disallowed_methods, reason = "...")]`, so any other reader
-# fails clippy and a function that stops reading fails its expectation. Test
-# code may set or read a global, each call under its own `#[expect]`: the
-# library root's `globals` test binary sets the globals to check that
-# fallback, and the CLI root's canary
-# `canary_the_global_propagator_is_a_no_op_after_a_lablet_is_built` reads the
-# global propagator to show that nothing set it. The metrics functions are
-# compiled in because `opentelemetry-otlp`'s HTTP features turn on its
-# `metrics` feature. `allow-invalid` because a crate that doesn't depend on
-# `opentelemetry` can't resolve the path.
+# `Lablet`s, each given the OpenTelemetry its host hands in, so nothing in
+# lablet sets or reads one, and lablet emits no metrics. A host on the globals
+# reads them itself and hands them in. Test code may set or read a global, each
+# call under its own `#[expect(clippy::disallowed_methods, reason = "...")]`:
+# the library root's `globals` test binary sets the globals to show that
+# lablet reads none and reads them to show that it sets none, and the CLI
+# root's canary `canary_the_global_propagator_is_a_no_op_after_a_lablet_is_built`
+# reads the global propagator to show that nothing set it. The metrics
+# functions are compiled in because `opentelemetry-otlp`'s HTTP features turn
+# on its `metrics` feature. `allow-invalid` because a crate that doesn't depend
+# on `opentelemetry` can't resolve the path.
 disallowed-methods = [
   { path = "opentelemetry::global::set_tracer_provider", reason = "a global provider is shared by every Lablet in the process; the CLI root hands its provider in", allow-invalid = true },
-  { path = "opentelemetry::global::tracer_provider", reason = "read only by the library root's fallback, where a host handed in no tracer provider", allow-invalid = true },
-  { path = "opentelemetry::global::tracer", reason = "the tracer comes from the provider a Lablet was given, or the library root's fallback", allow-invalid = true },
-  { path = "opentelemetry::global::tracer_with_scope", reason = "the tracer comes from the provider a Lablet was given, or the library root's fallback", allow-invalid = true },
+  { path = "opentelemetry::global::tracer_provider", reason = "lablet reads no global; a host on the global tracer provider hands it in", allow-invalid = true },
+  { path = "opentelemetry::global::tracer", reason = "the tracer comes from the tracer provider a Lablet's host handed in", allow-invalid = true },
+  { path = "opentelemetry::global::tracer_with_scope", reason = "the tracer comes from the tracer provider a Lablet's host handed in", allow-invalid = true },
   { path = "opentelemetry::global::set_meter_provider", reason = "lablet emits no metrics; a global provider is shared by every Lablet in the process", allow-invalid = true },
   { path = "opentelemetry::global::meter_provider", reason = "lablet emits no metrics; a global provider is shared by every Lablet in the process", allow-invalid = true },
   { path = "opentelemetry::global::meter", reason = "lablet emits no metrics; a global provider is shared by every Lablet in the process", allow-invalid = true },
   { path = "opentelemetry::global::meter_with_scope", reason = "lablet emits no metrics; a global provider is shared by every Lablet in the process", allow-invalid = true },
   { path = "opentelemetry::global::set_text_map_propagator", reason = "the global propagator is shared by every Lablet in the process; the CLI root hands its propagators in", allow-invalid = true },
-  { path = "opentelemetry::global::get_text_map_propagator", reason = "read only by the library root's fallback, where a host handed in no propagator", allow-invalid = true },
+  { path = "opentelemetry::global::get_text_map_propagator", reason = "lablet reads no global; a host on the global propagator hands in a propagator of its own that asks it", allow-invalid = true },
 ]

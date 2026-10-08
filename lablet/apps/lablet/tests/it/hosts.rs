@@ -213,3 +213,35 @@ async fn a_run_under_a_span_the_host_has_open_is_its_child_and_reaches_the_host_
     assert_eq!(hosts.len(), 1, "{:?}", exported.spans);
     assert_eq!(hosts[0].span_id, host.span_id().to_string());
 }
+
+/// A clone of an `Otel` shares its tracer and its logger, so a host builds
+/// every `Lablet` it has from one `Otel`, and each reaches its providers.
+#[tokio::test]
+async fn two_lablets_built_from_one_otel_both_reach_its_providers() {
+    let lab = Lab::new("hosts-one-otel");
+    let otel = lab.otel();
+    let mut first = lablet::Lablet::builder(lab.config(ENDS, json!({})), otel.clone())
+        .build()
+        .await
+        .unwrap();
+    let mut second = lablet::build(lab.config(ENDS, json!({})), otel)
+        .await
+        .unwrap();
+    let mut own = BTreeSet::new();
+    for lablet in [&mut first, &mut second] {
+        let finished = lablet.run(request()).await;
+        own.insert(finished.summary.outcome.run_id.to_string());
+    }
+    first.shutdown().await;
+    second.shutdown().await;
+
+    let exported = lab.exported();
+    assert_eq!(exported.spans_of(key::INVOKE_AGENT).len(), 2);
+    assert_eq!(exported.records_of(key::WIDE_EVENT).len(), 2);
+    for run_id in &own {
+        let traced = Traced::of(&exported, run_id);
+        assert_eq!(traced.spans.len(), 2, "a root and one attempt");
+        assert_eq!(traced.wide().trace_id, traced.root().trace_id);
+    }
+    assert_eq!(own.len(), 2, "two runs of their own: {own:?}");
+}

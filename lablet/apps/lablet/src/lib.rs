@@ -16,25 +16,25 @@
 //! [`CancelHandle`] its request was given is fired.
 //!
 //! A `Lablet` runs on the OpenTelemetry its host provides, and configures
-//! no SDK of its own. The host hands in the logger provider its records go
-//! to, which is required, since OpenTelemetry's API has no global logger
-//! provider: a host that wants no records hands in the API's
-//! `NoopLoggerProvider`. It may hand in the tracer provider its spans go
-//! to, and one it doesn't hand in is OpenTelemetry's global one, read once,
-//! when the `Lablet` is built, so a host sets its globals before it builds
-//! one. It may hand in the propagator a `bash` command's context is
-//! injected through, and one it doesn't hand in is OpenTelemetry's global
-//! one, asked as each command starts. Each run's root span is the child of
-//! the context that's current where the run is awaited, so a run under a
-//! span the host has open is in the host's trace, and a command's
+//! no SDK of its own. The host hands in an [`Otel`] of three pieces: the
+//! tracer provider its spans go to, the logger provider its records go to,
+//! and the propagator a `bash` command's context is injected through. Each
+//! is required, and lablet reads none of OpenTelemetry's globals: a host
+//! that wants none of a piece hands in the API's no-op for it, and
+//! [`Otel::noop`] is the no-op for all three. A host on the global tracer
+//! provider hands in `opentelemetry::global::tracer_provider()`, called
+//! once it has set its global tracer provider, since the `Otel` takes its
+//! tracer when it's made. Each run's root span is the
+//! child of the context that's current where the run is awaited, so a run
+//! under a span the host has open is in the host's trace, and a command's
 //! environment holds its tool span's context and none it would inherit.
 //! That context is read when the run's future is first polled, so a host
 //! makes its span current on the future itself, with
 //! [`FutureExt::with_context`] as the `traced_run` example does, rather
 //! than through a guard held on another task or thread.
-//! The providers and the propagator a host hands in are those of
-//! `opentelemetry` 0.33, the version lablet depends on, so a host's
-//! OpenTelemetry crates are that version.
+//! The pieces a host hands in are those of `opentelemetry` 0.33, the
+//! version lablet depends on, so a host's OpenTelemetry crates are that
+//! version.
 //! The host's SDK samples, exports and flushes: a run returns without
 //! flushing anything, and [`Lablet::shutdown`] does no telemetry work. A
 //! host's `tracing` subscriber sees lablet's diagnostics and none of its
@@ -64,8 +64,9 @@
 //! in-memory exporters:
 //!
 //! ```
-//! use lablet::{Config, Format, Lablet, OutcomeDocument, RunId, RunRequest, StopReason};
+//! use lablet::{Config, Format, Lablet, Otel, OutcomeDocument, RunId, RunRequest, StopReason};
 //! use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
+//! use opentelemetry_sdk::propagation::TraceContextPropagator;
 //! use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -116,10 +117,12 @@
 //!
 //! let runtime = tokio::runtime::Runtime::new()?;
 //! runtime.block_on(async {
-//!     let mut lablet = Lablet::builder(config, logger_provider.clone())
-//!         .with_tracer_provider(tracer_provider.clone())
-//!         .build()
-//!         .await?;
+//!     let otel = Otel::new(
+//!         tracer_provider.clone(),
+//!         logger_provider.clone(),
+//!         TraceContextPropagator::new(),
+//!     );
+//!     let mut lablet = Lablet::builder(config, otel).build().await?;
 //!
 //!     let first = lablet.run(RunRequest::new("What's in the directory?")?).await;
 //!     let named = RunId::new("the-second-run")?;
@@ -171,8 +174,8 @@
 //! ```
 
 mod build;
-mod fallback;
 mod lablet;
+mod otel;
 pub mod telemetry;
 
 pub mod config {
@@ -209,6 +212,7 @@ pub use lablet_model::{
 pub use lablet_prepare::{BuildError, Checked, ErrorClass, OwnFile, Unsupported};
 pub use lablet_run::FilterList;
 pub use lablet_run_request::{CancelHandle, RunIdRefused, RunRequest};
+pub use otel::Otel;
 
 /// The version of lablet, which a run's record names as
 /// `gen_ai.agent.version`.

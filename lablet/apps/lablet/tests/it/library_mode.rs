@@ -280,11 +280,15 @@ fn a_substituted_telemetry_header_is_withheld_and_cut_in_library_mode() {
 #[tokio::test]
 async fn a_lablet_built_with_the_no_op_logger_provider_emits_its_spans_and_no_record() {
     let lab = Lab::new("no-op-logger");
+    let otel = lablet::Otel::new(
+        lab.host().tracer_provider(),
+        opentelemetry::logs::NoopLoggerProvider::new(),
+        opentelemetry::trace::noop::NoopTextMapPropagator::new(),
+    );
     let mut lablet = lablet::Lablet::builder(
         lab.config(ENDS, json!({ "telemetry": { "capture_content": true } })),
-        opentelemetry::logs::NoopLoggerProvider::new(),
+        otel,
     )
-    .with_tracer_provider(lab.host().tracer_provider())
     .build()
     .await
     .unwrap();

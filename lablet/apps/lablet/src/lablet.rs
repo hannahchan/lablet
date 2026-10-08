@@ -11,8 +11,7 @@ use lablet_run_request::RunRequest;
 ///
 /// It runs many times, one run at a time, and every run has an id, a start
 /// time and labels of its own. Its spans go to the tracer provider it was
-/// built with, or the global one as it was when it was built, and its
-/// records to the logger provider it was built with.
+/// built with, and its records to the logger provider it was built with.
 pub struct Lablet {
     runner: Runner,
     provider: Played,
@@ -64,18 +63,17 @@ impl Lablet {
     /// future is first polled, so a host makes its span current on the
     /// future, with [`FutureExt::with_context`] as the `traced_run` example
     /// does, rather than through a guard held on another task or thread.
-    /// Its spans go to the tracer provider this `Lablet` was built with, or
-    /// OpenTelemetry's global one as it was when it was built, and its
-    /// records to the logger provider it was built with. Once the loop has
-    /// returned, the root span ends with the run's measured duration, the
-    /// run's transcript is written, when the config names a place for it,
-    /// and then the run's wide event is emitted, so the transcript it names
-    /// is whole, or its failure logged, when it arrives. Nothing is flushed:
-    /// the host's SDK decides when what the run emitted is exported. A
-    /// `bash` command starts under its tool span, whose context is injected
-    /// into its environment through the propagator this `Lablet` was built
-    /// with, or OpenTelemetry's global one as it is when the command starts,
-    /// in place of every context variable the command would inherit.
+    /// Its spans go to the tracer provider of the `Otel` this `Lablet` was
+    /// built with, and its records to the logger provider of that `Otel`.
+    /// Once the loop has returned, the root span ends with the run's
+    /// measured duration, the run's transcript is written, when the config
+    /// names a place for it, and then the run's wide event is emitted, so
+    /// the transcript it names is whole, or its failure logged, when it
+    /// arrives. Nothing is flushed: the host's SDK decides when what the run
+    /// emitted is exported. A `bash` command starts under its tool span,
+    /// whose context is injected into its environment through the
+    /// propagator of the `Otel` this `Lablet` was built with, in place of
+    /// every context variable the command would inherit.
     ///
     /// Library mode leaves alone what configured an OpenTelemetry SDK, and
     /// says nothing of it: the config's `telemetry.file`, `telemetry.otlp`
