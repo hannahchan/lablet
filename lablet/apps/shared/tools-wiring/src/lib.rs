@@ -15,7 +15,7 @@ use opentelemetry::propagation::TextMapPropagator;
 /// The tool set of the config `written`, which `prepared` checked: the
 /// built-in tools, when the config enables any, under the secrets it
 /// derived and injecting a command's context through `propagator`, the one
-/// the root resolved, and the set every run of it is offered.
+/// its root was handed, and the set every run of it is offered.
 ///
 /// # Errors
 ///

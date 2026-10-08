@@ -24,7 +24,9 @@ use opentelemetry::trace::{Tracer, TracerProvider};
 /// each, for a host that wants nothing of lablet's telemetry, and a host
 /// that wants one piece silent hands in the API's no-op for that one:
 /// [`NoopTracerProvider`], [`NoopLoggerProvider`] or
-/// [`NoopTextMapPropagator`].
+/// [`NoopTextMapPropagator`]. Under the no-op tracer provider a command's
+/// context is the one current where the run is awaited, since the API's
+/// no-op span carries its parent's context.
 ///
 /// A host on OpenTelemetry's globals hands them in itself: the global
 /// tracer provider is `opentelemetry::global::tracer_provider()`, called
