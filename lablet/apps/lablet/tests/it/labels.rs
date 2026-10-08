@@ -40,7 +40,7 @@ async fn the_labels_of_a_request_are_on_every_record_of_its_run_and_of_no_other(
             "telemetry": { "capture_content": true },
         }),
     );
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = scratch.build(config).await.unwrap();
     let labels = RunLabels {
         task: Some("fix-failing-test".to_owned()),
         experiment: Some("terse-tool-descriptions".to_owned()),
@@ -135,7 +135,8 @@ async fn the_labels_of_a_request_are_on_every_record_of_its_run_and_of_no_other(
 #[tokio::test]
 async fn a_request_that_names_one_label_has_that_one_on_its_records() {
     let scratch = Lab::new("one-label");
-    let mut lablet = lablet::build(scratch.config(crate::harness::ENDS, json!({})))
+    let mut lablet = scratch
+        .build(scratch.config(crate::harness::ENDS, json!({})))
         .await
         .unwrap();
 

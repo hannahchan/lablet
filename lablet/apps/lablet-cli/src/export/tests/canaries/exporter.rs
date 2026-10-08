@@ -140,7 +140,7 @@ async fn child_builds_a_provider_as_lablet_builds_it() {
 
     let tracer = telemetry.tracer();
     tracer.in_span("canary", |_| {});
-    telemetry.flush_leftovers().await.unwrap();
+    telemetry.flush_providers().await.unwrap();
 
     assert_eq!(
         memory.exported_spans().len(),

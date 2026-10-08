@@ -637,7 +637,7 @@ async fn a_record_emitted_through_the_logger_is_exported_by_the_next_flush() {
         span: SpanContext::empty_context(),
         attributes: Vec::new(),
     });
-    telemetry.flush_leftovers().await.unwrap();
+    telemetry.flush_providers().await.unwrap();
 
     assert_eq!(events_of(&memory.exported_records()), [EXCEPTION]);
     assert!(memory.exported_wide().is_empty());

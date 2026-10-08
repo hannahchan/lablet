@@ -1,13 +1,16 @@
-//! A directory for each test, a config whose files are in it, and what a
-//! run left there, read back.
+//! A directory for each test, a config whose files are in it, the host
+//! whose providers a `Lablet` is built with, and what the host was handed,
+//! read back.
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use lablet::{BuildError, Config, Format, RunRequest, Unsupported};
+use lablet::{BuildError, Config, Format, Lablet, RunRequest, Unsupported};
+use lablet_conformance::host::Host;
 use lablet_conformance::otlp::{Exported, LogRecord, Span};
 use lablet_test_support::Scratch;
+use opentelemetry::logs::NoopLoggerProvider;
 use serde_json::{Value, json};
 
 pub use lablet_test_support::{PROMPT, SYSTEM};
@@ -25,14 +28,28 @@ pub const ENDS: &str = "
 
 /// A scratch directory of one test's own, laid out for lablet: the root of
 /// the built-in tools is `work` in it, and lablet's own files are beside
-/// the root.
-pub struct Lab(Scratch);
+/// the root. Its host is the one every `Lablet` it builds is handed.
+pub struct Lab(Scratch, Host);
 
 impl Lab {
     pub fn new(test: &str) -> Self {
         let scratch = Scratch::new(test);
         scratch.create_dir("work");
-        Self(scratch)
+        Self(scratch, Host::new())
+    }
+
+    /// The host every `Lablet` the lab builds is handed.
+    pub fn host(&self) -> &Host {
+        &self.1
+    }
+
+    /// A `Lablet` of `config`, built with the lab's host's tracer and
+    /// logger providers.
+    pub async fn build(&self, config: Config) -> Result<Lablet, BuildError> {
+        Lablet::builder(config, self.1.logger_provider())
+            .with_tracer_provider(self.1.tracer_provider())
+            .build()
+            .await
     }
 
     pub fn path(&self) -> &Path {
@@ -47,21 +64,13 @@ impl Lab {
         self.at("work")
     }
 
-    /// The file every run's telemetry is appended to.
-    pub fn telemetry(&self) -> PathBuf {
-        self.at("telemetry.otlp.jsonl")
-    }
-
     pub fn write(&self, path: &str, text: &str) -> PathBuf {
         self.0.write(path, text)
     }
 
     /// The config, as a tree, of a fake model that plays the YAML script
-    /// `script`, with `more` stated over it. Its telemetry goes to the
-    /// lab's file and nowhere else: a test that exports to a receiver
-    /// states `telemetry.otlp.enabled: true` beside the receiver's
-    /// endpoint, so no test sends to a collector on the developer's
-    /// `localhost:4318`.
+    /// `script`, with `more` stated over it. It states no telemetry: what a
+    /// run emits goes to the lab's host.
     pub fn tree(&self, script: &str, more: Value) -> Value {
         let mut tree = json!({
             "model": {
@@ -70,11 +79,6 @@ impl Lab {
                 "name": MODEL,
             },
             "prompt": { "system": SYSTEM },
-            "telemetry": {
-                "file": { "path": self.telemetry() },
-                "otlp": { "enabled": false },
-                "resource": { "team": "evals" },
-            },
         });
         state(&mut tree, more);
         tree
@@ -95,9 +99,14 @@ impl Lab {
         json!({ "builtin": self.builtin(tools) })
     }
 
-    /// What the runs so far exported.
+    /// What the runs so far handed the lab's host.
     pub fn exported(&self) -> Exported {
-        Exported::read(&self.telemetry()).unwrap()
+        self.1.exported()
+    }
+
+    /// The same, as the file exporter's lines would hold it.
+    pub fn exported_text(&self) -> String {
+        self.1.lines()
     }
 }
 
@@ -122,14 +131,21 @@ pub fn request() -> RunRequest {
     RunRequest::new(PROMPT).unwrap()
 }
 
-/// What `build` refuses `config` with, which `check` refuses it with too.
-/// Two refusals are a build's alone: a provider this lablet has no adapter
-/// for yet, which the check passes since it stops before the provider is
-/// selected, and what only making the network exporter finds, which no
-/// config given here reaches.
+/// A `Lablet` of `config` whose records go nowhere, for a test that reads
+/// none of what a run emits.
+pub async fn quiet(config: Config) -> Result<Lablet, BuildError> {
+    lablet::build(config, NoopLoggerProvider::new()).await
+}
+
+/// What `build` refuses `config` with, which `check` refuses it with too,
+/// but for a provider this lablet has no adapter for yet, which the check
+/// passes since it stops before the provider is selected.
 pub async fn refusal(config: Config) -> BuildError {
     let checked = lablet::check(&config).await.map(drop);
-    let built = lablet::build(config).await.map(drop).unwrap_err();
+    let built = lablet::build(config, NoopLoggerProvider::new())
+        .await
+        .map(drop)
+        .unwrap_err();
     match &built {
         BuildError::Unsupported {
             kind: Unsupported::Anthropic | Unsupported::Openai,
@@ -140,7 +156,7 @@ pub async fn refusal(config: Config) -> BuildError {
     built
 }
 
-/// What one run exported, out of everything a file holds.
+/// What one run emitted, out of everything a host was handed.
 pub struct Traced<'a> {
     pub spans: Vec<&'a Span>,
     pub records: Vec<&'a LogRecord>,

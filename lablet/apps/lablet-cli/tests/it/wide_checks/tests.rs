@@ -387,7 +387,7 @@ async fn returned(test: &str, script: &str) -> RunSummary {
         script,
         json!({ "run": { "retry_backoff_base": "1ms", "retry_backoff_max": "1ms" } }),
     );
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = lablet_cli::compose::build(config).await.unwrap();
     let finished = lablet
         .run(request().run_id(RunId::new(RUN).unwrap()).unwrap())
         .await;

@@ -20,6 +20,32 @@ use lablet_config::Env;
 /// a `RUST_LOG` directive that names it, are as they were.
 const TARGET: &str = "lablet::otel_env";
 
+/// The GenAI instrumentation's capture variable, which both roots read:
+/// whether content reaches the telemetry when the config says nothing.
+pub const CAPTURE_CONTENT: &str = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT";
+
+/// The OTLP exporter's header variables, generic and for each signal,
+/// which are secrets whenever they're set, in both modes.
+pub const HEADER_VARIABLES: [&str; 3] = [
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+    "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+];
+
+/// The OTLP exporter's endpoint variables, generic and for each signal,
+/// whose user information is a secret in both modes.
+pub const ENDPOINT_VARIABLES: [&str; 3] = [
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+];
+
+/// What [`CAPTURE_CONTENT`] in `env` says of content capture, or `None`
+/// when it says nothing. A value that isn't a Boolean is warned about.
+pub fn capture_content(env: Env<'_>) -> Option<bool> {
+    Variables(env).get(CAPTURE_CONTENT)
+}
+
 /// The environment, as the seam reads a variable of it.
 pub struct Variables<'a>(pub Env<'a>);
 
@@ -206,6 +232,49 @@ impl<T: Choice + PartialEq> Parse for Vec<T> {
             }
         }
         (!chosen.is_empty()).then_some(chosen)
+    }
+}
+
+/// The headers `value` names, as the exporter reads them from
+/// `OTEL_EXPORTER_OTLP_HEADERS` and its per-signal forms: `name=value`
+/// pairs between commas, each trimmed, with the value percent-decoded. A
+/// pair whose name or value is empty is left out, and a value whose
+/// percent-escapes don't decode is kept as it's written.
+#[must_use]
+pub fn decode_headers(value: &str) -> Vec<(String, String)> {
+    value
+        .split_terminator(',')
+        .map(str::trim)
+        .filter_map(|pair| {
+            let (name, value) = pair.split_once('=')?;
+            let decoded = percent_decoded(value.trim()).unwrap_or_else(|| value.to_owned());
+            (!name.trim().is_empty() && !decoded.is_empty())
+                .then(|| (name.trim().to_owned(), decoded))
+        })
+        .collect()
+}
+
+/// `value` with each `%xx` replaced by its byte, or nothing when an escape
+/// is cut short, isn't hex, or the bytes aren't UTF-8.
+fn percent_decoded(value: &str) -> Option<String> {
+    let mut decoded = String::with_capacity(value.len());
+    let mut bytes = Vec::new();
+    let mut chars = value.chars();
+    loop {
+        let next = chars.next();
+        if next == Some('%') {
+            let escape = [chars.next()?, chars.next()?];
+            bytes.push(u8::from_str_radix(&escape.iter().collect::<String>(), 16).ok()?);
+            continue;
+        }
+        if !bytes.is_empty() {
+            decoded.push_str(std::str::from_utf8(&bytes).ok()?);
+            bytes.clear();
+        }
+        match next {
+            Some(char) => decoded.push(char),
+            None => return Some(decoded),
+        }
     }
 }
 

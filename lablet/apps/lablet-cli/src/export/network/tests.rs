@@ -65,53 +65,6 @@ fn values<'a>(map: &'a HeaderMap, name: &str) -> Vec<&'a str> {
         .collect()
 }
 
-// Decoding the environment's headers as the exporter does
-
-#[test]
-fn the_pairs_of_a_header_variable_are_split_on_commas_and_trimmed() {
-    assert_eq!(
-        decode_headers(" a=1 , b = two,c=3,"),
-        [("a", "1"), ("b", "two"), ("c", "3")]
-            .map(|(name, value)| (name.to_owned(), value.to_owned()))
-    );
-}
-
-#[test]
-fn a_value_is_percent_decoded_and_one_that_does_not_decode_is_kept_as_written() {
-    assert_eq!(
-        decode_headers("a=Bearer%20t%C3%B6ken,b=100%,c=x%zz"),
-        [("a", "Bearer töken"), ("b", "100%"), ("c", "x%zz")]
-            .map(|(name, value)| (name.to_owned(), value.to_owned()))
-    );
-}
-
-#[test]
-fn a_value_that_doesnt_decode_keeps_its_leading_space_as_the_exporter_does() {
-    // The exporter trims the pair, then the value only on the way into the
-    // decoder, so a value that doesn't decode keeps the space after `=`.
-    assert_eq!(
-        decode_headers("a= x%zz "),
-        [("a".to_owned(), " x%zz".to_owned())]
-    );
-}
-
-#[test]
-fn a_pair_without_a_name_or_a_value_or_an_equals_sign_is_left_out() {
-    assert_eq!(
-        decode_headers("=1,a=,b,c=3,,"),
-        [("c".to_owned(), "3".to_owned())]
-    );
-    assert!(decode_headers("").is_empty());
-}
-
-#[test]
-fn an_escape_that_is_cut_short_or_not_utf8_leaves_the_value_as_written() {
-    assert_eq!(
-        decode_headers("a=x%4,b=%ff"),
-        [("a", "x%4"), ("b", "%ff")].map(|(name, value)| (name.to_owned(), value.to_owned()))
-    );
-}
-
 // Replacing the headers the exporter merged
 
 /// What the exporter merged from the process environment is replaced, not

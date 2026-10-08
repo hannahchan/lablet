@@ -24,7 +24,7 @@ clap.workspace = true
 lablet-config.workspace = true
 lablet-documents.workspace = true
 lablet-model.workspace = true
-lablet-otel-sdk.workspace = true
+lablet-otel-env.workspace = true
 lablet-prepare.workspace = true
 lablet-provider-wiring.workspace = true
 lablet-run.workspace = true
@@ -32,9 +32,19 @@ lablet-run-request.workspace = true
 lablet-tools-wiring.workspace = true
 lablet-transcript-json.workspace = true
 opentelemetry.workspace = true
+opentelemetry-http.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry-proto.workspace = true
+opentelemetry_sdk.workspace = true
+# The blocking client the OTLP HTTP exporter sends through, from the batch processors' own
+# threads.
+reqwest = { workspace = true, features = ["blocking"] }
+secrecy.workspace = true
 serde_json.workspace = true
 serde-saphyr.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
+tonic.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
@@ -43,8 +53,7 @@ nix = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
 # The parity test runs the library beside the command on one config, and the
-# golden comparison runs the library from this package's directory, which the
-# starter's paths and so its config digest are relative to.
+# other tests name the config's and a run's types by the library's paths.
 lablet.workspace = true
 lablet-conformance.workspace = true
 lablet-provider-fake.workspace = true

@@ -83,6 +83,54 @@ fn a_directive_naming_the_module_a_warning_was_written_in_still_shows_it() {
     );
 }
 
+/// Each group of lablet's own warnings is under the target it was under
+/// before the command line had a package of its own, the composition's, the
+/// inbound context's, the network exporter's settings' and the
+/// environment's parsing, so a `RUST_LOG` filter written against them keeps
+/// working.
+#[tokio::test(flavor = "multi_thread")]
+async fn each_group_of_lablet_s_own_warnings_keeps_the_target_a_filter_names() {
+    let receiver = Receiver::start(Mode::Answers).await;
+    let lab = Lab::new("diagnostics-targets");
+    let blocked = lab.write(
+        "blocked",
+        "a file, where the transcript's directory would be",
+    );
+    let certificate = lab.write("collector.pem", receiver.client_certificate());
+    lab.write_config(
+        ENDS,
+        json!({
+            "run": { "transcript_path": blocked.join("transcript.json") },
+            "telemetry": { "otlp": { "enabled": true, "endpoint": receiver.http_endpoint() } },
+        }),
+    );
+    let mut command = lab.lablet(&["run", "--config", CONFIG, "--prompt", PROMPT]);
+    command
+        .env("TRACEPARENT", "not-a-trace-parent")
+        .env("OTEL_BSP_MAX_QUEUE_SIZE", "0")
+        .env("OTEL_EXPORTER_OTLP_CERTIFICATE", &certificate)
+        .env(
+            "RUST_LOG",
+            "error,lablet::lablet=warn,lablet::propagation=warn,lablet::otlp=warn,\
+             lablet::otel_env=warn",
+        );
+
+    let run = ran(command, "");
+
+    assert_eq!(run.code, Some(0), "{run:?}");
+    for target in [
+        "lablet::lablet",
+        "lablet::propagation",
+        "lablet::otlp",
+        "lablet::otel_env",
+    ] {
+        assert!(
+            run.stderr.contains(&format!(" WARN {target}: ")),
+            "{target}: {run:?}"
+        );
+    }
+}
+
 #[test]
 fn a_script_a_variable_leads_to_is_named_as_the_config_writes_it_in_everything_a_run_leaves() {
     let lab = Lab::new("diagnostics-script");

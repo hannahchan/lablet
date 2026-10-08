@@ -1,6 +1,6 @@
 //! The smoke test: a scripted provider, the built-in tools and the file
-//! exporter, through `build` and `run`, and the spans and records the run
-//! left in its file.
+//! exporter, through the command line's composition, its `build` and
+//! `run`, and the spans and records the run left in its file.
 
 use lablet::{FinishedRun, RunId, StopReason};
 use lablet_conformance::otlp::{Exported, LogRecord, SpanKind, Status};
@@ -56,7 +56,7 @@ impl Smoke {
             }),
         );
         let config_digest = config.digest().to_string();
-        let mut lablet = lablet::build(config).await.unwrap();
+        let mut lablet = lablet_cli::compose::build(config).await.unwrap();
 
         let finished = lablet
             .run(request().run_id(RunId::new(RUN).unwrap()).unwrap())
@@ -311,7 +311,7 @@ async fn every_export_carries_the_resource_the_config_states() {
         crate::harness::ENDS,
         json!({ "telemetry": { "resource": { "team": "evals", "service.name": "mine" } } }),
     );
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = lablet_cli::compose::build(config).await.unwrap();
 
     lablet.run(request()).await;
     lablet.shutdown().await;
@@ -343,7 +343,7 @@ async fn content_reaches_telemetry_when_the_config_says_so() {
         crate::harness::ENDS,
         json!({ "telemetry": { "capture_content": true } }),
     );
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = lablet_cli::compose::build(config).await.unwrap();
 
     lablet.run(request()).await;
     lablet.shutdown().await;

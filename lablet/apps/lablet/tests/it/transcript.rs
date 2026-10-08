@@ -1,11 +1,9 @@
 //! The transcript a run leaves, when the config names a place for it.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lablet::{FinishedRun, RunId, RunLabels, StopReason};
-use lablet_conformance::receiver::{Mode, Receiver};
 use serde_json::{Value, json};
 
 use crate::harness::{Diagnostics, ENDS, Lab, MODEL, PROMPT, SYSTEM, Traced, json_of, request};
@@ -65,7 +63,7 @@ impl Written {
             }),
         );
         let config_digest = config.digest().to_string();
-        let mut lablet = lablet::build(config).await.unwrap();
+        let mut lablet = scratch.build(config).await.unwrap();
         let labels = RunLabels {
             task: Some("fix-failing-test".to_owned()),
             experiment: None,
@@ -358,7 +356,7 @@ async fn a_run_writes_its_transcript_whatever_stopped_it() {
         for (key, value) in run.as_object().unwrap() {
             config["run"][key] = value.clone();
         }
-        let mut lablet = lablet::build(crate::harness::read(&config)).await.unwrap();
+        let mut lablet = scratch.build(crate::harness::read(&config)).await.unwrap();
 
         let finished = lablet.run(request()).await;
         lablet.shutdown().await;
@@ -393,7 +391,7 @@ async fn a_path_that_holds_no_run_id_is_every_runs_file() {
     let scratch = Lab::new("one-file");
     let transcript = scratch.at("transcript.json");
     let config = scratch.config(ENDS, json!({ "run": { "transcript_path": transcript } }));
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = scratch.build(config).await.unwrap();
 
     let first = lablet.run(request()).await.summary.outcome.run_id;
     assert_eq!(json_of(&transcript)["run_id"], json!(first.as_str()));
@@ -408,7 +406,7 @@ async fn each_run_has_a_directory_of_its_own_made_for_its_transcript() {
     let scratch = Lab::new("directory-each");
     let configured = scratch.at("out/{run_id}/transcript.json");
     let config = scratch.config(ENDS, json!({ "run": { "transcript_path": configured } }));
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = scratch.build(config).await.unwrap();
     let diagnostics = Diagnostics::capture();
 
     for run in ["run-a", "run-b"] {
@@ -434,7 +432,7 @@ async fn a_transcript_that_cannot_be_written_is_reported_and_the_outcome_is_as_i
     );
     let nowhere = scratch.at("no-such-directory/{run_id}.json");
     let config = scratch.config(ENDS, json!({ "run": { "transcript_path": nowhere } }));
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = scratch.build(config).await.unwrap();
     let diagnostics = Diagnostics::capture();
 
     let finished = lablet
@@ -527,7 +525,7 @@ async fn a_run_id_as_long_as_a_request_takes_names_its_transcript() {
         ENDS,
         json!({ "run": { "transcript_path": scratch.at("out/transcript-{run_id}.json") } }),
     );
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = scratch.build(config).await.unwrap();
     let diagnostics = Diagnostics::capture();
 
     lablet
@@ -543,7 +541,8 @@ async fn a_run_id_as_long_as_a_request_takes_names_its_transcript() {
 #[tokio::test]
 async fn a_config_that_names_no_place_writes_no_transcript() {
     let scratch = Lab::new("no-transcript");
-    let mut lablet = lablet::build(scratch.config(ENDS, json!({})))
+    let mut lablet = scratch
+        .build(scratch.config(ENDS, json!({})))
         .await
         .unwrap();
 
@@ -554,62 +553,8 @@ async fn a_config_that_names_no_place_writes_no_transcript() {
         .unwrap()
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect();
-    assert_eq!(left.len(), 3, "{left:?}");
-    for name in ["script.yaml", "telemetry.otlp.jsonl", "work"] {
+    assert_eq!(left.len(), 2, "{left:?}");
+    for name in ["script.yaml", "work"] {
         assert!(left.iter().any(|left| left == name), "{left:?}");
     }
-}
-
-/// Whether the file at `path` holds a whole transcript.
-fn whole_at(path: &str) -> bool {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .is_some_and(|document| document["turns"].is_array())
-}
-
-#[tokio::test]
-async fn the_transcript_a_wide_event_names_is_whole_when_the_wide_event_arrives() {
-    let scratch = Lab::new("transcript-before-wide");
-    let transcript = scratch.at("transcript.json");
-    let found = Arc::new(Mutex::new(Vec::new()));
-    let finding = Arc::clone(&found);
-    let receiver = Receiver::watching(Mode::Answers, move |received| {
-        let exported = received.exported().unwrap();
-        for wide in exported.records_of(key::WIDE_EVENT) {
-            let named = wide.attributes[key::LABLET_RUN_TRANSCRIPT_PATH]
-                .as_str()
-                .unwrap()
-                .to_owned();
-            let whole = whole_at(&named);
-            finding.lock().unwrap().push((named, whole));
-        }
-    })
-    .await;
-    let config = scratch.config(
-        ENDS,
-        json!({
-            "run": { "transcript_path": transcript },
-            "telemetry": { "otlp": {
-                "enabled": true,
-                "endpoint": receiver.grpc_endpoint(),
-                "protocol": "grpc",
-            } },
-        }),
-    );
-    let mut lablet = lablet::build(config).await.unwrap();
-
-    lablet.run(request()).await;
-    lablet.shutdown().await;
-
-    assert_eq!(
-        *found.lock().unwrap(),
-        [(transcript.display().to_string(), true)],
-        "the wide event reached the collector once, after its transcript was written"
-    );
-    assert_eq!(
-        scratch.exported().records_of(key::WIDE_EVENT).len(),
-        1,
-        "and the file holds it"
-    );
 }

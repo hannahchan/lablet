@@ -14,7 +14,7 @@ async fn digests(scratch: &Lab, run: &str, more: Value) -> [String; 3] {
     let tree = scratch.tree(ENDS, more);
     let config = read(&tree);
     let digest = config.digest().to_string();
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = scratch.build(config).await.unwrap();
 
     let finished: FinishedRun = lablet
         .run(request().run_id(RunId::new(run).unwrap()).unwrap())
@@ -80,7 +80,7 @@ async fn one_lablet_run_twice_has_the_same_digests_both_times() {
         ENDS,
         json!({ "tools": { "builtin": scratch.builtin(&["bash"]) } }),
     );
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = scratch.build(config).await.unwrap();
 
     let first = lablet.run(request()).await.summary;
     let second = lablet.run(request()).await.summary;

@@ -1,6 +1,6 @@
 [package]
 name = "lablet-conformance"
-description = "The shared ToolExecutor conformance cases, the OTLP/JSON reader and the in-process OTLP receiver"
+description = "The shared ToolExecutor conformance cases, the OTLP/JSON reader, a host's in-memory providers and the in-process OTLP receiver"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,6 +15,9 @@ flate2.workspace = true
 lablet-model.workspace = true
 lablet-run.workspace = true
 opentelemetry-proto = { workspace = true, features = ["gen-tonic"] }
+# A host's providers over the SDK's in-memory exporters, which are behind `testing`, for the
+# library's tests to hand in and read back.
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 prost.workspace = true
 rcgen.workspace = true
 rustls.workspace = true

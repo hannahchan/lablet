@@ -128,49 +128,6 @@ pub enum OtelBuildError {
     },
 }
 
-/// The headers `value` names, as the exporter reads them from
-/// `OTEL_EXPORTER_OTLP_HEADERS` and its per-signal forms: `name=value`
-/// pairs between commas, each trimmed, with the value percent-decoded. A
-/// pair whose name or value is empty is left out, and a value whose
-/// percent-escapes don't decode is kept as it's written.
-#[must_use]
-pub fn decode_headers(value: &str) -> Vec<(String, String)> {
-    value
-        .split_terminator(',')
-        .map(str::trim)
-        .filter_map(|pair| {
-            let (name, value) = pair.split_once('=')?;
-            let decoded = percent_decoded(value.trim()).unwrap_or_else(|| value.to_owned());
-            (!name.trim().is_empty() && !decoded.is_empty())
-                .then(|| (name.trim().to_owned(), decoded))
-        })
-        .collect()
-}
-
-/// `value` with each `%xx` replaced by its byte, or nothing when an escape
-/// is cut short, isn't hex, or the bytes aren't UTF-8.
-fn percent_decoded(value: &str) -> Option<String> {
-    let mut decoded = String::with_capacity(value.len());
-    let mut bytes = Vec::new();
-    let mut chars = value.chars();
-    loop {
-        let next = chars.next();
-        if next == Some('%') {
-            let escape = [chars.next()?, chars.next()?];
-            bytes.push(u8::from_str_radix(&escape.iter().collect::<String>(), 16).ok()?);
-            continue;
-        }
-        if !bytes.is_empty() {
-            decoded.push_str(std::str::from_utf8(&bytes).ok()?);
-            bytes.clear();
-        }
-        match next {
-            Some(char) => decoded.push(char),
-            None => return Some(decoded),
-        }
-    }
-}
-
 /// The headers of one signal's exporter: those the exporter sets of its
 /// own on its transport, which are kept, the names the environment's
 /// header variables set, which never are, and the resolved set, which goes

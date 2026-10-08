@@ -17,7 +17,7 @@ use opentelemetry_sdk::resource::{EnvResourceDetector, ResourceDetector as _};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use serde_json::json;
 
-use lablet::{Config, Format};
+use lablet_config::{Config, Format};
 
 /// Set in the environment of a child process a canary below starts, so the
 /// child's side runs.
@@ -99,9 +99,9 @@ fn canary_resource_builder_puts_the_pairs_over_otel_service_name() {
     );
 }
 
-/// The child's side: a `Lablet` built with `OTEL_PROPAGATORS` in the
-/// process's environment, and then the global propagator asked to inject a
-/// sampled span's context.
+/// The child's side: the command line's run composed with
+/// `OTEL_PROPAGATORS` in the process's environment, and then the global
+/// propagator asked to inject a sampled span's context.
 #[tokio::test]
 async fn global_propagator_child() {
     if std::env::var_os(CHILD).is_none() {
@@ -123,9 +123,10 @@ async fn global_propagator_child() {
             "file": { "path": scratch.at("telemetry.otlp.jsonl") },
         },
     });
-    let lablet = lablet::build(Config::from_str(&config.to_string(), Format::Json).unwrap())
-        .await
-        .unwrap();
+    let lablet =
+        crate::compose::build(Config::from_str(&config.to_string(), Format::Json).unwrap())
+            .await
+            .unwrap();
     let parent = Context::new().with_remote_span_context(SpanContext::new(
         TraceId::from_hex("0af7651916cd43dd8448eb211c80319c").unwrap(),
         SpanId::from_hex("b7ad6b7169203331").unwrap(),

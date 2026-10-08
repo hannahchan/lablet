@@ -4,11 +4,9 @@
 use std::ffi::OsString;
 
 use lablet_conformance::receiver::{Mode, Receiver};
-use lablet_test_support::Scratch;
 
 use super::*;
 use lablet_config::Format;
-use lablet_otel_sdk::otel_env::OtelEnv;
 
 /// A key as long as a key is, and so one that's cut.
 const KEY: &str = "sk-ant-0123456789abcdef0123456789";
@@ -41,7 +39,7 @@ fn nothing(_: &str) -> Option<OsString> {
 fn derived_from(text: &str, held: &dyn Fn(&str) -> Option<OsString>) -> Derived {
     let written = config(text);
     let real = written.substituted(held).unwrap();
-    derived(&written, &real, held, None, true)
+    derived(&written, &real, held, &[], true)
 }
 
 fn variable(name: &str, held: Held) -> Named {
@@ -95,8 +93,7 @@ fn the_variable_lablet_reads_its_key_from_is_withheld_and_what_it_holds_is_cut()
 fn a_config_that_names_no_secret_reads_nothing_but_the_otlp_variables_and_holds_nothing() {
     let never = |name: &str| -> Option<OsString> {
         assert!(
-            Exporter::HEADER_VARIABLES.contains(&name)
-                || Exporter::ENDPOINT_VARIABLES.contains(&name),
+            HEADER_VARIABLES.contains(&name) || ENDPOINT_VARIABLES.contains(&name),
             "the environment was read: {name}"
         );
         None
@@ -287,7 +284,7 @@ fn the_values_are_held_only_for_a_run_that_has_an_executor() {
     let written = config(text);
     let real = written.substituted(&held).unwrap();
 
-    let without = derived(&written, &real, &held, None, false);
+    let without = derived(&written, &real, &held, &[], false);
 
     assert_eq!(without.values, Secrets::default());
     assert_eq!(without.withheld, names(&["WORK_KEY"]));
@@ -337,7 +334,7 @@ fn an_otlp_header_variable_is_cut_whole_and_by_each_header_and_withheld_from_no_
     const TOKEN: &str = "Bearer sk-0123456789abcdef";
     let value = "x-env=1,authorization=Bearer%20sk-0123456789abcdef";
 
-    for name in Exporter::HEADER_VARIABLES {
+    for name in HEADER_VARIABLES {
         let derived = derived_from(FAKE, &env(&[(name, value)]));
 
         assert_eq!(
@@ -363,7 +360,7 @@ fn an_otlp_endpoint_variable_s_user_information_is_cut_in_each_form_and_withheld
     const PASSWORD: &str = "pw%40-0123456789abcdef";
     let value = format!("https://collector-user:{PASSWORD}@collector.internal:4317/v1/traces");
 
-    for name in Exporter::ENDPOINT_VARIABLES {
+    for name in ENDPOINT_VARIABLES {
         let derived = derived_from(FAKE, &env(&[(name, &value)]));
 
         assert_eq!(
@@ -460,7 +457,7 @@ fn an_otlp_header_variable_is_named_without_an_executor_and_its_value_held_only_
     let written = config(FAKE);
     let real = written.substituted(&held).unwrap();
 
-    let without = derived(&written, &real, &held, None, false);
+    let without = derived(&written, &real, &held, &[], false);
 
     assert_eq!(
         without.cut,
@@ -469,38 +466,29 @@ fn an_otlp_header_variable_is_named_without_an_executor_and_its_value_held_only_
     assert_eq!(without.values, Secrets::default());
 }
 
-/// A client key is read into the TLS identity when its signal's exporter
-/// speaks TLS, and what its file holds is cut from what a tool returns,
-/// each line too, as a value with several lines is. Its variable holds a
-/// path, which is no secret: it's named among what's cut and withheld from
-/// no command.
+/// What the file a client key variable names holds, which the root that
+/// read it hands in, is cut from what a tool returns, each line too, as a
+/// value with several lines is. Its variable holds a path, which is no
+/// secret: it's named among what's cut and withheld from no command.
 #[tokio::test]
 async fn a_client_keys_contents_are_cut_from_a_tools_result_and_its_path_is_not() {
     let receiver = Receiver::start(Mode::Answers).await;
-    let scratch = Scratch::new("secrets-client-key");
-    let key_file = scratch.write("client.key", receiver.client_key());
-    let certificate_file = scratch.write("client.pem", receiver.client_certificate());
-    let (key_path, certificate_path) = (
-        key_file.display().to_string(),
-        certificate_file.display().to_string(),
-    );
-    let named = [
-        ("OTEL_EXPORTER_OTLP_CLIENT_KEY", key_path.as_str()),
-        (
-            "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
-            certificate_path.as_str(),
-        ),
-    ];
+    let key_path = "/etc/collector/client.key";
+    let named = [("OTEL_EXPORTER_OTLP_CLIENT_KEY", key_path)];
     let held = env(&named);
     let written = config(&format!(
         "{FAKE}telemetry: {{ otlp: {{ endpoint: 'https://collector.internal:4318' }} }}"
     ));
     let real = written.substituted(&held).unwrap();
-    let otlp = lablet_otel_sdk::otlp::settings(&written, &real, &OtelEnv::read(&held).exporter)
-        .unwrap()
-        .unwrap();
+    let contents = SecretString::from(receiver.client_key());
 
-    let derived = derived(&written, &real, &held, Some(&otlp), true);
+    let derived = derived(
+        &written,
+        &real,
+        &held,
+        &[("OTEL_EXPORTER_OTLP_CLIENT_KEY", &contents)],
+        true,
+    );
 
     assert_eq!(
         derived.cut,
@@ -512,6 +500,6 @@ async fn a_client_keys_contents_are_cut_from_a_tools_result_and_its_path_is_not(
     let result = format!("cat said:\n{key}\nand then: {line}\nfrom {key_path}");
     let cut = derived.values.redacted(&result);
     assert!(!cut.contains(line), "{cut}");
-    assert!(cut.contains(&key_path), "the path is no secret: {cut}");
+    assert!(cut.contains(key_path), "the path is no secret: {cut}");
     assert!(!format!("{derived:?}").contains(line));
 }

@@ -52,7 +52,7 @@ async fn two_runs_on_one_lablet_are_two_runs_with_one_outcome() {
         json!({ "tools": { "builtin": scratch.builtin(&["bash"]) } }),
     );
     let digest = config.digest().to_string();
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = scratch.build(config).await.unwrap();
     let named = RunId::new("the-second-run").unwrap();
 
     let before = unix_ms_now();
@@ -119,7 +119,8 @@ fn ulid_time(id: &str) -> u64 {
 #[tokio::test]
 async fn a_run_without_an_id_gets_a_fresh_ulid_that_holds_when_it_started() {
     let scratch = Lab::new("fresh");
-    let mut lablet = lablet::build(scratch.config(ENDS, json!({})))
+    let mut lablet = scratch
+        .build(scratch.config(ENDS, json!({})))
         .await
         .unwrap();
 
@@ -171,7 +172,7 @@ async fn what_a_lablet_prints_of_itself_names_its_config_and_holds_no_prompt() {
     );
     let digest = config.digest().to_string();
 
-    let lablet = lablet::build(config).await.unwrap();
+    let lablet = scratch.build(config).await.unwrap();
 
     let printed = format!("{lablet:?}");
     assert!(printed.starts_with("Lablet {"), "{printed}");
@@ -193,7 +194,7 @@ fn a_blank_prompt_is_refused_when_the_request_is_made() {
 async fn the_run_is_given_the_prompt_the_request_holds_under_the_system_prompt_of_the_config() {
     let scratch = Lab::new("prompts");
     let config = scratch.config(ENDS, json!({ "telemetry": { "capture_content": true } }));
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = scratch.build(config).await.unwrap();
 
     let finished = lablet
         .run(RunRequest::new(" Rename the parser. ").unwrap())
@@ -225,37 +226,6 @@ async fn the_run_is_given_the_prompt_the_request_holds_under_the_system_prompt_o
     assert!(input.contains(" Rename the parser. "), "{input}");
 }
 
-#[tokio::test]
-async fn telemetry_that_cannot_be_written_leaves_the_outcome_alone() {
-    let scratch = Lab::new("unwritable");
-    let nowhere = scratch.at("no-such-directory/telemetry.otlp.jsonl");
-    let config = scratch.config(
-        ENDS,
-        json!({ "telemetry": { "file": { "path": nowhere } } }),
-    );
-    let mut lablet = lablet::build(config).await.unwrap();
-    let diagnostics = crate::harness::Diagnostics::capture();
-
-    let finished = lablet.run(request()).await;
-
-    let outcome = &finished.summary.outcome;
-    assert_eq!(outcome.stop_reason(), StopReason::Completed);
-    assert_eq!(outcome.result().text, "Nothing to fix.");
-    assert!(!nowhere.exists());
-    let lines = diagnostics.lines();
-    let warned: Vec<&String> = lines
-        .iter()
-        .filter(|line| line.contains("WARN") && line.contains(outcome.run_id.as_str()))
-        .collect();
-    assert_eq!(warned.len(), 1, "{lines:?}");
-    assert!(
-        warned[0].contains("the run's telemetry wasn't exported whole"),
-        "{lines:?}"
-    );
-    assert_eq!(warned[0].matches("exported whole").count(), 1, "{lines:?}");
-    lablet.shutdown().await;
-}
-
 /// A response that takes a millisecond, which a test cuts short.
 const TAKES_A_MILLISECOND: &str = "
 - response:
@@ -275,7 +245,8 @@ const TAKES_A_MILLISECOND: &str = "
 #[tokio::test(start_paused = true)]
 async fn the_run_s_own_span_and_its_wide_event_are_timed_to_the_nanosecond_from_its_start() {
     let scratch = Lab::new("nanoseconds");
-    let mut lablet = lablet::build(scratch.config(TAKES_A_MILLISECOND, json!({})))
+    let mut lablet = scratch
+        .build(scratch.config(TAKES_A_MILLISECOND, json!({})))
         .await
         .unwrap();
     let lasting = Duration::from_micros(1_500);

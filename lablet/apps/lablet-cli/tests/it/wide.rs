@@ -104,7 +104,7 @@ async fn everything(test: &str, capture_content: bool) -> Wrote {
             "telemetry": { "capture_content": capture_content },
         }),
     );
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = lablet_cli::compose::build(config).await.unwrap();
 
     let finished = lablet
         .run(request().run_id(RunId::new(RUN).unwrap()).unwrap())

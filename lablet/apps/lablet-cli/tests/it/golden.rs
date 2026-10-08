@@ -193,7 +193,9 @@ impl Golden {
 
     /// Runs once, under its own id, exporting to `telemetry`.
     async fn run_to(&self, telemetry: &Path) -> FinishedRun {
-        let mut lablet = lablet::build(self.config(telemetry)).await.unwrap();
+        let mut lablet = lablet_cli::compose::build(self.config(telemetry))
+            .await
+            .unwrap();
         let mut request = RunRequest::new(self.prompt)
             .unwrap()
             .run_id(RunId::new(format!("golden-{}", self.name)).unwrap())

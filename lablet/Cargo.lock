@@ -1111,7 +1111,7 @@ dependencies = [
  "lablet-conformance",
  "lablet-documents",
  "lablet-model",
- "lablet-otel-sdk",
+ "lablet-otel-env",
  "lablet-prepare",
  "lablet-provider-wiring",
  "lablet-run",
@@ -1120,6 +1120,7 @@ dependencies = [
  "lablet-tools-wiring",
  "lablet-transcript-json",
  "opentelemetry",
+ "opentelemetry-otlp",
  "opentelemetry_sdk",
  "serde-saphyr",
  "serde_json",
@@ -1139,7 +1140,7 @@ dependencies = [
  "lablet-conformance",
  "lablet-documents",
  "lablet-model",
- "lablet-otel-sdk",
+ "lablet-otel-env",
  "lablet-prepare",
  "lablet-provider-fake",
  "lablet-provider-wiring",
@@ -1150,9 +1151,17 @@ dependencies = [
  "lablet-transcript-json",
  "nix",
  "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
+ "opentelemetry-proto",
+ "opentelemetry_sdk",
+ "reqwest",
+ "secrecy",
  "serde-saphyr",
  "serde_json",
+ "thiserror",
  "tokio",
+ "tonic",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1183,6 +1192,7 @@ dependencies = [
  "lablet-run",
  "lablet-test-support",
  "opentelemetry-proto",
+ "opentelemetry_sdk",
  "prost",
  "rcgen",
  "rustls",
@@ -1225,32 +1235,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lablet-otel-sdk"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "lablet",
- "lablet-config",
- "lablet-conformance",
- "lablet-otel-env",
- "lablet-run",
- "lablet-test-support",
- "opentelemetry",
- "opentelemetry-http",
- "opentelemetry-otlp",
- "opentelemetry-proto",
- "opentelemetry_sdk",
- "reqwest",
- "secrecy",
- "serde_json",
- "thiserror",
- "tokio",
- "tonic",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "lablet-policy"
 version = "0.1.0"
 dependencies = [
@@ -1266,14 +1250,13 @@ dependencies = [
  "humantime",
  "lablet-config",
  "lablet-model",
- "lablet-otel-sdk",
  "lablet-policy",
  "lablet-provider-fake",
  "lablet-run",
  "lablet-secrets",
  "lablet-test-support",
  "lablet-tools-builtin",
- "serde_json",
+ "secrecy",
  "thiserror",
  "tokio",
 ]
@@ -1347,8 +1330,7 @@ dependencies = [
  "lablet-config",
  "lablet-conformance",
  "lablet-model",
- "lablet-otel-sdk",
- "lablet-test-support",
+ "lablet-otel-env",
  "secrecy",
  "tokio",
 ]

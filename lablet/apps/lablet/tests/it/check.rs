@@ -34,7 +34,7 @@ async fn a_config_whose_provider_has_no_adapter_yet_passes_the_check_and_fails_t
 
         assert_eq!(checked.resolved(), &yaml(&text).resolved());
         assert!(matches!(
-            lablet::build(yaml(&text)).await,
+            crate::harness::quiet(yaml(&text)).await,
             Err(BuildError::Unsupported {
                 kind: Unsupported::Anthropic | Unsupported::Openai,
                 ..
@@ -148,7 +148,7 @@ async fn the_check_and_a_built_lablet_list_the_tools_a_run_is_offered() {
     );
 
     let checked = lablet::check(&config).await.unwrap();
-    let lablet = lablet::build(config).await.unwrap();
+    let lablet = crate::harness::quiet(config).await.unwrap();
 
     assert_eq!(names(checked.tools()), ["bash", "read_file"]);
     assert_eq!(lablet.tools(), checked.tools());
@@ -178,7 +178,7 @@ async fn a_root_that_holds_the_task_prompt_s_file_is_refused() {
     let told = config().with_prompt_file(&inside);
     assert_eq!(told.prompt_file(), Some(inside.as_path()));
     assert_eq!(lablet::check(&told).await.unwrap_err(), expected);
-    assert_eq!(lablet::build(told).await.unwrap_err(), expected);
+    assert_eq!(crate::harness::quiet(told).await.unwrap_err(), expected);
     assert!(
         expected.to_string().ends_with(&format!(
             "it holds the task prompt's file, {}",
@@ -188,7 +188,7 @@ async fn a_root_that_holds_the_task_prompt_s_file_is_refused() {
     );
 
     let beside = scratch.write("task.md", "Fix the failing test.");
-    let mut lablet = lablet::build(config().with_prompt_file(&beside))
+    let mut lablet = crate::harness::quiet(config().with_prompt_file(&beside))
         .await
         .unwrap();
     lablet.run(request()).await;
@@ -215,7 +215,10 @@ async fn every_refusal_of_a_config_is_of_the_config_class() {
         json!({ "run": { "retry_jitter": 2 } }),
         json!({ "tools": { "mcp": [{ "name": "docs", "transport": "stdio", "command": "npx" }] } }),
         json!({ "tools": { "builtin": scratch.builtin(&["bash"]), "deny": ["grep"] } }),
-        json!({ "tools": { "builtin": { "root": scratch.at(""), "enabled": ["bash"] } } }),
+        json!({
+            "run": { "transcript_path": scratch.at("transcript.json") },
+            "tools": { "builtin": { "root": scratch.at(""), "enabled": ["bash"] } },
+        }),
     ] {
         refused.push(lablet::check(&read(&tree(more))).await.unwrap_err());
     }

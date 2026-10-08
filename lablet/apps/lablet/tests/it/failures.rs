@@ -18,7 +18,8 @@ const REJECTS_THE_KEY: &str = "
 #[tokio::test]
 async fn a_rejected_key_ends_the_run_at_once_and_the_chat_span_says_auth() {
     let scratch = Lab::new("auth");
-    let mut lablet = lablet::build(scratch.config(REJECTS_THE_KEY, json!({})))
+    let mut lablet = scratch
+        .build(scratch.config(REJECTS_THE_KEY, json!({})))
         .await
         .unwrap();
 

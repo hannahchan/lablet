@@ -1,6 +1,6 @@
-//! The network exporter through `build` and `run`: where the telemetry goes
-//! when an endpoint is stated, and what a refused endpoint or header is
-//! shown as.
+//! The network exporter through the command line's composition, its
+//! `build` and `run`: where the telemetry goes when an endpoint is stated,
+//! and what a refused endpoint or header is shown as.
 //! Each config states `telemetry.otlp.enabled: true` over the lab's
 //! `false`, beside the endpoint it sends to.
 
@@ -29,9 +29,9 @@ async fn a_run_with_an_endpoint_and_no_file_path_goes_to_the_collector_and_to_no
             "otlp": { "enabled": true, "endpoint": receiver.grpc_endpoint(), "protocol": "grpc" },
         } }),
     );
-    assert!(!lablet::telemetry_on_stderr(&config));
+    assert!(!lablet_cli::compose::telemetry_on_stderr(&config));
 
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = lablet_cli::compose::build(config).await.unwrap();
     let finished = lablet.run(request()).await;
     lablet.shutdown().await;
 
@@ -74,7 +74,7 @@ async fn a_run_with_an_endpoint_and_a_file_path_goes_to_both_over_http_when_the_
         } } }),
     );
 
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = lablet_cli::compose::build(config).await.unwrap();
     let finished = lablet.run(request()).await;
     lablet.shutdown().await;
 

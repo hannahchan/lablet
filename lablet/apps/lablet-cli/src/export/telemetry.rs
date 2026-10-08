@@ -41,7 +41,7 @@ impl FlushError {
 const SHUTDOWN: Duration = Duration::from_secs(5);
 
 /// One destination's processors, made once the SDK's settings are known.
-#[cfg(any(test, feature = "testing"))]
+#[cfg(test)]
 type Hooked = Box<dyn FnOnce(&Sdk) -> (BatchSpanProcessor, BatchLogProcessor) + Send>;
 
 /// What a [`Telemetry`] is built from.
@@ -52,7 +52,7 @@ pub struct TelemetryBuilder {
     otlp: Option<OtlpSettings>,
     sdk: Sdk,
     disabled: bool,
-    #[cfg(any(test, feature = "testing"))]
+    #[cfg(test)]
     hooked: Vec<Hooked>,
 }
 
@@ -115,7 +115,7 @@ impl TelemetryBuilder {
 
     /// Exports to `spans` and `records` too, as a destination registered
     /// where the network's is, after the file's.
-    #[cfg(any(test, feature = "testing"))]
+    #[cfg(test)]
     #[must_use]
     pub fn exporting_to<S, L>(mut self, spans: S, records: L) -> Self
     where
@@ -146,7 +146,7 @@ impl TelemetryBuilder {
             otlp,
             sdk,
             disabled,
-            #[cfg(any(test, feature = "testing"))]
+            #[cfg(test)]
             hooked,
         } = self;
         if disabled {
@@ -172,7 +172,7 @@ impl TelemetryBuilder {
             span_processors.extend(spans.map(|spans| span_processor(&sdk, spans)));
             log_processors.extend(records.map(|records| log_processor(&sdk, records)));
         }
-        #[cfg(any(test, feature = "testing"))]
+        #[cfg(test)]
         for hook in hooked {
             let (spans, records) = hook(&sdk);
             span_processors.push(spans);
@@ -217,7 +217,7 @@ fn log_processor(sdk: &Sdk, records: impl LogExporter + 'static) -> BatchLogProc
 }
 
 /// The batch processors of one destination, as the SDK's settings say.
-#[cfg(any(test, feature = "testing"))]
+#[cfg(test)]
 fn processors<S, L>(sdk: &Sdk, spans: S, records: L) -> (BatchSpanProcessor, BatchLogProcessor)
 where
     S: SpanExporter + 'static,
@@ -232,7 +232,7 @@ where
 /// The loop opens its spans through [`Telemetry::tracer`] and emits its
 /// records through [`Telemetry::logger`], which only queue what they're
 /// handed, so neither waits for an export. Whoever runs the loop calls
-/// [`Telemetry::begin_run`] before a run and [`Telemetry::flush_leftovers`]
+/// [`Telemetry::begin_run`] before a run and [`Telemetry::flush_providers`]
 /// once the run has emitted its wide event, and [`Telemetry::shutdown`]
 /// before the process exits. A `Telemetry` dropped without a shutdown is
 /// shut down by the SDK on the thread that drops it, which exports what the
@@ -265,7 +265,7 @@ impl Telemetry {
             otlp: None,
             sdk: Sdk::default(),
             disabled: false,
-            #[cfg(any(test, feature = "testing"))]
+            #[cfg(test)]
             hooked: Vec::new(),
         }
     }
@@ -310,9 +310,8 @@ impl Telemetry {
 
     /// Flushes both providers, side by side. Each flushes the file's
     /// processor before the network's, so when this returns the file holds
-    /// what the providers held whole, whatever a collector did: after a run,
-    /// the run and its wide event, and before one, what a run whose future
-    /// was dropped left, its open spans ended as they were dropped.
+    /// what the providers held whole, whatever a collector did: after the
+    /// command line's one run, the run and its wide event.
     ///
     /// The SDK gives each processor's flush five seconds, so a collector
     /// that never answers costs this about five seconds.
@@ -321,7 +320,7 @@ impl Telemetry {
     ///
     /// Returns a [`FlushError`] holding what each provider's processors
     /// said of a flush that failed or gave up.
-    pub async fn flush_leftovers(&self) -> Result<(), FlushError> {
+    pub async fn flush_providers(&self) -> Result<(), FlushError> {
         let Some(Providers { tracer, logger }) = self.providers.clone() else {
             return Ok(());
         };

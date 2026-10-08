@@ -53,7 +53,9 @@ fn shared(finished: &FinishedRun) -> Value {
 /// One run of `script` under `run_id`, with `more` stated over the config,
 /// to a file the lab names.
 async fn run(lab: &Lab, script: &str, run_id: &str, more: Value) -> FinishedRun {
-    let mut lablet = lablet::build(lab.config(script, more)).await.unwrap();
+    let mut lablet = lablet_cli::compose::build(lab.config(script, more))
+        .await
+        .unwrap();
     let finished = lablet
         .run(request().run_id(RunId::new(run_id).unwrap()).unwrap())
         .await;
@@ -72,7 +74,7 @@ async fn a_completed_run_and_a_failed_run_each_have_exactly_one_wide_event_in_th
     // Two runs of one `Lablet`, each of which hears the script from its
     // first entry and completes, and a run of a second `Lablet` on the same
     // file, which the provider's error ends.
-    let mut completing = lablet::build(lab.config(FAILS_CALLS_ENDS, more.clone()))
+    let mut completing = lablet_cli::compose::build(lab.config(FAILS_CALLS_ENDS, more.clone()))
         .await
         .unwrap();
     let completed = completing
@@ -86,7 +88,7 @@ async fn a_completed_run_and_a_failed_run_each_have_exactly_one_wide_event_in_th
         )
         .await;
     completing.shutdown().await;
-    let mut fails = lablet::build(lab.config(REJECTS_THE_KEY, more))
+    let mut fails = lablet_cli::compose::build(lab.config(REJECTS_THE_KEY, more))
         .await
         .unwrap();
     let failed = fails

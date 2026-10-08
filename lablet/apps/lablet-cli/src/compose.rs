@@ -1,15 +1,15 @@
 //! The command line's composition: a config in, a composed run or a
 //! checked config out. It checks the config through `lablet-prepare`,
-//! builds the tools and the provider through the wiring kernels, and
-//! connects them to the loop and the runner itself.
+//! settles the telemetry's settings from the config and the SDK's
+//! environment between the check's two halves, builds the tools and the
+//! provider through the wiring kernels, and connects them to the loop and
+//! the runner itself, with the tracer and the logger of the SDK it builds.
 
 use std::sync::Arc;
 
 use lablet_config::{Config, Env, environment};
 use lablet_model::{ConfigDigest, FinishedRun};
-use lablet_otel_sdk::export::Telemetry;
-use lablet_otel_sdk::propagation::Inbound;
-use lablet_prepare::{BuildError, Checked, Wiring, otlp_refused, prepare};
+use lablet_prepare::{BuildError, Checked, Wiring, prepare};
 use lablet_provider_wiring::Played;
 use lablet_run::{
     Clock, Ran, RunCancellation, RunService, Runner, Shared, ToolSet, TranscriptError,
@@ -20,6 +20,11 @@ use lablet_transcript_json::JsonTranscripts;
 use opentelemetry::trace::FutureExt as _;
 
 use crate::clock::TokioClock;
+use crate::export::Telemetry;
+use crate::exports::{otlp_refused, settle};
+use crate::propagation::Inbound;
+
+pub use crate::exports::telemetry_on_stderr;
 
 /// The version of lablet, the workspace's, which a run's record names as
 /// `gen_ai.agent.version`.
@@ -45,8 +50,8 @@ pub async fn check(config: &Config) -> Result<Checked, BuildError> {
 }
 
 /// [`check`], where `env` is lablet's environment.
-async fn check_in(config: &Config, env: Env<'_>) -> Result<Checked, BuildError> {
-    let prepared = prepare(config, env)?;
+pub(crate) async fn check_in(config: &Config, env: Env<'_>) -> Result<Checked, BuildError> {
+    let (prepared, _, _) = settle(config, prepare(config, env)?, env)?;
     let tools = lablet_tools_wiring::tools(config, &prepared).await?;
     Ok(Checked::new(
         config.resolved(),
@@ -56,7 +61,7 @@ async fn check_in(config: &Config, env: Env<'_>) -> Result<Checked, BuildError> 
 }
 
 /// The run `config` says, composed: the process's environment is read
-/// once, here, as the library's build reads it.
+/// once, here, for the SDK's settings and the inbound context.
 ///
 /// # Errors
 ///
@@ -67,27 +72,32 @@ pub async fn build(config: Config) -> Result<Composed, BuildError> {
     build_in(config, &environment).await
 }
 
-async fn build_in(config: Config, env: Env<'_>) -> Result<Composed, BuildError> {
-    let prepared = prepare(&config, env)?;
+pub(crate) async fn build_in(config: Config, env: Env<'_>) -> Result<Composed, BuildError> {
+    let (prepared, exports, inbound) = settle(&config, prepare(&config, env)?, env)?;
     let tools = lablet_tools_wiring::tools(&config, &prepared).await?;
-    let (exports, wiring) = prepared.split()?;
+    let wiring = prepared.wiring()?;
     let variables = exports.endpoint_variables();
     let telemetry = exports
         .telemetry()
         .map_err(|error| otlp_refused(&config, variables, error))?;
-    Ok(wire(&config, wiring, tools, telemetry))
+    Ok(wire(&config, wiring, tools, telemetry, inbound))
 }
 
-/// What a checked config comes to, which offers `tools` and whose run goes
-/// through `telemetry`.
-fn wire(config: &Config, wiring: Wiring, tools: Arc<ToolSet>, telemetry: Telemetry) -> Composed {
+/// What a checked config comes to, which offers `tools`, whose run goes
+/// through `telemetry`, and whose root span is opened in `inbound`.
+pub(crate) fn wire(
+    config: &Config,
+    wiring: Wiring,
+    tools: Arc<ToolSet>,
+    telemetry: Telemetry,
+    inbound: Inbound,
+) -> Composed {
     let Wiring {
         real,
         settings,
         script,
         system,
         capture_content,
-        inbound,
         secrets,
     } = wiring;
     let (provider, played) = lablet_provider_wiring::fake(real.model.name.clone(), script);
@@ -149,7 +159,7 @@ pub struct Composed {
     provider: Played,
     tools: Arc<ToolSet>,
     telemetry: Telemetry,
-    /// The context the run's root span is opened in.
+    /// The context the environment named, which is current around the run.
     inbound: Inbound,
     config_digest: ConfigDigest,
 }
@@ -169,16 +179,15 @@ impl core::fmt::Debug for Composed {
 }
 
 impl Composed {
-    /// Runs one task to its outcome, in the inbound context the
-    /// environment named, and flushes its telemetry once it has returned.
-    /// A transcript that can't be written and telemetry that can't be
+    /// Runs one task to its outcome, with the inbound context the
+    /// environment named made current around it, so the run's root span is
+    /// its child, and flushes the telemetry once it has returned. A
+    /// transcript that can't be written and telemetry that can't be
     /// exported are reported on the diagnostic log.
     pub async fn run(&mut self, request: RunRequest) -> FinishedRun {
         self.telemetry.begin_run();
         self.provider.begin_run();
 
-        // In the inbound context, never the caller's current one, so the
-        // span its caller is in has no part in the run's trace.
         let Ran {
             finished,
             transcript,
@@ -197,7 +206,7 @@ impl Composed {
             }
             None => {}
         }
-        if let Err(error) = self.telemetry.flush_leftovers().await {
+        if let Err(error) = self.telemetry.flush_providers().await {
             tracing::warn!(
                 target: TARGET,
                 %run_id,
@@ -221,3 +230,6 @@ impl Composed {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

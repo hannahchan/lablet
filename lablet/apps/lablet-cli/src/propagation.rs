@@ -1,6 +1,6 @@
-//! The context a run comes from: what the environment says each run of a
-//! `Lablet` is the child of, extracted through the propagators
-//! `OTEL_PROPAGATORS` names.
+//! The context a run comes from: what the environment says the command
+//! line's run is the child of, extracted through the propagators
+//! `OTEL_PROPAGATORS` names, once, and made current around the run.
 //!
 //! The propagators are lablet's own, and never OpenTelemetry's global one,
 //! which one process holding several `Lablet`s would share, and which a
@@ -31,7 +31,7 @@ const BAGGAGE_WARNINGS: &str = "BaggagePropagator.Extract.";
 /// a `RUST_LOG` directive that names it, are as they were.
 const TARGET: &str = "lablet::propagation";
 
-/// What every run of one `Lablet` starts from.
+/// What the command line's run starts from.
 #[derive(Debug, Clone)]
 pub struct Inbound {
     /// The context each run's root span is opened in.

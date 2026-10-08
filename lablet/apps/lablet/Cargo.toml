@@ -15,7 +15,7 @@ async-trait.workspace = true
 lablet-config.workspace = true
 lablet-documents.workspace = true
 lablet-model.workspace = true
-lablet-otel-sdk.workspace = true
+lablet-otel-env.workspace = true
 lablet-prepare.workspace = true
 lablet-provider-wiring.workspace = true
 lablet-run.workspace = true
@@ -28,11 +28,11 @@ tracing.workspace = true
 
 [dev-dependencies]
 lablet-conformance.workspace = true
-# The telemetry's exporter hook, which the test of a run's end hands an exporter to.
-lablet-otel-sdk = { workspace = true, features = ["testing"] }
 lablet-test-support.workspace = true
-# A host's own tracer in the tests, over the SDK's in-memory exporter, which is behind
-# `testing`, so a test can open a span of the host's and read what reached it.
+# The OTLP exporters the `traced_run` example's host sends its runs through.
+opentelemetry-otlp.workspace = true
+# A host's own providers in the tests and the examples, the tests' over the SDK's in-memory
+# exporters, which are behind `testing`.
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 serde-saphyr.workspace = true
 serde_json.workspace = true
@@ -42,3 +42,9 @@ tracing-subscriber.workspace = true
 [[test]]
 name = "it"
 path = "tests/it/main.rs"
+
+# The one test that sets OpenTelemetry's globals, in a binary of its own so no
+# other test sees them.
+[[test]]
+name = "globals"
+path = "tests/globals.rs"

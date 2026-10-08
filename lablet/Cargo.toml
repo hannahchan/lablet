@@ -5,7 +5,6 @@ members = [
   "apps/lablet-cli",
   "apps/shared/config",
   "apps/shared/otel-env",
-  "apps/shared/otel-sdk",
   "apps/shared/prepare",
   "apps/shared/provider-wiring",
   "apps/shared/run-request",
@@ -61,15 +60,14 @@ lablet-transcript-json = { path = "crates/adapters/secondary/transcript-json", v
 lablet-documents = { path = "crates/adapters/secondary/shared/documents", version = "0.1.0" }
 # Library root: build(), check() and the Lablet a host runs, its public library API
 lablet = { path = "apps/lablet", version = "0.1.0" }
-# CLI root: main, the command line and its own composition, as the binary `lablet`
+# CLI root: main, the command line, its own composition and the OpenTelemetry SDK it
+# configures, as the binary `lablet`
 lablet-cli = { path = "apps/lablet-cli", version = "0.1.0" }
 # Root kernel: the config's wire form, reading, ${VAR} substitution, the schema and the digest
 lablet-config = { path = "apps/shared/config", version = "0.1.0" }
-# Root kernel: the specification's parsing of the OpenTelemetry environment's variables
+# Root kernel: the specification's parsing of the OpenTelemetry environment's variables, and
+# the variables both roots read
 lablet-otel-env = { path = "apps/shared/otel-env", version = "0.1.0" }
-# Root kernel until phase 6c's L3: the OpenTelemetry SDK with what lablet adds to it, the
-# tracer and logger providers and their OTLP exporters, which both roots still build
-lablet-otel-sdk = { path = "apps/shared/otel-sdk", version = "0.1.0" }
 # Root kernel: what checking a config comes to, the refusals and the checked values
 lablet-prepare = { path = "apps/shared/prepare", version = "0.1.0" }
 # Root kernel: the model provider a checked config selects, built

@@ -4,10 +4,8 @@
 //!
 //! A [`Lablet`] is built from a [`Config`] and runs many times. Each run
 //! takes a [`RunRequest`] and returns the [`FinishedRun`] the loop made of
-//! it, whose summary holds the outcome. Once a run has returned, its
-//! telemetry has been flushed to where the config and the environment send
-//! it, OTLP to `http://localhost:4318` when neither names another place,
-//! and its transcript is written when the config names a place for one.
+//! it, whose summary holds the outcome, and its transcript is written when
+//! the config names a place for one.
 //!
 //! A config's text is read into a [`RawConfig`] first, where an override
 //! can state a setting over the text, and then into a [`Config`], which
@@ -17,30 +15,44 @@
 //! stops before the provider is selected. A run stops early when the
 //! [`CancelHandle`] its request was given is fired.
 //!
-//! A `Lablet`'s telemetry is its own: nothing plugs into it, and a host owes
-//! it nothing. A host's `tracing` subscriber sees lablet's diagnostics and
-//! none of its telemetry, and a tool executor finds its call's span in the
-//! current OpenTelemetry context.
+//! A `Lablet` runs on the OpenTelemetry its host provides, and configures
+//! no SDK of its own. The host hands in the logger provider its records go
+//! to, which is required, since OpenTelemetry's API has no global logger
+//! provider: a host that wants no records hands in the API's
+//! `NoopLoggerProvider`. It may hand in the tracer provider its spans go
+//! to, and one it doesn't hand in is OpenTelemetry's global one, read once,
+//! when the `Lablet` is built, so a host sets its globals before it builds
+//! one. Each run's root span is the child of the context that's current
+//! where the run is awaited, so a run under a span the host has open is in
+//! the host's trace. The host's SDK samples, exports and flushes: a run
+//! returns without flushing anything, and [`Lablet::shutdown`] does no
+//! telemetry work. A host's `tracing` subscriber sees lablet's diagnostics
+//! and none of its telemetry, and a tool executor finds its call's span in
+//! the current OpenTelemetry context.
 //!
-//! The process's environment configures it, as it configures any
-//! application instrumented with OpenTelemetry. When a `Lablet` is built,
-//! or a config checked, the `OTEL_*` variables are read once, and decide
-//! where the telemetry goes, and how, wherever the config's `telemetry`
-//! section states nothing, while `OTEL_SDK_DISABLED=true` turns it all off
-//! whatever the config states. `TRACEPARENT` and `TRACESTATE` are read then
-//! too, and name the parent of every run the `Lablet` makes, the same for
-//! each, and `BAGGAGE` is in each run's context: a host that runs under a
-//! trace of its own has every run beneath that trace's span unless it
-//! clears them.
+//! What configured an SDK does nothing in library mode, and nothing is said
+//! of it: the config's `telemetry.file`, `telemetry.otlp` and
+//! `telemetry.resource`, every `OTEL_*` variable the SDK reads,
+//! `OTEL_SDK_DISABLED`, and `TRACEPARENT`, `TRACESTATE` and `BAGGAGE`.
+//! Content capture still applies, `telemetry.capture_content` and then
+//! `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`, and so does the cut
+//! of the OTLP header variables' values and of the endpoint variables' user
+//! information from what a command prints. The secrets the config's own
+//! fields name are withheld from commands and cut as in the command line,
+//! the values of `telemetry.otlp.headers` and the user information of
+//! `telemetry.otlp.endpoint` among them, though no SDK uses them.
 //!
 //! A `Lablet` is built and run on a tokio runtime, which its adapters keep
 //! their deadlines on.
 //!
 //! The provider `fake` plays a script in place of a model, so a run needs
-//! no key:
+//! no key. Here a host hands in providers of the SDK's own, over its
+//! in-memory exporters:
 //!
 //! ```
-//! use lablet::{Config, Format, OutcomeDocument, RunId, RunRequest, StopReason};
+//! use lablet::{Config, Format, Lablet, OutcomeDocument, RunId, RunRequest, StopReason};
+//! use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
+//! use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! # let directory = std::env::temp_dir().join(format!("lablet-doctest-{}", std::process::id()));
@@ -75,19 +87,25 @@
 //!   builtin:
 //!     root: {directory}/work
 //!     enabled: [bash]
-//! telemetry:
-//!   file:
-//!     path: {directory}/telemetry.otlp.jsonl
-//!   otlp:
-//!     enabled: false
 //! "
 //!     ),
 //!     Format::Yaml,
 //! )?;
+//! let spans = InMemorySpanExporter::default();
+//! let records = InMemoryLogExporter::default();
+//! let tracer_provider = SdkTracerProvider::builder()
+//!     .with_simple_exporter(spans.clone())
+//!     .build();
+//! let logger_provider = SdkLoggerProvider::builder()
+//!     .with_simple_exporter(records.clone())
+//!     .build();
 //!
 //! let runtime = tokio::runtime::Runtime::new()?;
 //! runtime.block_on(async {
-//!     let mut lablet = lablet::build(config).await?;
+//!     let mut lablet = Lablet::builder(config, logger_provider.clone())
+//!         .with_tracer_provider(tracer_provider.clone())
+//!         .build()
+//!         .await?;
 //!
 //!     let first = lablet.run(RunRequest::new("What's in the directory?")?).await;
 //!     let named = RunId::new("the-second-run")?;
@@ -118,14 +136,19 @@
 //!     };
 //!     assert_eq!(shared(first)?, shared(second)?);
 //!
-//!     // The file holds both runs, and each run's one wide event.
-//!     let telemetry = std::fs::read_to_string(format!("{directory}/telemetry.otlp.jsonl"))?;
-//!     let wide_events: Vec<_> = telemetry
-//!         .lines()
-//!         .filter(|line| line.contains(r#""eventName":"lablet.run""#))
+//!     // The host's providers hold both runs, and each run's one wide event.
+//!     let wide_events: Vec<_> = records
+//!         .get_emitted_logs()?
+//!         .into_iter()
+//!         .filter(|log| log.record.event_name() == Some("lablet.run"))
 //!         .collect();
 //!     assert_eq!(wide_events.len(), 2);
-//!     assert!(wide_events[1].contains("the-second-run"));
+//!     let roots = spans
+//!         .get_finished_spans()?
+//!         .into_iter()
+//!         .filter(|span| span.name.starts_with("invoke_agent"))
+//!         .count();
+//!     assert_eq!(roots, 2);
 //!     Ok::<_, Box<dyn std::error::Error>>(())
 //! })?;
 //! # std::fs::remove_dir_all(directory.to_string())?;
@@ -135,6 +158,7 @@
 
 mod build;
 mod clock;
+mod fallback;
 mod lablet;
 pub mod telemetry;
 
@@ -152,24 +176,24 @@ pub mod config {
 
     pub use lablet_config::{
         Api, Applied, Builtin, BuiltinTool, CacheScope, Completion, Config, ConfigError, Context,
-        Effort, Format, McpLifetime, McpNames, McpResult, McpServer, Model, Otlp, OtlpProtocol,
-        OutputCut, Place, Pricing, Prompt, Provider, RawConfig, ResolvedBuiltin, ResolvedConfig,
-        ResolvedModel, ResolvedTools, Run, SkillsMode, Telemetry, TelemetryFile, Thinking, Tools,
-        TranscriptFormat, schema,
+        Effort, Env, Format, KeyPath, McpLifetime, McpNames, McpResult, McpServer, Model, Otlp,
+        OtlpProtocol, OutputCut, Place, Pricing, Prompt, Provider, RawConfig, Refusal,
+        ResolvedBuiltin, ResolvedConfig, ResolvedModel, ResolvedTools, Run, Setting, SkillsMode,
+        Substituted, Telemetry, TelemetryFile, Thinking, Tools, TranscriptFormat, schema,
     };
 }
 
-pub use build::{build, check};
-pub use config::{Config, ConfigError, Format, Place, RawConfig, ResolvedConfig, schema};
+pub use build::{Builder, build, check};
+pub use config::{
+    Config, ConfigError, Format, Place, RawConfig, Refusal, ResolvedConfig, Substituted, schema,
+};
 pub use lablet::Lablet;
 pub use lablet_documents::OutcomeDocument;
 pub use lablet_model::{
     BlankTask, ConfigDigest, FinishedRun, IdError, RunId, RunLabels, RunOutcome, StopReason,
     ToolSpec,
 };
-pub use lablet_prepare::{
-    BuildError, Checked, ErrorClass, OwnFile, Unsupported, telemetry_on_stderr,
-};
+pub use lablet_prepare::{BuildError, Checked, ErrorClass, OwnFile, Unsupported};
 pub use lablet_run::FilterList;
 pub use lablet_run_request::{CancelHandle, RunIdRefused, RunRequest};
 

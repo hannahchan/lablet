@@ -15,13 +15,12 @@ use std::time::Duration;
 use reqwest::header::{HeaderName, HeaderValue};
 
 use super::{Choice, Named, Parse, Timeout, Variables};
-use crate::export::{Signal, Transport, decode_headers};
+use crate::export::{Signal, Transport};
 use crate::otlp::{Hidden, Inherited, InheritedEndpoint, Variable};
 use lablet_config::Env;
+use lablet_otel_env::{CAPTURE_CONTENT, ENDPOINT_VARIABLES, HEADER_VARIABLES, decode_headers};
 
 const SDK_DISABLED: &str = "OTEL_SDK_DISABLED";
-
-const CAPTURE_CONTENT: &str = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT";
 
 /// The specification's default of how long one export may take.
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -42,8 +41,8 @@ struct Names {
 
 const GENERIC: Names = Names {
     protocol: "OTEL_EXPORTER_OTLP_PROTOCOL",
-    endpoint: "OTEL_EXPORTER_OTLP_ENDPOINT",
-    headers: "OTEL_EXPORTER_OTLP_HEADERS",
+    endpoint: ENDPOINT_VARIABLES[0],
+    headers: HEADER_VARIABLES[0],
     timeout: "OTEL_EXPORTER_OTLP_TIMEOUT",
     compression: "OTEL_EXPORTER_OTLP_COMPRESSION",
     insecure: "OTEL_EXPORTER_OTLP_INSECURE",
@@ -54,8 +53,8 @@ const GENERIC: Names = Names {
 
 const TRACES: Names = Names {
     protocol: "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
-    endpoint: "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-    headers: "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+    endpoint: ENDPOINT_VARIABLES[1],
+    headers: HEADER_VARIABLES[1],
     timeout: "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
     compression: "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION",
     insecure: "OTEL_EXPORTER_OTLP_TRACES_INSECURE",
@@ -66,8 +65,8 @@ const TRACES: Names = Names {
 
 const LOGS: Names = Names {
     protocol: "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
-    endpoint: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-    headers: "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+    endpoint: ENDPOINT_VARIABLES[2],
+    headers: HEADER_VARIABLES[2],
     timeout: "OTEL_EXPORTER_OTLP_LOGS_TIMEOUT",
     compression: "OTEL_EXPORTER_OTLP_LOGS_COMPRESSION",
     insecure: "OTEL_EXPORTER_OTLP_LOGS_INSECURE",
@@ -116,15 +115,6 @@ impl Default for Exporter {
 }
 
 impl Exporter {
-    /// The variables whose values are headers, generic and for each signal,
-    /// which are secrets whenever they're set.
-    pub const HEADER_VARIABLES: [&'static str; 3] = [GENERIC.headers, TRACES.headers, LOGS.headers];
-
-    /// The variables whose values are endpoints, generic and for each
-    /// signal, whose user information is a secret.
-    pub const ENDPOINT_VARIABLES: [&'static str; 3] =
-        [GENERIC.endpoint, TRACES.endpoint, LOGS.endpoint];
-
     pub(super) fn read(variables: &Variables<'_>) -> Self {
         let generic = Family::read(variables, &GENERIC);
         Self {

@@ -3,6 +3,7 @@
 //! doctest asserts.
 
 use lablet::{Config, OutcomeDocument, RunRequest};
+use opentelemetry::logs::NoopLoggerProvider;
 use serde_json::json;
 
 use super::harness::{Lab, shared};
@@ -56,7 +57,7 @@ telemetry:
     let command_line = lab.run(&["run", "--config", "lablet.yaml", "--prompt", PROMPT]);
     assert_eq!(command_line.code, Some(0), "{command_line:?}");
 
-    let mut lablet = lablet::build(Config::from_path(&path).unwrap())
+    let mut lablet = lablet::build(Config::from_path(&path).unwrap(), NoopLoggerProvider::new())
         .await
         .unwrap();
     let library = lablet.run(RunRequest::new(PROMPT).unwrap()).await;

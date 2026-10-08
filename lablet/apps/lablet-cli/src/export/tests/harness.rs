@@ -6,11 +6,12 @@ use std::path::PathBuf;
 
 use lablet_conformance::otlp::Exported;
 
+use crate::export::telemetry::FlushError;
 pub(super) use crate::export::testing::{
     CONTENT, CONTENT_PER_RUN, OTHER_RUN, RUN, RUN_KEY, Records, SPANS_PER_RUN, Scratch, VERSION,
     WIDE, after, emit_run, otlp_of, scope, sdk_of,
 };
-use crate::export::{FileTarget, FlushError, OtlpSettings, Telemetry, resource};
+use crate::export::{FileTarget, OtlpSettings, Telemetry, resource};
 use crate::otel_env::{self, Sdk};
 
 /// The file every run in `scratch` is appended to, unless a test says

@@ -1,6 +1,6 @@
 [package]
 name = "lablet-prepare"
-description = "What checking a config comes to, which both roots go on from: the checked values, the refusals and the telemetry's settings"
+description = "What checking a config comes to, which both roots go on from: the checked values, the refusals and lablet's secrets"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,13 +14,12 @@ workspace = true
 humantime.workspace = true
 lablet-config.workspace = true
 lablet-model.workspace = true
-lablet-otel-sdk.workspace = true
 lablet-policy.workspace = true
 lablet-provider-fake.workspace = true
 lablet-run.workspace = true
 lablet-secrets.workspace = true
 lablet-tools-builtin.workspace = true
-serde_json.workspace = true
+secrecy.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

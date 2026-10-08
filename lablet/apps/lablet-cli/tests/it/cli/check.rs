@@ -297,6 +297,33 @@ fn a_variable_that_is_not_set_is_refused_by_the_key_it_is_in() {
 }
 
 #[test]
+fn a_variable_that_is_not_set_in_the_telemetry_file_or_resource_is_refused() {
+    // The command line configures its SDK from them, as a library doesn't.
+    let lab = Lab::new("check-unset-telemetry");
+
+    for (section, key) in [
+        ("file:\n    path", "telemetry.file.path"),
+        ("resource:\n    team", "telemetry.resource.team"),
+    ] {
+        let run = check(
+            &lab,
+            &format!(
+                "model:\n  provider: fake\n  script: script.yaml\ntelemetry:\n  {section}: '${{{UNSET}}}'\n"
+            ),
+            &[],
+        );
+
+        refused(
+            &run,
+            &format!(
+                "config: {key} (line 6): \"${{{UNSET}}}\" is refused: the variable `{UNSET}` isn't \
+                 set"
+            ),
+        );
+    }
+}
+
+#[test]
 fn every_default_the_resolved_config_holds_is_the_one_spec_7_gives() {
     // C17: the spec's config states every setting, and its example servers
     // are the one thing it states that isn't a default.

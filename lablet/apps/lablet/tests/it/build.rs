@@ -96,7 +96,8 @@ async fn a_name_in_a_list_that_no_tool_has_is_refused_with_the_list_it_is_in() {
         },
         "a built-in tool that isn't enabled is a tool the run doesn't have"
     );
-    lablet::build(with(json!({ "allow": ["bash"], "deny": ["read_file"] })))
+    scratch
+        .build(with(json!({ "allow": ["bash"], "deny": ["read_file"] })))
         .await
         .unwrap();
 }
@@ -223,7 +224,8 @@ async fn a_root_that_holds_a_file_of_lablets_own_is_refused_with_the_file_it_hol
     );
     let beside = scratch.at("lablet.json");
     std::fs::write(&beside, scratch.tree(ENDS, tools.clone()).to_string()).unwrap();
-    lablet::build(Config::from_path(&beside).unwrap())
+    scratch
+        .build(Config::from_path(&beside).unwrap())
         .await
         .unwrap();
 
@@ -246,41 +248,20 @@ async fn a_root_that_holds_a_file_of_lablets_own_is_refused_with_the_file_it_hol
         holds(OwnFile::Transcript, &transcript)
     );
 
-    // The telemetry file, reached through a link that leads under the root.
+    // A telemetry file the config names is no file of lablet's in library
+    // mode, since the host's SDK writes what a run emits, so a root may
+    // hold it.
     symlink(&root, scratch.at("linked")).unwrap();
     let telemetry = scratch.at("linked/telemetry.otlp.jsonl");
-    let mut tree = scratch.tree(ENDS, tools.clone());
-    tree["telemetry"]["file"]["path"] = json!(telemetry);
-    assert_eq!(
-        refusal(read(&tree)).await,
-        holds(OwnFile::Telemetry, &telemetry)
-    );
-
-    // Standard error is no file, and a root that serves no tool holds
-    // nothing the model can reach.
     let mut tree = scratch.tree(ENDS, tools);
-    tree["telemetry"]["file"]["path"] = json!("-");
-    lablet::build(read(&tree)).await.unwrap();
+    tree["telemetry"] = json!({ "file": { "path": telemetry } });
+    scratch.build(read(&tree)).await.unwrap();
+    assert!(!telemetry.exists());
+
+    // A root that serves no tool holds nothing the model can reach.
     let mut tree = scratch.tree(ENDS, json!({ "tools": { "builtin": { "root": root } } }));
     tree["run"] = json!({ "transcript_path": transcript });
-    lablet::build(read(&tree)).await.unwrap();
-}
-
-/// With no file named, a run writes none, so a root that holds the
-/// working directory holds no telemetry of lablet's.
-#[tokio::test]
-async fn a_root_that_holds_the_working_directory_holds_no_telemetry_when_no_file_is_named() {
-    let here = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
-    let scratch = Lab::new("root-holds-here");
-    let mut tree = scratch.tree(
-        ENDS,
-        json!({ "tools": { "builtin": { "root": here, "enabled": ["read_file"] } } }),
-    );
-    tree["telemetry"]["file"]["path"] = json!(null);
-
-    let built = lablet::build(read(&tree)).await;
-
-    built.unwrap().shutdown().await;
+    scratch.build(read(&tree)).await.unwrap();
 }
 
 #[tokio::test]
@@ -390,7 +371,7 @@ async fn a_default_that_a_later_phase_applies_builds_stated_or_not() {
     assert_eq!(stated.digest(), plain.digest());
 
     for config in [stated, plain] {
-        let mut lablet = lablet::build(config).await.unwrap();
+        let mut lablet = scratch.build(config).await.unwrap();
 
         let finished = lablet.run(request()).await;
         lablet.shutdown().await;
@@ -530,7 +511,7 @@ async fn a_provider_that_needs_no_key_is_built_whatever_variable_the_config_name
     let mut tree = scratch.tree(ENDS, json!({}));
     tree["model"]["api_key_env"] = json!(NO_VARIABLE);
 
-    let mut lablet = lablet::build(read(&tree)).await.unwrap();
+    let mut lablet = scratch.build(read(&tree)).await.unwrap();
 
     let finished = lablet.run(request()).await;
     lablet.shutdown().await;
@@ -587,7 +568,7 @@ async fn a_script_that_cannot_be_played_is_refused_by_its_key_and_its_path() {
         "script.json",
         r#"[{ "response": { "content": [{ "text": "Done." }], "finish": "end_turn" } }]"#,
     );
-    lablet::build(with(&json)).await.unwrap();
+    scratch.build(with(&json)).await.unwrap();
 }
 
 #[tokio::test]
@@ -596,7 +577,7 @@ async fn the_system_prompt_is_read_from_the_file_the_config_names() {
     let file = scratch.write("system.md", "You fix tests, from a file.\n");
     let mut tree = scratch.tree(ENDS, json!({}));
     tree["prompt"] = json!({ "system_file": file });
-    let mut lablet = lablet::build(read(&tree)).await.unwrap();
+    let mut lablet = scratch.build(read(&tree)).await.unwrap();
 
     let finished = lablet.run(request()).await;
     lablet.shutdown().await;

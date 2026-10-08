@@ -1,7 +1,8 @@
-//! O23: a host that runs lablet as a library owes it nothing. Two `Lablet`s
-//! in one process each write only their own runs, the host's own `tracing`
-//! subscriber sees lablet's diagnostics and none of its telemetry, and a run
-//! under a span the host has open is a trace of its own.
+//! O23: a host that runs lablet as a library provides its OpenTelemetry.
+//! Two `Lablet`s in one process, each given providers of its own, each
+//! reach only their own, the host's own `tracing` subscriber sees lablet's
+//! diagnostics and none of its telemetry, and a run under a span the host
+//! has open is that span's child, in the host's trace.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
@@ -10,7 +11,6 @@ use opentelemetry::Context as OtelContext;
 use opentelemetry::trace::{
     FutureExt as _, Span as _, TraceContextExt as _, Tracer as _, TracerProvider as _,
 };
-use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use serde_json::json;
 use tracing::Subscriber;
 use tracing::field::{Field, Visit};
@@ -60,8 +60,7 @@ fn names_telemetry(text: &str) -> bool {
 /// binary can't set. Lablet's telemetry passes through `tracing` on no
 /// thread, so the thread this hears is the one that would have heard it.
 #[tokio::test]
-async fn two_lablets_in_one_process_each_write_their_own_runs_and_a_host_subscriber_hears_no_telemetry()
- {
+async fn two_lablets_given_their_own_providers_each_reach_only_their_own() {
     let heard = Heard::default();
     let told = Arc::clone(&heard.0);
     let subscriber = tracing_subscriber::registry().with(heard);
@@ -88,7 +87,7 @@ async fn two_lablets_in_one_process_each_write_their_own_runs_and_a_host_subscri
         ),
     ] {
         let config = lab.config(ENDS, more);
-        lablets.push(lablet::build(config).await.unwrap());
+        lablets.push(lab.build(config).await.unwrap());
     }
     let mut runs: Vec<Vec<String>> = Vec::new();
     for lablet in &mut lablets {
@@ -103,8 +102,8 @@ async fn two_lablets_in_one_process_each_write_their_own_runs_and_a_host_subscri
         lablet.shutdown().await;
     }
 
-    // Each file holds its own two runs' spans and records, and nothing of
-    // the other `Lablet`'s.
+    // Each host's providers hold their own `Lablet`'s two runs' spans and
+    // records, and nothing of the other's.
     for (lab, own) in [(&first, &runs[0]), (&second, &runs[1])] {
         let exported = lab.exported();
         assert_eq!(exported.spans_of(key::INVOKE_AGENT).len(), 2);
@@ -161,19 +160,18 @@ async fn two_lablets_in_one_process_each_write_their_own_runs_and_a_host_subscri
 const LOCAL_PARENT: u32 = 0x101;
 
 #[tokio::test]
-async fn a_run_under_a_span_the_host_has_open_is_a_trace_of_its_own_and_reaches_the_hosts_tracer_with_nothing()
- {
+async fn a_run_under_a_span_the_host_has_open_is_its_child_and_reaches_the_host_s_tracer() {
     let scratch = Lab::new("hosts-span");
-    let mut lablet = lablet::build(scratch.config(ENDS, json!({})))
+    let mut lablet = scratch
+        .build(scratch.config(ENDS, json!({})))
         .await
         .unwrap();
-    // The host's own tracing, which is where a run that took the current
-    // context as its parent would show up.
-    let hosts = InMemorySpanExporter::default();
-    let provider = SdkTracerProvider::builder()
-        .with_simple_exporter(hosts.clone())
-        .build();
-    let operation = provider.tracer("host").start("host operation");
+    // The host's own span, opened through the tracer provider it handed in.
+    let operation = scratch
+        .host()
+        .tracer_provider()
+        .tracer("host")
+        .start("host operation");
     let host = operation.span_context().clone();
     let within = OtelContext::current_with_span(operation);
 
@@ -184,11 +182,15 @@ async fn a_run_under_a_span_the_host_has_open_is_a_trace_of_its_own_and_reaches_
     let exported = scratch.exported();
     let traced = Traced::of(&exported, finished.summary.outcome.run_id.as_str());
     let root = traced.root();
-    assert_eq!(root.parent_span_id, None, "the root span has no parent");
-    assert_ne!(
+    assert_eq!(
+        root.parent_span_id.as_deref(),
+        Some(host.span_id().to_string().as_str()),
+        "the root span is the host's span's child"
+    );
+    assert_eq!(
         root.trace_id,
         host.trace_id().to_string(),
-        "the run is a trace of its own"
+        "the run is in the host's trace"
     );
     assert_eq!(traced.spans.len(), 2, "a root and one attempt");
     for span in &traced.spans {
@@ -202,9 +204,12 @@ async fn a_run_under_a_span_the_host_has_open_is_a_trace_of_its_own_and_reaches_
     );
     assert_eq!(traced.wide().trace_id, root.trace_id);
 
-    // The host's tracer saw the host's span and nothing of the run's.
-    let hosts_spans = hosts.get_finished_spans().unwrap();
-    assert_eq!(hosts_spans.len(), 1, "{hosts_spans:?}");
-    assert_eq!(hosts_spans[0].name, "host operation");
-    assert_eq!(hosts_spans[0].span_context.trace_id(), host.trace_id());
+    // The host's tracer provider holds the host's span beside the run's.
+    let hosts: Vec<_> = exported
+        .spans
+        .iter()
+        .filter(|span| span.name == "host operation")
+        .collect();
+    assert_eq!(hosts.len(), 1, "{:?}", exported.spans);
+    assert_eq!(hosts[0].span_id, host.span_id().to_string());
 }

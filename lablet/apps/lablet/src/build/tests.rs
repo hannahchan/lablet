@@ -1,7 +1,7 @@
 //! What the library root's check and build read of where they run,
 //! against an environment the test states, since a test can't set a
 //! variable of its own process: the names of lablet's secrets, `${VAR}`,
-//! and what reaches the providers a build makes.
+//! and which variables a library run reads at all.
 
 use std::ffi::OsString;
 
@@ -66,16 +66,16 @@ async fn the_check_names_what_a_run_withholds_and_cuts_and_never_a_value() {
     assert!(!format!("{checked:?}").contains(KEY), "{checked:?}");
 }
 
-/// The `OTEL_*` variables and the context variables are the one
-/// exception: read for every config, since lablet inherits them and they
-/// configure its telemetry whatever the config names.
+/// What a library run reads of the OpenTelemetry environment is the
+/// capture variable and the variables whose values the secrets cut, the
+/// OTLP header and endpoint variables: read for every config, since a
+/// command inherits them, and never a variable only the SDK reads, nor a
+/// context variable.
 #[tokio::test]
-async fn a_config_that_names_no_secret_reads_only_the_opentelemetry_variables() {
+async fn a_config_that_names_no_secret_reads_only_the_capture_header_and_endpoint_variables() {
+    let read = std::sync::Mutex::new(Vec::new());
     let never = |name: &str| -> Option<OsString> {
-        assert!(
-            name.starts_with("OTEL_") || ["TRACEPARENT", "TRACESTATE", "BAGGAGE"].contains(&name),
-            "the environment was read: {name}"
-        );
+        read.lock().unwrap().push(name.to_owned());
         None
     };
     let scratch = lablet_test_support::Scratch::new("check-no-secret");
@@ -89,6 +89,17 @@ async fn a_config_that_names_no_secret_reads_only_the_opentelemetry_variables() 
 
     assert!(checked.withheld().is_empty());
     assert_eq!(checked.cut(), Vec::<String>::new());
+    let mut read = read.into_inner().unwrap();
+    read.sort();
+    read.dedup();
+    let mut expected: Vec<String> = lablet_otel_env::HEADER_VARIABLES
+        .into_iter()
+        .chain(lablet_otel_env::ENDPOINT_VARIABLES)
+        .chain([lablet_otel_env::CAPTURE_CONTENT])
+        .map(str::to_owned)
+        .collect();
+    expected.sort();
+    assert_eq!(read, expected);
 }
 
 /// C19 at the library: a header variable the exporter reads is named among
@@ -155,10 +166,9 @@ async fn two_runs_whose_variables_differ_share_a_config_digest_and_run_with_thei
         "
 model: {{ provider: fake, script: '{}', name: '${{MODEL}}' }}
 prompt: {{ system: 'You fix ${{LANGUAGE}} tests.' }}
-telemetry: {{ capture_content: true, file: {{ path: '{}' }}, otlp: {{ enabled: false }} }}
+telemetry: {{ capture_content: true }}
 ",
         script.display(),
-        scratch.at("telemetry.otlp.jsonl").display()
     );
     let mut runs = Vec::new();
 
@@ -168,22 +178,23 @@ telemetry: {{ capture_content: true, file: {{ path: '{}' }}, otlp: {{ enabled: f
             "LANGUAGE" => Some(language.into()),
             _ => None,
         };
-        let mut lablet = build_in(config(&text), &held).await.unwrap();
+        let host = lablet_conformance::host::Host::new();
+        let builder = Lablet::builder(config(&text), host.logger_provider())
+            .with_tracer_provider(host.tracer_provider());
+        let mut lablet = build_in(builder, &held).await.unwrap();
         let finished = lablet.run(crate::RunRequest::new("Fix it.").unwrap()).await;
         lablet.shutdown().await;
-        runs.push(finished.summary.outcome.run_id);
+        runs.push((finished.summary.outcome.run_id, host.exported()));
     }
 
     // What each run was built with, as its own telemetry says: the digest
     // and the model on its root span, and the system prompt in the content
     // record of its first provider call.
-    let exported =
-        lablet_conformance::otlp::Exported::read(&scratch.at("telemetry.otlp.jsonl")).unwrap();
     let written = config(&text).digest().to_string();
     let seen: Vec<(String, String, bool)> = runs
         .iter()
         .zip(["You fix Rust tests.", "You fix Go tests."])
-        .map(|(run_id, system)| {
+        .map(|((run_id, exported), system)| {
             let of_run = |attributes: &lablet_conformance::otlp::Attributes| {
                 attributes.get(key::GEN_AI_CONVERSATION_ID)
                     == Some(&serde_json::Value::String(run_id.to_string()))
@@ -227,39 +238,6 @@ telemetry: {{ capture_content: true, file: {{ path: '{}' }}, otlp: {{ enabled: f
             (written.clone(), "scripted-1".to_owned(), true),
             (written, "scripted-2".to_owned(), true),
         ]
-    );
-}
-
-/// The SDK's settings a build reads from its environment reach the
-/// providers it makes: with the sampler `always_off`, a run exports no
-/// span, and its wide event still.
-#[tokio::test]
-async fn the_sampler_the_environment_names_reaches_the_providers_a_build_makes() {
-    let scratch = lablet_test_support::Scratch::new("build-sampler");
-    let script = scratch.write("script.yaml", ENDS);
-    let path = scratch.at("telemetry.otlp.jsonl");
-    let text = format!(
-        "
-model: {{ provider: fake, script: '{}', name: scripted-1 }}
-prompt: {{ system: 'You fix tests.' }}
-telemetry: {{ file: {{ path: '{}' }}, otlp: {{ enabled: false }} }}
-",
-        script.display(),
-        path.display()
-    );
-    let held = holding("OTEL_TRACES_SAMPLER", "always_off");
-
-    let mut lablet = build_in(config(&text), &held).await.unwrap();
-    lablet.run(crate::RunRequest::new("Fix it.").unwrap()).await;
-    lablet.shutdown().await;
-
-    let exported = lablet_conformance::otlp::Exported::read(&path).unwrap();
-    assert!(exported.spans.is_empty(), "{:?}", exported.spans);
-    assert_eq!(
-        exported
-            .records_of(lablet_run::telemetry::generated::LabletRun::NAME)
-            .len(),
-        1
     );
 }
 

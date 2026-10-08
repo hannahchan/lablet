@@ -24,7 +24,7 @@ impl Telemetry {
     /// emitted the wide event.
     pub(crate) async fn flush(&self, wide: Record) -> Result<(), FlushError> {
         self.logger().emit(wide);
-        self.flush_leftovers().await
+        self.flush_providers().await
     }
 }
 

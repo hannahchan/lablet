@@ -12,6 +12,7 @@ pub const INVOKE_AGENT: &str = "invoke_agent";
 /// The resource keys lablet sets itself, as the resource conventions name
 /// them; no signal's attribute, so no generated module declares them.
 pub const SERVICE_NAME: &str = "service.name";
+pub const SERVICE_VERSION: &str = "service.version";
 /// The SDK's own version on the resource, which the golden comparison
 /// normalises out.
 pub const TELEMETRY_SDK_VERSION: &str = "telemetry.sdk.version";

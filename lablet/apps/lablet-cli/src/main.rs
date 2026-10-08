@@ -74,7 +74,7 @@ fn run_command(args: RunArgs) -> u8 {
         Ok(config) => config,
         Err(refusal) => return refuse(&refusal),
     };
-    let on_stderr = lablet_prepare::telemetry_on_stderr(&config);
+    let on_stderr = lablet_cli::compose::telemetry_on_stderr(&config);
     log(diagnostics::filter(rust_log().as_deref(), on_stderr));
 
     let source = Source::from(prompt);

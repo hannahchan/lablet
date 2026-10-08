@@ -55,7 +55,9 @@ fn calling(calls: &[(&str, Value)]) -> String {
 
 /// One run of the config `tree`.
 async fn run_tree(tree: &Value) -> FinishedRun {
-    let mut lablet = lablet::build(crate::harness::read(tree)).await.unwrap();
+    let mut lablet = crate::harness::quiet(crate::harness::read(tree))
+        .await
+        .unwrap();
     let finished = lablet.run(request()).await;
     lablet.shutdown().await;
     finished
@@ -64,7 +66,7 @@ async fn run_tree(tree: &Value) -> FinishedRun {
 /// One run of `script`, with `tools` stated, and what it exported.
 async fn run(scratch: &Lab, script: &str, tools: Value) -> FinishedRun {
     let config = scratch.config(script, json!({ "tools": tools }));
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = scratch.build(config).await.unwrap();
     let finished = lablet.run(request()).await;
     lablet.shutdown().await;
     finished
@@ -84,7 +86,7 @@ async fn an_allow_list_offers_the_tools_it_names_and_no_other() {
         } }),
     );
     scratch.write("work/notes.md", SECRET);
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = scratch.build(config).await.unwrap();
 
     assert_eq!(
         lablet
@@ -166,7 +168,7 @@ async fn explicit_completion_offers_task_complete_beside_the_tools_that_are_enab
             "tools": { "builtin": scratch.builtin(&["bash"]), "allow": ["bash"] },
         }),
     );
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = scratch.build(config).await.unwrap();
 
     let finished = lablet.run(request()).await;
     lablet.shutdown().await;
@@ -228,11 +230,7 @@ async fn a_path_outside_the_root_is_an_error_result_and_the_file_is_not_read() {
         .collect();
     let refused = (&json!("tool_error"), Some(&json!("tool_error")));
     assert_eq!(statuses, [refused, refused, (&json!("ok"), None)]);
-    assert!(
-        !std::fs::read_to_string(scratch.telemetry())
-            .unwrap()
-            .contains(SECRET)
-    );
+    assert!(!scratch.exported_text().contains(SECRET));
 }
 
 #[tokio::test]
@@ -339,7 +337,7 @@ async fn a_command_has_lablet_s_environment_less_the_key_and_no_result_shows_the
     );
     assert!(!format!("{checked:?}").contains(&key), "{checked:?}");
 
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = scratch.build(config).await.unwrap();
     let finished = lablet.run(request()).await;
     lablet.shutdown().await;
 
@@ -383,7 +381,7 @@ async fn a_command_has_lablet_s_environment_less_the_key_and_no_result_shows_the
         ("ok", "[secret withheld]\nexit code: 0".to_owned()),
         "the header's value is cut whole"
     );
-    let telemetry = std::fs::read_to_string(scratch.telemetry()).unwrap();
+    let telemetry = scratch.exported_text();
     assert!(telemetry.contains("[secret withheld]"), "{telemetry}");
     assert!(!telemetry.contains(&key), "telemetry holds the key");
 }

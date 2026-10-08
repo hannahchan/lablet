@@ -1,6 +1,6 @@
-//! The composition root's export module: the OpenTelemetry SDK and what
-//! lablet adds to it. The rings that emit name the API alone, so this is
-//! where lablet holds the SDK.
+//! The command line's export module: the OpenTelemetry SDK and what lablet
+//! adds to it. The rings that emit, the library root and the root kernels
+//! name the API alone, so this is where lablet holds the SDK.
 //!
 //! The loop opens its spans through a tracer and emits its records through
 //! lablet's logger, and `lablet-run`'s runner opens the root span and fills
@@ -25,9 +25,6 @@ mod testing;
 mod tests;
 
 pub use file::FileTarget;
-pub use network::{OtelBuildError, OtlpSettings, Signal, Transport, decode_headers, validate};
+pub use network::{OtelBuildError, OtlpSettings, Signal, Transport, validate};
 pub use resource::resource;
-pub use telemetry::{FlushError, Telemetry, TelemetryBuilder};
-// What `resource` makes, named here so that `lablet-prepare` can hold one
-// without depending on the SDK.
-pub use opentelemetry_sdk::Resource;
+pub use telemetry::Telemetry;

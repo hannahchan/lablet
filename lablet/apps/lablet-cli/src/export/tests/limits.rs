@@ -73,7 +73,7 @@ async fn the_environments_span_limits_cut_a_span() {
     );
 
     several(&telemetry);
-    telemetry.flush_leftovers().await.unwrap();
+    telemetry.flush_providers().await.unwrap();
 
     // The reader refuses a span the SDK dropped anything from, and names
     // what was dropped, so its refusal is what says the cut happened.

@@ -39,7 +39,7 @@ async fn a_run_given_a_fired_handle_stops_before_its_first_call_and_leaves_its_r
     let scratch = Lab::new("cancel-fired");
     let transcript = scratch.at("transcript.json");
     let config = scratch.config(ENDS, json!({ "run": { "transcript_path": transcript } }));
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = scratch.build(config).await.unwrap();
     let handle = CancelHandle::new();
     handle.cancel();
 
@@ -76,7 +76,7 @@ async fn a_handle_fired_during_a_tool_call_stops_the_run_with_no_further_provide
         &marks_sleeps_then_ends(&started),
         json!({ "tools": { "builtin": scratch.builtin(&["bash"]) } }),
     );
-    let mut lablet = lablet::build(config).await.unwrap();
+    let mut lablet = scratch.build(config).await.unwrap();
     let handle = CancelHandle::new();
     let fired = handle.clone();
     tokio::spawn(async move {
@@ -112,7 +112,8 @@ async fn a_handle_fired_during_a_tool_call_stops_the_run_with_no_further_provide
 #[tokio::test]
 async fn a_handle_that_is_never_fired_changes_nothing_of_a_run() {
     let scratch = Lab::new("cancel-never");
-    let mut lablet = lablet::build(scratch.config(ENDS, json!({})))
+    let mut lablet = scratch
+        .build(scratch.config(ENDS, json!({})))
         .await
         .unwrap();
 

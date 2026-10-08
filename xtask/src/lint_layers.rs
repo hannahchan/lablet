@@ -3,10 +3,11 @@
 //! ones aside, are checked against what that ring may reach. The rings are
 //! those of contributing "Architecture rules", the adapters' shared kernels
 //! being a part of the adapter ring, and a forbidden family may
-//! let through the one crate named like the family: the application and
-//! adapter rings forbid the `opentelemetry` family and allow `opentelemetry`
-//! itself, the API, since instrumented code depends on the API and only the
-//! process that runs it installs the SDK. The two composition roots never
+//! let through the one crate named like the family: every ring but the
+//! domain, the CLI root and test support forbids the `opentelemetry` family
+//! and allows `opentelemetry` itself, the API, since instrumented code
+//! depends on the API and only the process that runs it installs the SDK,
+//! which in lablet is the CLI root alone. The two composition roots never
 //! depend on each other: what both build alike lives in the composition
 //! roots' kernels under `apps/shared/`.
 //!
@@ -30,7 +31,8 @@ pub enum Ring {
     /// `apps/shared/*`: what both composition roots construct alike, one
     /// capability to a crate. A kernel wires nothing and has no `main()`.
     RootKernel,
-    /// `apps/lablet`: the library root, lablet's public library API.
+    /// `apps/lablet`: the library root, lablet's public library API, which
+    /// runs on the OpenTelemetry its host provides and configures no SDK.
     LibraryRoot,
     /// `apps/lablet-cli`: the CLI root, `main`, the command line, and the
     /// SDK it configures from the config and the environment.
@@ -106,12 +108,12 @@ impl Ring {
 
     /// External crate families this ring may not use: the runtime, transport,
     /// and telemetry frameworks belong to adapters and the composition roots.
-    /// The application and the adapters may name the OpenTelemetry API,
-    /// `opentelemetry` itself, and no other member of its family, so the loop
-    /// and the adapters instrument themselves while the SDK stays in the
-    /// composition roots and their kernels. `serde` and `serde_json` are
-    /// allowed everywhere (decisions.md, "serde derives allowed in the
-    /// domain").
+    /// The application, the adapters, the library root and the kernels may
+    /// name the OpenTelemetry API, `opentelemetry` itself, and no other
+    /// member of its family, so the loop and the adapters instrument
+    /// themselves, a library run takes its host's providers, and the SDK is
+    /// the CLI root's alone. `serde` and `serde_json` are allowed everywhere
+    /// (decisions.md, "serde derives allowed in the domain").
     const fn forbidden_families(self) -> &'static [(&'static str, Namesake)] {
         match self {
             Self::Domain => &[
@@ -133,8 +135,10 @@ impl Ring {
                 ("hyper", Namesake::Forbidden),
                 ("opentelemetry", Namesake::Allowed),
             ],
-            Self::SecondaryAdapter => &[("opentelemetry", Namesake::Allowed)],
-            Self::RootKernel | Self::LibraryRoot | Self::CliRoot | Self::TestSupport => &[],
+            Self::SecondaryAdapter | Self::RootKernel | Self::LibraryRoot => {
+                &[("opentelemetry", Namesake::Allowed)]
+            }
+            Self::CliRoot | Self::TestSupport => &[],
         }
     }
 
@@ -516,6 +520,53 @@ mod tests {
     }
 
     #[test]
+    fn only_the_cli_root_may_hold_the_opentelemetry_sdk() {
+        for ring in [Ring::LibraryRoot, Ring::RootKernel] {
+            assert_eq!(forbidden_family(ring, "opentelemetry"), None, "{ring}");
+            assert_eq!(
+                forbidden_family(ring, "opentelemetry_sdk"),
+                Some("opentelemetry"),
+                "{ring}"
+            );
+            // The roots' own crates are never forbidden by family.
+            assert_eq!(forbidden_family(ring, "tokio"), None, "{ring}");
+            assert_eq!(forbidden_family(ring, "tracing"), None, "{ring}");
+        }
+        for name in [
+            "opentelemetry_sdk",
+            "opentelemetry-otlp",
+            "opentelemetry-propagator-b3",
+        ] {
+            assert_eq!(forbidden_family(Ring::CliRoot, name), None, "{name}");
+        }
+        assert_eq!(
+            Ring::LibraryRoot.forbidden_rule(),
+            "Library Root may not use any member of the opentelemetry family but opentelemetry \
+             itself"
+        );
+        let workspace = base()
+            .member(
+                LIBRARY,
+                "lablet",
+                &inherit("dependencies", &["otel", "otel-sdk"]),
+            )
+            .member(
+                CLI,
+                "lablet-cli",
+                &inherit("dependencies", &["otel", "otel-sdk"]),
+            )
+            .load();
+        assert_findings(
+            &lint(&workspace),
+            &[&format!(
+                "lablet ({LIBRARY}, Library Root): [dependencies] depends on opentelemetry_sdk \
+                 (declared as `otel-sdk`), of the `opentelemetry` family. Rule: Library Root may \
+                 not use any member of the opentelemetry family but opentelemetry itself"
+            )],
+        );
+    }
+
+    #[test]
     fn a_family_covers_both_spellings_and_every_member_crate() {
         // In the domain `tracing-opentelemetry` is of the `tracing` family
         // first, so the application, which allows `tracing`, shows the match.
@@ -579,13 +630,17 @@ mod tests {
     }
 
     #[test]
-    fn serde_is_allowed_everywhere_and_only_the_emitting_rings_forbid_anything() {
+    fn serde_is_allowed_everywhere_and_only_the_cli_root_and_test_support_forbid_nothing() {
         for ring in ALL_RINGS {
             assert_eq!(forbidden_family(ring, "serde"), None, "{ring}");
             assert_eq!(forbidden_family(ring, "serde_json"), None, "{ring}");
             let held = matches!(
                 ring,
-                Ring::Domain | Ring::Application | Ring::SecondaryAdapter
+                Ring::Domain
+                    | Ring::Application
+                    | Ring::SecondaryAdapter
+                    | Ring::RootKernel
+                    | Ring::LibraryRoot
             );
             assert_eq!(ring.forbidden_families().is_empty(), !held, "{ring}");
         }

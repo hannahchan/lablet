@@ -23,9 +23,7 @@ use lablet_model::Secrets;
 use secrecy::{ExposeSecret as _, SecretString};
 
 use lablet_config::{Config, Env, KeyPath, McpServer, Substituted, user_information};
-use lablet_otel_sdk::export::decode_headers;
-use lablet_otel_sdk::otel_env::Exporter;
-use lablet_otel_sdk::otlp::OtlpSettings;
+use lablet_otel_env::{ENDPOINT_VARIABLES, HEADER_VARIABLES, decode_headers};
 
 /// What a run withholds and cuts, derived from its config.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,7 +98,9 @@ impl fmt::Display for Named {
 
 /// Lablet's secrets as `written` and `real`, the same config with `${VAR}`
 /// substituted, define them, with each variable's value read from `env`,
-/// and the client keys the network exporters `otlp` read.
+/// and the client keys a root's network exporters read, each the variable
+/// that names its file and what the file holds. Only the command line's
+/// root reads one, so a library run hands in none.
 ///
 /// Every variable named is read, to say whether its value is cut, as the
 /// check of the key's variable reads it. The values are held, in
@@ -110,7 +110,7 @@ pub fn derived(
     written: &Config,
     real: &Substituted,
     env: Env<'_>,
-    otlp: Option<&OtlpSettings>,
+    client_keys: &[(&str, &SecretString)],
     with_values: bool,
 ) -> Derived {
     let mut set = Set {
@@ -153,13 +153,13 @@ pub fn derived(
             McpServer::Stdio { .. } => set.env(&key.key("env"), real),
         }
     }
-    for variable in Exporter::HEADER_VARIABLES {
+    for variable in HEADER_VARIABLES {
         set.inherited(variable);
     }
-    for variable in Exporter::ENDPOINT_VARIABLES {
+    for variable in ENDPOINT_VARIABLES {
         set.inherited_url(variable);
     }
-    for (variable, key) in otlp.map(OtlpSettings::client_keys).unwrap_or_default() {
+    for (variable, key) in client_keys {
         set.read(variable, key);
     }
     set.finish()

@@ -9,20 +9,29 @@ allow-expect-in-tests = true
 doc-valid-idents = ["..", "GenAI", "OpenAI"]
 
 # OpenTelemetry's globals are one per process, and a process may hold several
-# `Lablet`s, each with destinations of its own, so lablet's tracer, logger and
-# propagators are injected and never set or taken from them, and it emits no
-# metrics. The metrics functions are compiled in because `opentelemetry-otlp`'s
-# HTTP features turn on its `metrics` feature. `allow-invalid` because a crate
-# that doesn't depend on `opentelemetry` can't resolve the path.
+# `Lablet`s, each given providers of its own, so nothing in lablet sets one,
+# and lablet emits no metrics. The one reader is the library root's fallback,
+# for a host that hands in no tracer provider: a function in
+# `apps/lablet/src/fallback.rs` reads `tracer_provider` under its own
+# `#[expect(clippy::disallowed_methods, reason = "...")]`, so any other reader
+# fails clippy and a function that stops reading fails its expectation. Test
+# code may set or read a global, each call under its own `#[expect]`: the
+# library root's `globals` test binary sets the globals to check that
+# fallback, and the CLI root's canary
+# `canary_the_global_propagator_is_a_no_op_after_a_lablet_is_built` reads the
+# global propagator to show that nothing set it. The metrics functions are
+# compiled in because `opentelemetry-otlp`'s HTTP features turn on its
+# `metrics` feature. `allow-invalid` because a crate that doesn't depend on
+# `opentelemetry` can't resolve the path.
 disallowed-methods = [
-  { path = "opentelemetry::global::set_tracer_provider", reason = "lablet's tracer is injected; a global provider is shared by every Lablet in the process", allow-invalid = true },
-  { path = "opentelemetry::global::tracer_provider", reason = "lablet's tracer is injected; a global provider is shared by every Lablet in the process", allow-invalid = true },
-  { path = "opentelemetry::global::tracer", reason = "lablet's tracer is injected; a global provider is shared by every Lablet in the process", allow-invalid = true },
-  { path = "opentelemetry::global::tracer_with_scope", reason = "lablet's tracer is injected; a global provider is shared by every Lablet in the process", allow-invalid = true },
+  { path = "opentelemetry::global::set_tracer_provider", reason = "a global provider is shared by every Lablet in the process; the CLI root hands its provider in", allow-invalid = true },
+  { path = "opentelemetry::global::tracer_provider", reason = "read only by the library root's fallback, where a host handed in no tracer provider", allow-invalid = true },
+  { path = "opentelemetry::global::tracer", reason = "the tracer comes from the provider a Lablet was given, or the library root's fallback", allow-invalid = true },
+  { path = "opentelemetry::global::tracer_with_scope", reason = "the tracer comes from the provider a Lablet was given, or the library root's fallback", allow-invalid = true },
   { path = "opentelemetry::global::set_meter_provider", reason = "lablet emits no metrics; a global provider is shared by every Lablet in the process", allow-invalid = true },
   { path = "opentelemetry::global::meter_provider", reason = "lablet emits no metrics; a global provider is shared by every Lablet in the process", allow-invalid = true },
   { path = "opentelemetry::global::meter", reason = "lablet emits no metrics; a global provider is shared by every Lablet in the process", allow-invalid = true },
   { path = "opentelemetry::global::meter_with_scope", reason = "lablet emits no metrics; a global provider is shared by every Lablet in the process", allow-invalid = true },
-  { path = "opentelemetry::global::set_text_map_propagator", reason = "lablet's propagators are its own; the global one is shared by every Lablet in the process", allow-invalid = true },
+  { path = "opentelemetry::global::set_text_map_propagator", reason = "the global propagator is shared by every Lablet in the process", allow-invalid = true },
   { path = "opentelemetry::global::get_text_map_propagator", reason = "lablet's propagators are its own; the global one is shared by every Lablet in the process", allow-invalid = true },
 ]

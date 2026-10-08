@@ -1,11 +1,13 @@
 //! Test support: the shared `ToolExecutor` conformance cases, pulled in as a
 //! dev-dependency by each adapter that implements the port, the reader of the
-//! OTLP/JSON lines lablet exports, and an OTLP receiver in the test's own
-//! process, so a network scenario needs no collector.
+//! OTLP/JSON lines lablet exports, a host's providers to hand the library,
+//! read back as those lines, and an OTLP receiver in the test's own process,
+//! so a network scenario needs no collector.
 
 use std::fmt::Display;
 
 pub mod executor;
+pub mod host;
 pub mod otlp;
 pub mod receiver;
 
