@@ -578,7 +578,10 @@ mod tests {
                 command.to_string().starts_with("git rev-parse"),
                 "{command}"
             );
-            assert!(stderr.contains("not a git repository"), "{stderr}");
+            assert!(
+                crate::workspace::fixture::names_no_repository(stderr),
+                "{stderr}"
+            );
         }
 
         let gone = dir.path().join("gone");

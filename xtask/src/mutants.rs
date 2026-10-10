@@ -1509,7 +1509,10 @@ mod tests {
         let Error::Failed { stderr, .. } = &error else {
             panic!("{error:?}");
         };
-        assert!(stderr.contains("not a git repository"), "{stderr}");
+        assert!(
+            crate::workspace::fixture::names_no_repository(stderr),
+            "{stderr}"
+        );
     }
 
     #[test]

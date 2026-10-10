@@ -275,6 +275,14 @@ pub mod fixture {
         }
     }
 
+    /// Whether git's stderr says a `.git` file names no repository: git 2.56
+    /// says the gitfile doesn't point to a valid repository, where earlier
+    /// versions said "not a git repository".
+    pub fn names_no_repository(stderr: &str) -> bool {
+        stderr.contains("not a git repository")
+            || stderr.contains("does not point to a valid repository")
+    }
+
     /// Git pinned to a scratch repository and cut off from the developer's own
     /// configuration. Clearing the inherited variables isn't enough on its own:
     /// under a hook, a command that missed that step would reach the real
