@@ -32,8 +32,9 @@ const CHANGELOG: &str = "CHANGELOG.md";
 const UNRELEASED_HEADING: &str = "## [Unreleased]";
 
 /// Names the base commit outright, for CI events where the merge-base with
-/// `origin/main` is the pushed commit itself.
-const BASE_VARIABLE: &str = "LABLET_CHANGELOG_BASE";
+/// `origin/main` is the pushed commit itself. The scope of `ci` is judged
+/// from the same base; see [`crate::scope`].
+pub const BASE_VARIABLE: &str = "LABLET_CHANGELOG_BASE";
 
 /// What the gate concluded.
 #[derive(Debug, PartialEq, Eq)]
@@ -155,7 +156,7 @@ fn skipped() -> Note {
 /// the new path, and a contract file moved out of the contract is exactly the
 /// change the gate is for. `-z` keeps git from quoting an unusual name, which
 /// would no longer start with a contract path.
-fn changed_paths(directory: &Path, base: &str) -> Result<Vec<String>, Error> {
+pub fn changed_paths(directory: &Path, base: &str) -> Result<Vec<String>, Error> {
     let git = |args: &[&str]| process::capture_in(directory, "git", args);
     // A diff against a commit refreshes the index's stat data unless told
     // not to, which writes to the repository a gate only reads. Told not to,
@@ -271,7 +272,7 @@ fn nul_separated(output: &str) -> Vec<String> {
 }
 
 /// A full commit id cut to what a person reads; a ref name is left alone.
-fn short(revision: &str) -> &str {
+pub fn short(revision: &str) -> &str {
     if revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit()) {
         &revision[..12]
     } else {

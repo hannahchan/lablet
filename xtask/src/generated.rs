@@ -57,6 +57,11 @@ const fn module(
     }
 }
 
+/// Every directory a rendering replaces, relative to the repository root.
+pub fn trees() -> impl Iterator<Item = &'static str> {
+    OUTPUTS.iter().map(|output| output.tree)
+}
+
 const OUTPUTS: [Output; 2] = [
     // The run's signals, and the `Join` struct every module uses.
     module(

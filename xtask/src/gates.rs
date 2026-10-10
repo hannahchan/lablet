@@ -12,6 +12,7 @@ use std::time::Instant;
 
 use crate::error::{Error, chain};
 use crate::report::{self, Note, Row};
+use crate::scope::{self, Scope};
 use crate::workspace::{Workspace, repo_root, workspace_root, xtask_manifest};
 use crate::{
     changelog, coverage, generated, lint_layers, lint_manifests, live_check, mutants, process,
@@ -170,17 +171,23 @@ pub fn fmt_steps(check: bool) -> Vec<Step> {
     } else {
         both(label, "fmt", &["--all"], &[]).into()
     };
+    steps.push(dprint_step(check));
+    steps
+}
+
+/// dprint alone, which starts no compiler: a rewrite, or with `check` a
+/// verification.
+fn dprint_step(check: bool) -> Step {
     let dprint = Step::command(
         "fmt (dprint)",
         "dprint",
         &[if check { "check" } else { "fmt" }],
     );
-    steps.push(if check {
+    if check {
         dprint.with_hint(FMT_HINT)
     } else {
         dprint
-    });
-    steps
+    }
 }
 
 /// Clippy's machine-applicable fixes, then rustfmt. A tree being fixed is
@@ -541,6 +548,28 @@ pub fn pre_push_steps() -> Vec<Step> {
     // Last, since it builds the floor crates once more for each mutant, and
     // a push that changes none of them passes it at once.
     steps.extend(mutants_steps(true));
+    steps
+}
+
+/// The CI gate: a step that says which scope [`scope`] decided, then the
+/// pre-push steps, or only the documentation steps when every path changed
+/// since the base is documentation.
+pub fn ci_steps(scope: Scope) -> Vec<Step> {
+    let mut steps = vec![Step::check("scope", || Ok(Some(scope::note())))];
+    steps.extend(match scope {
+        Scope::Full => pre_push_steps(),
+        Scope::Docs => docs_steps(),
+    });
+    steps
+}
+
+/// The steps that read documentation and start no compiler. The changelog
+/// gate reads git alone, and runs so that a reduced gate judges nothing the
+/// full one would pass.
+fn docs_steps() -> Vec<Step> {
+    let mut steps = vec![dprint_step(true)];
+    steps.extend(lint_prose_steps(false));
+    steps.extend(changelog_steps());
     steps
 }
 

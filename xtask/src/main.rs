@@ -18,6 +18,7 @@ mod live_check;
 mod mutants;
 mod process;
 mod report;
+mod scope;
 mod workspace;
 
 use error::Error;
@@ -51,7 +52,9 @@ Quality gates:
                              + weaver check + weaver generate --check
                              + lint-shell + lint-prose
   pre-push                   pre-commit + deny + changelog + doc + test + mutants --changed
-  ci                         pre-push
+  ci                         pre-push, or only fmt (dprint) + lint-prose + changelog
+                             when every change since the base is documentation
+  scope                      Print `full` or `docs`: the scope ci decides, with why
 
 Analysis:
   coverage [--branch]        Line and region coverage floors (--branch: branches, on nightly)
@@ -97,6 +100,8 @@ enum Plan {
     /// with its own status and gets the signals sent to xtask, a Ctrl-C
     /// among them.
     Exec(Vec<String>),
+    /// Prints the scope on stdout, for CI to read, and why on stderr.
+    Scope(&'static scope::Decision),
 }
 
 /// What a task does, or why the arguments are wrong. The arms follow the
@@ -140,7 +145,8 @@ fn plan(task: &str, args: &[String]) -> Result<Plan, Usage> {
         // Quality gates.
         ("pre-commit", []) => gate("pre-commit", gates::pre_commit_steps()),
         ("pre-push", []) => gate("pre-push", gates::pre_push_steps()),
-        ("ci", []) => gate("ci", gates::pre_push_steps()),
+        ("ci", []) => gate("ci", gates::ci_steps(scope::decision().scope)),
+        ("scope", []) => Ok(Plan::Scope(scope::decision())),
         // Analysis.
         ("coverage", _) => command(gates::coverage_steps(flag("--branch")?)),
         ("mutants", _) => command(gates::mutants_steps(flag("--changed")?)),
@@ -190,6 +196,11 @@ fn exit_code(
     match plan(task, args) {
         Ok(Plan::Steps(mode, steps)) if run(mode, &steps) => ExitCode::SUCCESS,
         Ok(Plan::Steps(..)) => ExitCode::FAILURE,
+        Ok(Plan::Scope(decision)) => {
+            eprintln!("scope: {}", decision.reason);
+            println!("{}", decision.scope);
+            ExitCode::SUCCESS
+        }
         Ok(Plan::Exec(args)) => {
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
             eprintln!("error: {}", error::chain(&exec(&args)));
@@ -230,7 +241,7 @@ mod tests {
             documented_tasks().join(", "),
             "check, build, run, test, doc, fmt, fix, clippy, lint-layers, lint-manifests, \
              weaver check, weaver generate, lint-shell, lint-prose, deny, changelog, \
-             pre-commit, pre-push, ci, coverage, mutants, weaver live-check, setup, \
+             pre-commit, pre-push, ci, scope, coverage, mutants, weaver live-check, setup, \
              weaver vendor, clean"
         );
         for task in documented_tasks() {
@@ -456,13 +467,49 @@ mod tests {
     }
 
     #[test]
-    fn ci_runs_the_pre_push_steps_as_a_gate() {
+    fn ci_runs_the_pre_push_steps_or_the_documentation_steps_as_a_gate() {
         let Plan::Steps(mode, steps) = plan("ci", &[]).unwrap() else {
             panic!("`ci` runs no steps");
         };
         assert!(matches!(mode, Mode::Gate("ci")));
         let labels = |steps: &[Step]| steps.iter().map(|step| step.label).collect::<Vec<_>>();
-        assert_eq!(labels(&steps), labels(&gates::pre_push_steps()));
+        assert_eq!(
+            labels(&steps),
+            labels(&gates::ci_steps(scope::decision().scope))
+        );
+
+        let full = gates::ci_steps(scope::Scope::Full);
+        assert_eq!(labels(&full[..1]), ["scope"]);
+        assert_eq!(labels(&full[1..]), labels(&gates::pre_push_steps()));
+        let docs = labels(&gates::ci_steps(scope::Scope::Docs));
+        let synced = ["scope", "fmt (dprint)", "lint-prose", "changelog"];
+        let unsynced = [
+            "scope",
+            "fmt (dprint)",
+            "lint-prose (sync)",
+            "lint-prose",
+            "changelog",
+        ];
+        assert!(docs == synced || docs == unsynced, "{docs:?}");
+    }
+
+    #[test]
+    fn scope_prints_the_decision_and_runs_nothing() {
+        let Plan::Scope(decision) = plan("scope", &[]).unwrap() else {
+            panic!("`scope` plans something else");
+        };
+        assert_eq!(decision, scope::decision());
+        let ran = std::cell::Cell::new(false);
+        let code = exit_code(
+            &["scope".to_owned()],
+            |_, _| {
+                ran.set(true);
+                true
+            },
+            |_| panic!("`scope` became cargo"),
+        );
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(!ran.get());
     }
 
     /// A clone whose `core.hooksPath` is absolute runs the main checkout's

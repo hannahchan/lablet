@@ -22,19 +22,82 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  gate:
-    # Line and region coverage run beside `ci`, so neither waits for the other
-    # and one failing does not cancel the other. Mutation testing and branch
-    # coverage aren't here: they run daily and on demand, in floors.yml.
-    name: ${{ matrix.task }}
-    strategy:
-      fail-fast: false
-      matrix:
-        task: [ci, coverage]
-        # Not `ubuntu-latest`: it moves between images, and the build cache
-        # would restore artefacts linked against another image's libraries.
-        os: [ubuntu-24.04]
-    runs-on: ${{ matrix.os }}
+  # Whether this push to `main` was already judged: a fast-forward lands a
+  # commit whose branch run passed, and running it again would judge the same
+  # tree. The only job whose token can do more than read this public
+  # repository, and it builds and runs nothing from the tree, as in
+  # floors.yml. On a branch, and on a run on demand, it is skipped and every
+  # job runs.
+  landed:
+    name: landed
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      skip: ${{ steps.decide.outputs.skip }}
+    steps:
+      # Pinned by commit, as below. Full history: the push's range is diffed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Skips when a run of this workflow on the same commit passed, which
+      # only a run whose every job passed or was skipped on these same grounds
+      # does, and nothing the build cache is keyed on changed: only `main`
+      # saves the cache, so a landing that changes its key runs in full to
+      # save the new one. The changelog gate still runs, in `ci`, since the
+      # branch run judged it from where `main` was then, which an earlier
+      # landing of part of the branch moves. A listing that fails counts as no
+      # green run: a run too many costs minutes, a run too few hides a
+      # failure. Event data goes through `env` so the script never
+      # interpolates it.
+      - name: Decide whether the push was already judged
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          decide() {
+            echo "$2"
+            echo "skip=$1" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          if [[ "$BEFORE" =~ ^0+$ ]] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            decide no "What main pointed at before the push isn't in this clone."
+          fi
+          if ! git diff --quiet "$BEFORE" "$SHA" -- \
+            '*Cargo.toml' \
+            '*Cargo.lock' \
+            '*.cargo/config.toml' \
+            rust-toolchain.toml \
+            .github/workflows/ci.yml; then
+            decide no "What the build cache is keyed on changed since $BEFORE, so this run saves a new one."
+          fi
+          green=$(gh run list --repo "$REPOSITORY" --workflow ci.yml --commit "$SHA" \
+            --status success --limit 1 \
+            --json databaseId,headBranch --jq '.[0] | select(.) | "\(.databaseId) on \(.headBranch)"') || {
+            echo "::warning::The runs of this workflow couldn't be listed."
+            green=""
+          }
+          if [[ -z "$green" ]]; then
+            decide no "No green run of $SHA was found."
+          fi
+          decide yes "Run $green passed on $SHA, so only the changelog gate runs here."
+
+  ci:
+    # Every job waits on `landed`, which is skipped on a branch, so `!cancelled()`
+    # is what lets them run after a skipped one. A failed `landed` leaves no
+    # output, and everything runs.
+    name: ci
+    needs: landed
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       # Incremental artefacts are useless on a fresh runner and bloat the cache.
@@ -42,22 +105,24 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       # Actions are pinned by commit because a tag can be moved; the trailing
-      # comment names the tag. Full history: the changelog gate diffs against a
-      # base commit a shallow clone lacks. No persisted credentials, and the
-      # token mise exports is blanked after it: nothing later talks to the
-      # remote.
+      # comment names the tag. Full history: the changelog gate and the scope
+      # diff against a base commit a shallow clone lacks. No persisted
+      # credentials, and the token mise exports is blanked after it: nothing
+      # later talks to the remote.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      # xtask's default changelog base is the merge-base with origin/main. On
-      # `main` that is the pushed commit itself, so there the base is what
-      # `main` pointed at before the push. `before` is all zeros on a first
-      # push and may be gone after a force push; then the variable stays unset.
-      # It goes through `env` so the script never interpolates event data.
-      - name: Select the changelog base
-        if: matrix.task == 'ci' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # xtask's default base, for the changelog gate and the scope, is the
+      # merge-base with origin/main. On `main` that is the pushed commit
+      # itself, so there the base is what `main` pointed at before the push.
+      # `before` is all zeros on a first push and may be gone after a force
+      # push; then the variable stays unset, the scope is full, and the
+      # changelog gate compares nothing. It goes through `env` so the script
+      # never interpolates event data.
+      - name: Select the base
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           BEFORE: ${{ github.event.before }}
         run: |
@@ -70,18 +135,21 @@ jobs:
         run: rustup toolchain install
 
       # After the toolchain: the cache key includes the rustc version. Only
-      # `main` saves, so branch caches cannot evict main's. The automatic key
-      # tells neither matrix legs nor images apart, hence the explicit one.
+      # `main` saves, so branch caches cannot evict main's; `landed` lets a
+      # landing that changes the key run, so that it does. Not
+      # `ubuntu-latest`: it moves between images, and the cache would restore
+      # artefacts linked against another image's libraries.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: |
             lablet
             xtask
-          key: ${{ matrix.task }}-${{ matrix.os }}
+          key: ci-ubuntu-24.04
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The mise version that wrote mise.lock; bump the two together.
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        if: needs.landed.outputs.skip != 'yes'
         with:
           version: 2026.9.7
           cache: true
@@ -89,10 +157,78 @@ jobs:
       # mise-action exports the job's token to every later step. mise has
       # installed the pins by now and needs no token after that.
       - name: Keep the token from the build
+        if: needs.landed.outputs.skip != 'yes'
         run: echo "MISE_GITHUB_TOKEN=" >> "$GITHUB_ENV"
 
-      - name: cargo xtask ${{ matrix.task }}
-        run: cargo xtask ${{ matrix.task }}
+      # The pre-push steps, or only the documentation steps when every path
+      # changed since the base is documentation: xtask decides, and says so.
+      - name: cargo xtask ci
+        if: needs.landed.outputs.skip != 'yes'
+        run: cargo xtask ci
+
+      - name: cargo xtask changelog
+        if: needs.landed.outputs.skip == 'yes'
+        run: cargo xtask changelog
+
+  coverage:
+    # Line and region coverage run beside `ci`, so neither waits for the other
+    # and one failing does not cancel the other. Mutation testing and branch
+    # coverage aren't here: they run daily and on demand, in floors.yml.
+    name: coverage
+    needs: landed
+    if: ${{ !cancelled() && needs.landed.outputs.skip != 'yes' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      # The same setup as `ci`. Full history: the scope diffs against the
+      # base.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select the base
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [[ ! "$BEFORE" =~ ^0+$ ]] && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "LABLET_CHANGELOG_BASE=$BEFORE" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            lablet
+            xtask
+          key: coverage-ubuntu-24.04
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # xtask is in the cache, so this costs seconds. Only `docs` skips: a
+      # scope that fails to print anything runs the job.
+      - name: cargo xtask scope
+        id: scope
+        run: echo "scope=$(cargo xtask scope)" >> "$GITHUB_OUTPUT"
+
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        if: steps.scope.outputs.scope != 'docs'
+        with:
+          version: 2026.9.7
+          cache: true
+
+      - name: Keep the token from the build
+        if: steps.scope.outputs.scope != 'docs'
+        run: echo "MISE_GITHUB_TOKEN=" >> "$GITHUB_ENV"
+
+      - name: cargo xtask coverage
+        if: steps.scope.outputs.scope != 'docs'
+        run: cargo xtask coverage
 
   live-check:
     # The telemetry contract against what lablet emits: `weaver registry
@@ -101,17 +237,28 @@ jobs:
     # binary and binds ports, so it is a job of its own and not a gate step.
     # The registry and its dependencies are vendored, so it needs no network.
     name: weaver live-check
+    needs: landed
+    if: ${{ !cancelled() && needs.landed.outputs.skip != 'yes' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
     steps:
-      # The same setup as `gate`, without the full history: no changelog
-      # gate runs here.
+      # The same setup as `coverage`.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Select the base
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [[ ! "$BEFORE" =~ ^0+$ ]] && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "LABLET_CHANGELOG_BASE=$BEFORE" >> "$GITHUB_ENV"
+          fi
 
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
@@ -124,13 +271,20 @@ jobs:
           key: live-check-ubuntu-24.04
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: cargo xtask scope
+        id: scope
+        run: echo "scope=$(cargo xtask scope)" >> "$GITHUB_OUTPUT"
+
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        if: steps.scope.outputs.scope != 'docs'
         with:
           version: 2026.9.7
           cache: true
 
       - name: Keep the token from the build
+        if: steps.scope.outputs.scope != 'docs'
         run: echo "MISE_GITHUB_TOKEN=" >> "$GITHUB_ENV"
 
       - name: cargo xtask weaver live-check
+        if: steps.scope.outputs.scope != 'docs'
         run: cargo xtask weaver live-check

@@ -1701,3 +1701,15 @@ What the phase leaves:
 - **Wording in "Lablet reads no global":** `clippy.toml` has four reasons rewritten, not three, and the logger the `Otel` holds is shared in an `Arc` once `Bridge` has boxed it.
 
 Human sign-off: a reviewer runs the `traced_run` example, a host with an SDK of its own, and finds the run beneath the host's span.
+
+## 2026-10-10 CI judges a commit once, and documentation without a build
+
+Decided with the owner, who chose where the docs-only decision runs from three designs. Each landing ran CI twice on one commit, once on the branch and once on `main` after the fast-forward, and a push that changed only documentation ran the full build, coverage and live-check.
+
+- **A push to `main` whose commit already passed isn't judged again.** A first job, `landed`, the only one whose token can read Actions, looks for a successful run of the workflow on the same commit and builds nothing, as `Floors`' `changed` job does. A listing that fails counts as no green run.
+- **The changelog gate still runs there.** The branch run judged it from where `main` stood then, and `main` may since have taken part of the branch, as when parallel streams land in turn. Since `main` only moves by fast-forward, the branch's range then holds the landing's, and the two can still disagree: an entry that landed first leaves the later contract change with an `Unreleased` section that didn't change, and a contract change reverted later nets to nothing over the branch. So the landing's range is judged on `main` as before.
+- **A landing that changes what the build cache is keyed on runs in full.** Only `main` saves the cache, and a branch restores only its own and the default branch's, so skipping such a landing would leave every later branch on an ever older cache. The key changed on 5 of the 20 landings before this.
+- **Documentation is decided in xtask, by the whole branch, deny by default.** `xtask/src/scope.rs`, ported from UsefulBytes, classifies every path changed since the changelog gate's base. Only Markdown in named places is documentation; the rendered telemetry reference, the golden fixtures' and examples' Markdown, and anything nobody classified are build inputs, and every uncertainty is the full gate, as is a removed document, since a test may read one by name. A docs-only branch is judged on its own change, so one cut from a `main` that was red passes where a full run would have stayed red; a red `main` is fixed before anything lands, so that's the rule this leans on.
+- **Each job decides for itself.** `ci` reduces itself, and `coverage` and `live-check` ask `cargo xtask scope` once their cache holds xtask, rather than wait on a job that builds it. A separate job would add a billed minute and about 25 seconds to every code push to save one on a docs push, and code pushes are the many.
+
+Billed minutes, each job rounded up to a minute, from the runs of 2026-10-07 and 08: a code push stays at 5; a docs-only push goes from 5 to 3; a landing after a green branch run from 10 to 7, its `main` run 2; a landing that changes the cache key from 10 to 11; a docs push straight to `main` from 5 to 4.
