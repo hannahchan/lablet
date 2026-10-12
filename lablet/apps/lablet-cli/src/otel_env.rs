@@ -11,7 +11,7 @@ mod sdk;
 
 pub use context::Context;
 pub use exporter::Exporter;
-use lablet_config::Env;
+use lablet_otel_env::Env;
 pub(crate) use lablet_otel_env::{Choice, Named, Parse, Timeout, Variables};
 pub use sdk::Sdk;
 

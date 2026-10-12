@@ -77,11 +77,10 @@ impl Lablet {
     ///
     /// Library mode leaves alone what configured an OpenTelemetry SDK, and
     /// says nothing of it: the config's `telemetry.file`, `telemetry.otlp`
-    /// and `telemetry.resource`, the `OTEL_*` variables the SDK reads,
-    /// `OTEL_SDK_DISABLED`, and `TRACEPARENT`, `TRACESTATE` and `BAGGAGE`
-    /// as the run's parent. Content capture still applies, and the secrets
-    /// the config's telemetry section names are still withheld from
-    /// commands and cut from what they print.
+    /// and `telemetry.resource`; and it reads no environment variable, so
+    /// no `OTEL_*` variable and no `TRACEPARENT` names a run's parent.
+    /// Content capture still applies, and lablet's credentials are still
+    /// dropped from what a command inherits and cut from what it prints.
     ///
     /// A run is stopped through its [`CancelHandle`](crate::CancelHandle). Dropping the future
     /// abandons it with no outcome. Dropped before the loop returns, it leaves

@@ -2,11 +2,12 @@
 //! whose providers a `Lablet` is built with, and what the host was handed,
 //! read back.
 
+use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use lablet::{BuildError, Config, Format, Lablet, Otel, RunRequest, Unsupported};
+use lablet::{BuildError, Builder, Config, Format, Lablet, Otel, RunRequest, Unsupported};
 use lablet_conformance::host::Host;
 use lablet_conformance::otlp::{Exported, LogRecord, Span};
 use lablet_test_support::Scratch;
@@ -43,9 +44,16 @@ impl Lab {
         &self.1
     }
 
-    /// A `Lablet` of `config`, built with the lab's host's [`Lab::otel`].
+    /// A `Lablet` of `config`, built with the lab's host's [`Lab::otel`],
+    /// whose commands start from the test's own environment.
     pub async fn build(&self, config: Config) -> Result<Lablet, BuildError> {
-        Lablet::builder(config, self.otel()).build().await
+        self.builder(config).build().await
+    }
+
+    /// The builder of a `Lablet` of `config` on the lab's host's
+    /// [`Lab::otel`], with the test's own environment handed in.
+    pub fn builder(&self, config: Config) -> Builder {
+        Lablet::builder(config, self.otel()).with_process_environment(process_environment())
     }
 
     /// The lab's host's tracer and logger providers, and the API's no-op
@@ -133,25 +141,75 @@ pub fn read(tree: &Value) -> Config {
     Config::from_str(&tree.to_string(), Format::Json).unwrap()
 }
 
+/// That config, with each `${VAR}` filled from `held`, as a host fills a
+/// file it keeps.
+pub fn read_filled(tree: &Value, held: &[(&str, &str)]) -> Config {
+    filled(&tree.to_string(), Format::Json, held).unwrap()
+}
+
+/// The config `text` holds, with each `${VAR}` filled from `held`, or why
+/// it was refused.
+pub fn filled(
+    text: &str,
+    format: Format,
+    held: &[(&str, &str)],
+) -> Result<Config, lablet::ConfigError> {
+    let held: Vec<(String, String)> = held
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect();
+    lablet::RawConfig::from_str(text, format)?
+        .substituted(move |asked: &str| -> Option<OsString> {
+            held.iter()
+                .find(|(name, _)| name == asked)
+                .map(|(_, value)| value.into())
+        })?
+        .config()
+}
+
+/// A key as long as a key is.
+pub const KEY: &str = "sk-ant-0123456789abcdef0123456789";
+
+/// `config` with its key set in code, as a host sets one.
+pub fn with_key(mut config: Config) -> Config {
+    config.model.api_key = Some(lablet::Secret::new(KEY));
+    config
+}
+
 pub fn request() -> RunRequest {
     RunRequest::new(PROMPT).unwrap()
+}
+
+/// The test's own environment, which stands in for the one a host hands in.
+pub fn process_environment() -> Vec<(OsString, OsString)> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test's own environment stands in for the one a host hands in"
+    )]
+    let environment = std::env::vars_os().collect();
+    environment
+}
+
+/// The builder of a `Lablet` of `config` whose records go nowhere, with
+/// the test's own environment handed in, for a test that reads none of
+/// what a run emits.
+pub fn quietly(config: Config) -> Builder {
+    Lablet::builder(config, Otel::noop()).with_process_environment(process_environment())
 }
 
 /// A `Lablet` of `config` whose records go nowhere, for a test that reads
 /// none of what a run emits.
 pub async fn quiet(config: Config) -> Result<Lablet, BuildError> {
-    lablet::build(config, Otel::noop()).await
+    quietly(config).build().await
 }
 
 /// What `build` refuses `config` with, which `check` refuses it with too,
 /// but for a provider this lablet has no adapter for yet, which the check
 /// passes since it stops before the provider is selected.
 pub async fn refusal(config: Config) -> BuildError {
-    let checked = lablet::check(&config).await.map(drop);
-    let built = lablet::build(config, Otel::noop())
-        .await
-        .map(drop)
-        .unwrap_err();
+    let builder = quietly(config);
+    let checked = builder.check().await.map(drop);
+    let built = builder.build().await.map(drop).unwrap_err();
     match &built {
         BuildError::Unsupported {
             kind: Unsupported::Anthropic | Unsupported::Openai,

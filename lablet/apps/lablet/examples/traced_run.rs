@@ -1,8 +1,9 @@
 //! A host with an OpenTelemetry SDK of its own runs lablet as a library:
-//! it hands in its tracer and logger providers and a propagator, opens a
-//! span of its own, and makes a traced run beneath it that needs no model
-//! and no key. A script is played in place of the model, `bash` works under
-//! a root of its own, and the run leaves its transcript in a file.
+//! it hands in its tracer and logger providers and a propagator, and the
+//! environment its commands start from, opens a span of its own, and makes
+//! a traced run beneath it that needs no model and no key. A script is
+//! played in place of the model, `bash` works under a root of its own, and
+//! the run leaves its transcript in a file.
 //!
 //! The host's SDK sends over OTLP/HTTP to `http://localhost:4318`, or to
 //! where `OTEL_EXPORTER_OTLP_ENDPOINT` says, as the SDK reads it, so the
@@ -106,7 +107,17 @@ telemetry:
         logger_provider.clone(),
         TraceContextPropagator::new(),
     );
-    let mut lablet = Lablet::builder(config, otel).build().await?;
+    // The host's own environment, which `bash` starts from less what holds
+    // a credential of lablet's; a host may hand in less.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a host reads its own environment to hand it in; lablet reads none"
+    )]
+    let environment = std::env::vars_os();
+    let mut lablet = Lablet::builder(config, otel)
+        .with_process_environment(environment)
+        .build()
+        .await?;
     let request = RunRequest::new("What's in the directory?")?.labels(RunLabels {
         task: Some("list-the-directory".to_owned()),
         ..RunLabels::default()

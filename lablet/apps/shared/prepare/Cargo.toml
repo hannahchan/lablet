@@ -19,9 +19,10 @@ lablet-provider-fake.workspace = true
 lablet-run.workspace = true
 lablet-secrets.workspace = true
 lablet-tools-builtin.workspace = true
-secrecy.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 lablet-test-support.workspace = true
 tokio.workspace = true
+tracing-subscriber.workspace = true

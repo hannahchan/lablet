@@ -2,11 +2,11 @@
 
 use std::os::unix::fs::symlink;
 
-use lablet::{FinishedRun, StopReason};
+use lablet::{Credential, FinishedRun, StopReason};
 use lablet_model::{ToolCallOutcome, ToolResultContent};
 use serde_json::{Value, json};
 
-use crate::harness::{Lab, Traced, request};
+use crate::harness::{KEY, Lab, Traced, request};
 use crate::key;
 
 const SECRET: &str = "what the model is not to read";
@@ -53,11 +53,9 @@ fn calling(calls: &[(&str, Value)]) -> String {
     Value::Array(script).to_string()
 }
 
-/// One run of the config `tree`.
-async fn run_tree(tree: &Value) -> FinishedRun {
-    let mut lablet = crate::harness::quiet(crate::harness::read(tree))
-        .await
-        .unwrap();
+/// One run of `config`, on the no-op `Otel`.
+async fn run_config(config: lablet::Config) -> FinishedRun {
+    let mut lablet = crate::harness::quiet(config).await.unwrap();
     let finished = lablet.run(request()).await;
     lablet.shutdown().await;
     finished
@@ -292,11 +290,23 @@ async fn a_command_past_the_timeout_is_an_error_result_of_kind_timeout_and_the_r
     );
 }
 
-/// T16: what a run withholds and cuts, and what `check` says of it.
+/// T16: what a run drops and cuts, and what `check` says of it: the key's
+/// variable fills `model.api_key`, so no command inherits it, nor any
+/// variable holding its value, and no result shows the key.
 #[tokio::test]
-async fn a_command_has_lablet_s_environment_less_the_key_and_no_result_shows_the_key() {
-    let key = std::env::var(KEY_VARIABLE)
-        .expect("cargo sets the variable for a test, so lablet's environment holds it");
+async fn a_command_has_the_environment_less_the_key_and_no_result_shows_the_key() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variables cargo set, to know what a command inherits"
+    )]
+    let (key, not_a_secret, named_in_the_environment): (String, String, Vec<String>) = (
+        std::env::var(KEY_VARIABLE).expect("cargo sets the variable for a test"),
+        std::env::var(NOT_A_SECRET).unwrap(),
+        std::env::vars()
+            .filter(|(_, value)| value.contains(&std::env::var(KEY_VARIABLE).unwrap()))
+            .map(|(name, _)| name)
+            .collect(),
+    );
     let scratch = Lab::new("environment");
     scratch.write("secret.txt", SECRET);
     scratch.write("work/key.txt", &key);
@@ -313,29 +323,17 @@ async fn a_command_has_lablet_s_environment_less_the_key_and_no_result_shows_the
         &script,
         json!({ "tools": { "builtin": scratch.builtin(&["bash", "read_file"]) } }),
     );
-    tree["model"]["api_key_env"] = json!(KEY_VARIABLE);
+    tree["model"]["api_key"] = json!(format!("${{{KEY_VARIABLE}}}"));
     tree["tools"]["builtin"]["env"] = json!({ "LABLET_TEST_ADDED": "added by the config" });
     tree["telemetry"]["capture_content"] = json!(true);
     tree["telemetry"]["otlp"]["headers"] = json!({
         "Authorization": format!("Bearer ${{{KEY_VARIABLE}}}"),
         "X-Short": format!("${{{SHORT_VARIABLE}}}"),
     });
-    let config = crate::harness::read(&tree);
+    let config = crate::harness::read_filled(&tree, &[(KEY_VARIABLE, &key), (SHORT_VARIABLE, "7")]);
 
-    let checked = lablet::check(&config).await.unwrap();
-    assert_eq!(
-        checked.withheld(),
-        &[KEY_VARIABLE.to_owned(), SHORT_VARIABLE.to_owned()].into()
-    );
-    assert_eq!(
-        checked.cut(),
-        [
-            KEY_VARIABLE.to_owned(),
-            format!("{SHORT_VARIABLE} (under 16 bytes, not cut)")
-        ],
-        "the literal `tools.builtin.env` entry is no secret"
-    );
-    assert!(!format!("{checked:?}").contains(&key), "{checked:?}");
+    let checked = scratch.builder(config.clone()).check().await.unwrap();
+    t16_check_names_the_key(&checked, &key, &named_in_the_environment);
 
     let mut lablet = scratch.build(config).await.unwrap();
     let finished = lablet.run(request()).await;
@@ -350,7 +348,6 @@ async fn a_command_has_lablet_s_environment_less_the_key_and_no_result_shows_the
     assert!(environment.ends_with("exit code: 0"), "{environment}");
     assert!(!environment.contains(KEY_VARIABLE), "{environment}");
     assert!(!environment.contains(&key), "{environment}");
-    let not_a_secret = std::env::var(NOT_A_SECRET).unwrap();
     assert!(
         environment.contains(&format!("{NOT_A_SECRET}={not_a_secret}\n")),
         "{environment}"
@@ -386,8 +383,58 @@ async fn a_command_has_lablet_s_environment_less_the_key_and_no_result_shows_the
     assert!(!telemetry.contains(&key), "telemetry holds the key");
 }
 
+/// T16's check: the key's variable fills `model.api_key` and a header, so
+/// `check` names it under `own:`, drops it and every copy of its value, and
+/// shows the key nowhere.
+fn t16_check_names_the_key(checked: &lablet::Checked, key: &str, in_the_environment: &[String]) {
+    let own: Vec<String> = checked.own().iter().map(Credential::as_own).collect();
+    assert_eq!(own.len(), 3, "{own:?}");
+    assert!(
+        own[0].starts_with(&format!("{KEY_VARIABLE} (line 1) -> model.api_key"))
+            && own[0].ends_with("; no process inherits it"),
+        "{own:?}"
+    );
+    assert!(
+        own[1].starts_with(&format!(
+            "{KEY_VARIABLE} (line 1) -> telemetry.otlp.headers.Authorization"
+        )) && own[1].ends_with("; no process inherits it"),
+        "{own:?}"
+    );
+    assert_eq!(
+        own[2],
+        format!(
+            "{SHORT_VARIABLE} (line 1) (under 16 bytes, not cut) -> telemetry.otlp.headers.X-Short; \
+             no process inherits it"
+        )
+    );
+    let copies = &checked.own()[0].copies;
+    for copy in copies {
+        assert!(
+            in_the_environment.contains(copy) && *copy != KEY_VARIABLE,
+            "{copy} holds no copy of the key"
+        );
+    }
+    let inherited = checked.inherited();
+    assert!(
+        !inherited.contains(&KEY_VARIABLE.to_owned()),
+        "{inherited:?}"
+    );
+    assert!(
+        inherited.contains(&NOT_A_SECRET.to_owned()),
+        "{inherited:?}"
+    );
+    for copy in copies {
+        assert!(!inherited.contains(copy), "{copy} is inherited");
+    }
+    assert_eq!(checked.cut(), Vec::<String>::new(), "nothing is handed in");
+    assert!(!format!("{checked:?}").contains(key), "{checked:?}");
+}
+
+/// A variable the config sets under the key's variable's name is passed on
+/// as set: what's given knowingly isn't dropped, and the key's value never
+/// reaches the command.
 #[tokio::test]
-async fn the_key_variable_that_tools_builtin_env_names_is_passed_on() {
+async fn a_variable_the_config_sets_under_the_key_s_name_is_passed_on() {
     let scratch = Lab::new("environment-passed-on");
     let script = calling(&[(
         "bash",
@@ -397,14 +444,124 @@ async fn the_key_variable_that_tools_builtin_env_names_is_passed_on() {
         &script,
         json!({ "tools": { "builtin": scratch.builtin(&["bash"]) } }),
     );
-    tree["model"]["api_key_env"] = json!(KEY_VARIABLE);
+    tree["model"]["api_key"] = json!(format!("${{{KEY_VARIABLE}}}"));
     tree["tools"]["builtin"]["env"] = json!({ KEY_VARIABLE: "passed on by the config" });
+    let config = crate::harness::read_filled(&tree, &[(KEY_VARIABLE, KEY)]);
 
-    let finished = run_tree(&tree).await;
+    let finished = run_config(config).await;
 
     let turns = finished.transcript.turns();
     assert_eq!(
         sent(&turns[0].tool_calls()[0]),
         ("ok", "passed on by the config\nexit code: 0".to_owned())
+    );
+}
+
+/// J1 in the library: a handed-in variable holding the key's value is
+/// dropped from a command's environment under any name, as its `Bearer%20`
+/// form is, and a value under the cut's floor isn't.
+#[tokio::test]
+async fn a_handed_in_variable_holding_the_key_s_value_is_dropped_and_a_short_one_is_not() {
+    let scratch = Lab::new("dropped-by-value");
+    // A key holding `+`, `/` and `=`, which encoding changes, so the encoded
+    // copy is caught only through the decoder.
+    let key = "sk+ant/0123456789abcdef0123456789==";
+    let short = "shortvalue12";
+    let script = calling(&[(
+        "bash",
+        json!({ "command": "echo \"${MY_COPY-dropped}|${AUTH-dropped}|${ENCODED-dropped}|${SHORT_COPY-dropped}|${PLAIN-dropped}\"" }),
+    )]);
+    let mut tree = scratch.tree(
+        &script,
+        json!({ "tools": { "builtin": scratch.builtin(&["bash"]) } }),
+    );
+    tree["model"]["api_key"] = json!("${LABLET_TEST_KEY}");
+    let config = crate::harness::read_filled(&tree, &[("LABLET_TEST_KEY", key)]);
+    let base = [
+        ("PATH", "/usr/bin:/bin"),
+        ("MY_COPY", key),
+        ("AUTH", &format!("Bearer {key}")),
+        (
+            "ENCODED",
+            "authorization=Bearer%20sk%2Bant%2F0123456789abcdef0123456789%3D%3D",
+        ),
+        ("SHORT_COPY", short),
+        ("PLAIN", "plain-0123456789abcdef"),
+    ];
+    let builder = lablet::Lablet::builder(config, scratch.otel()).with_process_environment(base);
+
+    let checked = builder.check().await.unwrap();
+    let mut lablet = builder.build().await.unwrap();
+    let finished = lablet.run(request()).await;
+    lablet.shutdown().await;
+
+    assert_eq!(
+        sent(&finished.transcript.turns()[0].tool_calls()[0]),
+        (
+            "ok",
+            format!("dropped|dropped|dropped|{short}|plain-0123456789abcdef\nexit code: 0")
+        )
+    );
+    assert_eq!(
+        checked.own()[0].as_own(),
+        "LABLET_TEST_KEY (line 1) -> model.api_key, or AUTH, which holds it, or ENCODED, which \
+         holds it, or MY_COPY, which holds it; no process inherits it"
+    );
+    assert_eq!(checked.inherited(), ["PATH", "PLAIN", "SHORT_COPY"]);
+    let environment = checked.environment().unwrap();
+    assert_eq!(
+        environment.by_value,
+        ["AUTH", "ENCODED", "MY_COPY"].map(str::to_owned).into()
+    );
+    assert!(
+        environment.by_name.is_empty(),
+        "the base holds no LABLET_TEST_KEY"
+    );
+}
+
+/// A `credentials` entry reaches `bash` under its name, after the variable
+/// that held it was dropped, and its value is cut from the result; an
+/// `env` entry that's one `${VAR}` reaches `bash` as the text it was
+/// filled with.
+#[tokio::test]
+async fn a_credential_reaches_bash_under_its_name_and_is_cut_and_an_env_entry_is_text() {
+    let scratch = Lab::new("credential-given");
+    let token = "ghp_0123456789abcdef0123456789";
+    let script = calling(&[(
+        "bash",
+        json!({ "command": "echo \"${GITHUB_TOKEN-dropped}|$TOK|$PORT|${#PORT}\"" }),
+    )]);
+    let mut tree = scratch.tree(
+        &script,
+        json!({ "tools": { "builtin": scratch.builtin(&["bash"]) } }),
+    );
+    tree["tools"]["builtin"]["credentials"] = json!({ "TOK": "${GITHUB_TOKEN}" });
+    tree["tools"]["builtin"]["env"] = json!({ "PORT": "${PORT}" });
+    let config = crate::harness::read_filled(&tree, &[("GITHUB_TOKEN", token), ("PORT", "8080")]);
+    let base = [("PATH", "/usr/bin:/bin"), ("GITHUB_TOKEN", token)];
+    let builder = lablet::Lablet::builder(config, scratch.otel()).with_process_environment(base);
+
+    let checked = builder.check().await.unwrap();
+    let mut lablet = builder.build().await.unwrap();
+    let finished = lablet.run(request()).await;
+    lablet.shutdown().await;
+
+    assert_eq!(
+        sent(&finished.transcript.turns()[0].tool_calls()[0]),
+        (
+            "ok",
+            "dropped|[secret withheld]|8080|4\nexit code: 0".to_owned()
+        )
+    );
+    assert_eq!(
+        checked.given()[0].as_given(),
+        "GITHUB_TOKEN (line 1) -> bash as TOK"
+    );
+    assert!(checked.own().is_empty());
+    assert_eq!(checked.env()[0].to_string(), "PORT (line 1) -> bash");
+    assert_eq!(checked.inherited(), ["PATH"]);
+    assert_eq!(
+        checked.environment().unwrap().by_name,
+        ["GITHUB_TOKEN".to_owned()].into()
     );
 }

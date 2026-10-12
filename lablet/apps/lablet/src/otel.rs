@@ -18,7 +18,10 @@ use opentelemetry::trace::{Tracer, TracerProvider};
 /// and injects depends only on what its host handed it.
 ///
 /// [`Otel::new`] takes one tracer and one logger of lablet's
-/// instrumentation scope from the providers, and keeps neither provider. A
+/// instrumentation scope from the providers, and keeps neither provider: the
+/// host keeps both alive for as long as it wants the telemetry and shuts
+/// them down itself, as the doctest does with the clones it hands in, since
+/// an SDK provider shuts its processors down when its last handle drops. A
 /// clone shares them, so one `Otel` builds every `Lablet` of a host, and
 /// each runs on the same three pieces. [`Otel::noop`] is the API's no-op for
 /// each, for a host that wants nothing of lablet's telemetry, and a host

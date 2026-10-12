@@ -4,6 +4,11 @@
 //! Every rule in contributing/README.md is enforced here or is labelled a
 //! review convention there.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a developer tool reads its environment: CI's, cargo's, the gates' own switches and what it strips from the tests"
+)]
+
 use std::process::ExitCode;
 
 mod changelog;

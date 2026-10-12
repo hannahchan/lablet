@@ -222,7 +222,7 @@ pub(crate) fn otlp_of(text: &str, held: &[(&str, &str)]) -> super::OtlpSettings 
     };
     let config = lablet_config::Config::from_str(text, lablet_config::Format::Yaml)
         .unwrap_or_else(|error| panic!("{text} is a config: {error}"));
-    crate::otlp::settings(&config, &config, &OtelEnv::read(&env).exporter)
+    crate::otlp::settings(&config, &OtelEnv::read(&env).exporter)
         .unwrap_or_else(|error| panic!("{text} is refused: {error}"))
         .unwrap_or_else(|| panic!("{text} exports nothing over the network"))
 }

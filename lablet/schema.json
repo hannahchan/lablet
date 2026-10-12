@@ -19,6 +19,14 @@
       "additionalProperties": false,
       "description": "The `tools.builtin` section.",
       "properties": {
+        "credentials": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Credentials given to `bash`, each under the name written here and\nnowhere else: a `${VAR}`, or a `Secret` set in code, never the value\nwritten out. The variable is dropped from what a command inherits,\nand the value is cut out of every tool result.",
+          "type": "object"
+        },
         "enabled": {
           "default": [],
           "description": "The tools to serve. `task_complete` isn't one of them: explicit\ncompletion implies it.",
@@ -33,7 +41,7 @@
             "type": "string"
           },
           "default": {},
-          "description": "Variables a command starts with on top of lablet's own environment,\nwhich a command inherits less the variables lablet reads its secrets\nfrom. A variable substituted here is a secret: withheld from every\nother child, and cut out of every tool result. Naming a withheld\nvariable passes it on.",
+          "description": "Variables a command starts with on top of the environment it\ninherits, each passed as set: a `${VAR}` here makes nothing a\nsecret, and one that names the entry's own variable is refused,\nsince a command inherits it already.",
           "type": "object"
         },
         "root": {
@@ -248,7 +256,7 @@
                 "type": "string"
               },
               "default": {},
-              "description": "Variables the server starts with beside the short list it has. A\nvariable substituted here is a secret: withheld from every\ncommand, and cut out of every tool result.",
+              "description": "Variables the server starts with beside the short list it has,\neach passed as set: a `${VAR}` here makes nothing a secret.",
               "type": "object"
             },
             "instructions": {
@@ -296,7 +304,7 @@
                 "type": "string"
               },
               "default": {},
-              "description": "Headers sent with every request. Every value is a secret, written\nor substituted: a variable substituted into one is withheld from\nevery command, the value is cut out of every tool result, and\nit's left out of the config digest.",
+              "description": "Headers sent with every request. Every value is lablet's own: a\nvariable filled into one reaches no command, the value is cut\nout of every tool result, and it's left out of the config digest.",
               "type": "object"
             },
             "instructions": {
@@ -352,9 +360,9 @@
           "default": null,
           "description": "`openai` only: the API; `None` is the Responses API without a\n`base_url` and chat completions with one."
         },
-        "api_key_env": {
+        "api_key": {
           "default": null,
-          "description": "The environment variable that holds the API key, and never the key.\n`None` is `ANTHROPIC_API_KEY` for `anthropic` and no variable for\nthe others. The variable is withheld from every command, and its\nvalue is cut out of every tool result.",
+          "description": "The API key, which `anthropic` needs: written as a `${VAR}` and\nnever as the key itself, or set in code. It's lablet's own: no\nprocess a run starts inherits the variable or a copy of the value,\nand the value is cut out of every tool result.",
           "type": [
             "string",
             "null"
@@ -496,7 +504,7 @@
             "type": "string"
           },
           "default": null,
-          "description": "Headers sent with every export, and the only ones: none the\nenvironment names is sent beside them, `{}` included. `None` sends\nthe environment's, wherever the endpoint came from. Every value is a\nsecret, written or substituted: a variable substituted into one is\nwithheld from every command, the value is cut out of every tool\nresult, and it's left out of the config digest.",
+          "description": "Headers sent with every export, and the only ones: none the\nenvironment names is sent beside them, `{}` included. `None` sends\nthe environment's, wherever the endpoint came from. Every value is\nlablet's own: a variable filled into one reaches no command, the\nvalue is cut out of every tool result, and it's left out of the\nconfig digest.",
           "type": [
             "object",
             "null"
@@ -769,7 +777,7 @@
       "properties": {
         "capture_content": {
           "default": null,
-          "description": "Whether prompts, responses and tool content reach telemetry. `None`\nleaves it to `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`,\nwhich turns it on only when it's `true` in any case.",
+          "description": "Whether prompts, responses and tool content reach telemetry. `None`\ncaptures nothing, as `false` does; no variable is read.",
           "type": [
             "boolean",
             "null"
@@ -871,6 +879,7 @@
         "builtin": {
           "$ref": "#/$defs/Builtin",
           "default": {
+            "credentials": {},
             "enabled": [],
             "env": {},
             "root": null,
@@ -964,13 +973,13 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "What a `Lablet` is built from.\n\nThe sections hold what the config states, as it's written, with\nlablet's default wherever it states nothing and every provider shares\nthe default. A setting of the `model` section that's one provider's is\nheld as it was stated, and [`Config::resolved`] fills in its default.\n`${VAR}` is held as it's written, and substituted when a `Lablet` is\nbuilt from the config or the config is checked.\n\nReading a config checks its shape. What a config may not state is\nrefused when it's checked, and when a `Lablet` is built from it.",
+  "description": "What a `Lablet` is built from.\n\nThe sections hold what the config states, with lablet's default wherever\nit states nothing and every provider shares the default. A setting of\nthe `model` section that's one provider's is held as it was stated, and\n[`Config::resolved`] fills in its default. Every `${VAR}` was filled\nbefore the config was typed, by [`RawConfig::substituted`], and the\nconfig keeps the record of what the fill changed, so its `Debug` form,\nits messages and its resolved form show each filled setting as the file\nwrote it. Its serialisation shows the typed values, a secret as\n`[secret]`; it's what the mask reads.\n\nReading a config checks its shape. What a config may not state is\nrefused when it's checked, and when a `Lablet` is built from it.",
   "properties": {
     "model": {
       "$ref": "#/$defs/Model",
       "default": {
         "api": null,
-        "api_key_env": null,
+        "api_key": null,
         "base_url": null,
         "cache": null,
         "cache_scope": "shared",
@@ -1040,6 +1049,7 @@
       "default": {
         "allow": null,
         "builtin": {
+          "credentials": {},
           "enabled": [],
           "env": {},
           "root": null,

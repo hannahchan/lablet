@@ -27,6 +27,10 @@ const CHILD: &str = "LABLET_TEST_EXPORTER_CANARY";
 /// What the child the parent started was given, when it's the child of
 /// `canary`.
 fn given(canary: &str) -> Option<String> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable its parent set, to know which side it's on"
+    )]
     let given = std::env::var(CHILD).ok()?;
     let (named, rest) = given.split_once(':')?;
     (named == canary).then(|| rest.to_owned())

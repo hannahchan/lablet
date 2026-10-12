@@ -1,32 +1,37 @@
 //! What checking a config comes to, which both roots go on from: the
-//! config with `${VAR}` substituted and its settings checked, the provider's
-//! key variable, the system prompt and the fake provider's script read, and
-//! lablet's secrets derived. It reads no telemetry setting of its own: in
-//! between, each root settles what it reads of the telemetry, the command
-//! line's root its SDK's settings and the library root only the capture
-//! variable, and hands in what the rest of the check needs of it. It
-//! constructs no adapter: each root builds its tools and its provider
-//! through the wiring kernels, and connects what they return itself.
+//! filled config with its settings checked, its credentials held to their
+//! rules, the system prompt and the fake provider's script read, and
+//! lablet's credentials derived. It reads no environment variable and no
+//! telemetry setting of its own: the config was filled before it got here,
+//! the environment a run's processes start from is handed in, and in
+//! between the command line's root settles what it reads of the telemetry
+//! and hands in what the rest of the check needs of it. It constructs no
+//! adapter: each root builds its tools and its provider through the wiring
+//! kernels, and connects what they return itself.
 
 mod root;
 mod settings;
 
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use lablet_config::{
-    Config, ConfigError, Context, Env, Format, Model, Place, Provider, Refusal, ResolvedConfig,
-    Substituted, Tools, TranscriptFormat,
+    Config, ConfigError, Context, Format, KeyPath, Place, Provider, Refusal, ResolvedConfig, Tools,
+    TranscriptFormat,
 };
 use lablet_model::{RunOutcome, StopReason, ToolSpec};
 use lablet_provider_fake::{Script, ScriptFormat, ScriptSource};
 use lablet_run::FilterList;
-use lablet_secrets::{self as secrets, Derived, Named};
-use secrecy::SecretString;
+use lablet_secrets::{self as secrets, Credential, Derived, Handed, Named, Variables};
 
 pub use root::{OwnFile, held};
-pub use settings::{Selected, Settings, System};
+pub use settings::{BuiltinSettings, Selected, Settings, System};
+
+/// The target of this crate's warnings, so a `RUST_LOG` directive written
+/// against the composition's lines catches them too.
+const TARGET: &str = "lablet::lablet";
 
 /// What a config may state that this lablet has no adapter for yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -129,14 +134,12 @@ impl ErrorClass {
 /// Why a `Lablet` couldn't be built, or a config didn't pass its check.
 ///
 /// Each refusal of a setting names its key and where it was written, and
-/// shows its value as the config writes it, before `${VAR}` substitution:
-/// what a variable holds is in no message. `model.api_key_env`'s value is
-/// shown only when it's written in capitals, digits and `_`, as
-/// environment variables are and few key formats are.
+/// shows its value as the config writes it, `${VAR}` and all: what a
+/// variable holds is in no message, and a credential's value never is.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BuildError {
     /// The config states something a config may not, or a value that can't
-    /// be used where lablet runs: a variable that isn't set, a file that
+    /// be used where lablet runs: a credential written out, a file that
     /// can't be read, a script that's refused, a root that's no directory.
     #[error(transparent)]
     Config(#[from] ConfigError),
@@ -147,17 +150,6 @@ pub enum BuildError {
         kind: Unsupported,
         /// The phase of the build plan that delivers it.
         phase: &'static str,
-    },
-    /// The provider needs a key, and the variable that `model.api_key_env`
-    /// names holds none where lablet runs. What the config holds there may
-    /// be a key that was written in the name's place, so the refusal names
-    /// the variable only when it's written in capitals, digits and `_`.
-    #[error("model.api_key_env{} is refused: {reason}", at(*place))]
-    KeyVariable {
-        /// Where `model.api_key_env` was written, when it was.
-        place: Option<Place>,
-        /// What's wrong with the variable.
-        reason: String,
     },
     /// The root of the built-in tools holds a file of lablet's own, which
     /// the model could then read and write over. Both are shown as the
@@ -203,7 +195,6 @@ impl BuildError {
         match self {
             Self::Config(_)
             | Self::Unsupported { .. }
-            | Self::KeyVariable { .. }
             | Self::RootHolds { .. }
             | Self::UnknownTool { .. }
             | Self::Tools { .. } => ErrorClass::Config,
@@ -216,31 +207,136 @@ fn at(place: Option<Place>) -> String {
     place.map(|place| format!(" ({place})")).unwrap_or_default()
 }
 
+/// The environment every process a run starts begins from, as the root
+/// handed it in: the command line's own, or what a host chose. `None` when
+/// nothing was handed in, which `bash` refuses.
+pub type Base = Option<Vec<(OsString, OsString)>>;
+
+/// What the environment a command starts from came to, which the root
+/// computed from the base once the tools were built.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Environment {
+    /// The variables of the base a command inherits as set, sorted: the
+    /// base less the drops and the context variables.
+    pub inherited: Vec<String>,
+    /// The variables dropped by name: those that filled an own or given
+    /// field.
+    pub by_name: BTreeSet<String>,
+    /// The variables dropped by value: those holding an own or given value
+    /// under another name.
+    pub by_value: BTreeSet<String>,
+    /// Each variable dropped by value, with the field whose value it holds.
+    pub copies: Vec<(KeyPath, String)>,
+    /// The context variables a command is given in place of the ones it
+    /// would inherit: the propagator's fields, as variables.
+    pub context: Vec<String>,
+}
+
+/// An entry of `tools.builtin.env`, as `check` prints it under `env:`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Passed {
+    /// The variable's name.
+    pub name: String,
+    /// Where it was written.
+    pub place: Option<Place>,
+    /// The variable it's a copy of, when the entry is one `${VAR}` of
+    /// another name.
+    pub copied_from: Option<String>,
+}
+
+impl fmt::Display for Passed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.copied_from {
+            Some(_) => write!(
+                f,
+                "{}{} reaches bash uncut; if it's a credential, move it under \
+                 tools.builtin.credentials",
+                self.name,
+                at(self.place)
+            ),
+            None => write!(f, "{}{} -> bash", self.name, at(self.place)),
+        }
+    }
+}
+
 /// What a config passed its check with: what it resolves to, the tools a
-/// run of it is offered, and the names of its secrets.
+/// run of it is offered, its credentials and who gets each, and what its
+/// commands inherit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Checked {
     resolved: ResolvedConfig,
     tools: Vec<ToolSpec>,
-    withheld: BTreeSet<String>,
+    own: Vec<Credential>,
+    given: Vec<Credential>,
+    env: Vec<Passed>,
+    environment: Option<Environment>,
     cut: Vec<Named>,
 }
 
 impl Checked {
-    /// What a config passed its check with: `resolved`, the specs of the
-    /// tools the root built for it, and its `secrets`.
+    /// What `config` passed its check with: the specs of the tools the root
+    /// built for it, its `secrets`, and the `environment` its commands
+    /// start from, when it has `bash`.
     #[must_use]
-    pub fn new(resolved: ResolvedConfig, tools: Vec<ToolSpec>, secrets: Derived) -> Self {
+    pub fn new(
+        config: &Config,
+        tools: Vec<ToolSpec>,
+        secrets: Derived,
+        environment: Option<Environment>,
+    ) -> Self {
+        let Derived {
+            mut own,
+            mut given,
+            dropped: _,
+            cut,
+            values: _,
+            dropping: _,
+        } = secrets;
+        if let Some(environment) = &environment {
+            for credential in own.iter_mut().chain(&mut given) {
+                credential.copies = environment
+                    .copies
+                    .iter()
+                    .filter(|(field, _)| *field == credential.field)
+                    .map(|(_, name)| name.clone())
+                    .collect();
+            }
+        }
+        let env = config
+            .tools
+            .builtin
+            .env
+            .keys()
+            .map(|name| {
+                let key = KeyPath::of("tools.builtin.env").key(name);
+                let copied_from = config
+                    .filled()
+                    .at(&key)
+                    .filter(|fill| fill.is_one_variable())
+                    .and_then(|fill| fill.names().next())
+                    .filter(|variable| *variable != name)
+                    .map(str::to_owned);
+                Passed {
+                    name: name.clone(),
+                    place: config.place_at(&key),
+                    copied_from,
+                }
+            })
+            .collect();
         Self {
-            resolved,
+            resolved: config.resolved(),
             tools,
-            withheld: secrets.withheld,
-            cut: secrets.cut,
+            own,
+            given,
+            env,
+            environment,
+            cut,
         }
     }
 
-    /// The config with every default filled in, as it's written, which is
-    /// what `lablet check --resolved` prints.
+    /// The config with every default filled in, which is what `lablet
+    /// check --resolved` prints: each filled setting as written, and a
+    /// secret set in code as `[secret]`.
     #[must_use]
     pub fn resolved(&self) -> &ResolvedConfig {
         &self.resolved
@@ -253,17 +349,51 @@ impl Checked {
         &self.tools
     }
 
-    /// The variables no command of a run inherits: the ones lablet reads
-    /// its secrets from.
+    /// Lablet's own credentials, each with its source, the field it fills
+    /// and who gets it, which no process inherits.
     #[must_use]
-    pub fn withheld(&self) -> &BTreeSet<String> {
-        &self.withheld
+    pub fn own(&self) -> &[Credential] {
+        &self.own
     }
 
-    /// The names whose values no tool result shows, a variable's name or
-    /// the key of a value written in the config, in order, each followed by
-    /// a note when its value isn't cut: not set, empty, or under the floor.
-    /// Never a value.
+    /// The credentials given to `bash`, each under its entry's name.
+    #[must_use]
+    pub fn given(&self) -> &[Credential] {
+        &self.given
+    }
+
+    /// The entries of `tools.builtin.env`, each passed to `bash` as set.
+    #[must_use]
+    pub fn env(&self) -> &[Passed] {
+        &self.env
+    }
+
+    /// What `bash` inherits of the environment handed in, with what was
+    /// dropped on the way; `None` when the config enables no `bash`.
+    #[must_use]
+    pub fn environment(&self) -> Option<&Environment> {
+        self.environment.as_ref()
+    }
+
+    /// The names of the variables `bash` inherits as set, sorted.
+    #[must_use]
+    pub fn inherited(&self) -> &[String] {
+        self.environment
+            .as_ref()
+            .map_or(&[], |environment| environment.inherited.as_slice())
+    }
+
+    /// The digest of the resolved config, which groups the runs made from
+    /// it.
+    #[must_use]
+    pub fn digest(&self) -> lablet_model::ConfigDigest {
+        self.resolved.digest()
+    }
+
+    /// The names whose values the command line still cuts without dropping
+    /// them, the OTLP variables its seam sends, each followed by a note when
+    /// its value isn't cut: not set, empty, or under the floor. Never a
+    /// value.
     #[must_use]
     pub fn cut(&self) -> Vec<String> {
         self.cut.iter().map(ToString::to_string).collect()
@@ -273,11 +403,11 @@ impl Checked {
 /// A config checked up to its telemetry, which the root settles before
 /// the check goes on: what [`prepare`] comes to.
 pub struct Settled {
-    /// The config with `${VAR}` substituted, which is what runs.
-    real: Substituted,
+    config: Config,
     settings: Settings,
     provider: Ready,
     system: String,
+    base: Base,
 }
 
 /// What a root read of the telemetry's settings, which the rest of a check
@@ -287,20 +417,15 @@ pub struct Telemetry<'a> {
     /// The telemetry file the root writes, which the root of the built-in
     /// tools may not hold.
     pub file: Option<PathBuf>,
-    /// What the environment says of content capture, when it says
-    /// anything. The config's `telemetry.capture_content` wins over it.
-    pub capture_content: Option<bool>,
-    /// The client keys the root's network exporters read, each the
-    /// variable that names its file and what the file holds, which are
-    /// cut from what a tool returns.
-    pub client_keys: &'a [(&'a str, &'a SecretString)],
+    /// The values the root still reads from its environment and sends, to
+    /// be cut from what a tool returns without dropping their variables.
+    pub handed: &'a [Handed<'a>],
 }
 
 /// What checking a config comes to, which a build goes on from once the
 /// root has built its tools.
 pub struct Prepared {
-    /// The config with `${VAR}` substituted, which is what runs.
-    real: Substituted,
+    config: Config,
     settings: Settings,
     provider: Ready,
     system: String,
@@ -308,9 +433,10 @@ pub struct Prepared {
     telemetry_file: Option<PathBuf>,
     /// Whether content reaches telemetry.
     capture_content: bool,
-    /// lablet's secrets: what's withheld, what's cut, and the values when
-    /// the run has an executor to hand them to.
+    /// Lablet's credentials: what's dropped, what's given, what's cut, and
+    /// the values when the run has an executor to hand them to.
     secrets: Derived,
+    base: Base,
 }
 
 /// The provider a checked config selects, with what was read for it, so a
@@ -322,23 +448,31 @@ enum Ready {
     Fake(Script),
 }
 
-/// Checks `written` whole, on the config it comes to once `${VAR}` is
-/// substituted, and shows each refusal from `written`, so no message holds
-/// what a variable holds. It stops before the telemetry, which the root
-/// settles and hands to [`Settled::finish`], and the tools are left for the
-/// root to build through `lablet-tools-wiring`, which refuses what only
-/// building them finds.
+/// Checks `config` whole, as it was filled, with `base` the environment
+/// every process a run starts begins from. It stops before the telemetry,
+/// which the root settles and hands to [`Settled::finish`], and the tools
+/// are left for the root to build through `lablet-tools-wiring`, which
+/// refuses what only building them finds.
 ///
 /// # Errors
 ///
 /// Returns the [`BuildError`] of the first thing the check refuses, in the
-/// order a build meets them.
-pub fn prepare(written: &Config, env: Env<'_>) -> Result<Settled, BuildError> {
-    let refused = |refusal| BuildError::Config(written.refused(refusal));
-    let real = written.substituted(env).map_err(refused)?;
-    let settings = Settings::of(&real).map_err(refused)?;
-    key_is_set(&real.model, written, env)?;
-    supported(&real)?;
+/// order a build meets them: a setting a rule refuses; a credential written
+/// out, or with a default that isn't empty; a key the provider needs that
+/// isn't set; a `tools.builtin.env` entry that names a credential's
+/// variable, or one `bash` inherits already; a `credentials` entry `env`
+/// sets too; `bash` with no environment handed in; what this lablet has no
+/// adapter for; and a file the config names that can't be read.
+pub fn prepare(config: &Config, base: Base) -> Result<Settled, BuildError> {
+    let refused = |refusal| BuildError::Config(config.refused(refusal));
+    let settings = Settings::of(config).map_err(refused)?;
+    let variables = secrets::variables(config);
+    credentials_are_variables(config)?;
+    key_is_set(config)?;
+    env_is_no_credential(config, &variables, base.as_deref())?;
+    bash_has_a_base(config, &settings, base.is_some())?;
+    warn_of_an_own_credential_given(config, &variables);
+    supported(config)?;
 
     let system = match &settings.system {
         System::Text(text) => text.clone(),
@@ -352,71 +486,63 @@ pub fn prepare(written: &Config, env: Env<'_>) -> Result<Settled, BuildError> {
             // The script is read where it is and named as the config writes
             // it, since the provider puts its name in the errors a run ends
             // with.
-            let name = written
+            let name = config
                 .written_text("model.script")
                 .unwrap_or_else(|| script.display().to_string());
             Ready::Fake(read_script(script, &name).map_err(refused)?)
         }
     };
     Ok(Settled {
-        real,
+        config: config.clone(),
         settings,
         provider,
         system,
+        base,
     })
 }
 
 impl Settled {
-    /// The config with `${VAR}` substituted, which is what runs, and what
-    /// a root reads its telemetry's settings from.
+    /// The filled config, which is what runs, and what a root reads its
+    /// telemetry's settings from.
     #[must_use]
-    pub fn real(&self) -> &Substituted {
-        &self.real
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
-    /// The check of `written`, this config as it's written, gone on with
-    /// what the root read of the telemetry: content capture settled, and
-    /// lablet's secrets derived, with each variable's value read from
-    /// `env`.
+    /// The check gone on with what the root read of the telemetry: lablet's
+    /// credentials derived, with the values the root hands in cut beside
+    /// them.
     #[must_use]
-    pub fn finish(self, written: &Config, env: Env<'_>, telemetry: Telemetry<'_>) -> Prepared {
+    pub fn finish(self, telemetry: Telemetry<'_>) -> Prepared {
         let Self {
-            real,
+            config,
             settings,
             provider,
             system,
+            base,
         } = self;
-        let capture_content = real
-            .telemetry
-            .capture_content
-            .or(telemetry.capture_content)
-            .unwrap_or(false);
+        let capture_content = config.telemetry.capture_content.unwrap_or(false);
         // The values are held only for an executor to cut, and the built-in
         // tools are the one executor a run can have.
-        let secrets = secrets::derived(
-            written,
-            &real,
-            env,
-            telemetry.client_keys,
-            settings.builtin.is_some(),
-        );
+        let secrets = secrets::derived(&config, telemetry.handed, settings.builtin.is_some());
         Prepared {
-            real,
+            config,
             settings,
             provider,
             system,
             telemetry_file: telemetry.file,
             capture_content,
             secrets,
+            base,
         }
     }
 }
 
 impl Prepared {
-    /// The config with `${VAR}` substituted, which is what runs.
+    /// The filled config, which is what runs.
     #[must_use]
-    pub fn real(&self) -> &Substituted {
-        &self.real
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     /// What the loop and its adapters are built from.
@@ -438,13 +564,20 @@ impl Prepared {
         self.capture_content
     }
 
-    /// The variables no command inherits.
+    /// Lablet's credentials, derived.
     #[must_use]
-    pub fn withheld(&self) -> &BTreeSet<String> {
-        &self.secrets.withheld
+    pub fn secrets(&self) -> &Derived {
+        &self.secrets
     }
 
-    /// lablet's secrets, for a check that ends here.
+    /// The environment every process a run starts begins from, when one was
+    /// handed in.
+    #[must_use]
+    pub fn base(&self) -> Option<&[(OsString, OsString)]> {
+        self.base.as_deref()
+    }
+
+    /// Lablet's credentials, for a check that ends here.
     #[must_use]
     pub fn into_secrets(self) -> Derived {
         self.secrets
@@ -454,8 +587,8 @@ impl Prepared {
 /// What a checked config's `Lablet` is wired from, beside its telemetry and
 /// its tools.
 pub struct Wiring {
-    /// The config with `${VAR}` substituted, which is what runs.
-    pub real: Substituted,
+    /// The filled config, which is what runs.
+    pub config: Config,
     /// What the loop and its adapters are built from.
     pub settings: Settings,
     /// The fake provider's script, the one provider there's an adapter for.
@@ -464,7 +597,7 @@ pub struct Wiring {
     pub system: String,
     /// Whether content reaches telemetry.
     pub capture_content: bool,
-    /// lablet's secrets, whose values the loop cuts.
+    /// Lablet's credentials, whose values the loop cuts.
     pub secrets: Derived,
 }
 
@@ -477,13 +610,14 @@ impl Prepared {
     /// adapter for yet.
     pub fn wiring(self) -> Result<Wiring, BuildError> {
         let Self {
-            real,
+            config,
             settings,
             provider,
             system,
             telemetry_file: _,
             capture_content,
             secrets,
+            base: _,
         } = self;
         let script = match provider {
             Ready::Fake(script) => script,
@@ -491,7 +625,7 @@ impl Prepared {
             Ready::Openai => return Err(Unsupported::Openai.into()),
         };
         Ok(Wiring {
-            real,
+            config,
             settings,
             script,
             system,
@@ -501,31 +635,309 @@ impl Prepared {
     }
 }
 
-/// Holds `model.api_key_env` to a variable that's set, for a provider that
-/// needs a key. Only whether it's set is read, and nothing of what it
-/// holds is kept. `model` is the model as it runs, and the refusal names
-/// the variable as `written` writes it.
-fn key_is_set(model: &Model, written: &Config, env: Env<'_>) -> Result<(), BuildError> {
-    let (Provider::Anthropic, Some(variable)) = (model.provider, model.key_variable()) else {
-        return Ok(());
-    };
-    let fault = match env(variable) {
-        Some(key) if !key.is_empty() => return Ok(()),
-        Some(_) => "is empty",
-        None => "isn't set",
-    };
-    let variable = match (
-        &written.model.api_key_env,
-        written.model.shown_key_variable(),
-    ) {
-        (None, _) => format!("`{variable}`, the variable that's read when the config names none,"),
-        (Some(_), Some(shown)) => format!("`{shown}`, the variable it names,"),
-        (Some(_), None) => "the variable it names".to_owned(),
-    };
-    Err(BuildError::KeyVariable {
-        place: written.place_of("model.api_key_env"),
-        reason: format!("{variable} {fault}, and the provider `anthropic` needs a key"),
+/// The refusal of the setting at `key`, with its value as the config writes
+/// it where `shown` shows one.
+fn refusal(config: &Config, key: &KeyPath, shown: Option<String>, reason: String) -> BuildError {
+    BuildError::Config(ConfigError::Invalid {
+        key: key.to_string(),
+        place: config.place_at(key),
+        value: shown,
+        reason,
     })
+}
+
+/// The refusal of the setting at `key` that shows nothing of its value.
+fn refusal_unshown(config: &Config, key: &KeyPath, reason: String) -> BuildError {
+    BuildError::Config(ConfigError::Refused {
+        key: key.to_string(),
+        place: config.place_at(key),
+        reason,
+    })
+}
+
+/// Whether `text` is written as a variable's name is: capitals, digits and
+/// `_`, with at least one `_`, as `ANTHROPIC_API_KEY` is. The one shape of
+/// a credential written out that a message may show, since it's a name and
+/// never a key: an access key id or a hex token is capitals and digits too,
+/// and the `_` tells them apart.
+fn is_written_as_a_variable(text: &str) -> bool {
+    text.contains('_')
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+/// Holds each credential the config's text writes to a `${VAR}`:
+/// `model.api_key` and each entry of `tools.builtin.credentials` written in
+/// the text is a variable, with a default that's empty if it has one. A
+/// credential the text didn't write was set in code, as a `Secret`, and
+/// passes.
+fn credentials_are_variables(config: &Config) -> Result<(), BuildError> {
+    let key = KeyPath::of("model.api_key");
+    if let Some(secret) = &config.model.api_key {
+        credential_is_a_variable(config, &key, secret.expose_secret(), "api_key", "the key")?;
+    } else if config.filled().at(&key).is_some() {
+        // The key's variable is unset, and what the text wrote beside its
+        // `${VAR}` may still be a key.
+        credential_is_a_variable(config, &key, "", "api_key", "the key")?;
+    }
+    let credentials = KeyPath::of("tools.builtin.credentials");
+    for (name, secret) in &config.tools.builtin.credentials {
+        credential_is_a_variable(
+            config,
+            &credentials.key(name),
+            secret.expose_secret(),
+            name,
+            "it",
+        )?;
+    }
+    Ok(())
+}
+
+/// Holds the credential at `key`, which `entry` names in a fix, to one
+/// `${VAR}` and nothing else, with no default but an empty one, where the
+/// text wrote it; what's written beside a `${VAR}` may be the value, so
+/// it's refused unshown as a literal is.
+fn credential_is_a_variable(
+    config: &Config,
+    key: &KeyPath,
+    value: &str,
+    entry: &str,
+    rotated: &str,
+) -> Result<(), BuildError> {
+    if config.place_at(key).is_none() {
+        return Ok(());
+    }
+    let rotate = if rotated == "it" {
+        "rotate it if this was the token".to_owned()
+    } else {
+        format!("rotate {rotated} if this was one")
+    };
+    match config.filled().at(key) {
+        Some(fill) if !fill.variables.is_empty() => match fill.default() {
+            Some(default) if !default.is_empty() => Err(refusal_unshown(
+                config,
+                key,
+                format!(
+                    "a credential's default can only be empty, and what follows :- isn't shown; \
+                     write ${{{}:-}}",
+                    fill.variables[0].name
+                ),
+            )),
+            _ if !fill.is_one_variable() => Err(refusal_unshown(
+                config,
+                key,
+                format!(
+                    "it isn't one ${{VAR}} and nothing else, and what it holds isn't shown; write \
+                     {entry}: ${{{}}}, and {rotate}",
+                    fill.variables[0].name
+                ),
+            )),
+            _ => Ok(()),
+        },
+        _ if is_written_as_a_variable(value) => Err(refusal(
+            config,
+            key,
+            Some(format!("{value:?}")),
+            format!("it's a variable's name, not a ${{VAR}}; write {entry}: ${{{value}}}"),
+        )),
+        _ => {
+            let written = match config.place_at(key) {
+                Some(Place::Override) => format!("--set '{key}=${{MY_KEY}}'"),
+                _ => format!("{entry}: ${{{}}}", suggested_variable(entry)),
+            };
+            Err(refusal_unshown(
+                config,
+                key,
+                format!(
+                    "it holds no ${{VAR}}, and what it holds isn't shown; write {written}, and {rotate}"
+                ),
+            ))
+        }
+    }
+}
+
+/// The variable a fix names for `entry`: the entry's own name, or the key's
+/// conventional one.
+fn suggested_variable(entry: &str) -> String {
+    if entry == "api_key" {
+        "ANTHROPIC_API_KEY".to_owned()
+    } else {
+        entry.to_owned()
+    }
+}
+
+/// Holds `model.api_key` to a key that's set, for a provider that needs
+/// one. Nothing of what it holds is kept, and the refusal names the
+/// variable as the config writes it.
+fn key_is_set(config: &Config) -> Result<(), BuildError> {
+    if config.model.provider != Provider::Anthropic {
+        return Ok(());
+    }
+    let key = KeyPath::of("model.api_key");
+    let fill = config.filled().at(&key);
+    let needs = "the provider `anthropic` needs a key";
+    match &config.model.api_key {
+        Some(secret) if !secret.expose_secret().trim().is_empty() => Ok(()),
+        Some(_) => match fill.and_then(|fill| fill.names().next()) {
+            Some(variable) => Err(refusal(
+                config,
+                &key,
+                config
+                    .written_text("model.api_key")
+                    .map(|text| format!("{text:?}")),
+                format!("`{variable}` is empty, and {needs}; set it"),
+            )),
+            None => Err(refusal_unshown(
+                config,
+                &key,
+                format!("it's empty, and {needs}"),
+            )),
+        },
+        None => match fill.and_then(|fill| fill.names().next()) {
+            Some(variable) => Err(refusal(
+                config,
+                &key,
+                config
+                    .written_text("model.api_key")
+                    .map(|text| format!("{text:?}")),
+                format!("`{variable}` isn't set, and {needs}; set it"),
+            )),
+            None if config.made_in_code() => Err(BuildError::Config(ConfigError::Missing {
+                key: key.to_string(),
+                reason: format!(
+                    "{needs}, and a library reads no variable; set config.model.api_key = \
+                     Some(Secret::new(key))"
+                ),
+            })),
+            None => Err(BuildError::Config(ConfigError::Missing {
+                key: key.to_string(),
+                reason: format!("{needs}; add api_key: ${{ANTHROPIC_API_KEY}}"),
+            })),
+        },
+    }
+}
+
+/// Holds `tools.builtin.env` apart from the credentials: an entry filled
+/// from an own or given variable is refused, since the environment gives
+/// nothing knowingly, and so is one that names its own variable, which
+/// `bash` inherits already. A name both `env` and `credentials` set is
+/// refused too.
+fn env_is_no_credential(
+    config: &Config,
+    variables: &Variables,
+    base: Option<&[(OsString, OsString)]>,
+) -> Result<(), BuildError> {
+    let env = KeyPath::of("tools.builtin.env");
+    let credentials = KeyPath::of("tools.builtin.credentials");
+    for name in config.tools.builtin.credentials.keys() {
+        if config.tools.builtin.env.contains_key(name) {
+            return Err(refusal_unshown(
+                config,
+                &credentials.key(name),
+                format!(
+                    "`tools.builtin.env` sets {name} too{}; keep one",
+                    at(config.place_at(&env.key(name)))
+                ),
+            ));
+        }
+    }
+    for name in config.tools.builtin.env.keys() {
+        let key = env.key(name);
+        let Some(fill) = config.filled().at(&key) else {
+            continue;
+        };
+        let shown = || Some(format!("{:?}", fill.written));
+        for variable in fill.names() {
+            if let Some(field) = variables.own_field(variable) {
+                let what = if *field == KeyPath::of("model.api_key") {
+                    "the key"
+                } else {
+                    "the value"
+                };
+                return Err(refusal(
+                    config,
+                    &key,
+                    shown(),
+                    format!(
+                        "`{variable}` fills `{field}`, and no process inherits an own credential; \
+                         to give bash {what} knowingly, list {name} under `tools.builtin.credentials`"
+                    ),
+                ));
+            }
+            if let Some(entry) = variables.given_entry(variable) {
+                return Err(refusal(
+                    config,
+                    &key,
+                    shown(),
+                    format!(
+                        "`{variable}` is given under `credentials`{}; list {name} there instead, \
+                         as {name}: ${{{variable}}}",
+                        at(config.place_at(entry))
+                    ),
+                ));
+            }
+            let inherited =
+                base.is_some_and(|base| base.iter().any(|(set, _)| set.to_str() == Some(variable)));
+            if variable == name && fill.is_one_variable() && inherited {
+                return Err(refusal(
+                    config,
+                    &key,
+                    shown(),
+                    format!(
+                        "bash inherits `{name}` as set already, uncut; remove the line, or move it \
+                         under `tools.builtin.credentials` to have it cut"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Holds `bash` to an environment handed in, since a command starts from
+/// nothing else.
+fn bash_has_a_base(config: &Config, settings: &Settings, handed: bool) -> Result<(), BuildError> {
+    let runs_bash = settings
+        .builtin
+        .as_ref()
+        .is_some_and(|builtin| builtin.enabled.contains(&lablet_tools_builtin::Tool::Bash));
+    if !runs_bash || handed {
+        return Ok(());
+    }
+    // `bash` sorts first among the tools, so it's the list's first item as
+    // the config comes to it.
+    let key = KeyPath::of("tools.builtin.enabled").index(0);
+    Err(refusal(
+        config,
+        &key,
+        Some("\"bash\"".to_owned()),
+        "no process environment was handed in; hand in what commands need, PATH among them, \
+         as .with_process_environment([(\"PATH\", \"/usr/bin:/bin\")])"
+            .to_owned(),
+    ))
+}
+
+/// Warns of an own credential listed under `tools.builtin.credentials` too:
+/// allowed, so a task that needs the key gets it when the config says so,
+/// and said, since `bash` then has it.
+fn warn_of_an_own_credential_given(config: &Config, variables: &Variables) {
+    for (variable, entry) in &variables.given {
+        let Some(field) = variables.own_field(variable) else {
+            continue;
+        };
+        let what = if *field == KeyPath::of("model.api_key") {
+            "lablet's own key".to_owned()
+        } else {
+            format!("lablet's own `{field}`")
+        };
+        tracing::warn!(
+            target: TARGET,
+            "{entry}{}: it's {what}, given to bash; a task that needs the key gets it only when \
+             the config says so",
+            at(config.place_at(entry))
+        );
+    }
 }
 
 /// Refuses what the config selects, beside its provider, that this lablet

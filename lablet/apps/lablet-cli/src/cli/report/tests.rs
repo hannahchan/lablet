@@ -46,7 +46,9 @@ async fn finished(script: &str, budget: Option<u64>) -> FinishedRun {
         },
     });
     let config = Config::from_str(&config.to_string(), Format::Json).unwrap();
-    let mut lablet = lablet_cli::compose::build(config).await.unwrap();
+    let mut lablet = lablet_cli::compose::build(config, lablet_cli::input::process_environment())
+        .await
+        .unwrap();
     let finished = lablet.run(RunRequest::new(PROMPT).unwrap()).await;
     lablet.shutdown().await;
     finished

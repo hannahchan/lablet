@@ -31,7 +31,9 @@ async fn a_run_with_an_endpoint_and_no_file_path_goes_to_the_collector_and_to_no
     );
     assert!(!lablet_cli::compose::telemetry_on_stderr(&config));
 
-    let mut lablet = lablet_cli::compose::build(config).await.unwrap();
+    let mut lablet = lablet_cli::compose::build(config, lablet_cli::input::process_environment())
+        .await
+        .unwrap();
     let finished = lablet.run(request()).await;
     lablet.shutdown().await;
 
@@ -74,7 +76,9 @@ async fn a_run_with_an_endpoint_and_a_file_path_goes_to_both_over_http_when_the_
         } } }),
     );
 
-    let mut lablet = lablet_cli::compose::build(config).await.unwrap();
+    let mut lablet = lablet_cli::compose::build(config, lablet_cli::input::process_environment())
+        .await
+        .unwrap();
     let finished = lablet.run(request()).await;
     lablet.shutdown().await;
 

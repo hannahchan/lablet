@@ -10,7 +10,7 @@ use lablet_test_support::Scratch;
 
 use super::*;
 use crate::otel_env::{Exporter, OtelEnv};
-use lablet_config::Format;
+use lablet_config::{Format, RawConfig};
 
 /// A collector the environment names, which no message may show.
 const FROM_THE_ENVIRONMENT: &str = "http://collector.internal:4318";
@@ -32,13 +32,21 @@ fn env(held: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + use<> {
     }
 }
 
-/// What the config `text` resolves to in an environment that holds `held`,
-/// with `written` and `real` one config, since nothing here substitutes a
-/// variable.
+/// The config `text` holds, with each `${VAR}` filled from `held`.
+fn filled(text: &str, held: &[(&str, &str)]) -> Config {
+    RawConfig::from_str(text, Format::Yaml)
+        .unwrap()
+        .substituted(env(held))
+        .unwrap()
+        .config()
+        .unwrap()
+}
+
+/// What the config `text` resolves to in an environment that holds `held`.
 fn resolved(text: &str, held: &[(&str, &str)]) -> Result<Option<OtlpSettings>, ConfigError> {
     let config = config(text);
     let exporter = OtelEnv::read(&env(held)).exporter;
-    settings(&config, &config, &exporter)
+    settings(&config, &exporter)
 }
 
 fn on(text: &str, held: &[(&str, &str)]) -> OtlpSettings {
@@ -206,11 +214,12 @@ fn otel_sdk_disabled_wins_over_a_config_that_turns_the_exporter_on() {
 
 #[test]
 fn enabled_false_beside_an_endpoint_is_refused_as_a_setting_without_effect() {
-    let written = config("telemetry: { otlp: { enabled: false, endpoint: '${COLLECTOR}' } }");
-    let held = env(&[("COLLECTOR", FROM_THE_ENVIRONMENT)]);
-    let real = written.substituted(&held).unwrap();
+    let config = filled(
+        "telemetry: { otlp: { enabled: false, endpoint: '${COLLECTOR}' } }",
+        &[("COLLECTOR", FROM_THE_ENVIRONMENT)],
+    );
 
-    let refused = settings(&written, &real, &Exporter::default()).unwrap_err();
+    let refused = settings(&config, &Exporter::default()).unwrap_err();
 
     assert_eq!(
         refused.to_string(),
@@ -232,7 +241,7 @@ fn enabled_false_beside_an_endpoint_with_user_information_shows_its_key_alone() 
         "telemetry: { otlp: { enabled: false, endpoint: 'https://user:hunter2@collector.internal' } }",
     );
 
-    let refused = settings(&written, &written, &Exporter::default()).unwrap_err();
+    let refused = settings(&written, &Exporter::default()).unwrap_err();
 
     assert_eq!(
         refused.to_string(),
@@ -422,13 +431,12 @@ fn the_configs_endpoint_wins_over_every_variable() {
 
 #[test]
 fn an_endpoint_of_nothing_states_none_whether_written_so_or_given_by_a_variable() {
-    let written = config("telemetry: { otlp: { endpoint: '${COLLECTOR}' } }");
-    let held = env(&[("COLLECTOR", "")]);
-    let real = written.substituted(&held).unwrap();
+    let config = filled(
+        "telemetry: { otlp: { endpoint: '${COLLECTOR}' } }",
+        &[("COLLECTOR", "")],
+    );
 
-    let settings = settings(&written, &real, &Exporter::default())
-        .unwrap()
-        .unwrap();
+    let settings = settings(&config, &Exporter::default()).unwrap().unwrap();
 
     assert_eq!(where_to(&settings)[0].2, "http://localhost:4318/v1/traces");
 }

@@ -1,6 +1,9 @@
 //! What `lablet check` prints for a config that passed its check.
 
+use std::fmt::Write as _;
+
 use lablet_prepare::Checked;
+use lablet_secrets::Credential;
 
 use crate::cli::report::counted;
 
@@ -27,21 +30,78 @@ pub(crate) fn answer(checked: &Checked, resolved: bool) -> Result<String, String
     Ok(names.join("\n"))
 }
 
-/// The three lines a check that passed ends with on standard error:
-/// `withheld:` and the variables no command inherits, `cut:` and the names
-/// whose values no tool result shows, each with a note when its value
-/// isn't cut, then `passed:` and how many tools a run is offered, as
-/// `passed: 2 tools`. A list with nothing in it reads `none`, so a null
-/// effect is visible, and no line holds a value.
+/// The lines a check that passed ends with on standard error, each
+/// labelled: `own:`, each of lablet's own credentials, its variable and
+/// line, the field it fills and who gets it; `given:`, each credential
+/// `bash` is given, and under which name; `env:`, each entry of
+/// `tools.builtin.env` passed as set; with `bash`, `inherited:`, the
+/// variables a command inherits as set and the context variables it's given
+/// in their place; `cut:`, the names whose values the seam still sends and
+/// so cuts, each with a note when its value isn't cut; `digest:`, the
+/// config's; with `bash`, `limit:`, what no drop can hide from it; and
+/// `passed:`, how many tools a run is offered, as `passed: 2 tools`. A list
+/// with nothing in it reads `none`, so a null effect is visible, and no line
+/// holds a value.
 pub(crate) fn summary(checked: &Checked) -> String {
+    let mut lines = Vec::new();
+    let mut each = |label: &str, items: Vec<String>| {
+        if items.is_empty() {
+            lines.push(line(label, "none"));
+        }
+        for item in items {
+            lines.push(line(label, &item));
+        }
+    };
+    each(
+        "own",
+        checked.own().iter().map(Credential::as_own).collect(),
+    );
+    each(
+        "given",
+        checked.given().iter().map(Credential::as_given).collect(),
+    );
+    each(
+        "env",
+        checked.env().iter().map(ToString::to_string).collect(),
+    );
+    if let Some(environment) = checked.environment() {
+        let mut inherited = if environment.inherited.is_empty() {
+            "none".to_owned()
+        } else {
+            format!("{}, as set", environment.inherited.join(", "))
+        };
+        if !environment.context.is_empty() {
+            let _ = write!(
+                inherited,
+                "; {}, its tool span's",
+                environment.context.join(", ")
+            );
+        }
+        lines.push(line("inherited", &inherited));
+    }
+    lines.push(line("cut", &listed(checked.cut())));
+    lines.push(line("digest", &checked.digest().to_string()));
+    if checked.environment().is_some() {
+        let limit = if cfg!(target_os = "macos") {
+            "bash can read any file you can, and your shell's environment and lablet's"
+        } else {
+            "bash can read any file you can, and your shell's environment"
+        };
+        lines.push(line("limit", limit));
+    }
     let tools = u64::try_from(checked.tools().len()).unwrap_or(u64::MAX);
-    format!(
-        "withheld: {}\ncut: {}\npassed: {}",
-        listed(checked.withheld().iter().cloned()),
-        listed(checked.cut()),
-        counted(tools, "tool", "tools")
-    )
+    lines.push(line("passed", &counted(tools, "tool", "tools")));
+    lines.join("\n")
 }
+
+/// One line of the summary: its label, padded so every value starts in one
+/// column, and its text.
+fn line(label: &str, text: &str) -> String {
+    format!("{label}:{} {text}", " ".repeat(LABEL_WIDTH - label.len()))
+}
+
+/// The longest label, `inherited`.
+const LABEL_WIDTH: usize = "inherited".len();
 
 /// `names` on one line, or `none`.
 fn listed(names: impl IntoIterator<Item = String>) -> String {

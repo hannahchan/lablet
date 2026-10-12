@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::secret::Secret;
 use super::written::path;
 
 /// The `model` section.
@@ -28,11 +29,11 @@ pub struct Model {
     pub script: Option<PathBuf>,
     /// The provider's name for the model.
     pub name: String,
-    /// The environment variable that holds the API key, and never the key.
-    /// `None` is `ANTHROPIC_API_KEY` for `anthropic` and no variable for
-    /// the others. The variable is withheld from every command, and its
-    /// value is cut out of every tool result.
-    pub api_key_env: Option<String>,
+    /// The API key, which `anthropic` needs: written as a `${VAR}` and
+    /// never as the key itself, or set in code. It's lablet's own: no
+    /// process a run starts inherits the variable or a copy of the value,
+    /// and the value is cut out of every tool result.
+    pub api_key: Option<Secret>,
     /// `anthropic` and `openai` only: where the API is served, for a
     /// gateway or a local server. Its user information is a secret: cut
     /// out of every tool result, and left out of the config digest.
@@ -68,7 +69,7 @@ impl Default for Model {
             api: None,
             script: None,
             name: "claude-sonnet-5".to_owned(),
-            api_key_env: None,
+            api_key: None,
             base_url: None,
             max_tokens: 32_000,
             temperature: None,
@@ -149,30 +150,6 @@ impl Model {
         (self.provider == Provider::Openai).then_some(chosen)
     }
 
-    /// The variable that holds the API key: the one the config names, or
-    /// `ANTHROPIC_API_KEY` for `anthropic`.
-    #[must_use]
-    pub fn key_variable(&self) -> Option<&str> {
-        match (&self.api_key_env, self.provider) {
-            (Some(named), _) => Some(named),
-            (None, Provider::Anthropic) => Some("ANTHROPIC_API_KEY"),
-            (None, Provider::Openai | Provider::Fake) => None,
-        }
-    }
-
-    /// The name the config gives the key's variable, when a message may
-    /// show it: one written in capitals, digits and `_`, as environment
-    /// variables conventionally are and few key formats are. Any other
-    /// value may be a key written where its variable's name belongs.
-    /// Validation has already held the value to a variable's name, so only
-    /// its case and its characters are asked about here.
-    #[must_use]
-    pub fn shown_key_variable(&self) -> Option<&str> {
-        self.api_key_env
-            .as_deref()
-            .filter(|named| is_written_as_a_variable(named))
-    }
-
     /// Whether the provider can apply `setting`.
     #[must_use]
     pub fn applies(&self, setting: Setting) -> bool {
@@ -206,16 +183,6 @@ impl Model {
             Setting::Cache => self.cache.map(|cache| cache.to_string()),
         }
     }
-}
-
-/// Whether `named` is written in capitals, digits and `_`, as environment
-/// variables conventionally are and few key formats are: the one rule for
-/// whether a message may show what `model.api_key_env` holds.
-pub fn is_written_as_a_variable(named: &str) -> bool {
-    !named.is_empty()
-        && named
-            .bytes()
-            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
 /// A provider of models.

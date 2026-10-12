@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 lablet-config.workspace = true
+lablet-env-carrier.workspace = true
 lablet-prepare.workspace = true
 lablet-run.workspace = true
 lablet-tools-builtin.workspace = true

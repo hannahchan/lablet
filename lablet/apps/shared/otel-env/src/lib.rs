@@ -1,7 +1,6 @@
 //! The specification's parsing of the OpenTelemetry environment's
-//! variables, which the seam that reads them is built on. Each root reads
-//! the environment through it, so a variable parses alike whichever root
-//! reads it.
+//! variables, which the command line's seam is built on, and the decoding
+//! of a header variable's `k=v` text.
 //!
 //! The specification's parsing, for every variable read here: an empty value
 //! is unset; a name chosen from a list is matched in any case, trimmed, and
@@ -10,22 +9,22 @@
 //! naming the variable and, unless it may hold a secret, the value, and is
 //! then ignored, so the next source decides.
 
+use std::ffi::OsString;
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
-use lablet_config::Env;
+/// An environment, as a function from a variable's name to what it holds,
+/// so a test can say what it holds. It's `Sync`, so a future that holds one
+/// across an await is `Send`.
+pub type Env<'a> = &'a (dyn Fn(&str) -> Option<OsString> + Sync);
 
 /// The target of this crate's warnings, the module they were written in
 /// before the kernels were split out, so a line of the diagnostic log, and
 /// a `RUST_LOG` directive that names it, are as they were.
 const TARGET: &str = "lablet::otel_env";
 
-/// The GenAI instrumentation's capture variable, which both roots read:
-/// whether content reaches the telemetry when the config says nothing.
-pub const CAPTURE_CONTENT: &str = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT";
-
 /// The OTLP exporter's header variables, generic and for each signal,
-/// which are secrets whenever they're set, in both modes.
+/// whose values the command line's seam still sends, and so cuts.
 pub const HEADER_VARIABLES: [&str; 3] = [
     "OTEL_EXPORTER_OTLP_HEADERS",
     "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
@@ -33,18 +32,13 @@ pub const HEADER_VARIABLES: [&str; 3] = [
 ];
 
 /// The OTLP exporter's endpoint variables, generic and for each signal,
-/// whose user information is a secret in both modes.
+/// whose user information the command line's seam still sends to, and so
+/// cuts.
 pub const ENDPOINT_VARIABLES: [&str; 3] = [
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
     "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
 ];
-
-/// What [`CAPTURE_CONTENT`] in `env` says of content capture, or `None`
-/// when it says nothing. A value that isn't a Boolean is warned about.
-pub fn capture_content(env: Env<'_>) -> Option<bool> {
-    Variables(env).get(CAPTURE_CONTENT)
-}
 
 /// The environment, as the seam reads a variable of it.
 pub struct Variables<'a>(pub Env<'a>);

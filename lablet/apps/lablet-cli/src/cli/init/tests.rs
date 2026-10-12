@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use lablet_config::{Config, Format, Provider};
+use lablet_config::{Config, Format, KeyPath, Provider, RawConfig, Secret};
 use lablet_provider_fake::{Script, ScriptFormat, ScriptSource};
 use lablet_test_support::Scratch;
 
@@ -13,12 +13,18 @@ const STARTERS: [(Starter, Provider); 3] = [
     (Starter::Fake, Provider::Fake),
 ];
 
+/// The starter's config, with each `${VAR}` filled with a placeholder.
 fn config_of(starter: Starter) -> Config {
     let [config, ..] = starter.files() else {
         panic!("{starter:?} has no files");
     };
     assert_eq!(config.name, CONFIG);
-    Config::from_str(config.text, Format::Yaml).unwrap()
+    RawConfig::from_str(config.text, Format::Yaml)
+        .unwrap()
+        .substituted(|name: &str| Some(format!("placeholder-for-{name}").into()))
+        .unwrap()
+        .config()
+        .unwrap()
 }
 
 #[test]
@@ -37,19 +43,34 @@ fn each_starter_is_a_config_the_library_reads_that_selects_its_provider() {
 }
 
 #[test]
-fn the_starters_that_need_a_key_name_its_variable_and_hold_no_key() {
+fn the_starters_that_need_a_key_write_its_variable_and_hold_no_key() {
     for (starter, variable) in [
         (Starter::Anthropic, "ANTHROPIC_API_KEY"),
         (Starter::Openai, "OPENAI_API_KEY"),
     ] {
         let config = config_of(starter);
-        assert_eq!(config.model.api_key_env.as_deref(), Some(variable));
+        assert_eq!(
+            config.model.api_key,
+            Some(Secret::new(format!("placeholder-for-{variable}")))
+        );
+        assert_eq!(
+            config
+                .filled()
+                .at(&KeyPath::of("model.api_key"))
+                .unwrap()
+                .written,
+            format!("${{{variable}}}")
+        );
         assert_eq!(
             starter.files().len(),
             1,
             "{starter:?} writes its config alone"
         );
     }
+    assert!(
+        Config::from_str(Starter::Anthropic.files()[0].text, Format::Yaml).is_err(),
+        "the starter wants a fill"
+    );
 }
 
 #[test]

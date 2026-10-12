@@ -2,6 +2,7 @@
 //! in, and the digest that groups the runs made from it.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -12,6 +13,9 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 use super::model::{Api, CacheScope, Effort, Pricing, Provider, Thinking};
+use super::secret::Secret;
+use super::shown::{Masked, WrittenBack, debug_tree};
+use super::substitute::Filled;
 use super::tools::{Builtin, BuiltinTool, McpLifetime, McpResult, McpServer, OutputCut, Tools};
 use super::written::{duration, path};
 use super::{Prompt, Run, Telemetry, when};
@@ -23,7 +27,11 @@ use crate::url::without_user_information;
 /// states nothing, so two configs that come to the same thing resolve to the
 /// same value. It isn't a config that was checked: `build` refuses what a
 /// config may not state.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+///
+/// It's written out through the mask: a setting the fill changed is written
+/// as the file wrote it, `${VAR}` and all, and a secret as `[secret]`, so
+/// `check --resolved` and a `Debug` form hold nothing a variable gave.
+#[derive(Clone, PartialEq)]
 pub struct ResolvedConfig {
     /// The `run` section.
     pub run: Run,
@@ -35,6 +43,44 @@ pub struct ResolvedConfig {
     pub tools: ResolvedTools,
     /// The `telemetry` section.
     pub telemetry: Telemetry,
+    /// What the fill changed, which the mask writes back.
+    pub(crate) filled: Filled,
+}
+
+/// The sections as they serialise, in their order.
+#[derive(Serialize)]
+pub(crate) struct Sections<'a> {
+    run: &'a Run,
+    model: &'a ResolvedModel,
+    prompt: &'a Prompt,
+    tools: &'a ResolvedTools,
+    telemetry: &'a Telemetry,
+}
+
+impl ResolvedConfig {
+    pub(crate) fn sections(&self) -> Sections<'_> {
+        Sections {
+            run: &self.run,
+            model: &self.model,
+            prompt: &self.prompt,
+            tools: &self.tools,
+            telemetry: &self.telemetry,
+        }
+    }
+}
+
+impl Serialize for ResolvedConfig {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Masked::new(&self.sections(), &self.filled, WrittenBack::Every).serialize(serializer)
+    }
+}
+
+impl fmt::Debug for ResolvedConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("ResolvedConfig")
+            .field(&debug_tree(&self.sections(), &self.filled))
+            .finish()
+    }
 }
 
 /// A setting that only some configs apply: one that's one provider's, or
@@ -93,8 +139,8 @@ pub struct ResolvedModel {
     pub script: Applied<Option<PathBuf>>,
     /// The provider's name for the model.
     pub name: String,
-    /// The environment variable that holds the API key.
-    pub api_key_env: Option<String>,
+    /// The API key, written as `[secret]`, or as the file wrote it.
+    pub api_key: Option<Secret>,
     /// Where the API is served.
     #[serde(skip_serializing_if = "Applied::is_no")]
     pub base_url: Applied<Option<String>>,
@@ -240,10 +286,14 @@ pub struct ResolvedBuiltin {
         serialize_with = "applied_duration"
     )]
     pub timeout: Applied<Duration>,
-    /// Variables a command starts with on top of lablet's own environment,
-    /// which a command inherits less the variables lablet reads its secrets from.
+    /// Variables a command starts with on top of the environment it
+    /// inherits.
     #[serde(skip_serializing_if = "Applied::is_no")]
     pub env: Applied<BTreeMap<String, String>>,
+    /// Credentials given to `bash` under their names, each written as
+    /// `[secret]`, or as the file wrote it.
+    #[serde(skip_serializing_if = "Applied::is_no")]
+    pub credentials: Applied<BTreeMap<String, Secret>>,
 }
 
 impl From<&Builtin> for ResolvedBuiltin {
@@ -253,6 +303,7 @@ impl From<&Builtin> for ResolvedBuiltin {
             enabled,
             timeout,
             env,
+            credentials,
         } = builtin;
         let serves = !enabled.is_empty();
         Self {
@@ -260,6 +311,7 @@ impl From<&Builtin> for ResolvedBuiltin {
             root: when(serves, root.clone()),
             timeout: when(serves, *timeout),
             env: when(serves, env.clone()),
+            credentials: when(serves, credentials.clone()),
         }
     }
 }
@@ -267,19 +319,23 @@ impl From<&Builtin> for ResolvedBuiltin {
 impl ResolvedConfig {
     /// SHA-256 of the resolved config as canonical JSON, in lower-case hex.
     ///
-    /// It covers the settings that say what a run does and leaves out the
-    /// ones that say where its output goes, `run.transcript_path`,
-    /// `run.transcript_format` and the `telemetry` section, and the ones
-    /// that are credentials, which a run has but doesn't do: every value of
+    /// It covers the settings that say what a run does, each as it ran, so
+    /// a limit or a model's name a variable gave is in it as the variable
+    /// held it. It takes as the file wrote them, `${VAR}` and all, the
+    /// settings that say where something is: a path, a variable a command
+    /// starts with, and what starts a server, so one file has one digest on
+    /// every machine. It leaves out the settings that say where a run's
+    /// output goes, `run.transcript_path`, `run.transcript_format` and the
+    /// `telemetry` section, and the credentials, which a run has but doesn't
+    /// do: `model.api_key`, every value of `tools.builtin.credentials` and of
     /// an HTTP server's `headers`, whose keys stay, and the user information
     /// of `model.base_url` and a server's `url`, whose host stays. So two
     /// runs that differ only in where they write, or only in a rotated
-    /// token, share a digest. `tools.builtin.env` stays in it, since what a
-    /// command starts with is part of what a run does.
+    /// token, share a digest.
     ///
     /// The strip is made here and nowhere else, so the resolved config
-    /// `check --resolved` prints holds every value as written and reads
-    /// back to the same digest.
+    /// `check --resolved` prints holds every setting as written and reads
+    /// back to the same digest once its variables are filled again.
     ///
     /// Canonical JSON is compact, with the keys of every object in order.
     #[must_use]
@@ -287,28 +343,41 @@ impl ResolvedConfig {
         // Nothing of a resolved config fails to serialise: every key is
         // text, a path is written as it's shown, and a number JSON can't
         // hold is written as `null`.
-        let mut tree = serde_json::to_value(self).unwrap_or_default();
+        let mut tree = serde_json::to_value(Masked::new(
+            &self.sections(),
+            &self.filled,
+            WrittenBack::AsWritten,
+        ))
+        .unwrap_or_default();
         if let Value::Object(sections) = &mut tree {
             sections.remove("telemetry");
             if let Some(Value::Object(run)) = sections.get_mut("run") {
                 run.remove("transcript_path");
                 run.remove("transcript_format");
             }
-            if let Some(Value::Object(model)) = sections.get_mut("model")
-                && let Some(Value::String(url)) = model.get_mut("base_url")
-            {
-                *url = without_user_information(url);
+            if let Some(Value::Object(model)) = sections.get_mut("model") {
+                model.remove("api_key");
+                if let Some(Value::String(url)) = model.get_mut("base_url") {
+                    *url = without_user_information(url);
+                }
             }
-            if let Some(Value::Object(tools)) = sections.get_mut("tools")
-                && let Some(Value::Array(servers)) = tools.get_mut("mcp")
-            {
-                for server in servers.iter_mut().filter_map(Value::as_object_mut) {
-                    if let Some(Value::String(url)) = server.get_mut("url") {
-                        *url = without_user_information(url);
+            if let Some(Value::Object(tools)) = sections.get_mut("tools") {
+                if let Some(Value::Object(builtin)) = tools.get_mut("builtin")
+                    && let Some(Value::Object(credentials)) = builtin.get_mut("credentials")
+                {
+                    for value in credentials.values_mut() {
+                        *value = Value::Null;
                     }
-                    if let Some(Value::Object(headers)) = server.get_mut("headers") {
-                        for value in headers.values_mut() {
-                            *value = Value::Null;
+                }
+                if let Some(Value::Array(servers)) = tools.get_mut("mcp") {
+                    for server in servers.iter_mut().filter_map(Value::as_object_mut) {
+                        if let Some(Value::String(url)) = server.get_mut("url") {
+                            *url = without_user_information(url);
+                        }
+                        if let Some(Value::Object(headers)) = server.get_mut("headers") {
+                            for value in headers.values_mut() {
+                                *value = Value::Null;
+                            }
                         }
                     }
                 }

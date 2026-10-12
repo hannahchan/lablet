@@ -581,6 +581,10 @@ const LOGS: &str = "x-logs=l";
 /// from the child's own environment as a build resolves them, and the
 /// config's headers, when it states any.
 async fn exported_by_lablet(protocol: &str, endpoint: &str, headers: Option<&str>) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the child's own environment is what the parent set for it"
+    )]
     let environment = |name: &str| std::env::var_os(name);
     let config = lablet_config::Config::from_str(
         &to(protocol, endpoint, headers),
@@ -588,9 +592,7 @@ async fn exported_by_lablet(protocol: &str, endpoint: &str, headers: Option<&str
     )
     .unwrap();
     let exporter = crate::otel_env::OtelEnv::read(&environment).exporter;
-    let settings = crate::otlp::settings(&config, &config, &exporter)
-        .unwrap()
-        .unwrap();
+    let settings = crate::otlp::settings(&config, &exporter).unwrap().unwrap();
     exported_to(settings, "headers-child").await.unwrap();
 }
 
@@ -600,6 +602,10 @@ async fn exported_by_lablet(protocol: &str, endpoint: &str, headers: Option<&str
 /// gave it.
 #[test]
 fn a_child_process_exports_with_the_headers_its_environment_and_its_config_state() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable its parent set, to know which side it's on"
+    )]
     let Some(endpoints) = std::env::var_os(CHILD) else {
         return;
     };
@@ -703,6 +709,10 @@ const UNREAD_CHILD: &str = "LABLET_TEST_OTLP_UNREAD_HEADERS_CHILD";
 /// that sets nothing, whatever its process environment sets.
 #[test]
 fn a_child_process_exports_with_settings_read_from_an_empty_environment() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable its parent set, to know which side it's on"
+    )]
     let Some(endpoints) = std::env::var_os(UNREAD_CHILD) else {
         return;
     };
@@ -815,6 +825,10 @@ async fn child(name: &str, variable: &str, value: &str, roots: &Path) {
 /// which must take the whole run.
 #[test]
 fn a_child_process_exports_a_run_to_each_endpoint_over_tls() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable its parent set, to know which side it's on"
+    )]
     let Some(endpoints) = std::env::var_os(TLS_CHILD) else {
         return;
     };
@@ -874,6 +888,10 @@ async fn the_grpc_exporter_trusts_the_roots_its_environment_names_with_a_scheme_
 /// TLS, without the endpoint in the message.
 #[test]
 fn a_child_process_with_no_roots_to_trust_makes_no_exporter_that_speaks_tls() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable its parent set, to know which side it's on"
+    )]
     let Some(cases) = std::env::var_os(NO_ROOTS_CHILD) else {
         return;
     };
@@ -948,6 +966,10 @@ const REPLACED_CHILD: &str = "LABLET_TEST_OTLP_REPLACED_ROOTS_CHILD";
 /// CA, must fail.
 #[test]
 fn a_child_process_exports_with_an_unrelated_ca_named() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable its parent set, to know which side it's on"
+    )]
     let Some(given) = std::env::var_os(REPLACED_CHILD) else {
         return;
     };

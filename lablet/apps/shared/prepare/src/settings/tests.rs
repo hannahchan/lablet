@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 
 use lablet_model::{CacheScope, Effort, Thinking};
@@ -33,10 +33,6 @@ fn settings_of(config: &Config) -> Result<Settings, ConfigError> {
             place: None,
             value,
             reached,
-        },
-        ConfigError::KeyVariable { reason, .. } => ConfigError::KeyVariable {
-            place: None,
-            reason,
         },
         other => other,
     })
@@ -179,12 +175,10 @@ tools:
     );
     assert_eq!(
         settings.builtin,
-        Some(lablet_tools_builtin::Settings {
+        Some(BuiltinSettings {
             root: "work".into(),
             enabled: BTreeSet::from([Tool::Bash, Tool::WriteFile]),
             timeout: Duration::from_secs(5),
-            env: BTreeMap::from([("CI".to_owned(), "1".to_owned())]),
-            withheld: std::collections::BTreeSet::new(),
         })
     );
 }
@@ -465,66 +459,14 @@ fn a_setting_the_config_states_and_the_provider_cannot_apply_is_refused_by_name(
 fn a_setting_the_provider_applies_is_taken_stated_or_not() {
     for model in [
         "thinking: adaptive, effort: high, cache: false",
-        "api_key_env: WORK_KEY, base_url: 'https://gateway.example', temperature: 0",
+        "base_url: 'https://gateway.example', temperature: 0",
         "provider: openai, api: responses, seed: 7, effort: high",
         "provider: openai, api: chat_completions, seed: 7, reasoning_replay: true",
-        "provider: fake, script: run.yaml, api_key_env: WORK_KEY, cache_scope: run, temperature: 1",
+        "provider: fake, script: run.yaml, cache_scope: run, temperature: 1",
     ] {
         let settings = of(&format!("model: {{ {model} }}\nprompt: {{ system: Hi. }}"));
 
         assert!(settings.is_ok(), "{model}: {settings:?}");
-    }
-}
-
-#[test]
-fn a_key_written_where_its_variable_is_named_is_refused_and_never_shown() {
-    for written in [
-        "sk-ant-api03-0123456789abcdef",
-        "'sk ant'",
-        "'0123456789abcdef'",
-        "'$ANTHROPIC_API_KEY'",
-        "'${ANTHROPIC_API_KEY}'",
-        "'ANTHROPIC_API_KEY=sk'",
-        "cl\u{e9}",
-        "''",
-    ] {
-        for provider in ["anthropic", "openai", "fake, script: run.yaml"] {
-            let config = format!(
-                "model: {{ provider: {provider}, api_key_env: {written} }}\nprompt: {{ system: Hi. }}"
-            );
-
-            let error = of(&config).unwrap_err();
-
-            assert!(
-                matches!(error, ConfigError::KeyVariable { .. }),
-                "{config}: {error:?}"
-            );
-            let value = written.trim_matches('\'');
-            for shown in [error.to_string(), format!("{error:?}")] {
-                assert!(
-                    value.is_empty() || !shown.contains(value),
-                    "{config}: {shown}"
-                );
-            }
-            assert_eq!(
-                error.to_string(),
-                "model.api_key_env is refused: it holds something other than the name of an \
-                 environment variable, which is ASCII letters, digits and `_` and begins \
-                 with no digit. What it holds isn't shown, since a key may have been \
-                 written in its place"
-            );
-        }
-    }
-}
-
-#[test]
-fn the_name_of_a_variable_is_taken_as_the_key_s_variable() {
-    for named in ["ANTHROPIC_API_KEY", "_key", "work_key_2", "K"] {
-        let settings = of(&format!(
-            "model: {{ api_key_env: {named} }}\nprompt: {{ system: Hi. }}"
-        ));
-
-        assert!(settings.is_ok(), "{named}: {settings:?}");
     }
 }
 

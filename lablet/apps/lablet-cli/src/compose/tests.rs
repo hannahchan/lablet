@@ -45,9 +45,9 @@ async fn a_config_that_names_no_secret_reads_only_the_opentelemetry_variables() 
         script.display()
     );
 
-    let checked = check_in(&config(&text), &never).await.unwrap();
+    let checked = check_in(&config(&text), &never, Vec::new()).await.unwrap();
 
-    assert!(checked.withheld().is_empty());
+    assert!(checked.own().is_empty());
     assert_eq!(checked.cut(), Vec::<String>::new());
 }
 
@@ -70,7 +70,7 @@ telemetry: {{ file: {{ path: '{}' }}, otlp: {{ enabled: false }} }}
     );
     let held = holding("OTEL_TRACES_SAMPLER", "always_off");
 
-    let mut lablet = build_in(config(&text), &held).await.unwrap();
+    let mut lablet = build_in(config(&text), &held, Vec::new()).await.unwrap();
     lablet.run(RunRequest::new("Fix it.").unwrap()).await;
     lablet.shutdown().await;
 

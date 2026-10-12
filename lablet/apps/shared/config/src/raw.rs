@@ -1,7 +1,9 @@
 //! A config's text read into a tree, with the line each setting is on:
-//! what an override edits before anything is read into the config's types.
+//! what an override edits, and what `${VAR}` is filled into, before
+//! anything is read into the config's types.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -12,23 +14,28 @@ use serde_saphyr::Spanned;
 
 use super::de::{At, Fault, FaultKind, listed};
 use super::key::{KeyPath, Place, Places, place_in};
+use super::shown::is_credential;
+use super::substitute::{self, Filled};
 use super::{Config, ConfigError, Format, shown};
 
 /// A config's text, read into a tree of values, before the tree is read as
 /// a config.
 ///
-/// It's what an override edits: [`RawConfig::set`] states one setting over
-/// what the text states, and [`RawConfig::config`] reads the tree into a
-/// [`Config`], whose refusals name the key and the line of what they
-/// refuse. `${VAR}` stays as it's written here and in the config; it's
-/// substituted when a `Lablet` is built or a config is checked, so the
-/// digest and every message hold the config as it's written.
+/// It's what an override edits and the fill works on: [`RawConfig::set`]
+/// states one setting over what the text states, [`RawConfig::substituted`]
+/// fills each `${VAR}` from where the caller says, and [`RawConfig::config`]
+/// reads the tree into a [`Config`], whose refusals name the key and the
+/// line of what they refuse, and show a filled setting as the text wrote
+/// it. A text that holds a `${` wants the fill: a `Config` read without one
+/// is refused.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawConfig {
     /// A mapping of sections, always.
     tree: Value,
     places: BTreeMap<KeyPath, Place>,
     source: Option<PathBuf>,
+    /// What the fill changed, and whether it ran.
+    filled: Filled,
 }
 
 impl RawConfig {
@@ -58,6 +65,7 @@ impl RawConfig {
             tree,
             places,
             source: None,
+            filled: Filled::default(),
         })
     }
 
@@ -180,14 +188,56 @@ impl RawConfig {
         *node = value;
         self.tree = tree;
         self.places.retain(|written, _| !written.is_within(&path));
-        self.places.insert(path, Place::Override);
+        self.places.insert(path.clone(), Place::Override);
+        // The override's value is one no fill saw, so nothing is recorded
+        // for it or for what it replaced.
+        self.filled = self.filled.without(&path);
         Ok(())
     }
 
-    /// The tree, with every override stated over the text.
+    /// The tree, with every override stated over the text and, after
+    /// [`RawConfig::substituted`], every `${VAR}` filled.
     #[must_use]
     pub fn tree(&self) -> &Value {
         &self.tree
+    }
+
+    /// The tree with every `${VAR}` and `${VAR:-default}` of every text but
+    /// the prompts' filled from `lookup`, as text: a `${NAME}` is what the
+    /// variable holds, a `${NAME:-default}` that or the default when the
+    /// variable is unset or empty, and `$${` the text `${`. Each key the
+    /// fill changed is recorded with the text as written, so every message,
+    /// the resolved config and the digest show it as the file wrote it, and
+    /// after the fill every `${` left is text.
+    ///
+    /// A `${VAR}` at `model.api_key` whose variable is unset leaves the key
+    /// unset rather than refusing it, since whether a key is needed is the
+    /// provider's to say when the config is checked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Invalid`] for the first text that can't be
+    /// filled: a `${` that begins no reference to a variable, a variable
+    /// with no default that isn't set, or one that holds what isn't UTF-8.
+    /// The refusal names the key and where it was written, shows the text
+    /// as written, and shows nothing a variable holds.
+    pub fn substituted(
+        mut self,
+        lookup: impl Fn(&str) -> Option<OsString>,
+    ) -> Result<Self, ConfigError> {
+        let mut tree = self.tree.clone();
+        let fills = substitute::fill(&mut tree, &lookup).map_err(|unfilled| {
+            let key = unfilled.key;
+            ConfigError::Invalid {
+                value: shown(&key, key.find(&self.tree), &self.filled),
+                place: place_in(&self.places, &key),
+                key: key.to_string(),
+                reason: unfilled.reason,
+            }
+        })?;
+        self.tree = tree;
+        self.filled = Filled::new(fills);
+        Ok(self)
     }
 
     /// The config the tree holds.
@@ -196,18 +246,43 @@ impl RawConfig {
     ///
     /// Returns [`ConfigError::UnknownKey`] for a key no setting has,
     /// [`ConfigError::Invalid`] for a value of the wrong kind or one the
-    /// setting doesn't take, and [`ConfigError::Missing`] for a setting
-    /// that has no default and isn't stated. Each names the key and where
-    /// it was written, and shows the value as the tree holds it.
+    /// setting doesn't take, and for a text that holds a `${` when
+    /// [`RawConfig::substituted`] didn't run, and [`ConfigError::Missing`]
+    /// for a setting that has no default and isn't stated. Each names the
+    /// key and where it was written, and shows the value as the text wrote
+    /// it.
     pub fn config(&self) -> Result<Config, ConfigError> {
+        if !self.filled.ran()
+            && let Some(key) = wants_a_fill(&self.tree, &KeyPath::default())
+        {
+            return Err(ConfigError::Invalid {
+                value: shown(&key, key.find(&self.tree), &self.filled),
+                place: place_in(&self.places, &key),
+                key: key.to_string(),
+                reason: "it was never filled; call .substituted(lookup) on the RawConfig before \
+                         .config()"
+                    .to_owned(),
+            });
+        }
         let config = Config::deserialize(At {
             value: &self.tree,
             path: KeyPath::default(),
         })
         .map_err(|fault| self.refusal(fault))?;
+        // A credential key written as `null` states nothing, so a value set
+        // in code afterwards isn't held to the text's rule; a `${VAR}` that
+        // came out unset keeps its place, since the text beside it may be a
+        // key.
+        let mut places = self.places.clone();
+        places.retain(|key, _| {
+            !(is_credential(key)
+                && key.find(&self.tree) == Some(&Value::Null)
+                && self.filled.at(key).is_none())
+        });
         Ok(Config {
             source: self.source.clone(),
-            places: Places::new(self.places.clone()),
+            places: Places::new(places),
+            filled: self.filled.clone(),
             ..config
         })
     }
@@ -226,12 +301,30 @@ impl RawConfig {
                 reason: "the setting has no default".to_owned(),
             },
             FaultKind::Refused { reason } => ConfigError::Invalid {
-                value: shown(&key, key.find(&self.tree)),
+                value: shown(&key, key.find(&self.tree), &self.filled),
                 key: key.to_string(),
                 place,
                 reason,
             },
         }
+    }
+}
+
+/// The first key of `value`, under `key`, whose text wants a fill: one that
+/// holds `${`, in any setting but a prompt, which no fill reads.
+fn wants_a_fill(value: &Value, key: &KeyPath) -> Option<KeyPath> {
+    match value {
+        Value::String(text) => {
+            (substitute::wants_a_fill(text) && !substitute::is_unfilled(key)).then(|| key.clone())
+        }
+        Value::Array(items) => items
+            .iter()
+            .enumerate()
+            .find_map(|(index, item)| wants_a_fill(item, &key.index(index))),
+        Value::Object(entries) => entries
+            .iter()
+            .find_map(|(name, item)| wants_a_fill(item, &key.key(name))),
+        Value::Null | Value::Bool(_) | Value::Number(_) => None,
     }
 }
 

@@ -19,6 +19,10 @@ const SAYS: &str = "stop signals: ";
 /// catches is.
 #[test]
 fn a_child_process_says_which_stop_signals_it_caught() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable its parent set, to know which side it's on"
+    )]
     let Some(count) = std::env::var_os(CHILD) else {
         return;
     };

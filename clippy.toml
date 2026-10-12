@@ -31,4 +31,24 @@ disallowed-methods = [
   { path = "opentelemetry::global::meter_with_scope", reason = "lablet emits no metrics; a global provider is shared by every Lablet in the process", allow-invalid = true },
   { path = "opentelemetry::global::set_text_map_propagator", reason = "the global propagator is shared by every Lablet in the process; the CLI root hands its propagators in", allow-invalid = true },
   { path = "opentelemetry::global::get_text_map_propagator", reason = "lablet reads no global; a host on the global propagator hands in a propagator of its own that asks it", allow-invalid = true },
+  # Lablet reads its environment in one place, the CLI root's input module,
+  # where it fills the file's `${VAR}`s, takes the base every process a run
+  # starts begins from, reads the trace context and says which retired
+  # variables are set. So the library root and every kernel read none, and a
+  # host's `Config` and what it hands the builder are a `Lablet`'s only
+  # inputs. Allowed, each call under its own
+  # `#[expect(clippy::disallowed_methods, reason = "...")]`: the input module,
+  # `main`'s `RUST_LOG`, test code and examples, which `--all-targets`
+  # compiles. `xtask` reads its environment as a developer tool does, under
+  # one crate-level `#[expect]`. The lint sees lablet's own calls and no
+  # other: the crates read proxies, `SSL_CERT_FILE`, `SSL_CERT_DIR`,
+  # `TOKIO_WORKER_THREADS` and OTLP compression for themselves, which the
+  # hostile golden run and the canaries hold, and a `Command` started without
+  # `env_clear` inherits the whole environment, which no lint sees.
+  # `std::env::temp_dir` and `home_dir` aren't listed: `TMPDIR` and `HOME`
+  # configure nothing of lablet's.
+  { path = "std::env::var", reason = "lablet reads its environment in the CLI root's input module alone; the library takes a Config its host filled" },
+  { path = "std::env::var_os", reason = "lablet reads its environment in the CLI root's input module alone; the library takes a Config its host filled" },
+  { path = "std::env::vars", reason = "a process's base environment is handed in: by the CLI root's input module, or by a host through with_process_environment" },
+  { path = "std::env::vars_os", reason = "a process's base environment is handed in: by the CLI root's input module, or by a host through with_process_environment" },
 ]

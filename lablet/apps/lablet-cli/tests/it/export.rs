@@ -41,7 +41,9 @@ async fn a_root_that_holds_the_telemetry_file_is_refused_with_the_file_it_holds(
 
     let mut tree = scratch.tree(ENDS, tools);
     tree["telemetry"]["file"]["path"] = json!("-");
-    compose::build(read(&tree)).await.unwrap();
+    compose::build(read(&tree), lablet_cli::input::process_environment())
+        .await
+        .unwrap();
 }
 
 /// With no file named, a run writes none, so a root that holds the
@@ -56,7 +58,7 @@ async fn a_root_that_holds_the_working_directory_holds_no_telemetry_when_no_file
     );
     tree["telemetry"]["file"]["path"] = json!(null);
 
-    let built = compose::build(read(&tree)).await;
+    let built = compose::build(read(&tree), lablet_cli::input::process_environment()).await;
 
     built.unwrap().shutdown().await;
 }
@@ -69,7 +71,9 @@ async fn telemetry_that_cannot_be_written_leaves_the_outcome_alone() {
         ENDS,
         json!({ "telemetry": { "file": { "path": nowhere } } }),
     );
-    let mut lablet = compose::build(config).await.unwrap();
+    let mut lablet = compose::build(config, lablet_cli::input::process_environment())
+        .await
+        .unwrap();
     let diagnostics = crate::harness::Diagnostics::capture();
 
     let finished = lablet.run(request()).await;
@@ -106,7 +110,9 @@ async fn a_run_end_with_a_collector_that_never_answers_waits_one_flush_bound() {
             "otlp": { "enabled": true, "endpoint": receiver.grpc_endpoint(), "protocol": "grpc" },
         } }),
     );
-    let mut lablet = compose::build(config).await.unwrap();
+    let mut lablet = compose::build(config, lablet_cli::input::process_environment())
+        .await
+        .unwrap();
 
     let began = Instant::now();
     lablet
@@ -171,7 +177,9 @@ async fn the_transcript_a_wide_event_names_is_whole_when_the_wide_event_arrives(
             } },
         }),
     );
-    let mut lablet = compose::build(config).await.unwrap();
+    let mut lablet = compose::build(config, lablet_cli::input::process_environment())
+        .await
+        .unwrap();
 
     lablet.run(request()).await;
     lablet.shutdown().await;

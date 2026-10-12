@@ -8,12 +8,17 @@
 //! the config names a place for one.
 //!
 //! A config's text is read into a [`RawConfig`] first, where an override
-//! can state a setting over the text, and then into a [`Config`], which
-//! holds `${VAR}` as it's written: the variables are read when the config is
-//! checked or a `Lablet` is built, so the digest and every message see the
-//! config as it's written. [`check`] checks a config as [`build`] does and
-//! stops before the provider is selected. A run stops early when the
-//! [`CancelHandle`] its request was given is fired.
+//! can state a setting over the text and the host fills each `${VAR}` from
+//! wherever it says, through [`RawConfig::substituted`], and then into a
+//! [`Config`], which keeps the record of what the fill changed, so its
+//! messages, its resolved form and its digest show each filled setting as
+//! the file wrote it. Lablet itself reads no environment variable: a host
+//! that builds its config in code sets the key and a tool's credentials as
+//! [`Secret`]s, and hands the environment its processes start from to
+//! [`Builder::with_process_environment`], which a config that enables
+//! `bash` needs. [`Builder::check`] checks a config as [`Builder::build`]
+//! does and stops before the provider is selected. A run stops early when
+//! the [`CancelHandle`] its request was given is fired.
 //!
 //! A `Lablet` runs on the OpenTelemetry its host provides, and configures
 //! no SDK of its own. The host hands in an [`Otel`] of three pieces: the
@@ -45,23 +50,22 @@
 //!
 //! What configured an SDK does nothing in library mode, and nothing is said
 //! of it: the config's `telemetry.file`, `telemetry.otlp` and
-//! `telemetry.resource`, every `OTEL_*` variable the SDK reads,
-//! `OTEL_SDK_DISABLED`, and `TRACEPARENT`, `TRACESTATE` and `BAGGAGE` as
-//! the run's parent.
-//! Content capture still applies, `telemetry.capture_content` and then
-//! `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`, and so does the cut
-//! of the OTLP header variables' values and of the endpoint variables' user
-//! information from what a command prints. The secrets the config's own
-//! fields name are withheld from commands and cut as in the command line,
-//! the values of `telemetry.otlp.headers` and the user information of
-//! `telemetry.otlp.endpoint` among them, though no SDK uses them.
+//! `telemetry.resource`. No environment variable is read at all: not the
+//! `OTEL_*` variables, nor `TRACEPARENT`, `TRACESTATE` and `BAGGAGE` as the
+//! run's parent, nor the capture variable, since `telemetry.capture_content`
+//! alone decides whether content is captured. Lablet's credentials are
+//! dropped from what a command inherits and cut from what it prints as in
+//! the command line: `model.api_key`, the values of `telemetry.otlp.headers`
+//! and the user information of `telemetry.otlp.endpoint`, though no SDK
+//! uses them, and each entry of `tools.builtin.credentials`, which `bash`
+//! is given under its name.
 //!
 //! A `Lablet` is built and run on a tokio runtime, which its adapters keep
 //! their deadlines on.
 //!
 //! The provider `fake` plays a script in place of a model, so a run needs
 //! no key. Here a host hands in providers of the SDK's own, over its
-//! in-memory exporters:
+//! in-memory exporters, and its own environment for `bash` to start from:
 //!
 //! ```
 //! use lablet::{Config, Format, Lablet, Otel, OutcomeDocument, RunId, RunRequest, StopReason};
@@ -122,7 +126,10 @@
 //!         logger_provider.clone(),
 //!         TraceContextPropagator::new(),
 //!     );
-//!     let mut lablet = Lablet::builder(config, otel).build().await?;
+//!     let mut lablet = Lablet::builder(config, otel)
+//!         .with_process_environment(std::env::vars_os())
+//!         .build()
+//!         .await?;
 //!
 //!     let first = lablet.run(RunRequest::new("What's in the directory?")?).await;
 //!     let named = RunId::new("the-second-run")?;
@@ -189,19 +196,24 @@ pub mod config {
     //! starts at the working directory, wherever the config's own file is,
     //! so a config read from text and the same config read from a file name
     //! the same files.
+    //!
+    //! A `${VAR}` is filled by the host, through [`RawConfig::substituted`],
+    //! before the config is typed; the record of what the fill changed
+    //! travels on the config as [`Filled`].
 
     pub use lablet_config::{
         Api, Applied, Builtin, BuiltinTool, CacheScope, Completion, Config, ConfigError, Context,
-        Effort, Env, Format, KeyPath, McpLifetime, McpNames, McpResult, McpServer, Model, Otlp,
-        OtlpProtocol, OutputCut, Place, Pricing, Prompt, Provider, RawConfig, Refusal,
-        ResolvedBuiltin, ResolvedConfig, ResolvedModel, ResolvedTools, Run, Setting, SkillsMode,
-        Substituted, Telemetry, TelemetryFile, Thinking, Tools, TranscriptFormat, schema,
+        Effort, Fill, Filled, Format, KeyPath, Masked, McpLifetime, McpNames, McpResult, McpServer,
+        Model, Otlp, OtlpProtocol, OutputCut, Place, Pricing, Prompt, Provider, RawConfig, Refusal,
+        ResolvedBuiltin, ResolvedConfig, ResolvedModel, ResolvedTools, Run, Secret, Setting,
+        SkillsMode, Telemetry, TelemetryFile, Thinking, Tools, TranscriptFormat, Variable,
+        WrittenBack, is_credential, schema, shown,
     };
 }
 
-pub use build::{Builder, build, check};
+pub use build::{Builder, build};
 pub use config::{
-    Config, ConfigError, Format, Place, RawConfig, Refusal, ResolvedConfig, Substituted, schema,
+    Config, ConfigError, Format, Place, RawConfig, Refusal, ResolvedConfig, Secret, schema,
 };
 pub use lablet::Lablet;
 pub use lablet_documents::OutcomeDocument;
@@ -209,9 +221,12 @@ pub use lablet_model::{
     BlankTask, ConfigDigest, FinishedRun, IdError, RunId, RunLabels, RunOutcome, StopReason,
     ToolSpec,
 };
-pub use lablet_prepare::{BuildError, Checked, ErrorClass, OwnFile, Unsupported};
+pub use lablet_prepare::{
+    BuildError, Checked, Environment, ErrorClass, OwnFile, Passed, Unsupported,
+};
 pub use lablet_run::FilterList;
 pub use lablet_run_request::{CancelHandle, RunIdRefused, RunRequest};
+pub use lablet_secrets::{Credential, Held, Source};
 pub use otel::Otel;
 
 /// The version of lablet, which a run's record names as

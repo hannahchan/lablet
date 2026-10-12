@@ -49,6 +49,10 @@ fn in_a_child(name: &str, env: &[(&str, &str)]) {
 /// gives a value as it's written.
 #[test]
 fn env_resource_detector_child() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable its parent set, to know which side it's on"
+    )]
     if std::env::var_os(CHILD).is_none() {
         return;
     }
@@ -72,6 +76,10 @@ fn canary_env_resource_detector_leaves_an_escape_undecoded() {
 /// and a `service.name` among the pairs, takes the pairs'.
 #[test]
 fn resource_builder_precedence_child() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable its parent set, to know which side it's on"
+    )]
     if std::env::var_os(CHILD).is_none() {
         return;
     }
@@ -104,6 +112,10 @@ fn canary_resource_builder_puts_the_pairs_over_otel_service_name() {
 /// propagator asked to inject a sampled span's context.
 #[tokio::test]
 async fn global_propagator_child() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable its parent set, to know which side it's on"
+    )]
     if std::env::var_os(CHILD).is_none() {
         return;
     }
@@ -123,10 +135,12 @@ async fn global_propagator_child() {
             "file": { "path": scratch.at("telemetry.otlp.jsonl") },
         },
     });
-    let lablet =
-        crate::compose::build(Config::from_str(&config.to_string(), Format::Json).unwrap())
-            .await
-            .unwrap();
+    let lablet = crate::compose::build(
+        Config::from_str(&config.to_string(), Format::Json).unwrap(),
+        crate::input::process_environment(),
+    )
+    .await
+    .unwrap();
     let parent = Context::new().with_remote_span_context(SpanContext::new(
         TraceId::from_hex("0af7651916cd43dd8448eb211c80319c").unwrap(),
         SpanId::from_hex("b7ad6b7169203331").unwrap(),
@@ -187,6 +201,10 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Written {
 /// accepts, so only a builder that stops reading it stops warning.
 #[test]
 fn sdk_sampler_warning_child() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable its parent set, to know which side it's on"
+    )]
     if std::env::var_os(CHILD).is_none() {
         return;
     }

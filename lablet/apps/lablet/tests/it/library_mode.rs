@@ -1,13 +1,14 @@
 //! Library mode: what configured an OpenTelemetry SDK does nothing and says
-//! nothing, while content capture and lablet's secrets still apply.
+//! nothing, no environment variable is read, and content capture and
+//! lablet's credentials still apply.
 //!
 //! Each case runs in a child process of this binary, since what it pins is
-//! what lablet reads of the process's environment, which `cargo xtask test`
-//! strips and a test can't set for its own process.
+//! that lablet reads nothing of the process's environment, which `cargo
+//! xtask test` strips and a test can't set for its own process.
 
 use std::process::{Command, Stdio};
 
-use lablet::{FinishedRun, RunRequest, StopReason};
+use lablet::{FinishedRun, RunRequest, Secret, StopReason};
 use lablet_conformance::host::SERVICE;
 use lablet_model::ToolResultContent;
 use opentelemetry::Context;
@@ -49,7 +50,12 @@ fn in_a_child(name: &str, env: &[(&str, &str)]) {
 }
 
 fn in_the_child() -> bool {
-    std::env::var_os(CHILD).is_some()
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable its parent set, to know which side it's on"
+    )]
+    let child = std::env::var_os(CHILD).is_some();
+    child
 }
 
 /// A script in which `bash` runs `command` and a last turn ends the run.
@@ -98,7 +104,7 @@ async fn library_mode_ignores_child() {
     );
     let diagnostics = Diagnostics::capture();
 
-    lablet::check(&config).await.unwrap();
+    lab.builder(config.clone()).check().await.unwrap();
     let mut lablet = lab.build(config).await.unwrap();
     let operation = lab
         .host()
@@ -174,33 +180,37 @@ async fn captured(lab: &Lab, more: Value) -> bool {
         .any(|record| record.attributes.contains_key(key::GEN_AI_INPUT_MESSAGES))
 }
 
-/// The child's side: the capture variable is `true`.
+/// The child's side: the capture variable is `true`, and nothing reads it.
 #[tokio::test]
 async fn capture_child() {
     if !in_the_child() {
         return;
     }
-    assert!(captured(&Lab::new("capture-variable"), json!({})).await);
     assert!(
-        !captured(
+        !captured(&Lab::new("capture-variable"), json!({})).await,
+        "the variable isn't read, so nothing is captured"
+    );
+    assert!(
+        captured(
             &Lab::new("capture-stated"),
-            json!({ "telemetry": { "capture_content": false } })
+            json!({ "telemetry": { "capture_content": true } })
         )
         .await,
-        "the config's setting wins over the variable"
+        "the config's setting alone decides"
     );
 }
 
 #[test]
-fn capture_content_and_its_variable_still_decide_in_library_mode() {
+fn capture_content_alone_decides_in_library_mode_and_its_variable_is_not_read() {
     in_a_child(
         "capture_child",
         &[("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true")],
     );
 }
 
-/// The child's side: a command prints the OTLP header variable it
-/// inherits, and its value decoded.
+/// The child's side: a command prints the OTLP header variable it inherits
+/// from what the host handed in, uncut, since the library reads no variable
+/// and the config names none.
 #[tokio::test]
 async fn header_variable_child() {
     if !in_the_child() {
@@ -212,21 +222,28 @@ async fn header_variable_child() {
     ));
     let config = lab.config(&script, json!({ "tools": lab.builtin_tools(&["bash"]) }));
 
-    let checked = lablet::check(&config).await.unwrap();
+    let checked = lab.builder(config.clone()).check().await.unwrap();
     let mut lablet = lab.build(config).await.unwrap();
     let finished = lablet.run(request()).await;
     lablet.shutdown().await;
 
-    assert!(checked.withheld().is_empty(), "every command inherits it");
-    assert_eq!(checked.cut(), ["OTEL_EXPORTER_OTLP_HEADERS"]);
+    assert!(checked.own().is_empty(), "the config names no credential");
+    assert_eq!(checked.cut(), Vec::<String>::new());
+    assert!(
+        checked
+            .inherited()
+            .contains(&"OTEL_EXPORTER_OTLP_HEADERS".to_owned()),
+        "{:?}",
+        checked.inherited()
+    );
     assert_eq!(
         sent(&finished),
-        "[secret withheld]\n[secret withheld]\nexit code: 0"
+        format!("authorization=Bearer%20{TOKEN}\nBearer {TOKEN}\nexit code: 0")
     );
 }
 
 #[test]
-fn an_otlp_header_variable_s_value_is_cut_from_a_tool_result_in_library_mode() {
+fn an_otlp_header_variable_the_host_hands_in_reaches_bash_uncut_in_library_mode() {
     let value = format!("authorization=Bearer%20{TOKEN}");
     in_a_child(
         "header_variable_child",
@@ -234,45 +251,51 @@ fn an_otlp_header_variable_s_value_is_cut_from_a_tool_result_in_library_mode() {
     );
 }
 
-/// The variable a child process gives `telemetry.otlp.headers`.
-const SUBSTITUTED: &str = "LABLET_TEST_TELEMETRY_TOKEN";
+/// A variable of the host's that holds the header's token.
+const HOLDS_THE_TOKEN: &str = "LABLET_TEST_TELEMETRY_TOKEN";
 
-/// The child's side: a command prints the variable substituted into the
-/// config's header, and the header's value.
+/// The child's side: a header value the host set in code is cut, and the
+/// variable of the handed-in environment holding its token is dropped.
 #[tokio::test]
-async fn substituted_header_child() {
+async fn header_in_code_child() {
     if !in_the_child() {
         return;
     }
-    let lab = Lab::new("library-substituted-header");
-    let script = running(&format!("echo \"tok=${SUBSTITUTED}\"; echo Bearer {TOKEN}"));
-    let config = lab.config(
-        &script,
-        json!({
-            "tools": lab.builtin_tools(&["bash"]),
-            "telemetry": { "otlp": { "headers": {
-                "authorization": format!("Bearer ${{{SUBSTITUTED}}}"),
-            } } },
-        }),
+    let lab = Lab::new("library-header-in-code");
+    let script = running(&format!(
+        "echo \"tok=${{{HOLDS_THE_TOKEN}-dropped}}\"; echo Bearer {TOKEN}"
+    ));
+    let mut config = lab.config(&script, json!({ "tools": lab.builtin_tools(&["bash"]) }));
+    config.telemetry.otlp.headers = Some(
+        [(
+            "authorization".to_owned(),
+            Secret::new(format!("Bearer {TOKEN}")),
+        )]
+        .into(),
     );
 
-    let checked = lablet::check(&config).await.unwrap();
+    let checked = lab.builder(config.clone()).check().await.unwrap();
     let mut lablet = lab.build(config).await.unwrap();
     let finished = lablet.run(request()).await;
     lablet.shutdown().await;
 
-    assert_eq!(checked.withheld(), &[SUBSTITUTED.to_owned()].into());
-    assert_eq!(checked.cut(), [SUBSTITUTED]);
+    assert_eq!(
+        checked.own()[0].as_own(),
+        format!(
+            "telemetry.otlp.headers.authorization (set in code), or {HOLDS_THE_TOKEN}, which \
+             holds it; no process inherits it"
+        )
+    );
     assert_eq!(
         sent(&finished),
-        "tok=\n[secret withheld]\nexit code: 0",
-        "the variable is withheld from the command, and its value is cut"
+        "tok=dropped\n[secret withheld]\nexit code: 0",
+        "the variable holding the token is dropped, and the value is cut"
     );
 }
 
 #[test]
-fn a_substituted_telemetry_header_is_withheld_and_cut_in_library_mode() {
-    in_a_child("substituted_header_child", &[(SUBSTITUTED, TOKEN)]);
+fn a_header_set_in_code_is_cut_and_a_handed_in_variable_holding_it_is_dropped() {
+    in_a_child("header_in_code_child", &[(HOLDS_THE_TOKEN, TOKEN)]);
 }
 
 /// A host that wants spans and no records hands in the API's no-op logger
@@ -303,23 +326,23 @@ async fn a_lablet_built_with_the_no_op_logger_provider_emits_its_spans_and_no_re
     assert!(exported.records.is_empty(), "{:?}", exported.records);
 }
 
-/// A variable nothing sets.
-const UNSET: &str = "LABLET_TEST_A_VARIABLE_NOTHING_SETS";
-
-/// The telemetry file and the resource only configured an SDK, so a
-/// variable in them that isn't set is no refusal in library mode, as it is
-/// on the command line.
+/// A `Lablet` is built with `bash` only when its host handed in the
+/// environment commands start from, and its check says so.
 #[tokio::test]
-async fn an_unset_variable_in_the_telemetry_file_or_resource_is_not_refused_in_library_mode() {
-    let lab = Lab::new("library-unset-telemetry");
-    let config = lab.config(
-        ENDS,
-        json!({ "telemetry": {
-            "file": { "path": format!("${{{UNSET}}}/telemetry.otlp.jsonl") },
-            "resource": { "team": format!("${{{UNSET}}}") },
-        } }),
-    );
+async fn library_mode_refuses_bash_without_an_environment_handed_in() {
+    let lab = Lab::new("library-no-environment");
+    let config = lab.config(ENDS, json!({ "tools": lab.builtin_tools(&["bash"]) }));
 
-    lablet::check(&config).await.unwrap();
-    lab.build(config).await.unwrap().shutdown().await;
+    let refused = lablet::Lablet::builder(config, lab.otel())
+        .build()
+        .await
+        .map(drop)
+        .unwrap_err();
+
+    assert!(
+        refused
+            .to_string()
+            .starts_with("tools.builtin.enabled[0] (line 1): \"bash\" is refused: no process environment was handed in"),
+        "{refused}"
+    );
 }

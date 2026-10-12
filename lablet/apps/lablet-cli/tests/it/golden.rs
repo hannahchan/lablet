@@ -195,9 +195,12 @@ impl Golden {
 
     /// Runs once, under its own id, exporting to `telemetry`.
     async fn run_to(&self, telemetry: &Path) -> FinishedRun {
-        let mut lablet = lablet_cli::compose::build(self.config(telemetry))
-            .await
-            .unwrap();
+        let mut lablet = lablet_cli::compose::build(
+            self.config(telemetry),
+            lablet_cli::input::process_environment(),
+        )
+        .await
+        .unwrap();
         let mut request = RunRequest::new(self.prompt)
             .unwrap()
             .run_id(RunId::new(format!("golden-{}", self.name)).unwrap())
@@ -243,6 +246,10 @@ impl Golden {
 
         let normalised = normalised(exported);
         let fixture = self.fixture();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the golden test reads whether it was asked to write the fixtures, and where it runs"
+        )]
         if std::env::var_os(UPDATE).is_some() {
             let written = serde_json::to_string_pretty(&normalised).unwrap() + "\n";
             std::fs::create_dir_all(fixture.parent().unwrap()).unwrap();
@@ -276,6 +283,10 @@ impl Golden {
 /// and [`UPDATE`] in CI, where a regeneration would pass
 /// whatever the run emitted. Names are read, never a value.
 fn refuse_the_environment() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the golden test reads the names of its own environment, to refuse one it can't trust"
+    )]
     let set = refused(std::env::vars_os().map(|(name, _)| name.to_string_lossy().into_owned()));
     assert!(
         set.is_empty(),
@@ -284,9 +295,18 @@ fn refuse_the_environment() {
          them",
         set.into_iter().collect::<Vec<_>>().join(", ")
     );
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the golden test reads whether it was asked to write the fixtures, and where it runs"
+    )]
     if std::env::var_os(UPDATE).is_some() {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the golden test reads whether it was asked to write the fixtures, and where it runs"
+        )]
+        let in_ci = std::env::var_os("CI").is_some();
         assert!(
-            std::env::var_os("CI").is_none(),
+            !in_ci,
             "{UPDATE} is set in CI, and the fixtures are regenerated locally, never there"
         );
     }
@@ -305,6 +325,10 @@ const REFUSAL_CHILD: &str = "LABLET_TEST_GOLDEN_REFUSAL_CHILD";
 /// The child's side, which does nothing unless the test below started it.
 #[test]
 fn a_child_process_checks_its_environment_as_a_golden_run_does() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable its parent set, to know which side it's on"
+    )]
     if std::env::var_os(REFUSAL_CHILD).is_some() {
         refuse_the_environment();
     }
@@ -531,6 +555,10 @@ fn hostile() -> Vec<(String, String)> {
 /// the two-turns run, exported to the file the parent named.
 #[tokio::test(start_paused = true)]
 async fn a_child_process_runs_the_two_turns_run_under_a_hostile_environment() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable its parent set, to know which side it's on"
+    )]
     let Some(telemetry) = std::env::var_os(HOSTILE_CHILD) else {
         return;
     };

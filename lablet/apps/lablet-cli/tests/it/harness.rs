@@ -129,8 +129,13 @@ pub fn request() -> RunRequest {
 /// stops before the provider is selected, and what only making the network
 /// exporter finds, which no config given here reaches.
 pub async fn refusal(config: Config) -> BuildError {
-    let checked = compose::check(&config).await.map(drop);
-    let built = compose::build(config).await.map(drop).unwrap_err();
+    let checked = compose::check(&config, lablet_cli::input::process_environment())
+        .await
+        .map(drop);
+    let built = compose::build(config, lablet_cli::input::process_environment())
+        .await
+        .map(drop)
+        .unwrap_err();
     match &built {
         BuildError::Unsupported {
             kind: Unsupported::Anthropic | Unsupported::Openai,

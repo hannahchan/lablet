@@ -31,6 +31,7 @@ lablet-prepare.workspace = true
 lablet-provider-wiring.workspace = true
 lablet-run.workspace = true
 lablet-run-request.workspace = true
+lablet-secrets.workspace = true
 lablet-tools-wiring.workspace = true
 lablet-transcript-json.workspace = true
 opentelemetry.workspace = true

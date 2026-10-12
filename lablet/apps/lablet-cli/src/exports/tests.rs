@@ -5,7 +5,7 @@
 
 use std::ffi::OsString;
 
-use lablet_config::Format;
+use lablet_config::{Format, RawConfig};
 use lablet_conformance::receiver::{Mode, Receiver};
 use lablet_prepare::prepare;
 
@@ -13,6 +13,14 @@ use super::*;
 
 fn config(text: &str) -> Config {
     Config::from_str(text, Format::Yaml).unwrap()
+}
+
+/// The config `text` holds, with each `${VAR}` filled from `env`, or why it
+/// was refused.
+fn filled(text: &str, env: Env<'_>) -> Result<Config, lablet_config::ConfigError> {
+    RawConfig::from_str(text, Format::Yaml)?
+        .substituted(|name: &str| env(name))?
+        .config()
 }
 
 /// An environment that holds `value` under `name` and nothing else.
@@ -24,9 +32,10 @@ fn nothing(_: &str) -> Option<OsString> {
     None
 }
 
-/// The check of `config` in `env`, gone on through [`settle`].
+/// The check of `config` with an empty base handed in, gone on through
+/// [`settle`] with `env` what the seam reads.
 fn settled(config: &Config, env: Env<'_>) -> (Prepared, Exports, Inbound) {
-    settle(config, prepare(config, env).unwrap(), env).unwrap()
+    settle(prepare(config, Some(Vec::new())).unwrap(), env).unwrap()
 }
 
 /// Where the telemetry file goes: no file for a null path, standard error
@@ -83,25 +92,21 @@ async fn otel_sdk_disabled_wins_over_a_named_file_and_endpoint() {
     assert!(enabled.otlp.is_some());
 }
 
-/// The GenAI instrumentation's switch for capturing content.
+/// The GenAI instrumentation's switch for capturing content, which lablet
+/// doesn't read: `telemetry.capture_content` decides alone.
 const CAPTURE: &str = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT";
 
 #[tokio::test]
-async fn the_genai_capture_variable_decides_when_the_config_states_nothing() {
+async fn the_genai_capture_variable_is_not_read_and_the_config_alone_decides() {
     let scratch = lablet_test_support::Scratch::new("capture-variable");
     let config = ending(&scratch, "{ otlp: { enabled: false } }");
 
-    for (value, captured) in [("TRUE", true), ("false", false), ("1", false)] {
+    for value in ["TRUE", "true", "false", "1"] {
         let held = |name: &str| (name == CAPTURE).then(|| value.into());
         let (prepared, _, _) = settled(&config, &held);
-        assert_eq!(prepared.capture_content(), captured, "{value}");
+        assert!(!prepared.capture_content(), "{value}");
     }
     assert!(!settled(&config, &nothing).0.capture_content());
-}
-
-#[tokio::test]
-async fn a_stated_capture_content_wins() {
-    let scratch = lablet_test_support::Scratch::new("capture-stated");
 
     for (stated, value, captured) in [("false", "true", false), ("true", "false", true)] {
         let config = ending(
@@ -122,13 +127,13 @@ const ENDS: &str = "
 ";
 
 /// C15: whether the telemetry is on standard error is read from the path
-/// as a run writes to it, once `${VAR}` is substituted, and only a path
-/// that's `-` whole is standard error.
+/// as a run writes to it, once `${VAR}` is filled, and only a path that's
+/// `-` whole is standard error.
 #[test]
-fn the_telemetry_is_on_standard_error_when_its_path_is_a_dash_once_variables_are_substituted() {
+fn the_telemetry_is_on_standard_error_when_its_path_is_a_dash_once_variables_are_filled() {
     let on_stderr = |path: &str, env: Env<'_>| {
-        let config = config(&format!("telemetry: {{ file: {{ path: {path} }} }}"));
-        telemetry_on_stderr_in(&config, env)
+        filled(&format!("telemetry: {{ file: {{ path: {path} }} }}"), env)
+            .is_ok_and(|config| telemetry_on_stderr_in(&config, env))
     };
 
     assert!(
@@ -272,7 +277,7 @@ fn tls_that_cannot_be_set_up_is_refused_by_the_endpoint_as_written_or_the_variab
 /// A client key is read into the TLS identity when its signal's exporter
 /// speaks TLS, and what its file holds is cut from what a tool returns,
 /// each line too, as a value with several lines is. Its variable holds a
-/// path, which is no secret: it's named among what's cut and withheld from
+/// path, which is no secret: it's named among what's cut and dropped from
 /// no command.
 #[tokio::test]
 async fn a_client_keys_contents_are_cut_from_a_tools_result_and_its_path_is_not() {
@@ -304,7 +309,7 @@ async fn a_client_keys_contents_are_cut_from_a_tools_result_and_its_path_is_not(
 
     let cut: Vec<String> = derived.cut.iter().map(ToString::to_string).collect();
     assert_eq!(cut, ["OTEL_EXPORTER_OTLP_CLIENT_KEY"]);
-    assert!(derived.withheld.is_empty());
+    assert!(derived.dropped.is_empty());
     let key = receiver.client_key();
     let line = key.lines().nth(1).unwrap();
     let result = format!("cat said:\n{key}\nand then: {line}\nfrom {key_path}");

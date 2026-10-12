@@ -1,59 +1,41 @@
-//! Each field of the config that defines a secret, against an environment
-//! the test states, since a test can't set a variable of its own process.
+//! Each field of the config that defines a credential, with which variable
+//! filled it read off the record, and what's handed in to be cut.
 
 use std::ffi::OsString;
 
 use lablet_conformance::receiver::{Mode, Receiver};
+use secrecy::SecretString;
 
 use super::*;
-use lablet_config::Format;
+use lablet_config::{Format, RawConfig};
 
 /// A key as long as a key is, and so one that's cut.
 const KEY: &str = "sk-ant-0123456789abcdef0123456789";
 
 const FAKE: &str = "model: { provider: fake, script: run.yaml }\n";
 
-fn config(text: &str) -> Config {
-    Config::from_str(text, Format::Yaml).unwrap()
-}
-
-/// An environment that holds what `held` says, and nothing else.
-fn env(held: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+/// The config `text` holds, with each `${VAR}` filled from `held`.
+fn filled(text: &str, held: &[(&str, &str)]) -> Config {
     let held: Vec<(String, String)> = held
         .iter()
         .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
         .collect();
-    move |asked| {
-        held.iter()
-            .find(|(name, _)| name == asked)
-            .map(|(_, value)| value.into())
-    }
+    RawConfig::from_str(text, Format::Yaml)
+        .unwrap()
+        .substituted(move |asked: &str| -> Option<OsString> {
+            held.iter()
+                .find(|(name, _)| name == asked)
+                .map(|(_, value)| value.into())
+        })
+        .unwrap()
+        .config()
+        .unwrap()
 }
 
-fn nothing(_: &str) -> Option<OsString> {
-    None
-}
-
-/// What `derived` makes of the config `text` in the environment `held`,
-/// for a run that has an executor.
-fn derived_from(text: &str, held: &(dyn Fn(&str) -> Option<OsString> + Sync)) -> Derived {
-    let written = config(text);
-    let real = written.substituted(held).unwrap();
-    derived(&written, &real, held, &[], true)
-}
-
-fn variable(name: &str, held: Held) -> Named {
-    Named {
-        source: Source::Variable(name.to_owned()),
-        held,
-    }
-}
-
-fn key(path: KeyPath, held: Held) -> Named {
-    Named {
-        source: Source::Key(path),
-        held,
-    }
+/// What `derived` makes of the config `text` filled from `held`, for a run
+/// that has an executor and nothing handed in.
+fn derived_from(text: &str, held: &[(&str, &str)]) -> Derived {
+    derived(&filled(text, held), &[], true)
 }
 
 fn names(names: &[&str]) -> BTreeSet<String> {
@@ -64,84 +46,107 @@ fn secrets(values: &[&str]) -> Secrets {
     Secrets::new(values.iter().map(|&value| value.to_owned()))
 }
 
-#[test]
-fn the_variable_lablet_reads_its_key_from_is_withheld_and_what_it_holds_is_cut() {
-    for (text, name) in [
-        (
-            "model: { provider: fake, script: run.yaml, api_key_env: WORK_KEY }",
-            "WORK_KEY",
-        ),
-        ("", "ANTHROPIC_API_KEY"),
-    ] {
-        let derived = derived_from(text, &env(&[(name, KEY)]));
-
-        assert_eq!(
-            derived,
-            Derived {
-                withheld: names(&[name]),
-                cut: vec![variable(name, Held::Cut)],
-                values: secrets(&[KEY]),
-            }
-        );
-        assert!(!format!("{derived:?}").contains(KEY), "{derived:?}");
-    }
+/// The own credentials as `check` prints them.
+fn own(derived: &Derived) -> Vec<String> {
+    derived.own.iter().map(Credential::as_own).collect()
 }
 
-/// The OTLP header and endpoint variables are the one exception: read for
-/// every config, since the exporter reads them whatever the config names.
-#[test]
-fn a_config_that_names_no_secret_reads_nothing_but_the_otlp_variables_and_holds_nothing() {
-    let never = |name: &str| -> Option<OsString> {
-        assert!(
-            HEADER_VARIABLES.contains(&name) || ENDPOINT_VARIABLES.contains(&name),
-            "the environment was read: {name}"
-        );
-        None
-    };
+/// The given credentials as `check` prints them.
+fn given(derived: &Derived) -> Vec<String> {
+    derived.given.iter().map(Credential::as_given).collect()
+}
 
-    let derived = derived_from(FAKE, &never);
+#[test]
+fn the_variable_that_fills_the_key_is_own_dropped_and_its_value_cut() {
+    let derived = derived_from(
+        "model: { provider: fake, script: run.yaml, api_key: '${WORK_KEY}' }",
+        &[("WORK_KEY", KEY)],
+    );
+
+    assert_eq!(
+        own(&derived),
+        ["WORK_KEY (line 1) -> model.api_key; no process inherits it"]
+    );
+    assert!(derived.given.is_empty());
+    assert_eq!(derived.dropped, names(&["WORK_KEY"]));
+    assert_eq!(derived.values, secrets(&[KEY]));
+    assert_eq!(derived.dropping, secrets(&[KEY]));
+    assert!(derived.cut.is_empty());
+    assert!(!format!("{derived:?}").contains(KEY), "{derived:?}");
+}
+
+/// A key set in code is own by its field alone, and nothing is dropped by
+/// name for it: the drop by value is its guard.
+#[test]
+fn a_key_set_in_code_is_own_and_names_no_variable() {
+    let mut config = Config::default();
+    config.model.api_key = Some(Secret::new(KEY));
+
+    let derived = derived(&config, &[], true);
+
+    assert_eq!(
+        own(&derived),
+        ["model.api_key (set in code); no process inherits it"]
+    );
+    assert!(derived.dropped.is_empty());
+    assert_eq!(derived.dropping, secrets(&[KEY]));
+    assert_eq!(derived.own[0].source, Source::Code);
+    assert!(derived.own[0].holds(KEY));
+    assert!(derived.own[0].holds(&format!("Bearer%20{KEY}")));
+    assert!(!derived.own[0].holds("another-0123456789abcdef"));
+}
+
+#[test]
+fn a_config_that_names_no_credential_holds_nothing() {
+    let derived = derived_from(FAKE, &[]);
 
     assert_eq!(
         derived,
         Derived {
-            withheld: BTreeSet::new(),
+            own: Vec::new(),
+            given: Vec::new(),
+            dropped: BTreeSet::new(),
             cut: Vec::new(),
             values: Secrets::default(),
+            dropping: Secrets::default(),
         }
     );
+    assert_eq!(variables(&filled(FAKE, &[])), Variables::default());
 }
 
+/// A key's variable that's unset, empty or short is own and named with why
+/// its value isn't cut.
 #[test]
-fn a_variable_that_is_unset_empty_or_short_is_withheld_and_named_with_why_it_is_not_cut() {
-    let text = "model: { provider: fake, script: run.yaml, api_key_env: WORK_KEY }";
+fn a_key_variable_that_is_unset_empty_or_short_is_named_with_why_it_is_not_cut() {
+    let text = "model: { provider: fake, script: run.yaml, api_key: '${WORK_KEY}' }";
 
-    for (value, expected, shown) in [
-        (None, Held::Unset, "WORK_KEY (not set, not cut)"),
-        (Some("  "), Held::Empty, "WORK_KEY (empty, not cut)"),
+    for (held, expected, shown) in [
+        (vec![], Held::Unset, "WORK_KEY (line 1) (unset, not cut)"),
         (
-            Some("short"),
+            vec![("WORK_KEY", "  ")],
+            Held::Empty,
+            "WORK_KEY (line 1) (empty, not cut)",
+        ),
+        (
+            vec![("WORK_KEY", "short")],
             Held::Short,
-            "WORK_KEY (under 16 bytes, not cut)",
+            "WORK_KEY (line 1) (under 16 bytes, not cut)",
         ),
     ] {
-        let held = move |asked: &str| {
-            (asked == "WORK_KEY")
-                .then(|| value.map(OsString::from))
-                .flatten()
-        };
-
         let derived = derived_from(text, &held);
 
-        assert_eq!(derived.withheld, names(&["WORK_KEY"]));
-        assert_eq!(derived.cut, [variable("WORK_KEY", expected)]);
-        assert_eq!(derived.cut[0].to_string(), shown);
+        assert_eq!(derived.own[0].held, expected);
+        assert_eq!(
+            derived.own[0].as_own(),
+            format!("{shown} -> model.api_key; no process inherits it")
+        );
+        assert_eq!(derived.dropped, names(&["WORK_KEY"]));
         assert!(derived.values.is_empty(), "{expected:?}");
     }
-    assert_eq!(variable("K", Held::Cut).to_string(), "K");
 }
 
 #[test]
-fn every_header_value_is_a_secret_as_substituted_and_a_variable_in_one_is_withheld() {
+fn every_header_value_is_own_from_its_variable_or_as_written() {
     let text = "
 model: { provider: fake, script: run.yaml }
 telemetry:
@@ -153,37 +158,35 @@ tools:
 ";
     let (t, u) = ("tok-0123456789abcdef", "u-0123456789abcdef0");
 
-    let derived = derived_from(text, &env(&[("T", t), ("U", u)]));
+    let derived = derived_from(text, &[("T", t), ("U", u)]);
 
-    let headers = KeyPath::of("telemetry.otlp.headers");
     assert_eq!(
-        derived,
-        Derived {
-            withheld: names(&["T", "U"]),
-            cut: vec![
-                variable("T", Held::Cut),
-                variable("U", Held::Cut),
-                key(headers.key("X-Literal"), Held::Cut),
-                key(headers.key("X-Short"), Held::Short),
-            ],
-            values: secrets(&[
-                &format!("Bearer {t}"),
-                t,
-                "literal-0123456789abcdef",
-                "short",
-                &format!("v-{t}-{u}"),
-                u,
-            ]),
-        }
+        own(&derived),
+        [
+            "T (line 5) -> telemetry.otlp.headers.Authorization; no process inherits it",
+            "telemetry.otlp.headers.X-Literal (line 5) holds its value; no process inherits it",
+            "telemetry.otlp.headers.X-Short (line 5) holds its value (under 16 bytes, not cut); \
+             no process inherits it",
+            "T (line 8) -> tools.mcp[0].headers.H; no process inherits it",
+            "U (line 8) -> tools.mcp[0].headers.H; no process inherits it",
+        ]
     );
+    assert_eq!(derived.dropped, names(&["T", "U"]));
+    // The field's whole value is cut, and `Bearer` bounds the token inside
+    // it; a variable's value alone isn't known to a library that reads none.
     assert_eq!(
-        derived.cut[3].to_string(),
-        "telemetry.otlp.headers.X-Short (under 16 bytes, not cut)"
+        derived.values,
+        secrets(&[
+            &format!("Bearer {t}"),
+            "literal-0123456789abcdef",
+            "short",
+            &format!("v-{t}-{u}"),
+        ])
     );
 }
 
 #[test]
-fn the_user_information_of_a_url_is_a_secret_in_each_of_its_forms_and_its_host_is_not() {
+fn the_user_information_of_a_url_is_own_in_each_of_its_forms_and_its_host_is_not() {
     let text = "
 model: { provider: openai, base_url: 'https://hannah:${P}@gw.example/v1' }
 telemetry: { otlp: { endpoint: 'https://${HOST}:4317' } }
@@ -193,120 +196,150 @@ tools:
 ";
     let password = "pass-0123456789abcdef";
 
-    let derived = derived_from(text, &env(&[("P", password), ("HOST", "otel.example")]));
+    let derived = derived_from(text, &[("P", password), ("HOST", "otel.example")]);
 
     assert_eq!(
-        derived,
-        Derived {
-            withheld: names(&["P"]),
-            cut: vec![
-                variable("P", Held::Cut),
-                key(KeyPath::of("tools.mcp").index(0).key("url"), Held::Cut),
-            ],
-            values: secrets(&[
-                &format!("hannah:{password}"),
-                "hannah",
-                password,
-                "user-0123456789ab:pw%40-0123456789abc",
-                "user-0123456789ab:pw@-0123456789abc",
-                "user-0123456789ab",
-                "pw%40-0123456789abc",
-                "pw@-0123456789abc",
-            ]),
-        }
+        own(&derived),
+        [
+            "P (line 2) -> model.base_url; no process inherits it",
+            "tools.mcp[0].url (line 6) holds its value; no process inherits it",
+        ]
     );
-    assert_eq!(derived.cut[1].to_string(), "tools.mcp[0].url");
+    assert_eq!(derived.dropped, names(&["P"]));
+    assert_eq!(
+        derived.values,
+        secrets(&[
+            &format!("hannah:{password}"),
+            "hannah",
+            password,
+            "user-0123456789ab:pw%40-0123456789abc",
+            "user-0123456789ab:pw@-0123456789abc",
+            "user-0123456789ab",
+            "pw%40-0123456789abc",
+            "pw@-0123456789abc",
+        ])
+    );
 }
 
 #[test]
-fn a_variable_that_gives_a_url_its_user_information_from_outside_the_written_text_is_withheld() {
+fn a_variable_that_gives_a_url_its_user_information_from_outside_the_written_text_is_own() {
     let base = "https://u-0123456789abcdef:p-0123456789abcdef@h";
     let text = "model: { provider: openai, base_url: '${BASE}/v1' }";
 
-    let derived = derived_from(text, &env(&[("BASE", base)]));
+    let derived = derived_from(text, &[("BASE", base)]);
     assert_eq!(
-        derived,
-        Derived {
-            withheld: names(&["BASE"]),
-            cut: vec![variable("BASE", Held::Cut)],
-            values: secrets(&[
-                base,
-                "u-0123456789abcdef:p-0123456789abcdef",
-                "u-0123456789abcdef",
-                "p-0123456789abcdef",
-            ]),
-        }
+        own(&derived),
+        ["BASE (line 1) -> model.base_url; no process inherits it"]
+    );
+    assert_eq!(derived.dropped, names(&["BASE"]));
+    assert_eq!(
+        derived.values,
+        secrets(&[
+            "u-0123456789abcdef:p-0123456789abcdef",
+            "u-0123456789abcdef",
+            "p-0123456789abcdef",
+        ])
     );
 
-    let no_information = derived_from(text, &env(&[("BASE", "https://h.example")]));
-    assert_eq!(no_information, derived_from(FAKE, &nothing));
+    let no_information = derived_from(text, &[("BASE", "https://h.example")]);
+    assert_eq!(no_information, derived_from(FAKE, &[]));
 }
 
+/// An `env` entry is no credential, filled or not; a `credentials` entry is
+/// given, dropped from what a command inherits and cut.
 #[test]
-fn a_variable_substituted_into_an_env_is_a_secret_and_a_value_written_out_is_not() {
+fn a_credentials_entry_is_given_and_an_env_entry_is_no_credential() {
     let text = "
 model: { provider: fake, script: run.yaml }
 tools:
-  builtin: { root: ., enabled: [bash], env: { GITHUB_TOKEN: '${GITHUB_TOKEN}', PATH: /usr/bin:/bin, MIXED: 'x-${A}' } }
-  mcp:
-    - { name: t, transport: stdio, command: tracker-mcp, env: { TRACKER_TOKEN: '${TRACKER_TOKEN}' } }
+  builtin:
+    root: .
+    enabled: [bash]
+    env: { PATH: /usr/bin:/bin, MIXED: 'x-${A}' }
+    credentials: { GITHUB_TOKEN: '${GITHUB_TOKEN}', TOK: '${TRACKER_TOKEN}' }
 ";
-    let held = env(&[
+    let held = [
         ("GITHUB_TOKEN", "ghp_0123456789abcdef"),
         ("A", "a-0123456789abcdef"),
         ("TRACKER_TOKEN", "trk-0123456789abcdef"),
-    ]);
+    ];
 
     let derived = derived_from(text, &held);
 
+    assert!(derived.own.is_empty());
     assert_eq!(
-        derived,
-        Derived {
-            withheld: names(&["A", "GITHUB_TOKEN", "TRACKER_TOKEN"]),
-            cut: vec![
-                variable("A", Held::Cut),
-                variable("GITHUB_TOKEN", Held::Cut),
-                variable("TRACKER_TOKEN", Held::Cut),
-            ],
-            values: secrets(&[
-                "a-0123456789abcdef",
-                "ghp_0123456789abcdef",
-                "trk-0123456789abcdef",
-            ]),
-        }
+        given(&derived),
+        [
+            "GITHUB_TOKEN (line 8) -> bash",
+            "TRACKER_TOKEN (line 8) -> bash as TOK",
+        ]
     );
+    assert_eq!(derived.given[0].given_as(), Some("GITHUB_TOKEN"));
+    assert_eq!(derived.dropped, names(&["GITHUB_TOKEN", "TRACKER_TOKEN"]));
+    assert_eq!(
+        derived.values,
+        secrets(&["ghp_0123456789abcdef", "trk-0123456789abcdef"]),
+        "the `env` entry's variable is no secret"
+    );
+    let variables = variables(&filled(text, &held));
+    assert_eq!(variables.own, []);
+    assert_eq!(
+        variables.given_entry("TRACKER_TOKEN"),
+        Some(&KeyPath::of("tools.builtin.credentials").key("TOK"))
+    );
+    assert_eq!(variables.given_entry("A"), None);
+}
+
+/// Q5: an own credential listed under `credentials` too is shown under
+/// both, and `own:` says who gets it.
+#[test]
+fn an_own_credential_given_under_credentials_is_shown_on_both_sides() {
+    let text = "
+model: { provider: fake, script: run.yaml, api_key: '${ANTHROPIC_API_KEY}' }
+tools: { builtin: { root: ., enabled: [bash], credentials: { ANTHROPIC_API_KEY: '${ANTHROPIC_API_KEY}' } } }
+";
+
+    let derived = derived_from(text, &[("ANTHROPIC_API_KEY", KEY)]);
+
+    assert_eq!(
+        own(&derived),
+        ["ANTHROPIC_API_KEY (line 2) -> model.api_key; given to bash by credentials (line 3)"]
+    );
+    assert_eq!(given(&derived), ["ANTHROPIC_API_KEY (line 3) -> bash"]);
+    assert_eq!(derived.dropped, names(&["ANTHROPIC_API_KEY"]));
+    assert_eq!(derived.values, secrets(&[KEY]), "one value, held once");
 }
 
 #[test]
 fn the_values_are_held_only_for_a_run_that_has_an_executor() {
-    let text = "model: { provider: fake, script: run.yaml, api_key_env: WORK_KEY }";
-    let held = env(&[("WORK_KEY", KEY)]);
-    let written = config(text);
-    let real = written.substituted(&held).unwrap();
+    let config = filled(
+        "model: { provider: fake, script: run.yaml, api_key: '${WORK_KEY}' }",
+        &[("WORK_KEY", KEY)],
+    );
 
-    let without = derived(&written, &real, &held, &[], false);
+    let without = derived(&config, &[], false);
 
     assert_eq!(without.values, Secrets::default());
-    assert_eq!(without.withheld, names(&["WORK_KEY"]));
+    assert_eq!(without.dropping, Secrets::default());
+    assert_eq!(without.dropped, names(&["WORK_KEY"]));
     assert_eq!(
-        without.cut,
-        [variable("WORK_KEY", Held::Cut)],
+        without.own[0].held,
+        Held::Cut,
         "the value is still read, to say whether it would be cut"
     );
 }
 
 #[test]
-fn a_variable_in_two_fields_is_withheld_and_named_once() {
+fn a_variable_in_two_fields_is_dropped_once_and_each_field_names_it() {
     let text = "
-model: { provider: fake, script: run.yaml, api_key_env: K }
+model: { provider: fake, script: run.yaml, api_key: '${K}' }
 telemetry: { otlp: { headers: { Authorization: 'Bearer ${K}' } } }
-tools: { builtin: { root: ., enabled: [bash], env: { K: '${K}' } } }
 ";
 
-    let derived = derived_from(text, &env(&[("K", KEY)]));
+    let derived = derived_from(text, &[("K", KEY)]);
 
-    assert_eq!(derived.withheld, names(&["K"]));
-    assert_eq!(derived.cut, [variable("K", Held::Cut)]);
+    assert_eq!(derived.dropped, names(&["K"]));
+    assert_eq!(derived.own.len(), 2);
     assert_eq!(
         derived.values,
         secrets(&[KEY, &format!("Bearer {KEY}")]),
@@ -325,181 +358,80 @@ fn a_percent_escape_is_decoded_and_what_is_no_escape_is_kept() {
     assert_eq!(percent_decoded("plain"), "plain");
 }
 
-/// The OTLP header variables the exporter reads are the one secret found
-/// rather than told: cut whole, as `env` prints a variable, and each
-/// decoded header with it, and named without being withheld, since the
-/// exporter in every command reads them too.
-#[test]
-fn an_otlp_header_variable_is_cut_whole_and_by_each_header_and_withheld_from_no_command() {
-    const TOKEN: &str = "Bearer sk-0123456789abcdef";
-    let value = "x-env=1,authorization=Bearer%20sk-0123456789abcdef";
-
-    for name in HEADER_VARIABLES {
-        let derived = derived_from(FAKE, &env(&[(name, value)]));
-
-        assert_eq!(
-            derived,
-            Derived {
-                withheld: BTreeSet::new(),
-                cut: vec![variable(name, Held::Cut)],
-                values: secrets(&[value, TOKEN]),
-            },
-            "{name}"
-        );
-        assert!(!format!("{derived:?}").contains("sk-0123"), "{derived:?}");
-    }
-}
-
-/// The OTLP endpoint variables the exporter reads are the other secret
-/// found rather than told, for the credentials one carries: cut in each
-/// form the config's endpoint's are, and named without being withheld,
-/// since the exporter in every command reads them too. The host is no
-/// secret, so a variable that names only a host isn't listed.
-#[test]
-fn an_otlp_endpoint_variable_s_user_information_is_cut_in_each_form_and_withheld_from_no_command() {
-    const PASSWORD: &str = "pw%40-0123456789abcdef";
-    let value = format!("https://collector-user:{PASSWORD}@collector.internal:4317/v1/traces");
-
-    for name in ENDPOINT_VARIABLES {
-        let derived = derived_from(FAKE, &env(&[(name, &value)]));
-
-        assert_eq!(
-            derived,
-            Derived {
-                withheld: BTreeSet::new(),
-                cut: vec![variable(name, Held::Cut)],
-                values: secrets(&[
-                    &format!("collector-user:{PASSWORD}"),
-                    "collector-user:pw@-0123456789abcdef",
-                    "collector-user",
-                    PASSWORD,
-                    "pw@-0123456789abcdef",
-                ]),
-            },
-            "{name}"
-        );
-        assert!(
-            !format!("{derived:?}").contains("0123456789"),
-            "{derived:?}"
-        );
-    }
-
-    let short = derived_from(
-        FAKE,
-        &env(&[("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "https://u:p@h")]),
-    );
-    assert_eq!(
-        short.cut,
-        vec![variable("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", Held::Short)]
-    );
-    assert!(short.withheld.is_empty());
-    assert_eq!(short.values, Secrets::default());
-
-    let host_only = derived_from(
-        FAKE,
-        &env(&[(
-            "OTEL_EXPORTER_OTLP_ENDPOINT",
-            "https://collector.internal:4317",
-        )]),
-    );
-    assert_eq!(host_only, derived_from(FAKE, &nothing));
-}
-
-/// An endpoint without a scheme, which the gRPC exporter gives one, carries
-/// its credentials where a URL does, so they're cut alike, from the config
-/// and from the environment.
-#[test]
-fn the_user_information_of_an_endpoint_without_a_scheme_is_cut_as_a_urls_is() {
-    const INFORMATION: &str = "collector-user:pw-0123456789abcdef";
-    let endpoint = format!("{INFORMATION}@collector.internal:4317");
-    let cut = secrets(&[INFORMATION, "collector-user", "pw-0123456789abcdef"]);
-
-    let stated = derived_from(
-        &format!("{FAKE}telemetry: {{ otlp: {{ endpoint: '{endpoint}' }} }}"),
-        &nothing,
-    );
-    assert_eq!(
-        stated.cut,
-        [key(KeyPath::of("telemetry.otlp.endpoint"), Held::Cut)]
-    );
-    assert_eq!(stated.values, cut);
-
-    let inherited = derived_from(FAKE, &env(&[("OTEL_EXPORTER_OTLP_ENDPOINT", &endpoint)]));
-    assert_eq!(
-        inherited.cut,
-        [variable("OTEL_EXPORTER_OTLP_ENDPOINT", Held::Cut)]
-    );
-    assert!(inherited.withheld.is_empty());
-    assert_eq!(inherited.values, cut);
-}
-
-#[test]
-fn an_otlp_header_variable_that_is_empty_or_short_is_named_with_why_it_is_not_cut() {
-    for (value, held) in [("  ", Held::Empty), ("a=b", Held::Short)] {
-        let derived = derived_from(FAKE, &env(&[("OTEL_EXPORTER_OTLP_LOGS_HEADERS", value)]));
-
-        assert_eq!(
-            derived.cut,
-            vec![variable("OTEL_EXPORTER_OTLP_LOGS_HEADERS", held)],
-            "{value:?}"
-        );
-        assert!(derived.withheld.is_empty());
-        assert_eq!(derived.values, Secrets::default());
-    }
-}
-
-#[test]
-fn an_otlp_header_variable_is_named_without_an_executor_and_its_value_held_only_with_one() {
-    let held = env(&[(
-        "OTEL_EXPORTER_OTLP_HEADERS",
-        "authorization=Bearer%20sk-0123456789abcdef",
-    )]);
-    let written = config(FAKE);
-    let real = written.substituted(&held).unwrap();
-
-    let without = derived(&written, &real, &held, &[], false);
-
-    assert_eq!(
-        without.cut,
-        vec![variable("OTEL_EXPORTER_OTLP_HEADERS", Held::Cut)]
-    );
-    assert_eq!(without.values, Secrets::default());
-}
-
-/// What the file a client key variable names holds, which the root that
-/// read it hands in, is cut from what a tool returns, each line too, as a
-/// value with several lines is. Its variable holds a path, which is no
-/// secret: it's named among what's cut and withheld from no command.
+/// What the command line hands in is cut, named under `cut:` and never
+/// dropped: a header variable whole and by each header, an endpoint
+/// variable's user information in each form, and what a client key's file
+/// holds; a value under the floor or empty is named with why it isn't cut,
+/// and a URL with no user information isn't named.
 #[tokio::test]
-async fn a_client_keys_contents_are_cut_from_a_tools_result_and_its_path_is_not() {
+async fn what_is_handed_in_is_cut_and_named_and_never_dropped() {
+    const TOKEN: &str = "Bearer sk-0123456789abcdef";
     let receiver = Receiver::start(Mode::Answers).await;
-    let key_path = "/etc/collector/client.key";
-    let named = [("OTEL_EXPORTER_OTLP_CLIENT_KEY", key_path)];
-    let held = env(&named);
-    let written = config(&format!(
-        "{FAKE}telemetry: {{ otlp: {{ endpoint: 'https://collector.internal:4318' }} }}"
-    ));
-    let real = written.substituted(&held).unwrap();
-    let contents = SecretString::from(receiver.client_key());
+    let headers = SecretString::from("x-env=1,authorization=Bearer%20sk-0123456789abcdef");
+    let endpoint = SecretString::from("https://collector-user:pw%40-0123456789abcdef@c:4317/v1");
+    let host_only = SecretString::from("https://collector.internal:4317");
+    let short = SecretString::from("a=b");
+    let key = SecretString::from(receiver.client_key());
+    let handed = [
+        Handed {
+            name: "OTEL_EXPORTER_OTLP_HEADERS",
+            value: &headers,
+            kind: HandedKind::Headers,
+        },
+        Handed {
+            name: "OTEL_EXPORTER_OTLP_ENDPOINT",
+            value: &endpoint,
+            kind: HandedKind::Url,
+        },
+        Handed {
+            name: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+            value: &host_only,
+            kind: HandedKind::Url,
+        },
+        Handed {
+            name: "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+            value: &short,
+            kind: HandedKind::Headers,
+        },
+        Handed {
+            name: "OTEL_EXPORTER_OTLP_CLIENT_KEY",
+            value: &key,
+            kind: HandedKind::Contents,
+        },
+    ];
 
-    let derived = derived(
-        &written,
-        &real,
-        &held,
-        &[("OTEL_EXPORTER_OTLP_CLIENT_KEY", &contents)],
-        true,
-    );
+    let cut_only = derived(&filled(FAKE, &[]), &handed, true);
 
+    let cut: Vec<String> = cut_only.cut.iter().map(ToString::to_string).collect();
     assert_eq!(
-        derived.cut,
-        vec![variable("OTEL_EXPORTER_OTLP_CLIENT_KEY", Held::Cut)]
+        cut,
+        [
+            "OTEL_EXPORTER_OTLP_CLIENT_KEY",
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_HEADERS",
+            "OTEL_EXPORTER_OTLP_LOGS_HEADERS (under 16 bytes, not cut)",
+        ]
     );
-    assert!(derived.withheld.is_empty());
-    let key = receiver.client_key();
-    let line = key.lines().nth(1).unwrap();
-    let result = format!("cat said:\n{key}\nand then: {line}\nfrom {key_path}");
-    let cut = derived.values.redacted(&result);
-    assert!(!cut.contains(line), "{cut}");
-    assert!(cut.contains(key_path), "the path is no secret: {cut}");
-    assert!(!format!("{derived:?}").contains(line));
+    assert!(cut_only.dropped.is_empty(), "every command inherits them");
+    assert_eq!(
+        cut_only.dropping,
+        Secrets::default(),
+        "nothing is dropped by value for them"
+    );
+    let line = receiver.client_key().lines().nth(1).unwrap().to_owned();
+    for value in [
+        "x-env=1,authorization=Bearer%20sk-0123456789abcdef",
+        TOKEN,
+        "collector-user:pw%40-0123456789abcdef",
+        "collector-user:pw@-0123456789abcdef",
+        "pw@-0123456789abcdef",
+        &line,
+    ] {
+        assert_ne!(cut_only.values.redacted(value), value, "{value} isn't cut");
+    }
+    assert!(!format!("{cut_only:?}").contains("sk-0123"), "{cut_only:?}");
+
+    let without = derived(&filled(FAKE, &[]), &handed, false);
+    assert_eq!(without.values, Secrets::default());
+    assert_eq!(without.cut, cut_only.cut, "named without an executor too");
 }

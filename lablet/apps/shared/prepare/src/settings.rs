@@ -21,6 +21,18 @@ use lablet_config::{
     Setting,
 };
 
+/// What the built-in tools are built from, less the environment their
+/// commands start from, which the root computes once it has the base.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuiltinSettings {
+    /// The directory `bash` starts in and the file tools stay under.
+    pub root: PathBuf,
+    /// The tools to serve.
+    pub enabled: BTreeSet<Tool>,
+    /// The longest a call may take.
+    pub timeout: Duration,
+}
+
 /// What a backoff grows by after each attempt.
 const BACKOFF_FACTOR: f64 = 2.0;
 
@@ -69,7 +81,7 @@ pub struct Settings {
     /// Where the system prompt comes from.
     pub system: System,
     /// `None` when no built-in tool is enabled.
-    pub builtin: Option<lablet_tools_builtin::Settings>,
+    pub builtin: Option<BuiltinSettings>,
 }
 
 fn shown(duration: Duration) -> String {
@@ -94,10 +106,7 @@ impl Settings {
                 max_consecutive_invalid_turns: run.max_consecutive_invalid_turns,
             },
             retry: retry(run)?,
-            provider: {
-                key_variable(&config.model)?;
-                selected(&config.model)?
-            },
+            provider: selected(&config.model)?,
             request: request(&config.model, &resolved.model)?,
             pricing: config.model.pricing.map(pricing).transpose()?,
             system: system(&config.prompt)?,
@@ -143,28 +152,6 @@ fn retry(run: &config::Run) -> Result<RetryPolicy, Refusal> {
             "the jitter is a share of a wait, from 0 to 1",
         ),
     })
-}
-
-/// Holds `model.api_key_env` to the name of a variable, whichever
-/// provider is selected: anything else there is a mistake, and the mistake
-/// to expect is the key itself.
-fn key_variable(model: &config::Model) -> Result<(), Refusal> {
-    let Some(named) = &model.api_key_env else {
-        return Ok(());
-    };
-    let mut bytes = named.bytes();
-    let begins_a_name = bytes
-        .next()
-        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_');
-    if begins_a_name && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_') {
-        Ok(())
-    } else {
-        Err(Refusal::KeyVariable {
-            reason: "it holds something other than the name of an environment variable, \
-                     which is ASCII letters, digits and `_` and begins with no digit. What \
-                     it holds isn't shown, since a key may have been written in its place",
-        })
-    }
 }
 
 fn selected(model: &config::Model) -> Result<Selected, Refusal> {
@@ -349,7 +336,7 @@ fn tool(tool: BuiltinTool) -> Tool {
     }
 }
 
-fn builtin(builtin: &config::Builtin) -> Result<Option<lablet_tools_builtin::Settings>, Refusal> {
+fn builtin(builtin: &config::Builtin) -> Result<Option<BuiltinSettings>, Refusal> {
     let Some(&first) = builtin.enabled.first() else {
         return Ok(None);
     };
@@ -362,14 +349,10 @@ fn builtin(builtin: &config::Builtin) -> Result<Option<lablet_tools_builtin::Set
             ),
         });
     };
-    Ok(Some(lablet_tools_builtin::Settings {
+    Ok(Some(BuiltinSettings {
         root: root.clone(),
         enabled: builtin.enabled.iter().copied().map(tool).collect(),
         timeout: builtin.timeout,
-        env: builtin.env.clone(),
-        // lablet's secrets are derived from the config and where it runs,
-        // which `build` reads and this doesn't.
-        withheld: BTreeSet::new(),
     }))
 }
 

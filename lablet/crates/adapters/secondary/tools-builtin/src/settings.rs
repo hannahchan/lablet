@@ -1,10 +1,12 @@
-//! What an executor that serves tools is built from, and why one can't be
-//! built.
+//! What an executor that serves tools is built from, the environment its
+//! commands start from, and why one can't be built.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
+
+use lablet_model::Secrets;
 
 /// One of the built-in tools.
 ///
@@ -47,9 +49,9 @@ impl core::fmt::Display for Tool {
 /// executor that serves nothing needs no settings:
 /// [`BuiltinTools::default`](crate::BuiltinTools::default) is one.
 ///
-/// Its `Debug` form names the variables of `env` and leaves their values
-/// out, since a value may be a credential that a command needs and a log
-/// doesn't.
+/// Its `Debug` form names the variables of the environment and leaves their
+/// values out, since a value may be a credential that a command needs and a
+/// log doesn't.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Settings {
     /// The directory `bash` starts in and the file tools stay under. It has
@@ -60,20 +62,22 @@ pub struct Settings {
     /// The longest a call may take. A call's own deadline can only shorten
     /// it.
     pub timeout: Duration,
-    /// Variables a command starts with on top of the ones it inherits. One
-    /// that has the name of an inherited variable replaces it, one that has
-    /// the name of a withheld variable passes it on, and one that has the
-    /// name of a context variable wins over the one injected.
-    pub env: BTreeMap<String, String>,
-    /// Variables of lablet's environment that no command inherits, and that
-    /// no context is injected into: the ones lablet reads its secrets from.
-    /// Their values aren't here, since a command can find a value some other
-    /// way than its environment, in a file or in lablet's own environment
+    /// The environment every command starts from, computed once by
+    /// [`environment`]: what was handed in, less what's dropped, with the
+    /// config's own variables and credentials on top. The context
+    /// variables are the exception: each command gets its tool span's as it
+    /// starts.
+    pub environment: BTreeMap<OsString, OsString>,
+    /// The names no context is injected into: the config's own variables
+    /// and credentials, which win over a context variable that's injected,
+    /// and the names dropped, which stay dropped. The values of what's
+    /// dropped aren't here, since a command can find a value some other way
+    /// than its environment, in a file or in lablet's own environment
     /// through the process table, as `ps eww -p $PPID` and
     /// `/proc/<pid>/environ` read it. So the values come with every call, as
     /// [`lablet_run::ToolCall::secrets`], and are cut out of every result
     /// however the command came by them.
-    pub withheld: BTreeSet<String>,
+    pub kept: BTreeSet<String>,
 }
 
 impl core::fmt::Debug for Settings {
@@ -82,20 +86,21 @@ impl core::fmt::Debug for Settings {
             root,
             enabled,
             timeout,
-            env,
-            withheld,
+            environment,
+            kept,
         } = self;
         f.debug_struct("Settings")
             .field("root", root)
             .field("enabled", enabled)
             .field("timeout", timeout)
-            .field("env", &env.keys().collect::<Vec<_>>())
-            .field("withheld", withheld)
+            .field("environment", &environment.keys().collect::<Vec<_>>())
+            .field("kept", kept)
             .finish()
     }
 }
 
-/// Why an executor couldn't be built from its settings.
+/// Why an executor couldn't be built from its settings, or a command's
+/// environment from what it starts from.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SettingsError {
     /// The root couldn't be resolved to a directory that exists.
@@ -112,47 +117,151 @@ pub enum SettingsError {
         /// The root as the settings gave it.
         root: String,
     },
-    /// A variable has a name or a value no process can be started with.
+    /// A variable of the config's own has a name or a value no process can
+    /// be started with.
     #[error("the variable {name:?} can't be set: {reason}")]
     Variable {
-        /// The variable's name as the settings gave it.
+        /// The variable's name as the config gave it.
+        name: String,
+        /// Which rule it breaks.
+        reason: &'static str,
+    },
+    /// A credential given to the command has a name or a value no process
+    /// can be started with.
+    #[error("the credential {name:?} can't be set: {reason}")]
+    Credential {
+        /// The credential's name as the config gave it.
         name: String,
         /// Which rule it breaks.
         reason: &'static str,
     },
 }
 
-/// The environment a command starts with: `inherited` less the variables
-/// that `withheld` names, then `added`, which wins where it names a variable
-/// of either.
+/// The environment a command starts from, and what was dropped from the
+/// base on the way to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dropped {
+    /// The environment: the base less the drops, then the config's own
+    /// variables, then its credentials. Its values aren't shown by its
+    /// `Debug` form's holder, [`Settings`].
+    pub environment: BTreeMap<OsString, OsString>,
+    /// The variables of the base dropped by name: those that filled an own
+    /// or given field.
+    pub by_name: BTreeSet<String>,
+    /// The variables of the base dropped by value: those holding an own or
+    /// given value, or its percent-encoded form, under any name.
+    pub by_value: BTreeSet<String>,
+}
+
+/// The environment a command starts from: `base`, less every variable
+/// `dropped_names` names and every variable whose value `secrets` would
+/// cut, as it is or percent-decoded, then `env`, then `credentials`, each
+/// of which wins where it names a variable of what came before.
 ///
-/// `inherited` is lablet's environment, asked for as a list so that a test
-/// can say what it holds.
-pub(crate) fn environment(
-    inherited: impl IntoIterator<Item = (OsString, OsString)>,
-    withheld: &BTreeSet<String>,
-    added: BTreeMap<String, String>,
-) -> Result<BTreeMap<OsString, OsString>, SettingsError> {
-    let mut environment: BTreeMap<OsString, OsString> = inherited
-        .into_iter()
-        .filter(|(name, _)| !name.to_str().is_some_and(|name| withheld.contains(name)))
-        .collect();
-    for (name, value) in added {
-        let refused = if name.is_empty() {
-            Some("its name is empty")
-        } else if name.contains(['=', '\0']) {
-            Some("its name holds `=` or a NUL")
-        } else if value.contains('\0') {
-            Some("its value holds a NUL")
+/// The drop by value is the one place lablet matches values, over the
+/// environment it was handed and against the values it holds: it's the only
+/// guard against a copy of a credential under a name the config never
+/// wrote, a key set in code among them. A value is matched as the cut
+/// matches it, so a value under the cut's floor is never dropped for it.
+///
+/// `base` is asked for as a list so that a caller says what it holds: the
+/// command line hands in its own environment, a host what it chooses.
+///
+/// # Errors
+///
+/// Returns [`SettingsError::Variable`] or [`SettingsError::Credential`] when
+/// an entry of `env` or `credentials` has a name or a value no process can
+/// be started with.
+pub fn environment(
+    base: impl IntoIterator<Item = (OsString, OsString)>,
+    dropped_names: &BTreeSet<String>,
+    secrets: &Secrets,
+    env: BTreeMap<String, String>,
+    credentials: BTreeMap<String, String>,
+) -> Result<Dropped, SettingsError> {
+    let mut environment = BTreeMap::new();
+    let mut by_name = BTreeSet::new();
+    let mut by_value = BTreeSet::new();
+    for (name, value) in base {
+        // A name that isn't text filled nothing, since a config writes text.
+        if name
+            .to_str()
+            .is_some_and(|shown| dropped_names.contains(shown))
+        {
+            by_name.insert(name.to_string_lossy().into_owned());
+        } else if holds_a_secret(secrets, &value) {
+            by_value.insert(name.to_string_lossy().into_owned());
         } else {
-            None
-        };
-        if let Some(reason) = refused {
-            return Err(SettingsError::Variable { name, reason });
+            environment.insert(name, value);
         }
-        environment.insert(name.into(), value.into());
     }
-    Ok(environment)
+    for (name, value) in env {
+        let (name, value) = checked(name, value)
+            .map_err(|(name, reason)| SettingsError::Variable { name, reason })?;
+        environment.insert(name, value);
+    }
+    for (name, value) in credentials {
+        let (name, value) = checked(name, value)
+            .map_err(|(name, reason)| SettingsError::Credential { name, reason })?;
+        environment.insert(name, value);
+    }
+    Ok(Dropped {
+        environment,
+        by_name,
+        by_value,
+    })
+}
+
+/// Whether `secrets` would cut `value`, as it is or percent-decoded, read
+/// as a command's output is read.
+fn holds_a_secret(secrets: &Secrets, value: &OsString) -> bool {
+    if secrets.is_empty() {
+        return false;
+    }
+    let text = value.to_string_lossy();
+    let decoded = percent_decoded(&text);
+    secrets.redacted(&text) != text || secrets.redacted(&decoded) != decoded
+}
+
+/// `name` and `value` as a process can be started with them, or why not.
+fn checked(name: String, value: String) -> Result<(OsString, OsString), (String, &'static str)> {
+    let refused = if name.is_empty() {
+        Some("its name is empty")
+    } else if name.contains(['=', '\0']) {
+        Some("its name holds `=` or a NUL")
+    } else if value.contains('\0') {
+        Some("its value holds a NUL")
+    } else {
+        None
+    };
+    match refused {
+        Some(reason) => Err((name, reason)),
+        None => Ok((name.into(), value.into())),
+    }
+}
+
+/// `text` with each `%XX` read as the byte it encodes, and a `%` that
+/// begins no such pair kept as it is, read as a command's output is read.
+/// The adapter's own, since a kernel's isn't its to use.
+fn percent_decoded(text: &str) -> String {
+    let mut bytes = Vec::with_capacity(text.len());
+    let mut rest = text.as_bytes();
+    while let Some(at) = rest.iter().position(|&byte| byte == b'%') {
+        bytes.extend_from_slice(&rest[..at]);
+        let encoded = rest
+            .get(at + 1..at + 3)
+            .and_then(|hex| std::str::from_utf8(hex).ok())
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        if let Some(byte) = encoded {
+            bytes.push(byte);
+            rest = &rest[at + 3..];
+        } else {
+            bytes.push(b'%');
+            rest = &rest[at + 1..];
+        }
+    }
+    bytes.extend_from_slice(rest);
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 #[cfg(test)]

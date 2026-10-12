@@ -22,7 +22,6 @@ fn an_environment_that_sets_nothing_gives_the_specifications_defaults() {
     assert!(warnings.is_empty());
     assert_eq!(exporter, Exporter::default());
     assert!(!exporter.sdk_disabled);
-    assert_eq!(exporter.capture_content, None);
     for inherited in [&exporter.traces, &exporter.logs] {
         assert_eq!(
             *inherited,
@@ -414,30 +413,4 @@ fn otel_sdk_disabled_is_a_specification_boolean() {
     assert!(Exporter::sdk_disabled_in(&|name: &str| {
         (name == "OTEL_SDK_DISABLED").then(|| "True".into())
     }));
-}
-
-#[test]
-fn the_genai_capture_variable_is_parsed_as_a_specification_boolean() {
-    let capture = |value: &str| {
-        warned(
-            &[("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", value)],
-            Exporter::read,
-        )
-    };
-
-    let (on, quiet) = capture("TRUE");
-    assert_eq!((on.capture_content, quiet.len()), (Some(true), 0));
-    let (off, quiet) = capture("false");
-    assert_eq!((off.capture_content, quiet.len()), (Some(false), 0));
-    let (empty, quiet) = capture("");
-    assert_eq!((empty.capture_content, quiet.len()), (None, 0));
-    let (one, warnings) = capture("1");
-    assert_eq!(one.capture_content, None, "so content stays off");
-    assert_eq!(
-        warnings,
-        [
-            "`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` holds `1`, which isn't `true` \
-             or `false`, so it's read as `false`"
-        ]
-    );
 }

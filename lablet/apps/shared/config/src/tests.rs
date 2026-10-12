@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::num::NonZeroU32;
 use std::time::Duration;
 
@@ -12,8 +13,29 @@ use super::*;
 /// `product/spec.md`, which can drift.
 const SPEC: &str = include_str!("tests/spec.yaml");
 
+/// What the spec's `${ANTHROPIC_API_KEY}` is filled with here.
+const KEY: &str = "sk-ant-0123456789abcdef0123456789";
+
 fn yaml(text: &str) -> Config {
     Config::from_str(text, Format::Yaml).unwrap()
+}
+
+/// The config `text` holds, with each `${VAR}` filled from `held`.
+fn filled(text: &str, held: &[(&str, &str)]) -> Config {
+    let held: Vec<(String, String)> = held
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect();
+    RawConfig::from_str(text, Format::Yaml)
+        .unwrap()
+        .substituted(move |asked: &str| -> Option<OsString> {
+            held.iter()
+                .find(|(name, _)| name == asked)
+                .map(|(_, value)| value.into())
+        })
+        .unwrap()
+        .config()
+        .unwrap()
 }
 
 fn refusal(text: &str, format: Format) -> String {
@@ -55,7 +77,7 @@ fn defaults() -> Config {
             api: None,
             script: None,
             name: "claude-sonnet-5".to_owned(),
-            api_key_env: None,
+            api_key: None,
             base_url: None,
             max_tokens: 32_000,
             temperature: None,
@@ -79,6 +101,7 @@ fn defaults() -> Config {
                 enabled: BTreeSet::new(),
                 timeout: Duration::from_secs(120),
                 env: BTreeMap::new(),
+                credentials: BTreeMap::new(),
             },
             mcp: Vec::new(),
             mcp_lifetime: McpLifetime::Run,
@@ -105,6 +128,7 @@ fn defaults() -> Config {
         source: None,
         places: Places::default(),
         prompt_file: None,
+        filled: Filled::default(),
     }
 }
 
@@ -126,13 +150,13 @@ fn a_section_that_states_one_setting_keeps_the_defaults_of_the_rest() {
 }
 
 /// The spec states its defaults, the provider's own among them, and two MCP
-/// servers and a system prompt as examples.
+/// servers, a system prompt and the key's `${VAR}` as examples.
 #[test]
 fn the_config_the_spec_writes_is_read_whole_and_its_values_are_the_defaults() {
-    let config = yaml(SPEC);
+    let config = filled(SPEC, &[("ANTHROPIC_API_KEY", KEY)]);
 
     let mut expected = defaults();
-    expected.model.api_key_env = Some("ANTHROPIC_API_KEY".to_owned());
+    expected.model.api_key = Some(Secret::new(KEY));
     expected.model.thinking = Some(Thinking::ProviderDefault);
     expected.model.reasoning_replay = Some(false);
     expected.model.cache = Some(true);
@@ -158,9 +182,25 @@ fn the_config_the_spec_writes_is_read_whole_and_its_values_are_the_defaults() {
             instructions: true,
         },
     ];
+    assert_eq!(
+        config
+            .filled()
+            .at(&KeyPath::of("model.api_key"))
+            .unwrap()
+            .written,
+        "${ANTHROPIC_API_KEY}"
+    );
+    let config = Config {
+        filled: Filled::default(),
+        ..config
+    };
     assert_eq!(config, expected);
     assert_eq!(config.tools.mcp[0].name(), "docs");
     assert_eq!(config.tools.mcp[1].name(), "search");
+    assert!(
+        Config::from_str(SPEC, Format::Yaml).is_err(),
+        "the spec's config wants a fill"
+    );
 }
 
 #[test]
@@ -277,6 +317,10 @@ fn a_key_the_config_does_not_know_is_refused_by_its_path_in_every_section() {
         ),
         ("model: { nme: scripted-1 }", "model.nme"),
         (
+            "model: { api_key_env: ANTHROPIC_API_KEY }",
+            "model.api_key_env",
+        ),
+        (
             "model: { pricing: { input: 1, output: 1, cache_read: 1, cache_write: 1, cached: 1 } }",
             "model.pricing.cached",
         ),
@@ -320,6 +364,22 @@ fn a_key_the_config_does_not_know_is_refused_by_its_path_in_every_section() {
          `max_consecutive_invalid_turns`, `provider_timeout`, `context`, `transcript_path`, \
          `transcript_format`, `completion_schema`"
     );
+}
+
+/// The key a config named the key's variable under before `api_key` is
+/// refused as any unknown key is, and the refusal names `api_key` beside it.
+#[test]
+fn a_config_that_writes_api_key_env_is_refused_as_an_unknown_key_naming_api_key() {
+    let refusal = refused("model:\n  api_key_env: ANTHROPIC_API_KEY\n").to_string();
+
+    assert!(
+        refusal.starts_with(
+            "model.api_key_env (line 2) is refused: no setting has the key; the keys beside it are"
+        ),
+        "{refusal}"
+    );
+    assert!(refusal.contains("`api_key`"), "{refusal}");
+    assert!(!refusal.contains("`api_key_env`"), "{refusal}");
 }
 
 #[test]
@@ -597,48 +657,37 @@ fn a_file_that_cannot_be_read_as_a_config_is_refused_and_the_error_names_it() {
 #[test]
 fn a_message_shows_a_value_as_json_writes_it_and_cuts_a_long_one() {
     let key = KeyPath::of("prompt.system");
+    let none = Filled::default();
 
     assert_eq!(
-        shown(&key, Some(&json!("Fix it."))),
+        shown(&key, Some(&json!("Fix it.")), &none),
         Some("\"Fix it.\"".to_owned())
     );
-    assert_eq!(shown(&key, Some(&json!(7))), Some("7".to_owned()));
-    assert_eq!(shown(&key, None), None);
+    assert_eq!(shown(&key, Some(&json!(7)), &none), Some("7".to_owned()));
+    assert_eq!(shown(&key, None, &none), None);
     let long = "\u{e9}".repeat(200);
-    let cut = shown(&key, Some(&json!(long))).unwrap();
-    assert_eq!(cut.chars().count(), SHOWN_CHARS + 1);
+    let cut = shown(&key, Some(&json!(long)), &none).unwrap();
+    assert_eq!(cut.chars().count(), shown::SHOWN_CHARS + 1);
     assert!(
         cut.starts_with("\"\u{e9}") && cut.ends_with("\u{e9}…"),
         "{cut}"
     );
-    let fits = "a".repeat(SHOWN_CHARS - 2);
-    assert_eq!(shown(&key, Some(&json!(fits))), Some(format!("\"{fits}\"")));
+    let fits = "a".repeat(shown::SHOWN_CHARS - 2);
+    assert_eq!(
+        shown(&key, Some(&json!(fits)), &none),
+        Some(format!("\"{fits}\""))
+    );
 }
 
-/// What `model.api_key_env` holds is shown only when it's written as a
-/// variable's name is, whatever refused it.
+/// The key is a secret: a value of the wrong kind there is refused without
+/// being shown, as every value under the key is but the marker.
 #[test]
-fn a_message_shows_the_key_variable_only_when_it_is_written_as_a_variable() {
-    let key = KeyPath::of("model.api_key_env");
-
-    assert_eq!(
-        shown(&key, Some(&json!("WORK_KEY_2"))),
-        Some("\"WORK_KEY_2\"".to_owned())
-    );
-    for hidden in [
-        json!("sk-ant-api03-secret"),
-        json!("work_key"),
-        json!(""),
-        json!(7),
-    ] {
-        assert_eq!(shown(&key, Some(&hidden)), None, "{hidden}");
-    }
-
-    let error = refused("model: { api_key_env: [sk-ant-api03-secret] }");
+fn a_key_of_the_wrong_kind_is_refused_without_its_value() {
+    let error = refused("model: { api_key: [sk-ant-api03-secret] }");
     assert_eq!(
         error,
         ConfigError::Invalid {
-            key: "model.api_key_env".to_owned(),
+            key: "model.api_key".to_owned(),
             place: Some(Place::Line(1)),
             value: None,
             reason: "expected a string".to_owned(),
@@ -646,8 +695,85 @@ fn a_message_shows_the_key_variable_only_when_it_is_written_as_a_variable() {
     );
     assert_eq!(
         error.to_string(),
-        "model.api_key_env (line 1): its value is refused: expected a string"
+        "model.api_key (line 1): its value is refused: expected a string"
     );
+}
+
+/// R55: the marker a secret set in code is written as doesn't read back.
+#[test]
+fn the_marker_of_a_secret_set_in_code_is_refused_when_read_back() {
+    for (text, key) in [
+        ("model: { api_key: '[secret]' }", "model.api_key"),
+        (
+            "tools: { builtin: { credentials: { T: '[secret]' } } }",
+            "tools.builtin.credentials.T",
+        ),
+        (
+            "telemetry: { otlp: { headers: { Authorization: '[secret]' } } }",
+            "telemetry.otlp.headers.Authorization",
+        ),
+    ] {
+        let error = refused(text);
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "{key} (line 1): \"[secret]\" is refused: it's how lablet writes a secret set in \
+                 code; set it with Secret::new"
+            ),
+            "{text}"
+        );
+    }
+}
+
+/// A config's `Debug` form is the masked tree: a secret is the marker, a
+/// filled setting is as the file wrote it, and a value that may hold a
+/// credential is hidden.
+#[test]
+fn a_config_s_debug_form_shows_no_secret_and_no_filled_value() {
+    let config = filled(
+        "
+model: { api_key: '${KEY}', name: '${MODEL}', base_url: 'https://u:${P}@gw.example/v1' }
+tools: { builtin: { root: work, enabled: [bash], env: { T: '${TOK}' }, credentials: { C: '${KEY}' } } }
+telemetry: { otlp: { headers: { Authorization: 'Bearer ${KEY}' } } }
+",
+        &[
+            ("KEY", KEY),
+            ("MODEL", "model-0123456789"),
+            ("P", "pw-0123456789abcdef"),
+            ("TOK", "tok-0123456789abcdef"),
+        ],
+    );
+
+    let shown = format!("{config:?}");
+
+    for hidden in [
+        KEY,
+        "model-0123456789",
+        "pw-0123456789abcdef",
+        "tok-0123456789abcdef",
+    ] {
+        assert!(!shown.contains(hidden), "{hidden}: {shown}");
+    }
+    assert!(shown.contains("${MODEL}"), "{shown}");
+    assert!(shown.contains("${TOK}"), "{shown}");
+    assert!(shown.contains("${KEY}"), "{shown}");
+    let code = Config {
+        model: Model {
+            api_key: Some(Secret::new(KEY)),
+            base_url: Some("https://u:pw-0123456789abcdef@gw.example/v1".to_owned()),
+            ..Model::default()
+        },
+        ..Config::default()
+    };
+    let shown = format!("{code:?}");
+    assert!(
+        !shown.contains(KEY) && !shown.contains("pw-0123"),
+        "{shown}"
+    );
+    assert!(shown.contains("[secret]"), "{shown}");
+    assert!(code.made_in_code());
+    assert!(!config.made_in_code());
 }
 
 /// C21: the config takes the specification's spellings alone.

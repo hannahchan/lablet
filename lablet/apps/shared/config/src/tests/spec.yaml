@@ -20,7 +20,7 @@ model:
   api: null # openai only: responses | chat_completions; null means responses without a base_url and chat_completions with one
   script: null # fake only: path to the scripted responses
   name: claude-sonnet-5
-  api_key_env: ANTHROPIC_API_KEY # never the key itself; optional for openai (Ollama) and fake
+  api_key: ${ANTHROPIC_API_KEY} # a ${VAR}, never the key itself; required for anthropic, optional for openai (Ollama) and fake
   base_url: null # override for gateways, Ollama, vLLM
   max_tokens: 32000
   temperature: null # sent only when set; rejected by current Anthropic models
@@ -43,7 +43,7 @@ tools:
     root: null # required when a built-in is enabled; never a directory that holds lablet's own files
     enabled: [] # bash, read_file, write_file; task_complete is implied by run.completion: explicit
     timeout: 120s
-    env: {} # added on top of the environment bash inherits; may name a withheld variable to pass it on
+    env: {} # added on top of the environment bash inherits, each entry passed as set; a credential goes under credentials instead
   mcp:
     - name: docs # letters, digits, - and _
       transport: stdio
@@ -69,7 +69,7 @@ tools:
   max_description_chars: 2048 # a tool description or a server's instructions longer than this is cut; null means no cap (phase 8; until then a value other than the default is refused)
 
 telemetry:
-  capture_content: null # null means OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, on only when it's true in any case; a stated value wins
+  capture_content: null # null captures nothing, as false does; true captures; no variable is read
   otlp:
     enabled: null # null leaves each signal to OTEL_TRACES_EXPORTER and OTEL_LOGS_EXPORTER, on unless none; true turns both on and false both off, whatever they say; false is refused beside an endpoint, which it would make a setting without effect
     endpoint: null # e.g. http://localhost:4318; null means the signal's variable, then OTEL_EXPORTER_OTLP_ENDPOINT, then http://localhost:4318 on http or http://localhost:4317 on grpc; on http it's a base URL to which /v1/traces and /v1/logs are appended, as OTEL_EXPORTER_OTLP_ENDPOINT is

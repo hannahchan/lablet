@@ -5,13 +5,16 @@ use std::os::unix::fs::symlink;
 use lablet::{BuildError, Config, ConfigError, FilterList, Format, OwnFile, Place, Unsupported};
 use serde_json::{Value, json};
 
-use crate::harness::{ENDS, Lab, read, refusal, request};
+use crate::harness::{ENDS, KEY, Lab, filled, read, read_filled, refusal, request};
 
-/// A variable cargo sets for every test, as a key is set for lablet.
-const KEY_VARIABLE: &str = "CARGO_MANIFEST_DIR";
+/// The variable the key is filled from in the configs below that need one.
+const KEY_VARIABLE: &str = "LABLET_TEST_KEY";
 
 /// A variable nothing sets.
 const NO_VARIABLE: &str = "LABLET_TEST_A_VARIABLE_NOTHING_SETS";
+
+/// What the configs below are filled from: the key's variable set.
+const HELD: [(&str, &str); 1] = [(KEY_VARIABLE, KEY)];
 
 /// Where every setting of a config the harness writes is: its JSON is on
 /// one line.
@@ -95,6 +98,17 @@ async fn a_name_in_a_list_that_no_tool_has_is_refused_with_the_list_it_is_in() {
             name: "write_file".to_owned(),
         },
         "a built-in tool that isn't enabled is a tool the run doesn't have"
+    );
+    // A name a variable gave is shown as the file wrote it, not as filled.
+    let mut tree = scratch.tree(
+        ENDS,
+        json!({ "tools": { "builtin": scratch.builtin(&["bash", "read_file"]) } }),
+    );
+    tree["tools"]["allow"] = json!(["bash", "${TOOL}"]);
+    let filled = refusal(read_filled(&tree, &[("TOOL", "raed_file")])).await;
+    assert_eq!(
+        filled.to_string(),
+        "tools.allow (line 1): ${TOOL} is refused: no tool the lists apply to has the name"
     );
     scratch
         .build(with(json!({ "allow": ["bash"], "deny": ["read_file"] })))
@@ -284,7 +298,7 @@ async fn a_variable_no_command_can_start_with_is_refused_by_its_name() {
 fn later(scratch: &Lab) -> Vec<(Value, Unsupported, &'static str, &'static str)> {
     let fake = |more: Value| scratch.tree(ENDS, more);
     let mut anthropic = fake(json!({}));
-    anthropic["model"] = json!({ "api_key_env": KEY_VARIABLE });
+    anthropic["model"] = json!({ "api_key": format!("${{{KEY_VARIABLE}}}") });
     let mut openai = fake(json!({}));
     openai["model"] = json!({ "provider": "openai", "name": "gpt-5" });
     vec![
@@ -353,7 +367,7 @@ async fn what_a_later_phase_delivers_is_refused_with_the_phase_that_delivers_it(
     let scratch = Lab::new("unsupported");
 
     for (tree, kind, phase, named) in later(&scratch) {
-        let error = refusal(read(&tree)).await;
+        let error = refusal(read_filled(&tree, &HELD)).await;
 
         assert_eq!(error, BuildError::Unsupported { kind, phase }, "{tree}");
         assert_eq!(
@@ -413,7 +427,7 @@ async fn a_config_is_checked_whole_before_any_adapter_is_selected() {
     for (mut tree, kind, _, _) in later(&scratch) {
         tree["run"]["retry_jitter"] = json!(2);
 
-        let error = refusal(read(&tree)).await;
+        let error = refusal(read_filled(&tree, &HELD)).await;
 
         assert_eq!(
             error,
@@ -427,7 +441,8 @@ async fn a_config_is_checked_whole_before_any_adapter_is_selected() {
     }
 
     // A setting the provider can't apply is the config's fault, whether or
-    // not the provider has an adapter yet.
+    // not the provider has an adapter yet, and it's refused before the key
+    // is asked for.
     let config =
         Config::from_str("model: { seed: 7 }\nprompt: { system: Hi. }", Format::Yaml).unwrap();
     assert_eq!(
@@ -441,59 +456,77 @@ async fn a_config_is_checked_whole_before_any_adapter_is_selected() {
     );
 }
 
+/// R16: a provider that needs a key needs its variable set, and the
+/// refusal names the variable; set, the key passes the check before the
+/// adapter is selected.
 #[tokio::test]
 async fn a_provider_that_needs_a_key_needs_the_variable_that_holds_it_to_be_set() {
-    let anthropic = |variable: &str| {
-        Config::from_str(
-            &format!("model: {{ api_key_env: {variable} }}\nprompt: {{ system: Hi. }}"),
+    let anthropic = |variable: &str, held: &[(&str, &str)]| {
+        filled(
+            &format!("model: {{ api_key: '${{{variable}}}' }}\nprompt: {{ system: Hi. }}"),
             Format::Yaml,
+            held,
         )
         .unwrap()
     };
 
-    let error = refusal(anthropic(NO_VARIABLE)).await;
+    let error = refusal(anthropic(NO_VARIABLE, &[])).await;
     assert_eq!(
         error.to_string(),
         format!(
-            "model.api_key_env (line 1) is refused: `{NO_VARIABLE}`, the variable it names, \
-             isn't set, and the provider `anthropic` needs a key"
+            "model.api_key (line 1): \"${{{NO_VARIABLE}}}\" is refused: `{NO_VARIABLE}` isn't set, \
+             and the provider `anthropic` needs a key; set it"
         )
     );
-    assert!(matches!(error, BuildError::KeyVariable { .. }), "{error:?}");
-    let lower = NO_VARIABLE.to_lowercase();
-    let error = refusal(anthropic(&lower)).await;
+    assert!(
+        matches!(error, BuildError::Config(ConfigError::Invalid { .. })),
+        "{error:?}"
+    );
+    let error = refusal(anthropic(KEY_VARIABLE, &[(KEY_VARIABLE, "")])).await;
     assert_eq!(
         error.to_string(),
-        "model.api_key_env (line 1) is refused: the variable it names isn't set, and the \
-         provider `anthropic` needs a key"
+        format!(
+            "model.api_key (line 1): \"${{{KEY_VARIABLE}}}\" is refused: `{KEY_VARIABLE}` is \
+             empty, and the provider `anthropic` needs a key; set it"
+        )
     );
-    assert!(!format!("{error:?}").contains(&lower), "{error:?}");
     assert_eq!(
-        refusal(anthropic(KEY_VARIABLE)).await,
+        refusal(anthropic(KEY_VARIABLE, &HELD)).await,
         BuildError::from(Unsupported::Anthropic),
-        "the variable is checked before the adapter is selected"
+        "the key is checked before the adapter is selected"
     );
 }
 
+/// R17 and R37: a key or a credential written out is refused by the check
+/// and the build alike, without being shown, for every provider.
 #[tokio::test]
-async fn a_key_written_where_its_variable_is_named_is_refused_and_never_shown() {
+async fn a_key_written_out_is_refused_and_never_shown() {
     let pasted = "sk-ant-api03-0123456789abcdef";
     let scratch = Lab::new("pasted-key");
     let mut fake = scratch.tree(ENDS, json!({}));
-    fake["model"]["api_key_env"] = json!(pasted);
-    let anthropic = json!({ "model": { "api_key_env": pasted }, "prompt": { "system": "Hi." } });
+    fake["model"]["api_key"] = json!(pasted);
+    let anthropic = json!({ "model": { "api_key": pasted }, "prompt": { "system": "Hi." } });
+    let mut given = scratch.tree(
+        ENDS,
+        json!({ "tools": { "builtin": scratch.builtin(&["bash"]) } }),
+    );
+    given["tools"]["builtin"]["credentials"] = json!({ "GITHUB_TOKEN": pasted });
 
-    for tree in [fake, anthropic] {
-        let error = refusal(read(&tree)).await;
+    for (tree, key) in [
+        (fake, "model.api_key"),
+        (anthropic, "model.api_key"),
+        (given, "tools.builtin.credentials.GITHUB_TOKEN"),
+    ] {
+        let error = refusal(read_filled(&tree, &[])).await;
 
         assert!(
-            matches!(error, BuildError::Config(ConfigError::KeyVariable { .. })),
+            matches!(error, BuildError::Config(ConfigError::Refused { .. })),
             "{error:?}"
         );
         assert!(
             error
                 .to_string()
-                .starts_with("model.api_key_env (line 1) is refused: "),
+                .starts_with(&format!("{key} (line 1) is refused: it holds no ${{VAR}}")),
             "{error}"
         );
         for shown in [error.to_string(), format!("{error:?}")] {
@@ -505,13 +538,15 @@ async fn a_key_written_where_its_variable_is_named_is_refused_and_never_shown() 
     }
 }
 
+/// A provider that needs no key is built with its key's variable unset,
+/// and the key is checked for anthropic alone.
 #[tokio::test]
-async fn a_provider_that_needs_no_key_is_built_whatever_variable_the_config_names() {
+async fn a_provider_that_needs_no_key_is_built_whatever_its_key_s_variable_holds() {
     let scratch = Lab::new("no-key");
     let mut tree = scratch.tree(ENDS, json!({}));
-    tree["model"]["api_key_env"] = json!(NO_VARIABLE);
+    tree["model"]["api_key"] = json!(format!("${{{NO_VARIABLE}}}"));
 
-    let mut lablet = scratch.build(read(&tree)).await.unwrap();
+    let mut lablet = scratch.build(read_filled(&tree, &[])).await.unwrap();
 
     let finished = lablet.run(request()).await;
     lablet.shutdown().await;
@@ -521,9 +556,9 @@ async fn a_provider_that_needs_no_key_is_built_whatever_variable_the_config_name
     );
 
     let mut openai = scratch.tree(ENDS, json!({}));
-    openai["model"] = json!({ "provider": "openai", "api_key_env": NO_VARIABLE });
+    openai["model"] = json!({ "provider": "openai", "api_key": format!("${{{NO_VARIABLE}}}") });
     assert_eq!(
-        refusal(read(&openai)).await,
+        refusal(read_filled(&openai, &[])).await,
         BuildError::from(Unsupported::Openai)
     );
 }

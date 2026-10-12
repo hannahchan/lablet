@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use lablet_model::{ToolConcurrency, ToolSource};
+use lablet_model::{Secrets, ToolConcurrency, ToolSource};
 use lablet_run::{ToolErrorKind, ToolExecutor};
 use lablet_tools_builtin::{BuiltinTools, Settings, SettingsError, Tool};
 use serde_json::json;
@@ -229,22 +229,22 @@ async fn a_root_that_is_a_link_is_the_directory_the_link_leads_to() {
     );
 }
 
-#[tokio::test]
-async fn a_variable_no_command_can_start_with_is_refused_when_the_executor_is_built() {
-    let scratch = Root::new("executor-variable");
-
-    let refused = BuiltinTools::new(
-        Settings {
-            env: [("KEY=VALUE".to_owned(), "1".to_owned())].into(),
-            ..scratch.settings()
-        },
-        crate::harness::untraced(),
-    )
-    .unwrap_err();
+#[test]
+fn a_variable_no_command_can_start_with_is_refused_when_the_environment_is_made() {
+    let refused =
+        crate::harness::environment_of(&[], &Secrets::default(), &[("KEY=VALUE", "1")], &[])
+            .unwrap_err();
 
     assert_eq!(
         refused.to_string(),
         "the variable \"KEY=VALUE\" can't be set: its name holds `=` or a NUL"
+    );
+    let refused =
+        crate::harness::environment_of(&[], &Secrets::default(), &[], &[("KEY=VALUE", "1")])
+            .unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "the credential \"KEY=VALUE\" can't be set: its name holds `=` or a NUL"
     );
 }
 
@@ -254,13 +254,12 @@ async fn an_executor_is_shown_as_its_tools_and_its_timeout() {
     let tools = BuiltinTools::new(
         Settings {
             enabled: [Tool::ReadFile, Tool::Bash].into(),
-            env: [(
-                "NPM_TOKEN".to_owned(),
-                "a value no log is to hold".to_owned(),
-            )]
-            .into(),
-            withheld: ["ANTHROPIC_API_KEY".to_owned()].into(),
-            ..scratch.settings()
+            ..scratch.settings_from(
+                &["ANTHROPIC_API_KEY"],
+                &Secrets::default(),
+                &[("NPM_TOKEN", "a value no log is to hold")],
+                &[],
+            )
         },
         crate::harness::untraced(),
     )

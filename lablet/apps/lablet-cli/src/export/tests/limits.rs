@@ -155,6 +155,10 @@ const SEAM: [(&str, &str); 2] = [
 #[tokio::test]
 async fn a_child_process_exports_a_run_with_the_settings_of_an_environment_that_sets_the_delays_alone()
  {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable its parent set, to know which side it's on"
+    )]
     let Some(path) = std::env::var_os(CHILD) else {
         return;
     };

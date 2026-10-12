@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use lablet_model::Secrets;
 use lablet_run::ToolExecutor as _;
 use lablet_tools_builtin::BuiltinTools;
 use opentelemetry::baggage::BaggageExt as _;
@@ -149,14 +150,15 @@ async fn the_context_is_taken_as_the_command_starts() {
     );
 }
 
-/// A config that substitutes a context variable into `tools.builtin.env`
-/// withholds it, and the context would put its value back: the parent's
-/// trace state and the baggage pass on verbatim.
+/// A context variable that filled a credential is dropped, and the context
+/// would put its value back: the parent's trace state and the baggage pass
+/// on verbatim.
 #[tokio::test]
-async fn a_withheld_context_variable_is_not_injected() {
-    let scratch = Root::new("context-withheld");
-    let mut settings = scratch.settings();
-    settings.withheld = ["TRACESTATE".to_owned(), "BAGGAGE".to_owned()].into();
+async fn a_dropped_context_variable_is_not_injected() {
+    let scratch = Root::new("context-dropped");
+    let mut settings =
+        scratch.settings_from(&["TRACESTATE", "BAGGAGE"], &Secrets::default(), &[], &[]);
+    settings.kept = ["TRACESTATE".to_owned(), "BAGGAGE".to_owned()].into();
     let tools = BuiltinTools::new(
         settings,
         Arc::new(TextMapCompositePropagator::new(vec![

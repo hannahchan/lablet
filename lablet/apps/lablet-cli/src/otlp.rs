@@ -233,9 +233,9 @@ impl From<OtlpProtocol> for Transport {
     }
 }
 
-/// What the network exporters are built from, for `real`, a config with
-/// `${VAR}` substituted, and `exporter`, what the seam read of the
-/// environment, or `None` when no signal is exported over the network:
+/// What the network exporters are built from, for `config` and `exporter`,
+/// what the seam read of the environment, or `None` when no signal is
+/// exported over the network:
 /// `OTEL_SDK_DISABLED` is `true`, `telemetry.otlp.enabled` is `false`, or
 /// it's `null` and each signal's selector is `none`.
 ///
@@ -247,18 +247,18 @@ impl From<OtlpProtocol> for Transport {
 ///
 /// # Errors
 ///
-/// Returns a [`ConfigError`] shown from `written`, the same config before
-/// substitution: `telemetry.otlp.enabled: false` beside an endpoint, which
-/// it would make a setting without effect; and a certificate, client key
-/// or client certificate the environment names that can't be loaded, or a
-/// client key or certificate named without the other, naming the variable
-/// and never what the file holds.
+/// Returns a [`ConfigError`] shown as the file wrote it:
+/// `telemetry.otlp.enabled: false` beside an endpoint, which it would make a
+/// setting without effect; and a certificate, client key or client
+/// certificate the environment names that can't be loaded, or a client key
+/// or certificate named without the other, naming the variable and never
+/// what the file holds.
 pub fn settings(
-    written: &Config,
-    real: &Config,
+    config: &Config,
     exporter: &otel_env::Exporter,
 ) -> Result<Option<OtlpSettings>, ConfigError> {
-    let otlp = &real.telemetry.otlp;
+    let written = config;
+    let otlp = &config.telemetry.otlp;
     let endpoint = otlp
         .endpoint
         .as_deref()
@@ -268,10 +268,8 @@ pub fn settings(
         // refusal of an endpoint shows it, since user information is a
         // secret and where it ends can't be told.
         let shown = match written.written_text(ENDPOINT_KEY) {
-            Some(endpoint) if !endpoint.contains('@') => {
-                format!("`telemetry.otlp.endpoint: {endpoint}`")
-            }
-            _ => "`telemetry.otlp.endpoint`".to_owned(),
+            Some(endpoint) => format!("`telemetry.otlp.endpoint: {endpoint}`"),
+            None => "`telemetry.otlp.endpoint`".to_owned(),
         };
         return Err(written.refused(Refusal::invalid(
             "telemetry.otlp.enabled",
@@ -326,7 +324,12 @@ fn destination(
     let headers = match &otlp.headers {
         Some(stated) => stated
             .iter()
-            .map(|(name, value)| (name.clone(), SecretString::from(value.clone())))
+            .map(|(name, value)| {
+                (
+                    name.clone(),
+                    SecretString::from(value.expose_secret().to_owned()),
+                )
+            })
             .collect(),
         None => inherited
             .headers

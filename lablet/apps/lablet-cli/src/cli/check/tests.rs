@@ -1,4 +1,6 @@
-use lablet_config::{Config, Format};
+use std::ffi::OsString;
+
+use lablet_config::{Config, Format, RawConfig};
 use lablet_prepare::Checked;
 use lablet_test_support::Scratch;
 use serde_json::json;
@@ -15,8 +17,28 @@ const SHORT: &str = "CARGO_PKG_NAME";
 /// A script the fake model can play, which a check reads as a run would.
 const ENDS: &str = "- response: { content: [{ text: Done. }], finish: end_turn }\n";
 
+/// The context variables a command is given, as `inherited:` ends.
+const CONTEXT: &str = "BAGGAGE, TRACEPARENT, TRACESTATE, its tool span's";
+
+/// What `limit:` says of `bash` on this platform.
+const LIMIT: &str = if cfg!(target_os = "macos") {
+    "bash can read any file you can, and your shell's environment and lablet's"
+} else {
+    "bash can read any file you can, and your shell's environment"
+};
+
+/// The value of [`SET`], which a test reads only to hold that it's nowhere.
+fn held() -> String {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable cargo set, to hold that its value is nowhere"
+    )]
+    let held = std::env::var(SET).unwrap();
+    held
+}
+
 /// A config of the fake model with `tools`, whose system prompt holds a
-/// variable.
+/// `${VAR}`, which a prompt keeps as text.
 fn tree(scratch: &Scratch, tools: &serde_json::Value) -> serde_json::Value {
     scratch.create_dir("work");
     json!({
@@ -27,18 +49,46 @@ fn tree(scratch: &Scratch, tools: &serde_json::Value) -> serde_json::Value {
     })
 }
 
-/// What `lablet_cli::compose::check` makes of the config `tree`.
-fn checked_tree(tree: &serde_json::Value) -> Checked {
-    let config = Config::from_str(&tree.to_string(), Format::Json).unwrap();
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    runtime
-        .block_on(lablet_cli::compose::check(&config))
+/// The config `tree` holds, filled from the test's environment as the
+/// command line fills one.
+fn config(tree: &serde_json::Value) -> Config {
+    RawConfig::from_str(&tree.to_string(), Format::Json)
+        .unwrap()
+        .substituted(lablet_cli::input::variable)
+        .unwrap()
+        .config()
         .unwrap()
 }
 
-/// What `lablet_cli::compose::check` makes of a config of the fake model with `tools`.
+/// An environment handed in as the base every command starts from: `HOME`
+/// and `PATH`, and `more`.
+fn environment(more: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+    [("HOME", "/home/t"), ("PATH", "/usr/bin")]
+        .iter()
+        .chain(more)
+        .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+        .collect()
+}
+
+/// What `lablet_cli::compose::check` makes of the config `tree`, with
+/// `environment` handed in.
+fn checked_tree(tree: &serde_json::Value, environment: Vec<(OsString, OsString)>) -> Checked {
+    let config = config(tree);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime
+        .block_on(lablet_cli::compose::check(&config, environment))
+        .unwrap()
+}
+
+/// What `lablet_cli::compose::check` makes of a config of the fake model
+/// with `tools`, with `HOME` and `PATH` handed in.
 fn checked(scratch: &Scratch, tools: &serde_json::Value) -> Checked {
-    checked_tree(&tree(scratch, tools))
+    checked_tree(&tree(scratch, tools), environment(&[]))
+}
+
+/// The summary of `checked`, with the digest it holds as `<digest>`.
+fn summarised(checked: &Checked) -> String {
+    summary(checked).replace(&checked.digest().to_string(), "<digest>")
 }
 
 #[test]
@@ -54,8 +104,12 @@ fn a_check_lists_the_tools_a_run_is_offered_a_line_each_in_their_order() {
 
     assert_eq!(answer(&checked, false).unwrap(), "bash\nread_file");
     assert_eq!(
-        summary(&checked),
-        "withheld: none\ncut: none\npassed: 2 tools"
+        summarised(&checked),
+        format!(
+            "own:       none\ngiven:     none\nenv:       none\ninherited: HOME, PATH, as set; \
+             {CONTEXT}\ncut:       none\ndigest:    <digest>\nlimit:     {LIMIT}\npassed:    2 \
+             tools"
+        )
     );
 }
 
@@ -66,23 +120,26 @@ fn a_check_of_a_config_with_no_tools_lists_nothing() {
 
     assert_eq!(answer(&checked, false).unwrap(), "");
     assert_eq!(
-        summary(&checked),
-        "withheld: none\ncut: none\npassed: 0 tools"
+        summarised(&checked),
+        "own:       none\ngiven:     none\nenv:       none\ncut:       none\ndigest:    \
+         <digest>\npassed:    0 tools"
     );
 }
 
-/// T16: the summary names what's withheld and cut, a variable by its name
-/// and a written value by its key, with a note on a value under the floor,
-/// and holds no value.
+/// T16: the summary names each own credential by its variable and line and
+/// the field it fills, with a copy of its value the environment holds under
+/// another name, a written value by its key, and a note on a value under
+/// the floor; `env:` names what's passed; `inherited:` names no own
+/// variable and no copy; and no line holds a value.
 #[test]
-fn a_check_names_the_variables_withheld_and_the_names_cut_and_never_a_value() {
+fn a_check_names_the_credentials_and_what_bash_inherits_and_never_a_value() {
     let scratch = Scratch::new("answer-secrets");
     let mut tree = tree(
         &scratch,
         &json!({ "builtin": {
             "root": scratch.at("work"),
             "enabled": ["bash"],
-            "env": { "TOKEN": format!("${{{SET}}}"), "PATH": "/usr/bin" },
+            "env": { "PATH": "/usr/bin" },
         } }),
     );
     tree["telemetry"] = json!({ "otlp": { "headers": {
@@ -90,17 +147,33 @@ fn a_check_names_the_variables_withheld_and_the_names_cut_and_never_a_value() {
         "X-Literal": "literal-0123456789abcdef",
         "X-Short": format!("${{{SHORT}}}"),
     } } });
+    let held = held();
 
-    let summary = summary(&checked_tree(&tree));
+    let checked = checked_tree(
+        &tree,
+        environment(&[(SET, &held), ("MY_COPY", &held), (SHORT, "lablet-cli")]),
+    );
+    let summary = summarised(&checked);
 
     assert_eq!(
         summary,
         format!(
-            "withheld: {SET}, {SHORT}\ncut: {SET}, {SHORT} (under 16 bytes, not cut), \
-             telemetry.otlp.headers.X-Literal\npassed: 1 tool"
+            "own:       {SET} (line 1) -> telemetry.otlp.headers.Authorization, or MY_COPY, \
+             which holds it; no process inherits it\n\
+             own:       telemetry.otlp.headers.X-Literal (line 1) holds its value; no process \
+             inherits it\n\
+             own:       {SHORT} (line 1) (under 16 bytes, not cut) -> \
+             telemetry.otlp.headers.X-Short; no process inherits it\n\
+             given:     none\n\
+             env:       PATH (line 1) -> bash\n\
+             inherited: HOME, as set; {CONTEXT}\n\
+             cut:       none\n\
+             digest:    <digest>\n\
+             limit:     {LIMIT}\n\
+             passed:    1 tool"
         )
     );
-    assert!(!summary.contains(&std::env::var(SET).unwrap()), "{summary}");
+    assert!(!summary.contains(&held), "{summary}");
 }
 
 #[test]
@@ -108,22 +181,32 @@ fn the_resolved_config_is_yaml_that_reads_back_as_the_config_it_resolves() {
     let scratch = Scratch::new("answer-resolved");
     let checked = checked(
         &scratch,
-        &json!({ "builtin": { "root": scratch.at("work"), "enabled": ["bash"] } }),
+        &json!({ "builtin": {
+            "root": scratch.at("work"),
+            "enabled": ["bash"],
+            "env": { "WHERE": format!("${{{SET}}}") },
+        } }),
     );
 
     let yaml = answer(&checked, true).unwrap();
     assert_eq!(
-        summary(&checked),
-        "withheld: none\ncut: none\npassed: 1 tool"
+        summarised(&checked),
+        format!(
+            "own:       none\ngiven:     none\nenv:       WHERE (line 1) reaches bash uncut; if \
+             it's a credential, move it under tools.builtin.credentials\ninherited: HOME, PATH, \
+             as set; {CONTEXT}\ncut:       none\ndigest:    <digest>\nlimit:     \
+             {LIMIT}\npassed:    1 tool"
+        )
     );
 
     assert!(yaml.starts_with("run:\n"), "{yaml}");
     assert!(!yaml.ends_with('\n'), "{yaml:?}");
-    let read_back = Config::from_str(&yaml, Format::Yaml).unwrap();
+    let read_back = config(&serde_saphyr::from_str(&yaml).unwrap());
     assert_eq!(&read_back.resolved(), checked.resolved());
     assert_eq!(read_back.digest(), checked.resolved().digest());
     assert_eq!(read_back.run.max_turns, std::num::NonZeroU32::new(5));
-    // The config as it's written, and nothing a variable holds.
-    assert!(yaml.contains(&format!("${{{SET}}}")), "{yaml}");
-    assert!(!yaml.contains(&std::env::var(SET).unwrap()), "{yaml}");
+    // The config as it's written, the prompt's text and the filled entry,
+    // and nothing a variable holds.
+    assert_eq!(yaml.matches(&format!("${{{SET}}}")).count(), 2, "{yaml}");
+    assert!(!yaml.contains(&held()), "{yaml}");
 }

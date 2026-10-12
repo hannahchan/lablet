@@ -74,7 +74,7 @@ impl Extractor for EnvExtractor<'_> {
 /// The environment a process starts with, written as a carrier: each key
 /// is set as the variable its normalised name names, unless the value is
 /// empty or the variable is one of `kept`: the names a config states, which
-/// win over what's injected, and the names withheld from the process,
+/// win over what's injected, and the names dropped from the process,
 /// which a context would otherwise put back.
 #[derive(Debug)]
 pub struct EnvInjector<'a> {

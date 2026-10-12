@@ -31,7 +31,12 @@ impl Lab {
             .args(args)
             .current_dir(self.path())
             .env_remove("RUST_LOG");
-        without_otel(&mut command, std::env::vars_os().map(|(name, _)| name));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the test reads the names of its own environment, to take the OpenTelemetry variables off the binary's"
+        )]
+        let names = std::env::vars_os().map(|(name, _)| name);
+        without_otel(&mut command, names);
         command
     }
 }

@@ -62,6 +62,10 @@ fn run_hands_its_process_to_cargo_so_the_exit_status_is_what_cargo_ran() {
     let script = "#!/bin/sh\necho \"$$ ${GIT_DIR-unset} $(pwd -P) $*\"\nexit 2\n";
     std::fs::write(&cargo, script).unwrap();
     std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the stand-in goes first on the PATH the test itself was started with"
+    )]
     let inherited = std::env::var_os("PATH").unwrap_or_default();
     let path =
         std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&inherited)))

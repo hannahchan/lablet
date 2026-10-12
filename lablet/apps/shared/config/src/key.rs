@@ -50,6 +50,24 @@ impl KeyPath {
         self.0.starts_with(&other.0)
     }
 
+    /// Whether this path is an item of the list at `list`: `list` and one
+    /// index after it.
+    pub(crate) fn is_item_of(&self, list: &Self) -> bool {
+        self.0.len() == list.0.len() + 1
+            && self.0.starts_with(&list.0)
+            && matches!(self.0.last(), Some(Segment::Index(_)))
+    }
+
+    /// The last key of the path, when the path ends in a key: the name of
+    /// a map's entry.
+    #[must_use]
+    pub fn last_key(&self) -> Option<&str> {
+        match self.0.last()? {
+            Segment::Key(key) => Some(key),
+            Segment::Index(_) => None,
+        }
+    }
+
     /// What's at this path of `tree`, when anything is.
     #[must_use]
     pub fn find<'a>(&self, tree: &'a serde_json::Value) -> Option<&'a serde_json::Value> {
@@ -108,6 +126,12 @@ impl Places {
     /// config made in code.
     pub fn of(&self, key: &KeyPath) -> Option<Place> {
         place_in(self.0.as_ref()?, key)
+    }
+
+    /// Whether the config was read from text, so each setting it states has
+    /// a place; a config made in code has none.
+    pub fn are_known(&self) -> bool {
+        self.0.is_some()
     }
 }
 

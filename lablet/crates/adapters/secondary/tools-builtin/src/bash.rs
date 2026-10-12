@@ -57,12 +57,12 @@ long as a call may take is killed, with every process it started.";
 /// else of lablet's, and the context each command starts in.
 pub(crate) struct Bash {
     pub(crate) root: Root,
-    /// lablet's environment less what's withheld, with the settings' own on
-    /// top.
+    /// The environment every command starts from, as the settings computed
+    /// it.
     pub(crate) environment: BTreeMap<OsString, OsString>,
-    /// The names that no context is injected into: the settings' own
-    /// variables, which win over a context variable that's inherited or
-    /// injected, and the withheld ones, which stay withheld.
+    /// The names that no context is injected into: the config's own
+    /// variables and credentials, which win over a context variable that's
+    /// inherited or injected, and the dropped ones, which stay dropped.
     pub(crate) kept: BTreeSet<String>,
     /// What the context a command starts in is injected through.
     pub(crate) propagator: Arc<dyn TextMapPropagator + Send + Sync>,
@@ -166,7 +166,7 @@ impl Bash {
     /// The environment a command started in `context` gets: no context
     /// variable it would inherit, since one that's left is another span's,
     /// and `context` injected in their place, but for the variables the
-    /// settings state, which stay as they say, and the withheld ones, which
+    /// config states, which stay as they say, and the dropped ones, which
     /// it doesn't get.
     fn environment_in(&self, context: &Context) -> BTreeMap<OsString, OsString> {
         let mut environment = self.environment.clone();

@@ -573,10 +573,11 @@ async fn otel_sdk_disabled_writes_no_file_and_sends_nothing_and_the_summary_prin
     assert!(lines[0].starts_with("completed: 1 turn, "), "{to_stderr:?}");
 }
 
-/// O30: the GenAI capture variable turns content capture on when the
-/// config states nothing, and a stated `false` wins over it.
+/// O30, as the caller owning the config rewords it: the GenAI capture
+/// variable isn't read, so it turns nothing on, and a stated
+/// `telemetry.capture_content: true` alone captures.
 #[test]
-fn the_genai_capture_variable_turns_capture_on_and_a_stated_false_wins() {
+fn the_genai_capture_variable_is_not_read_and_a_stated_capture_content_alone_captures() {
     const CONTENT: &str = "gen_ai.client.inference.operation.details";
     let capture = [("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true")];
 
@@ -585,10 +586,13 @@ fn the_genai_capture_variable_turns_capture_on_and_a_stated_false_wins() {
     let stated = Lab::new("otlp-capture-stated");
     completed(
         &stated,
-        json!({ "telemetry": { "capture_content": false } }),
-        &capture,
+        json!({ "telemetry": { "capture_content": true } }),
+        &[],
     );
 
-    assert!(!unstated.exported().records_of(CONTENT).is_empty());
-    assert!(stated.exported().records_of(CONTENT).is_empty());
+    assert!(
+        unstated.exported().records_of(CONTENT).is_empty(),
+        "the variable was read"
+    );
+    assert!(!stated.exported().records_of(CONTENT).is_empty());
 }

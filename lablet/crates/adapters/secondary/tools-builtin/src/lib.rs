@@ -30,12 +30,14 @@
 //! carries from one command to the next. `bash` is found on the `PATH` the
 //! command starts with.
 //!
-//! A command starts with lablet's own environment, less the variables that
-//! [`Settings::withheld`] names, and with what [`Settings::env`] adds on
-//! top. So what the environment lablet runs in prepared for its commands
-//! reaches them, and the model can't read lablet's key with `env`. A
-//! variable that `env` names is passed on even when it's withheld, which is
-//! how a command that needs the key is given it.
+//! A command starts from [`Settings::environment`], which [`environment`]
+//! computes once from what the root handed in: the base less every variable
+//! that filled one of lablet's credentials and every variable holding a
+//! credential's value, with the config's own variables and then its
+//! credentials on top, each under the name the config wrote. So what the
+//! environment lablet runs in prepared for its commands reaches them, the
+//! model can't read lablet's key with `env`, and a command that needs a
+//! credential is given it only where the config says so.
 //!
 //! The context variables are the exception: a command is under the span of
 //! its own call, so it inherits none of `TRACEPARENT`, `TRACESTATE`,
@@ -46,7 +48,7 @@
 //! variable its normalised name names, and none with an empty value. A
 //! context variable that `env` names wins over the one injected, key by key.
 //!
-//! Withholding a variable keeps it out of the command's environment and
+//! Dropping a variable keeps it out of the command's environment and
 //! nowhere else: a command can read lablet's own through the process table,
 //! as `ps eww -p $PPID` and `/proc/<pid>/environ` do, or find a key in a
 //! file. So every value the call carries as
@@ -116,4 +118,4 @@ mod tool;
 mod write_file;
 
 pub use executor::BuiltinTools;
-pub use settings::{Settings, SettingsError, Tool};
+pub use settings::{Dropped, Settings, SettingsError, Tool, environment};

@@ -22,10 +22,11 @@ fn a_build_that_failed_is_a_config_message_whatever_failed() {
         BuildError::Config(ConfigError::UnknownFormat {
             path: "lablet.toml".to_owned(),
         }),
-        BuildError::KeyVariable {
+        BuildError::Config(ConfigError::Refused {
+            key: "model.api_key".to_owned(),
             place: None,
-            reason: "`ANTHROPIC_API_KEY` isn't set".to_owned(),
-        },
+            reason: "it holds no ${VAR}".to_owned(),
+        }),
         BuildError::Unsupported {
             kind: Unsupported::Anthropic,
             phase: "7",

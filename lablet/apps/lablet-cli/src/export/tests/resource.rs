@@ -36,6 +36,10 @@ const GIVEN: [(&str, &str); 2] = [
 /// with the resource of [`GIVEN`] and the composer stating `team: b`.
 #[tokio::test]
 async fn a_child_process_exports_a_run_with_the_resource_of_the_environment_it_is_given() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable its parent set, to know which side it's on"
+    )]
     let Some(path) = std::env::var_os(CHILD) else {
         return;
     };

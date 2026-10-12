@@ -1,6 +1,6 @@
 //! A root of a test's own, an executor under it, and calls to it.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,7 +11,7 @@ use lablet_model::{
 };
 use lablet_run::{ToolCall, ToolError, ToolExecutor, ToolOutput};
 use lablet_test_support::Scratch;
-use lablet_tools_builtin::{BuiltinTools, Settings, Tool};
+use lablet_tools_builtin::{BuiltinTools, Dropped, Settings, Tool, environment};
 use nix::errno::Errno;
 use nix::sys::signal::kill;
 use nix::unistd::Pid;
@@ -61,14 +61,41 @@ impl Root {
     }
 
     /// The settings of an executor that serves every tool under the root,
-    /// and withholds nothing.
+    /// whose commands start from the test's own environment with nothing
+    /// dropped and nothing added.
     pub fn settings(&self) -> Settings {
+        self.settings_from(&[], &Secrets::default(), &[], &[])
+    }
+
+    /// The settings of an executor that serves every tool under the root,
+    /// whose commands start from the test's own environment less the
+    /// variables `dropped` names and those holding a value of `secrets`,
+    /// with `env` and then `credentials` on top.
+    pub fn settings_from(
+        &self,
+        dropped: &[&str],
+        secrets: &Secrets,
+        env: &[(&str, &str)],
+        credentials: &[(&str, &str)],
+    ) -> Settings {
+        let Dropped {
+            environment,
+            by_name,
+            by_value,
+        } = environment_of(dropped, secrets, env, credentials).unwrap();
+        let kept = env
+            .iter()
+            .chain(credentials)
+            .map(|(name, _)| (*name).to_owned())
+            .chain(by_name)
+            .chain(by_value)
+            .collect();
         Settings {
             root: self.root(),
             enabled: Tool::ALL.into(),
             timeout: TIMEOUT,
-            env: BTreeMap::new(),
-            withheld: BTreeSet::new(),
+            environment,
+            kept,
         }
     }
 
@@ -76,6 +103,34 @@ impl Root {
     pub fn tools(&self) -> BuiltinTools {
         BuiltinTools::new(self.settings(), untraced()).unwrap()
     }
+}
+
+/// The environment a command starts from, computed from the test's own
+/// environment: the base a host or the command line would hand in.
+pub fn environment_of(
+    dropped: &[&str],
+    secrets: &Secrets,
+    env: &[(&str, &str)],
+    credentials: &[(&str, &str)],
+) -> Result<Dropped, lablet_tools_builtin::SettingsError> {
+    let pairs = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect()
+    };
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test's own environment stands in for the base a root hands in"
+    )]
+    let base = std::env::vars_os();
+    environment(
+        base,
+        &dropped.iter().map(|&name| name.to_owned()).collect(),
+        secrets,
+        pairs(env),
+        pairs(credentials),
+    )
 }
 
 /// What a command's context is injected through where a test doesn't look

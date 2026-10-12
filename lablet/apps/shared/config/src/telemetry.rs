@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::secret::Secret;
 use super::written::path;
 
 /// The `telemetry` section. A field that's `null` is the environment's,
@@ -15,8 +16,7 @@ use super::written::path;
 #[serde(default, deny_unknown_fields)]
 pub struct Telemetry {
     /// Whether prompts, responses and tool content reach telemetry. `None`
-    /// leaves it to `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`,
-    /// which turns it on only when it's `true` in any case.
+    /// captures nothing, as `false` does; no variable is read.
     pub capture_content: Option<bool>,
     /// The OTLP network exporter.
     pub otlp: Otlp,
@@ -57,11 +57,11 @@ pub struct Otlp {
     pub protocol: Option<OtlpProtocol>,
     /// Headers sent with every export, and the only ones: none the
     /// environment names is sent beside them, `{}` included. `None` sends
-    /// the environment's, wherever the endpoint came from. Every value is a
-    /// secret, written or substituted: a variable substituted into one is
-    /// withheld from every command, the value is cut out of every tool
-    /// result, and it's left out of the config digest.
-    pub headers: Option<BTreeMap<String, String>>,
+    /// the environment's, wherever the endpoint came from. Every value is
+    /// lablet's own: a variable filled into one reaches no command, the
+    /// value is cut out of every tool result, and it's left out of the
+    /// config digest.
+    pub headers: Option<BTreeMap<String, Secret>>,
 }
 
 /// The protocol an OTLP collector is sent, as the specification spells it.

@@ -1111,11 +1111,11 @@ dependencies = [
  "lablet-conformance",
  "lablet-documents",
  "lablet-model",
- "lablet-otel-env",
  "lablet-prepare",
  "lablet-provider-wiring",
  "lablet-run",
  "lablet-run-request",
+ "lablet-secrets",
  "lablet-test-support",
  "lablet-tools-wiring",
  "lablet-transcript-json",
@@ -1148,6 +1148,7 @@ dependencies = [
  "lablet-provider-wiring",
  "lablet-run",
  "lablet-run-request",
+ "lablet-secrets",
  "lablet-test-support",
  "lablet-tools-wiring",
  "lablet-transcript-json",
@@ -1248,7 +1249,6 @@ dependencies = [
 name = "lablet-otel-env"
 version = "0.1.0"
 dependencies = [
- "lablet-config",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1275,9 +1275,10 @@ dependencies = [
  "lablet-secrets",
  "lablet-test-support",
  "lablet-tools-builtin",
- "secrecy",
  "thiserror",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1401,6 +1402,7 @@ name = "lablet-tools-wiring"
 version = "0.1.0"
 dependencies = [
  "lablet-config",
+ "lablet-env-carrier",
  "lablet-prepare",
  "lablet-run",
  "lablet-tools-builtin",

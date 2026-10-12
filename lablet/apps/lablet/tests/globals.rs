@@ -130,9 +130,19 @@ fn request() -> RunRequest {
     RunRequest::new("Fix the failing test.").unwrap()
 }
 
-/// The `Lablet` of `config` on `otel`, and its one run.
+/// The `Lablet` of `config` on `otel`, and its one run, with the test's own
+/// environment standing in for the one a host hands in.
 async fn run_on(config: Config, otel: Otel) -> FinishedRun {
-    let mut lablet = Lablet::builder(config, otel).build().await.unwrap();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test's own environment stands in for the one a host hands in"
+    )]
+    let environment: Vec<_> = std::env::vars_os().collect();
+    let mut lablet = Lablet::builder(config, otel)
+        .with_process_environment(environment)
+        .build()
+        .await
+        .unwrap();
     let finished = lablet.run(request()).await;
     lablet.shutdown().await;
     finished

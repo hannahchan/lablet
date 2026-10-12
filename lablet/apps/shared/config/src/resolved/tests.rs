@@ -1,11 +1,31 @@
+use std::ffi::OsString;
+
 use lablet_model::ConfigDigest;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::{Config, Format};
+use crate::{Config, Format, RawConfig};
 
 fn yaml(text: &str) -> Config {
     Config::from_str(text, Format::Yaml).unwrap()
+}
+
+/// The config `text` holds, with each `${VAR}` filled from `held`.
+fn filled(text: &str, held: &[(&str, &str)]) -> Config {
+    let held: Vec<(String, String)> = held
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect();
+    RawConfig::from_str(text, Format::Yaml)
+        .unwrap()
+        .substituted(move |asked: &str| -> Option<OsString> {
+            held.iter()
+                .find(|(name, _)| name == asked)
+                .map(|(_, value)| value.into())
+        })
+        .unwrap()
+        .config()
+        .unwrap()
 }
 
 fn resolved_model(text: &str) -> Value {
@@ -20,7 +40,7 @@ fn a_fake_model_resolves_to_what_the_fake_provider_applies() {
             "provider": "fake",
             "script": "scripts/run.yaml",
             "name": "scripted-1",
-            "api_key_env": null,
+            "api_key": null,
             "max_tokens": 32_000,
             "temperature": null,
             "cache_scope": "shared",
@@ -36,7 +56,7 @@ fn an_anthropic_model_resolves_with_the_defaults_that_are_its_own() {
         json!({
             "provider": "anthropic",
             "name": "claude-sonnet-5",
-            "api_key_env": "ANTHROPIC_API_KEY",
+            "api_key": null,
             "base_url": null,
             "max_tokens": 32_000,
             "temperature": null,
@@ -57,7 +77,7 @@ fn an_openai_model_resolves_to_the_api_it_is_reached_through_and_what_that_api_a
             "provider": "openai",
             "api": "responses",
             "name": "gpt-5",
-            "api_key_env": null,
+            "api_key": null,
             "base_url": null,
             "max_tokens": 32_000,
             "temperature": null,
@@ -75,7 +95,7 @@ fn an_openai_model_resolves_to_the_api_it_is_reached_through_and_what_that_api_a
             "provider": "openai",
             "api": "chat_completions",
             "name": "qwen3",
-            "api_key_env": null,
+            "api_key": null,
             "base_url": "http://localhost:11434/v1",
             "max_tokens": 32_000,
             "temperature": null,
@@ -96,10 +116,10 @@ fn an_openai_model_resolves_to_the_api_it_is_reached_through_and_what_that_api_a
 
 #[test]
 fn a_resolved_config_holds_what_was_stated_in_place_of_a_default() {
-    let model = resolved_model(
+    let config = filled(
         "
 model:
-  api_key_env: WORK_KEY
+  api_key: ${WORK_KEY}
   thinking: { budget: 2048 }
   effort: high
   cache: false
@@ -107,9 +127,20 @@ model:
   temperature: 0.7
   pricing: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 }
 ",
+        &[("WORK_KEY", "sk-0123456789abcdef")],
     );
+    let model = serde_json::to_value(config.resolved().model).unwrap();
 
-    assert_eq!(model["api_key_env"], json!("WORK_KEY"));
+    assert_eq!(
+        model["api_key"],
+        json!("[secret]"),
+        "the section alone has no record"
+    );
+    assert_eq!(
+        serde_json::to_value(config.resolved()).unwrap()["model"]["api_key"],
+        json!("${WORK_KEY}"),
+        "the resolved config writes the key back as written"
+    );
     assert_eq!(model["thinking"], json!({ "budget": 2048 }));
     assert_eq!(model["effort"], json!("high"));
     assert_eq!(model["cache"], json!(false));
@@ -191,6 +222,7 @@ telemetry: { resource: { team: evals } }
                 "enabled": ["bash", "write_file"],
                 "timeout": "2m",
                 "env": {},
+                "credentials": {},
             },
             "mcp": [],
             "allow": null,
@@ -252,7 +284,7 @@ fn digest(more: &str) -> ConfigDigest {
 /// output goes. A default that changes, or a key that does, changes the
 /// digest of every config, which a release has to say.
 const FAKE_CANONICAL: &str = concat!(
-    r#"{"model":{"api_key_env":null,"cache_scope":"shared","max_tokens":32000,"#,
+    r#"{"model":{"cache_scope":"shared","max_tokens":32000,"#,
     r#""name":"scripted-1","pricing":null,"provider":"fake","script":"scripts/run.yaml","#,
     r#""temperature":null},"#,
     r#""prompt":{"skills":[],"skills_mode":"tool","system":"You fix tests.","system_file":null},"#,
@@ -274,7 +306,7 @@ fn the_digest_is_of_the_settings_that_say_what_a_run_does_with_every_default_fil
     assert_eq!(digest("").as_str(), expected);
     assert_eq!(
         expected,
-        "e6697aa9d6abe9e6e64979c8df1665a3064073b72d7ce5495685245563756eb2"
+        "a18eb7095afedc13e7def996ef886351eadb443f3b3744fc6811581b31008a89"
     );
 }
 
@@ -528,8 +560,149 @@ fn a_setting_that_is_applied_changes_the_digest() {
     assert_eq!(resolved_tools(&served)["mcp_result"], json!("structured"));
     assert_eq!(
         resolved_tools(enabled)["builtin"],
-        json!({ "root": "work", "enabled": ["bash"], "timeout": "2m", "env": {} })
+        json!({ "root": "work", "enabled": ["bash"], "timeout": "2m", "env": {}, "credentials": {} })
     );
+}
+
+/// A key as long as a key is.
+const KEY: &str = "sk-ant-0123456789abcdef0123456789";
+
+/// The digest of [`FAKE`] with `more` stated and filled from `held`.
+fn digest_filled(more: &str, held: &[(&str, &str)]) -> ConfigDigest {
+    filled(&format!("{FAKE}{more}"), held).digest()
+}
+
+/// The digest of the fake model with `model` stated beside its script,
+/// filled from `held`.
+fn digest_of_model(model: &str, held: &[(&str, &str)]) -> ConfigDigest {
+    filled(
+        &format!(
+            "model: {{ provider: fake, script: scripts/run.yaml, {model} }}\nprompt: {{ system: You fix tests. }}"
+        ),
+        held,
+    )
+    .digest()
+}
+
+/// The digest is per field: a setting that says what a run does enters as
+/// it ran, so two values of its variable are two digests; a path or a
+/// command's variable enters as written, so two values are one; and a
+/// credential leaves, written or set in code.
+#[test]
+fn a_filled_setting_enters_the_digest_as_its_field_says() {
+    let model = |value: &str| digest_of_model("name: '${MODEL}'", &[("MODEL", value)]);
+    assert_ne!(
+        model("scripted-1"),
+        model("scripted-2"),
+        "behaviour, filled"
+    );
+    assert_eq!(
+        model("scripted-1"),
+        digest(""),
+        "a filled name is the name written out"
+    );
+
+    let root = |value: &str| {
+        digest_filled(
+            "tools: { builtin: { root: '${REPO}', enabled: [bash] } }",
+            &[("REPO", value)],
+        )
+    };
+    assert_eq!(
+        root("/home/a/repo"),
+        root("/home/b/repo"),
+        "a path, as written"
+    );
+    assert_ne!(
+        root("/home/a/repo"),
+        digest("tools: { builtin: { root: /home/a/repo, enabled: [bash] } }")
+    );
+
+    let env = |value: &str| {
+        digest_filled(
+            "tools: { builtin: { root: work, enabled: [bash], env: { PORT: '${PORT}' } } }",
+            &[("PORT", value)],
+        )
+    };
+    assert_eq!(env("8080"), env("9090"), "a command's variable, as written");
+
+    let key =
+        |value: &str| digest_of_model("name: scripted-1, api_key: '${KEY}'", &[("KEY", value)]);
+    assert_eq!(key(KEY), key("sk-other-0123456789abcdef"));
+    assert_eq!(key(KEY), digest(""), "the key leaves the digest");
+    let mut in_code = yaml(FAKE);
+    in_code.model.api_key = Some(Secret::new(KEY));
+    assert_eq!(in_code.digest(), digest(""), "set in code too");
+
+    let given = |value: &str| {
+        digest_filled(
+            "tools: { builtin: { root: work, enabled: [bash], credentials: { T: '${TOK}' } } }",
+            &[("TOK", value)],
+        )
+    };
+    assert_eq!(given("tok-0123456789abcdef"), given("tok-fedcba9876543210"));
+    assert_ne!(
+        given("tok-0123456789abcdef"),
+        digest("tools: { builtin: { root: work, enabled: [bash] } }"),
+        "the entry's name stays"
+    );
+    assert_eq!(
+        digest("tools: { builtin: { credentials: { T: tok } } }"),
+        digest(""),
+        "a credential is left out with the rest of the built-in settings when no tool is enabled"
+    );
+
+    let gateway = |password: &str| {
+        filled(
+            "model: { provider: openai, base_url: 'https://u:${P}@gw.example/v1' }\nprompt: { system: You fix tests. }",
+            &[("P", password)],
+        )
+        .digest()
+    };
+    assert_eq!(gateway("one-0123456789"), gateway("two-0123456789"));
+    assert_eq!(
+        gateway("one-0123456789"),
+        gateway_digest("https://gw.example/v1"),
+        "the URL enters filled, less its user information"
+    );
+}
+
+/// The digest of an `openai` model at the gateway `url`.
+fn gateway_digest(url: &str) -> ConfigDigest {
+    yaml(&format!(
+        "model: {{ provider: openai, base_url: '{url}' }}\nprompt: {{ system: You fix tests. }}"
+    ))
+    .digest()
+}
+
+/// The resolved config writes a filled setting back as written, and the
+/// text it writes reads back, once filled again, to the same digest.
+#[test]
+fn the_resolved_config_writes_a_filled_setting_as_written_and_reads_back_to_the_same_digest() {
+    let held = [
+        ("MODEL", "scripted-7"),
+        ("REPO", "/home/lab/repo"),
+        ("KEY", KEY),
+        ("TOK", "tok-0123456789abcdef"),
+    ];
+    let text = format!(
+        "{FAKE}model: {{ provider: fake, script: scripts/run.yaml, name: '${{MODEL}}', api_key: '${{KEY}}' }}\n\
+         tools: {{ builtin: {{ root: '${{REPO}}', enabled: [bash], credentials: {{ T: '${{TOK}}' }} }} }}"
+    )
+    .replacen(FAKE, "", 1);
+    let config = filled(&text, &held);
+
+    let printed = serde_json::to_value(config.resolved()).unwrap();
+
+    assert_eq!(printed["model"]["name"], json!("${MODEL}"));
+    assert_eq!(printed["model"]["api_key"], json!("${KEY}"));
+    assert_eq!(printed["tools"]["builtin"]["root"], json!("${REPO}"));
+    assert_eq!(
+        printed["tools"]["builtin"]["credentials"]["T"],
+        json!("${TOK}")
+    );
+    let read_back = filled(&printed.to_string().replace('\n', " "), &held);
+    assert_eq!(read_back.digest(), config.digest());
 }
 
 /// A server at `url` with `headers`, as a config states it.
@@ -563,8 +736,16 @@ fn two_configs_that_differ_only_in_a_credential_share_a_digest() {
         "a rotated literal header"
     );
     assert_eq!(
-        digest(&http_server("{ Authorization: '${A}' }", at)),
-        digest(&http_server("{ Authorization: '${B}' }", at)),
+        filled(
+            &format!("{FAKE}{}", http_server("{ Authorization: '${A}' }", at)),
+            &[("A", "one-0123456789")]
+        )
+        .digest(),
+        filled(
+            &format!("{FAKE}{}", http_server("{ Authorization: '${B}' }", at)),
+            &[("B", "two-0123456789")]
+        )
+        .digest(),
         "a header from another variable"
     );
     assert_eq!(
@@ -614,10 +795,11 @@ fn a_header_s_key_a_url_s_host_and_a_command_s_variables_change_the_digest() {
     );
 }
 
-/// The strip is the digest's alone: the resolved config holds every
-/// credential as written, and reads back to the same digest.
+/// The strip is the digest's alone: the resolved config holds a URL's user
+/// information as written and a header's value as the marker, and reads
+/// back to the same digest once the header is given as a `${VAR}`.
 #[test]
-fn the_resolved_config_keeps_a_credential_as_written_and_reads_back_to_the_same_digest() {
+fn the_resolved_config_keeps_a_url_as_written_and_a_header_as_the_marker() {
     let config = yaml(&format!(
         "{FAKE}{}",
         http_server(
@@ -630,15 +812,43 @@ fn the_resolved_config_keeps_a_credential_as_written_and_reads_back_to_the_same_
 
     assert_eq!(
         printed["tools"]["mcp"][0]["headers"]["Authorization"],
-        json!("Bearer token-0123456789")
+        json!("[secret]")
     );
     assert_eq!(
         printed["tools"]["mcp"][0]["url"],
         json!("https://u:p@h/mcp")
     );
-    let read_back = Config::from_str(&printed.to_string(), Format::Json).unwrap();
-    assert_eq!(read_back.digest(), config.digest());
+    assert!(
+        Config::from_str(&printed.to_string(), Format::Json).is_err(),
+        "the marker doesn't read back"
+    );
     assert_ne!(config.digest(), digest(""), "the server is in the digest");
+
+    let held = [("T", "Bearer token-0123456789")];
+    let from_variable = filled(
+        &format!(
+            "{FAKE}{}",
+            http_server("{ Authorization: '${T}' }", "https://u:p@h/mcp")
+        ),
+        &held,
+    );
+    let printed = serde_json::to_value(from_variable.resolved()).unwrap();
+    assert_eq!(
+        printed["tools"]["mcp"][0]["headers"]["Authorization"],
+        json!("${T}")
+    );
+    let read_back = RawConfig::from_str(&printed.to_string(), Format::Json)
+        .unwrap()
+        .substituted(|name: &str| (name == "T").then(|| OsString::from(held[0].1)))
+        .unwrap()
+        .config()
+        .unwrap();
+    assert_eq!(read_back.digest(), from_variable.digest());
+    assert_eq!(
+        read_back.digest(),
+        config.digest(),
+        "a credential's source changes nothing"
+    );
 }
 
 #[test]

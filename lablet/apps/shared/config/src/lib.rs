@@ -7,6 +7,13 @@
 //! at the working directory, wherever the config's own file is, so a config
 //! read from text and the same config read from a file name the same
 //! files.
+//!
+//! A `${VAR}` is filled before the config is typed, by
+//! [`RawConfig::substituted`], from wherever the caller says a variable's
+//! value comes: the config itself reads no environment. What the fill
+//! changed is recorded on the config, so every message, the resolved config
+//! and the digest show a filled setting as the file wrote it, through one
+//! mask, [`shown`].
 
 mod de;
 mod key;
@@ -15,13 +22,14 @@ mod prompt;
 mod raw;
 mod resolved;
 mod run;
+mod secret;
+mod shown;
 mod substitute;
 mod telemetry;
 mod tools;
 mod url;
 mod written;
 
-use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -39,18 +47,14 @@ pub use prompt::{Prompt, SkillsMode};
 pub use raw::RawConfig;
 pub use resolved::{Applied, ResolvedBuiltin, ResolvedConfig, ResolvedModel, ResolvedTools};
 pub use run::{Completion, Context, Run, TranscriptFormat};
-pub use substitute::{Env, Substituted};
+pub use secret::Secret;
+pub use shown::{Masked, WrittenBack, is_credential, shown};
+pub use substitute::{Fill, Filled, Variable};
 pub use telemetry::{Otlp, OtlpProtocol, Telemetry, TelemetryFile};
 pub use tools::{
     Builtin, BuiltinTool, McpLifetime, McpNames, McpResult, McpServer, OutputCut, Tools,
 };
 pub use url::{user_information, without_user_information};
-
-/// What lablet reads of where it runs: its own environment.
-#[must_use]
-pub fn environment(name: &str) -> Option<OsString> {
-    std::env::var_os(name)
-}
 
 /// The format a config's text is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -92,11 +96,9 @@ impl fmt::Display for Format {
 /// Why a config was refused.
 ///
 /// Each refusal of a setting names its key and where it was written, and
-/// shows its value as the config writes it, before `${VAR}` substitution,
-/// so nothing a variable holds reaches a message. `model.api_key_env`'s
-/// value is shown only when it's written in capitals, digits and `_`, as a
-/// variable's name is and few key formats are: anything else there may be
-/// a key written where its variable's name belongs.
+/// shows its value as the config writes it, `${VAR}` and all, so nothing a
+/// variable holds reaches a message. A credential's value is never shown,
+/// nor a value that may hold one: [`shown`] decides.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConfigError {
     /// The config's file couldn't be read.
@@ -151,20 +153,21 @@ pub enum ConfigError {
         /// state, whose default was refused beside what it does state.
         place: Option<Place>,
         /// The value it holds, as the config writes it; `None` for a value
-        /// of `model.api_key_env` that isn't written as a variable's name.
+        /// that's never shown, a credential's or one that may hold one.
         value: Option<String>,
         /// The rule the value breaks, or the values the setting takes.
         reason: String,
     },
-    /// `model.api_key_env` holds what no variable is named. A key that was
-    /// written where the variable's name belongs is a secret, so the
-    /// refusal holds nothing of the value.
-    #[error("model.api_key_env{} is refused: {reason}", at(*place))]
-    KeyVariable {
+    /// A setting is refused and nothing of its value is shown: a credential
+    /// written out, or a setting refused for what stands beside it.
+    #[error("{key}{} is refused: {reason}", at(*place))]
+    Refused {
+        /// The setting.
+        key: String,
         /// Where it was written.
         place: Option<Place>,
-        /// The rule the value breaks.
-        reason: &'static str,
+        /// The rule the value breaks, and the fix.
+        reason: String,
     },
     /// A setting the config needs isn't stated.
     #[error("{key} isn't set: {reason}")]
@@ -199,26 +202,6 @@ fn key_of(key: Option<&str>) -> String {
     key.map(|key| format!("{key}: ")).unwrap_or_default()
 }
 
-/// The longest a message shows of a value, in characters.
-const SHOWN_CHARS: usize = 120;
-
-/// A value as a message shows it, which is as JSON writes it, cut to
-/// `SHOWN_CHARS`. `model.api_key_env`'s is shown only when it's written as
-/// a variable's name is.
-pub fn shown(key: &KeyPath, value: Option<&serde_json::Value>) -> Option<String> {
-    let value = value?;
-    if *key == KeyPath::of("model.api_key_env")
-        && !value.as_str().is_some_and(model::is_written_as_a_variable)
-    {
-        return None;
-    }
-    let written = value.to_string();
-    Some(match written.char_indices().nth(SHOWN_CHARS) {
-        Some((cut, _)) => format!("{}…", &written[..cut]),
-        None => written,
-    })
-}
-
 /// A setting refused where lablet checks a config, by its key alone: the
 /// config the refusal is shown from says what it holds and where it was
 /// written, so a value a variable gave is never shown.
@@ -245,11 +228,6 @@ pub enum Refusal {
         /// Why it must.
         reason: String,
     },
-    /// `model.api_key_env` holds what isn't a variable's name.
-    KeyVariable {
-        /// Why it's refused.
-        reason: &'static str,
-    },
 }
 
 impl Refusal {
@@ -265,16 +243,19 @@ impl Refusal {
 
 /// What a `Lablet` is built from.
 ///
-/// The sections hold what the config states, as it's written, with
-/// lablet's default wherever it states nothing and every provider shares
-/// the default. A setting of the `model` section that's one provider's is
-/// held as it was stated, and [`Config::resolved`] fills in its default.
-/// `${VAR}` is held as it's written, and substituted when a `Lablet` is
-/// built from the config or the config is checked.
+/// The sections hold what the config states, with lablet's default wherever
+/// it states nothing and every provider shares the default. A setting of
+/// the `model` section that's one provider's is held as it was stated, and
+/// [`Config::resolved`] fills in its default. Every `${VAR}` was filled
+/// before the config was typed, by [`RawConfig::substituted`], and the
+/// config keeps the record of what the fill changed, so its `Debug` form,
+/// its messages and its resolved form show each filled setting as the file
+/// wrote it. Its serialisation shows the typed values, a secret as
+/// `[secret]`; it's what the mask reads.
 ///
 /// Reading a config checks its shape. What a config may not state is
 /// refused when it's checked, and when a `Lablet` is built from it.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// How a run completes, what bounds it, and where its transcript goes.
@@ -298,6 +279,18 @@ pub struct Config {
     /// built-in tools may not hold either.
     #[serde(skip)]
     prompt_file: Option<PathBuf>,
+    /// What the fill changed, each key with the text as written, and
+    /// whether it ran.
+    #[serde(skip)]
+    filled: Filled,
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Config")
+            .field(&shown::debug_tree(self, &self.filled))
+            .finish()
+    }
 }
 
 impl Config {
@@ -348,14 +341,28 @@ impl Config {
         self.prompt_file.as_deref()
     }
 
+    /// What the fill changed: each key a `${VAR}` or a `$${` was written
+    /// at, with the text as written and the variables it named.
+    #[must_use]
+    pub fn filled(&self) -> &Filled {
+        &self.filled
+    }
+
+    /// Whether the config was made in code rather than read from text, so
+    /// a credential in it was set as a `Secret` and no setting has a place.
+    #[must_use]
+    pub fn made_in_code(&self) -> bool {
+        !self.places.are_known()
+    }
+
     /// The config with every default filled in, and without the settings
     /// that nothing of it applies: a default the provider can't apply, how
     /// an output is cut where nothing is, the length of a preview under a
     /// cut that makes none, the MCP settings where there's no server, and
     /// the built-in tools' settings where none is enabled.
     ///
-    /// It holds the config as it's written, so a `${VAR}` is in it as it's
-    /// written and nothing a variable holds is.
+    /// It carries the record of what the fill changed, so written out it
+    /// shows each filled setting as the file wrote it.
     #[must_use]
     pub fn resolved(&self) -> ResolvedConfig {
         let Self {
@@ -367,6 +374,7 @@ impl Config {
             source: _,
             places: _,
             prompt_file: _,
+            filled,
         } = self;
         let applied = |setting| model.applies(setting);
         ResolvedConfig {
@@ -376,7 +384,7 @@ impl Config {
                 api: model.openai_api().map_or(Applied::No, Applied::Yes),
                 script: when(applied(Setting::Script), model.script.clone()),
                 name: model.name.clone(),
-                api_key_env: model.key_variable().map(str::to_owned),
+                api_key: model.api_key.clone(),
                 base_url: when(applied(Setting::BaseUrl), model.base_url.clone()),
                 max_tokens: model.max_tokens,
                 temperature: model.temperature,
@@ -397,25 +405,26 @@ impl Config {
             prompt: prompt.clone(),
             tools: tools.into(),
             telemetry: telemetry.clone(),
+            filled: filled.clone(),
         }
     }
 
     /// The digest of the resolved config, which groups the runs made from
-    /// it: [`ResolvedConfig::digest`]. It's of the config as it's written,
-    /// so a value a variable gives never enters it.
+    /// it: [`ResolvedConfig::digest`].
     #[must_use]
     pub fn digest(&self) -> ConfigDigest {
         self.resolved().digest()
     }
 
     /// `refusal` as this config shows it: with the value of the setting as
-    /// it's written here, and where it was written.
+    /// the file wrote it, where [`shown`] shows one, and where it was
+    /// written.
     #[must_use]
     pub fn refused(&self, refusal: Refusal) -> ConfigError {
         // Nothing of a config fails to serialise: a path is written as
         // it's shown, and a number JSON can't hold is written as `null`.
         let written = serde_json::to_value(self).unwrap_or_default();
-        let value = |key: &KeyPath| shown(key, key.find(&written));
+        let value = |key: &KeyPath| shown(key, key.find(&written), &self.filled);
         match refusal {
             Refusal::Invalid { key, reason } => ConfigError::Invalid {
                 place: self.places.of(&key),
@@ -436,10 +445,6 @@ impl Config {
                 key: key.to_owned(),
                 reason,
             },
-            Refusal::KeyVariable { reason } => ConfigError::KeyVariable {
-                place: self.places.of(&KeyPath::of("model.api_key_env")),
-                reason,
-            },
         }
     }
 
@@ -455,16 +460,28 @@ impl Config {
         self.places.of(&KeyPath::of(key).index(index))
     }
 
-    /// The setting at `key` as this config writes it, for a message that
-    /// shows it in its own words: a text as it is, anything else as JSON
-    /// writes it.
+    /// Where the setting at `key` was written, when it was.
+    #[must_use]
+    pub fn place_at(&self, key: &KeyPath) -> Option<Place> {
+        self.places.of(key)
+    }
+
+    /// The setting at `key` as the file wrote it, for a message that shows
+    /// it in its own words: a text as it is, anything else as JSON writes
+    /// it, and nothing for what [`shown`] never shows.
     #[must_use]
     pub fn written_text(&self, key: &str) -> Option<String> {
+        self.written_text_at(&KeyPath::of(key))
+    }
+
+    /// [`Config::written_text`] for a setting named by a [`KeyPath`], as an
+    /// item of a list is.
+    #[must_use]
+    pub fn written_text_at(&self, key: &KeyPath) -> Option<String> {
         let written = serde_json::to_value(self).ok()?;
-        let key = KeyPath::of(key);
-        match key.find(&written)? {
-            serde_json::Value::String(text) => Some(text.clone()),
-            other => shown(&key, Some(other)),
+        match shown::shown_whole(key, key.find(&written)?, &self.filled)? {
+            serde_json::Value::String(text) => Some(text),
+            other => shown(key, Some(&other), &Filled::default()),
         }
     }
 }

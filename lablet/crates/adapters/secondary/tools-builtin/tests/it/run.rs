@@ -19,7 +19,7 @@ const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
 const SECRET: &str = "what the model is not to read";
 
 /// A variable cargo sets for every test, as a key is set for lablet, and
-/// withheld as lablet's key is.
+/// dropped from a command as lablet's key is.
 const NOT_FOR_A_COMMAND: &str = "CARGO_MANIFEST_DIR";
 
 /// One run of the YAML script `script`, whose tools are `tools` and whose
@@ -153,13 +153,19 @@ async fn a_run_is_refused_what_is_outside_the_root_and_kept_from_lablet_s_enviro
         &scratch.outside("secret.txt"),
         &scratch.root().join("notes.txt"),
     );
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the variable cargo set, to know the value it stands for"
+    )]
     let held = std::env::var(NOT_FOR_A_COMMAND).expect("cargo sets it for a test");
     scratch.holds("key.txt", &held);
     let tools = BuiltinTools::new(
-        Settings {
-            withheld: [NOT_FOR_A_COMMAND.to_owned()].into(),
-            ..scratch.settings()
-        },
+        scratch.settings_from(
+            &[NOT_FOR_A_COMMAND],
+            &Secrets::new([held.clone()]),
+            &[],
+            &[],
+        ),
         crate::harness::untraced(),
     )
     .unwrap();

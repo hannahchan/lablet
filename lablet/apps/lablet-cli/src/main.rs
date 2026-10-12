@@ -75,6 +75,7 @@ fn run_command(args: RunArgs) -> u8 {
         Err(refusal) => return refuse(&refusal),
     };
     let on_stderr = lablet_cli::compose::telemetry_on_stderr(&config);
+    let environment = lablet_cli::input::process_environment();
     log(diagnostics::filter(rust_log().as_deref(), on_stderr));
 
     let source = Source::from(prompt);
@@ -111,7 +112,7 @@ fn run_command(args: RunArgs) -> u8 {
             ));
             return report::NOT_STARTED;
         }
-        let mut lablet = match lablet_cli::compose::build(config).await {
+        let mut lablet = match lablet_cli::compose::build(config, environment).await {
             Ok(lablet) => lablet,
             Err(error) => return refuse(&error.into()),
         };
@@ -146,7 +147,8 @@ fn check_command(args: &CheckArgs) -> u8 {
     let Some(runtime) = runtime() else {
         return report::NOT_STARTED;
     };
-    let checked = runtime.block_on(lablet_cli::compose::check(&config));
+    let environment = lablet_cli::input::process_environment();
+    let checked = runtime.block_on(lablet_cli::compose::check(&config, environment));
     runtime.shutdown_background();
     let checked = match checked {
         Ok(checked) => checked,
@@ -224,7 +226,13 @@ fn log(filter: Option<EnvFilter>) {
     let _ = diagnostics::subscriber(filter, io::stderr, io::stderr().is_terminal()).try_init();
 }
 
+/// What `RUST_LOG` asks of the diagnostic log: a process convention, read
+/// here and nowhere else of the binary's.
 fn rust_log() -> Option<OsString> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "`RUST_LOG` is the diagnostic log's own, which `main` installs"
+    )]
     std::env::var_os("RUST_LOG")
 }
 

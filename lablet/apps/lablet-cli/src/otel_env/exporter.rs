@@ -1,6 +1,6 @@
 //! The OTLP exporter's share of the seam: `OTEL_SDK_DISABLED`, the two
-//! exporter selectors, every `OTEL_EXPORTER_OTLP_*` variable, generic and
-//! for each signal, and the GenAI instrumentation's capture variable.
+//! exporter selectors, and every `OTEL_EXPORTER_OTLP_*` variable, generic
+//! and for each signal.
 //!
 //! Each setting of a signal is its own variable's when that gives one
 //! lablet can use, else the generic variable's, but for the headers: a
@@ -17,8 +17,7 @@ use reqwest::header::{HeaderName, HeaderValue};
 use super::{Choice, Named, Parse, Timeout, Variables};
 use crate::export::{Signal, Transport};
 use crate::otlp::{Hidden, Inherited, InheritedEndpoint, Variable};
-use lablet_config::Env;
-use lablet_otel_env::{CAPTURE_CONTENT, ENDPOINT_VARIABLES, HEADER_VARIABLES, decode_headers};
+use lablet_otel_env::{ENDPOINT_VARIABLES, Env, HEADER_VARIABLES, decode_headers};
 
 const SDK_DISABLED: &str = "OTEL_SDK_DISABLED";
 
@@ -98,9 +97,6 @@ impl Signal {
 pub struct Exporter {
     /// Whether `OTEL_SDK_DISABLED` is `true`: no telemetry at all.
     pub sdk_disabled: bool,
-    /// Whether the GenAI capture variable turns content capture on, or
-    /// `None` when it says nothing.
-    pub capture_content: Option<bool>,
     /// What the environment gives the spans' exporter.
     pub(crate) traces: Inherited,
     /// What the environment gives the log records' exporter.
@@ -119,7 +115,6 @@ impl Exporter {
         let generic = Family::read(variables, &GENERIC);
         Self {
             sdk_disabled: sdk_disabled(variables),
-            capture_content: variables.get(CAPTURE_CONTENT),
             traces: inherited(variables, Signal::Traces, &generic),
             logs: inherited(variables, Signal::Logs, &generic),
         }

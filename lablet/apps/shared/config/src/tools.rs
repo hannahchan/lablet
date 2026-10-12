@@ -9,6 +9,7 @@ use std::time::Duration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::secret::Secret;
 use super::written::{duration, path};
 
 /// The `tools` section.
@@ -76,12 +77,16 @@ pub struct Builtin {
     #[serde(with = "duration")]
     #[schemars(with = "String")]
     pub timeout: Duration,
-    /// Variables a command starts with on top of lablet's own environment,
-    /// which a command inherits less the variables lablet reads its secrets
-    /// from. A variable substituted here is a secret: withheld from every
-    /// other child, and cut out of every tool result. Naming a withheld
-    /// variable passes it on.
+    /// Variables a command starts with on top of the environment it
+    /// inherits, each passed as set: a `${VAR}` here makes nothing a
+    /// secret, and one that names the entry's own variable is refused,
+    /// since a command inherits it already.
     pub env: BTreeMap<String, String>,
+    /// Credentials given to `bash`, each under the name written here and
+    /// nowhere else: a `${VAR}`, or a `Secret` set in code, never the value
+    /// written out. The variable is dropped from what a command inherits,
+    /// and the value is cut out of every tool result.
+    pub credentials: BTreeMap<String, Secret>,
 }
 
 impl Default for Builtin {
@@ -91,6 +96,7 @@ impl Default for Builtin {
             enabled: BTreeSet::new(),
             timeout: Duration::from_secs(120),
             env: BTreeMap::new(),
+            credentials: BTreeMap::new(),
         }
     }
 }
@@ -122,9 +128,8 @@ pub enum McpServer {
         /// The command's arguments.
         #[serde(default)]
         args: Vec<String>,
-        /// Variables the server starts with beside the short list it has. A
-        /// variable substituted here is a secret: withheld from every
-        /// command, and cut out of every tool result.
+        /// Variables the server starts with beside the short list it has,
+        /// each passed as set: a `${VAR}` here makes nothing a secret.
         #[serde(default)]
         env: BTreeMap<String, String>,
         /// How long the server may take to start.
@@ -148,12 +153,11 @@ pub enum McpServer {
         name: String,
         /// Where the server listens.
         url: String,
-        /// Headers sent with every request. Every value is a secret, written
-        /// or substituted: a variable substituted into one is withheld from
-        /// every command, the value is cut out of every tool result, and
-        /// it's left out of the config digest.
+        /// Headers sent with every request. Every value is lablet's own: a
+        /// variable filled into one reaches no command, the value is cut
+        /// out of every tool result, and it's left out of the config digest.
         #[serde(default)]
-        headers: BTreeMap<String, String>,
+        headers: BTreeMap<String, Secret>,
         /// How long the server may take to answer its first request.
         #[serde(default = "startup_timeout", with = "duration")]
         #[schemars(with = "String")]

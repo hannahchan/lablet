@@ -3,7 +3,7 @@
 //! and shares one `Otel` between such tasks, which asks that it's `Sync`
 //! too.
 
-use lablet::{Config, Lablet, Otel, RunRequest};
+use lablet::{Builder, Config, Lablet, Otel, RunRequest};
 
 /// Compiles only when `T` is `Send`.
 fn send<T: Send>(_: &T) {}
@@ -16,10 +16,10 @@ fn send_sync<T: Send + Sync + 'static>() {}
 fn the_futures_of_build_check_and_run_are_send() {
     send_sync::<Otel>();
     send_sync::<lablet::Builder>();
-    let _ = |config: Config, lablet: &mut Lablet, request: RunRequest| {
+    let _ = |config: Config, builder: &Builder, lablet: &mut Lablet, request: RunRequest| {
         send(&Lablet::builder(config.clone(), Otel::noop()).build());
         send(&lablet::build(config.clone(), Otel::noop()));
-        send(&lablet::check(&config));
+        send(&builder.check());
         send(&lablet.run(request));
     };
 }
