@@ -53,9 +53,6 @@ fn headers(set: &[(&str, &str)]) -> Headers {
 /// A body of protobuf, as the exporter makes one uncompressed.
 const PROTOBUF: &[u8] = b"\x0a\x00";
 
-/// The user agent the exporter gives a request of its own.
-const AGENT: &str = "OTel-OTLP-Exporter-Rust/0.33.0";
-
 fn values<'a>(map: &'a HeaderMap, name: &str) -> Vec<&'a str> {
     map.get_all(name)
         .iter()
@@ -75,14 +72,14 @@ fn the_resolved_headers_replace_every_value_of_their_name_and_only_the_exporters
     map.append("authorization", "Bearer code".parse().unwrap());
     map.append("x-unread", "env".parse().unwrap());
     map.append("content-type", "application/x-protobuf".parse().unwrap());
-    map.append("user-agent", AGENT.parse().unwrap());
+    map.append("user-agent", EXPORTER_AGENT.parse().unwrap());
 
     headers.apply(&mut map, PROTOBUF);
 
     assert_eq!(values(&map, "authorization"), ["Bearer config"]);
     assert!(map.get("x-unread").is_none());
     assert_eq!(values(&map, "content-type"), ["application/x-protobuf"]);
-    assert_eq!(values(&map, "user-agent"), [AGENT]);
+    assert_eq!(values(&map, "user-agent"), [EXPORTER_AGENT]);
     assert!(
         map.get("authorization").unwrap().is_sensitive(),
         "the value is marked sensitive, so a `Debug` of the map hides it"
@@ -92,8 +89,8 @@ fn the_resolved_headers_replace_every_value_of_their_name_and_only_the_exporters
 /// Every header the exporter merged from the process environment comes
 /// off, whatever its name, the exporter's own names among them: the
 /// environment's value replaced the exporter's, so the body's type is the
-/// protocol's, its encoding the one the body is compressed in, and a user
-/// agent that isn't the exporter's goes.
+/// protocol's, its encoding the one the body is compressed in, and the user
+/// agent the pinned exporter's.
 #[test]
 fn the_environments_headers_come_off_and_the_configs_go_on() {
     let headers = headers(&[("x-config", "yes")]);
@@ -117,8 +114,9 @@ fn the_environments_headers_come_off_and_the_configs_go_on() {
 
     let mut names: Vec<_> = plain.keys().map(HeaderName::as_str).collect();
     names.sort_unstable();
-    assert_eq!(names, ["content-type", "x-config"]);
+    assert_eq!(names, ["content-type", "user-agent", "x-config"]);
     assert_eq!(values(&plain, "content-type"), ["application/x-protobuf"]);
+    assert_eq!(values(&plain, "user-agent"), [EXPORTER_AGENT]);
     assert_eq!(values(&compressed, "content-encoding"), ["gzip"]);
     assert_eq!(values(&zstd, "content-encoding"), ["zstd"]);
     assert_eq!(
@@ -164,17 +162,19 @@ fn the_grpc_interceptor_sets_the_headers_on_the_requests_metadata() {
         .append("x-other", MetadataValue::from_static("env"));
     request
         .metadata_mut()
-        .append("user-agent", MetadataValue::from_static(AGENT));
+        .append("user-agent", MetadataValue::from_static(EXPORTER_AGENT));
     request
         .metadata_mut()
         .append("content-type", MetadataValue::from_static("env"));
-    let mut hostile = tonic::Request::new(());
-    hostile
-        .metadata_mut()
-        .append("user-agent", MetadataValue::from_static("env"));
+    let hostile = ["env", "OTel-OTLP-Exporter-Rust/anything"].map(|agent| {
+        let mut hostile = tonic::Request::new(());
+        hostile
+            .metadata_mut()
+            .append("user-agent", MetadataValue::from_static(agent));
+        interceptor(hostile).unwrap()
+    });
 
     let request = interceptor(request).unwrap();
-    let hostile = interceptor(hostile).unwrap();
 
     let metadata = request.metadata();
     let authorization: Vec<_> = metadata
@@ -186,11 +186,14 @@ fn the_grpc_interceptor_sets_the_headers_on_the_requests_metadata() {
     assert_eq!(metadata.get("x-env"), None);
     assert_eq!(metadata.get("x-other"), None);
     assert_eq!(metadata.get("content-type"), None);
-    assert_eq!(metadata.get("user-agent").unwrap(), AGENT);
-    assert!(
-        hostile.metadata().get("user-agent").is_none(),
-        "a user agent the environment gave isn't the exporter's: {hostile:?}"
-    );
+    assert_eq!(metadata.get("user-agent").unwrap(), EXPORTER_AGENT);
+    for hostile in hostile {
+        assert_eq!(
+            hostile.metadata().get("user-agent").unwrap(),
+            EXPORTER_AGENT,
+            "a user agent the environment gave is the pinned exporter's: {hostile:?}"
+        );
+    }
 }
 
 // What's refused, and what a refusal says

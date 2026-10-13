@@ -548,7 +548,7 @@ impl Set<'_> {
     /// written user information is own, and so is one that gave the URL its
     /// user information from outside the written text, as a variable
     /// holding the whole URL does. A host or a path a variable gave is no
-    /// secret.
+    /// secret. A URL the text didn't write was set in code.
     fn url(&mut self, key: &KeyPath, url: Option<&str>) {
         let Some(information) = url.and_then(user_information) else {
             return;
@@ -559,7 +559,9 @@ impl Set<'_> {
             self.values.extend(forms.iter().cloned());
         }
         let matcher = Secrets::new(forms);
-        let fill = self.config.filled().at(key);
+        let place = self.config.place_at(key);
+        // A URL with no place was set in code, over whatever a fill left.
+        let fill = self.config.filled().at(key).filter(|_| place.is_some());
         let written_information = fill
             .map(|fill| fill.written.as_str())
             .and_then(user_information);
@@ -576,12 +578,15 @@ impl Set<'_> {
                     .collect()
             })
             .unwrap_or_default();
-        let place = self.config.place_at(key);
         if variables.is_empty() {
             self.own.push(Credential {
                 field: key.clone(),
                 place,
-                source: Source::Key(key.clone()),
+                source: if place.is_some() {
+                    Source::Key(key.clone())
+                } else {
+                    Source::Code
+                },
                 held,
                 given_by: None,
                 copies: Vec::new(),

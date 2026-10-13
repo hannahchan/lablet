@@ -19,6 +19,7 @@ use opentelemetry_otlp::{SpanExporter, WithExportConfig as _};
 use opentelemetry_sdk::trace::{SpanData, SpanEvents, SpanExporter as _, SpanLinks};
 
 use crate::export::Telemetry;
+use crate::export::network::EXPORTER_AGENT;
 use crate::export::testing::memory::Memory;
 use crate::export::testing::{RUN, Records, SPANS_PER_RUN, emit_run, otlp_of, scope};
 
@@ -39,8 +40,9 @@ fn given(canary: &str) -> Option<String> {
 }
 
 /// Runs the child test `test` of this file with `canary` and `rest` in
-/// [`CHILD`] and the variables `set`, and holds it to passing as the one
-/// test run, since a name that matches none runs nothing and passes.
+/// [`CHILD`], no header variable but the ones `set` sets, and the
+/// variables `set`, and holds it to passing as the one test run, since a
+/// name that matches none runs nothing and passes.
 async fn child(test: &str, canary: &str, rest: &str, set: &[(&str, &str)]) {
     let output = tokio::process::Command::new(std::env::current_exe().unwrap())
         .args([
@@ -49,6 +51,9 @@ async fn child(test: &str, canary: &str, rest: &str, set: &[(&str, &str)]) {
             "--test-threads=1",
         ])
         .env(CHILD, format!("{canary}:{rest}"))
+        .env_remove("OTEL_EXPORTER_OTLP_HEADERS")
+        .env_remove("OTEL_EXPORTER_OTLP_TRACES_HEADERS")
+        .env_remove("OTEL_EXPORTER_OTLP_LOGS_HEADERS")
         .envs(set.iter().copied())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -256,6 +261,39 @@ async fn canary_an_empty_signal_header_variable_hides_the_generic_one_in_the_cra
             None,
             "the crate reads an empty variable as unset: lablet's replacing of what the crate \
              merged still holds, but say in decisions.md that the gap is closed: {request:?}"
+        );
+    }
+}
+
+/// The user agent lablet writes on every request is the one the pinned
+/// crate sends of its own, with no header variable set: exact on HTTP, and
+/// on gRPC where tonic's own follows it. A bump of the crate that changes
+/// it fails here, rather than lablet sending a stale one.
+#[tokio::test(flavor = "multi_thread")]
+async fn canary_the_exporter_agent_lablet_writes_is_the_one_the_crate_sends() {
+    let receiver = Receiver::start(Mode::Answers).await;
+
+    child(
+        "child_exports_a_span_through_the_crates_exporters",
+        "headers",
+        &format!("{},{}", receiver.grpc_endpoint(), receiver.http_endpoint()),
+        &[],
+    )
+    .await;
+
+    let requests = receiver.requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    for request in &requests {
+        let sent = header(request, "user-agent").unwrap_or_default();
+        let lablets = if request.transport == receiver::Transport::Http {
+            sent == EXPORTER_AGENT
+        } else {
+            sent.starts_with(&format!("{EXPORTER_AGENT} "))
+        };
+        assert!(
+            lablets,
+            "the crate sends `{sent}`, and lablet writes `{EXPORTER_AGENT}`: set the constant to \
+             the crate's own: {request:?}"
         );
     }
 }

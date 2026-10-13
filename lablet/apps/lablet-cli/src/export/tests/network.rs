@@ -19,6 +19,7 @@ use super::harness::{
     CONTENT, CONTENT_PER_RUN, RUN, Records, SPANS_PER_RUN, Settings, WIDE, built, emit_run,
     otlp_of, providers, run, scope,
 };
+use crate::export::network::EXPORTER_AGENT;
 use crate::export::{FileTarget, OtelBuildError, OtlpSettings, Signal, Telemetry, validate};
 
 /// The endpoint of `receiver` that `protocol` speaks to, as a config
@@ -632,64 +633,88 @@ async fn the_headers_on_the_wire_are_the_configs_alone_whatever_the_environment_
 /// environment's header variables set them to: the environment's value
 /// replaced the exporter's, so on HTTP the body's type is the protocol's
 /// and its encoding the one the body is compressed in, uncompressed or
-/// under the compression variable the exporter reads itself, and a user
-/// agent the environment gave goes on both transports.
+/// under the compression variable the exporter reads itself, and the user
+/// agent is the pinned exporter's on both transports, whether the
+/// environment's is another or one that begins as the exporter's does. A
+/// header of another name in the generic variable, with neither signal's
+/// variable set, so the crate merges it into both signals, reaches no
+/// request either.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_exporters_own_headers_keep_its_values_whatever_the_environment_sets_them_to() {
     for (compression, named, encoding) in [
         (None, "gzip", None),
         (Some("gzip"), "identity", Some("gzip")),
     ] {
-        let receiver = Receiver::start(Mode::Answers).await;
-        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
-        command
-            .args([
-                "--exact",
-                "export::tests::network::a_child_process_exports_with_the_headers_its_config_states",
-                "--test-threads=1",
-            ])
-            .env(
-                CHILD,
-                format!("{},{}", receiver.grpc_endpoint(), receiver.http_endpoint()),
-            )
-            .env(
-                "OTEL_EXPORTER_OTLP_HEADERS",
-                format!("content-type=text/plain,user-agent=hostile-agent,content-encoding={named}"),
-            );
-        if let Some(compression) = compression {
-            command.env("OTEL_EXPORTER_OTLP_COMPRESSION", compression);
-        }
-        let child = command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .unwrap();
-        assert!(
-            child.status.success(),
-            "the child failed, so a collector refused what it was sent:\n{}\n{}",
-            String::from_utf8_lossy(&child.stdout),
-            String::from_utf8_lossy(&child.stderr)
-        );
-
-        let requests = receiver.requests();
-        assert_eq!(requests.len(), 2 * 6, "{requests:?}");
-        for request in &requests {
+        for agent in ["hostile-agent", "OTel-OTLP-Exporter-Rust/anything"] {
+            let receiver = Receiver::start(Mode::Answers).await;
+            let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "export::tests::network::a_child_process_exports_with_the_headers_its_config_states",
+                    "--test-threads=1",
+                ])
+                .env(
+                    CHILD,
+                    format!("{},{}", receiver.grpc_endpoint(), receiver.http_endpoint()),
+                )
+                .env(
+                    "OTEL_EXPORTER_OTLP_HEADERS",
+                    format!(
+                        "content-type=text/plain,user-agent={agent},content-encoding={named},\
+                         x-generic=g"
+                    ),
+                )
+                .env_remove("OTEL_EXPORTER_OTLP_TRACES_HEADERS")
+                .env_remove("OTEL_EXPORTER_OTLP_LOGS_HEADERS");
+            if let Some(compression) = compression {
+                command.env("OTEL_EXPORTER_OTLP_COMPRESSION", compression);
+            }
+            let child = command
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .await
+                .unwrap();
             assert!(
-                request
-                    .headers
-                    .iter()
-                    .all(|(_, value)| !value.contains("hostile-agent") && value != "text/plain"),
-                "{request:?}"
+                child.status.success(),
+                "the child failed, so a collector refused what it was sent:\n{}\n{}",
+                String::from_utf8_lossy(&child.stdout),
+                String::from_utf8_lossy(&child.stderr)
             );
-            if request.transport == receiver::Transport::Http {
-                assert_eq!(
-                    header(request, "content-type"),
-                    Some("application/x-protobuf"),
+
+            let requests = receiver.requests();
+            assert_eq!(requests.len(), 2 * 6, "{requests:?}");
+            for transport in [receiver::Transport::Grpc, receiver::Transport::Http] {
+                assert!(
+                    requests
+                        .iter()
+                        .any(|request| request.transport == transport),
+                    "{transport:?}: {requests:?}"
+                );
+            }
+            for request in &requests {
+                assert!(
+                    request
+                        .headers
+                        .iter()
+                        .all(|(_, value)| !value.contains(agent) && value != "text/plain"),
                     "{request:?}"
                 );
-                assert_eq!(header(request, "content-encoding"), encoding, "{request:?}");
+                assert_eq!(header(request, "x-generic"), None, "{request:?}");
+                let sent = header(request, "user-agent").unwrap_or_default();
+                if request.transport == receiver::Transport::Http {
+                    assert_eq!(sent, EXPORTER_AGENT, "{request:?}");
+                    assert_eq!(
+                        header(request, "content-type"),
+                        Some("application/x-protobuf"),
+                        "{request:?}"
+                    );
+                    assert_eq!(header(request, "content-encoding"), encoding, "{request:?}");
+                } else {
+                    assert!(sent.starts_with(EXPORTER_AGENT), "{request:?}");
+                }
             }
         }
     }

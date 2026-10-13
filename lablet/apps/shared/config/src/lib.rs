@@ -58,7 +58,9 @@ pub use telemetry::{
 pub use tools::{
     Builtin, BuiltinTool, McpLifetime, McpNames, McpResult, McpServer, OutputCut, Tools,
 };
-pub use url::{user_information, without_user_information};
+pub use url::{
+    WrittenInformation, user_information, without_user_information, written_information,
+};
 
 /// The format a config's text is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

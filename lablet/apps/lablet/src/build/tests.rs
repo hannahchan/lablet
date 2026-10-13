@@ -282,3 +282,135 @@ async fn a_config_that_states_only_what_it_must_resolves_to_every_default_of_the
     assert_eq!(checked.digest(), spec.digest());
     assert_eq!(checked.tools(), []);
 }
+
+/// R17's URL form in a library, by its check and its build alike: a
+/// password the text writes out in `model.base_url` or
+/// `telemetry.otlp.endpoint` is refused unshown, by line or as an
+/// override; one set in code, after the text wrote none, `null` or a
+/// `${VAR}` that came out empty, is own, and cut, since a host has no
+/// other way to give it. A build of the
+/// gateway's config goes on to the refusal of the provider this lablet has
+/// no adapter for yet, past every rule of the URL.
+#[tokio::test]
+async fn a_url_s_password_written_out_is_refused_and_one_set_in_code_is_own() {
+    let scratch = lablet_test_support::Scratch::new("library-url-password");
+    let script = scratch.write("script.yaml", ENDS);
+    let password = "gwsecretpassword1234567";
+    let literal = format!("https://gwuser:{password}@gw.example/v1");
+    let gateway = |written: &str| {
+        format!(
+            "model: {{ provider: anthropic, api_key: '${{K}}'{written} }}\nprompt: {{ system: Hi. }}"
+        )
+    };
+    let collector = |written: &str| {
+        format!(
+            "model: {{ provider: fake, script: '{}', api_key: '${{K}}' }}\nprompt: {{ system: Hi. }}\ntelemetry: {{ otlp: {{ protocol: grpc{written} }} }}",
+            script.display()
+        )
+    };
+    let set_in_code = |config: &mut Config, key: &str| {
+        if key == "model.base_url" {
+            config.model.base_url = Some(literal.clone());
+        } else {
+            config.telemetry.otlp.endpoint = Some(literal.clone());
+        }
+    };
+    let fill = |name: &str| (name == "K").then(|| std::ffi::OsString::from(KEY));
+
+    for (key, text, line) in [
+        ("model.base_url", &gateway as &dyn Fn(&str) -> String, 1),
+        ("telemetry.otlp.endpoint", &collector, 3),
+    ] {
+        let short = key.rsplit('.').next().unwrap();
+        let written = filled(&text(&format!(", {short}: '{literal}'")), &[("K", KEY)]).unwrap();
+        let mut raw = RawConfig::from_str(&text(""), Format::Yaml).unwrap();
+        raw.set(&format!("{key}={literal}")).unwrap();
+        let overridden = raw.substituted(fill).unwrap().config().unwrap();
+        let why = "is refused: its user or password isn't a ${VAR}, and what it holds isn't shown";
+        let rotate = "and rotate it if this was one";
+        for (config, expected) in [
+            (
+                written,
+                format!(
+                    "{key} (line {line}) {why}; write https://${{GW_USER}}:${{GW_PASS}}@gw/v1, \
+                     {rotate}"
+                ),
+            ),
+            (
+                overridden,
+                format!(
+                    "{key} (an override) {why}; write --set \
+                     '{key}=https://${{GW_USER}}:${{GW_PASS}}@gw/v1', {rotate}"
+                ),
+            ),
+        ] {
+            let checked = check(config.clone()).await.unwrap_err();
+            let built = Lablet::builder(config, Otel::noop())
+                .build()
+                .await
+                .err()
+                .unwrap();
+            for refusal in [checked.to_string(), built.to_string()] {
+                assert_eq!(refusal, expected);
+            }
+            assert!(!format!("{checked:?}{built:?}").contains(password));
+        }
+
+        for written in [
+            String::new(),
+            format!(", {short}: null"),
+            format!(", {short}: '${{GW:-}}'"),
+            format!(", {short}: '${{GW}}'"),
+        ] {
+            let mut config = filled(&text(&written), &[("K", KEY), ("GW", "")]).unwrap();
+            set_in_code(&mut config, key);
+
+            let checked = check(config.clone()).await.unwrap();
+
+            let own: Vec<String> = checked.own().iter().map(Credential::as_own).collect();
+            assert_eq!(
+                own,
+                [
+                    "K (line 1) -> model.api_key; no process inherits it".to_owned(),
+                    format!("{key} (set in code); no process inherits it"),
+                ],
+                "{written}"
+            );
+            assert!(!format!("{checked:?}").contains(password));
+            match Lablet::builder(config, Otel::noop()).build().await {
+                Ok(_) => {}
+                Err(BuildError::Unsupported { .. }) if key == "model.base_url" => {}
+                Err(error) => panic!("{key}{written}: {error}"),
+            }
+        }
+    }
+}
+
+/// A library reads no telemetry setting, the client key's file among them,
+/// so its check claims no cut of it: `own:` names the credentials it does
+/// cut and not `telemetry.otlp.tls.client_key`, even for a file that
+/// doesn't exist.
+#[tokio::test]
+async fn a_library_check_claims_no_cut_of_a_client_key_it_never_reads() {
+    let scratch = lablet_test_support::Scratch::new("library-client-key");
+    let script = scratch.write("script.yaml", ENDS);
+    let missing = scratch.at("no-such-client.key");
+    let config = filled(
+        &format!(
+            "model: {{ provider: fake, script: '{}', api_key: '${{WORK_KEY}}' }}\nprompt: {{ system: Hi. }}\ntelemetry: {{ otlp: {{ endpoint: 'https://collector.internal:4318', tls: {{ client_key: '{}', client_cert: '{}' }} }} }}",
+            script.display(),
+            missing.display(),
+            missing.display(),
+        ),
+        &[("WORK_KEY", KEY)],
+    )
+    .unwrap();
+
+    let checked = check(config).await.unwrap();
+
+    let own: Vec<String> = checked.own().iter().map(Credential::as_own).collect();
+    assert_eq!(
+        own,
+        ["WORK_KEY (line 1) -> model.api_key; no process inherits it"]
+    );
+}

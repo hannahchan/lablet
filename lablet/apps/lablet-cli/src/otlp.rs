@@ -49,8 +49,9 @@ impl OtlpSettings {
     }
 
     /// What the file `telemetry.otlp.tls.client_key` names holds, when the
-    /// config names one: the exporters' private key, which is cut from
-    /// every tool result.
+    /// config names one and an endpoint: the private key the exporters show
+    /// a collector. The cut takes it from [`client_key`], which reads it
+    /// whether or not an endpoint is named.
     #[must_use]
     pub fn client_key(&self) -> Option<&SecretString> {
         self.destinations()
@@ -137,23 +138,54 @@ impl From<OtlpProtocol> for Transport {
     }
 }
 
-/// What the network exporters are built from, for `config`, or `None` when
-/// it names no endpoint: nothing goes over the network then, whatever else
-/// the section states.
-///
-/// The TLS files the config names are read and loaded here whenever an
-/// endpoint is named, whether or not it speaks TLS, so a check reads what
-/// a build reads, a file that can't be loaded is refused wherever the
-/// exporter is on, and a client key's contents are cut whenever lablet
-/// holds them.
+/// What the file `telemetry.otlp.tls.client_key` names holds, whenever the
+/// config states it, endpoint or none, so its contents are cut from what a
+/// tool returns whatever else the section states.
 ///
 /// # Errors
 ///
-/// Returns a [`ConfigError`] shown as the file wrote it: a `ca_file`,
-/// `client_cert` or `client_key` that can't be read or loaded, naming a
-/// filled path's variable and never what the file holds, and a client key or
-/// certificate named without the other.
-pub fn settings(config: &Config) -> Result<Option<OtlpSettings>, ConfigError> {
+/// Returns a [`ConfigError`] shown as the file wrote it, by the key: a file
+/// that can't be read, or that holds what isn't text, naming a filled
+/// path's variable and never what the file holds.
+pub fn client_key(config: &Config) -> Result<Option<SecretString>, ConfigError> {
+    let Some(path) = &config.telemetry.otlp.tls.client_key else {
+        return Ok(None);
+    };
+    let named = named(config, "client_key");
+    let refused = |reason: String| {
+        config.refused(Refusal::Invalid {
+            key: tls_key("client_key"),
+            reason,
+        })
+    };
+    let bytes = std::fs::read(path)
+        .map_err(|error| refused(format!("{named} names a file that can't be read: {error}")))?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| refused(format!("{named} names a file that isn't a PEM private key")))?;
+    Ok(Some(SecretString::from(text)))
+}
+
+/// What the network exporters are built from, for `config`, or `None` when
+/// it names no endpoint: nothing goes over the network then, whatever else
+/// the section states. `key` is what [`client_key`] read of the client
+/// key's file, so the key the exporter shows and the contents cut are one
+/// read.
+///
+/// The TLS files the config names are read and loaded here whenever an
+/// endpoint is named, whether or not it speaks TLS, so a check reads what
+/// a build reads, and a file that can't be loaded is refused wherever the
+/// exporter is on.
+///
+/// # Errors
+///
+/// Returns a [`ConfigError`] shown as the file wrote it: a `ca_file` or
+/// `client_cert` that can't be read, and TLS files that can't be loaded,
+/// naming a filled path's variable and never what the file holds, and a
+/// client key or certificate named without the other.
+pub fn settings(
+    config: &Config,
+    key: Option<&SecretString>,
+) -> Result<Option<OtlpSettings>, ConfigError> {
     let otlp = &config.telemetry.otlp;
     let Some(endpoint) = otlp
         .endpoint
@@ -176,7 +208,7 @@ pub fn settings(config: &Config) -> Result<Option<OtlpSettings>, ConfigError> {
             )
         })
         .collect();
-    let tls = tls(config)?;
+    let tls = tls(config, key)?;
     // Both signals go to the one endpoint, whose scheme a signal's path
     // doesn't change, so a file is warned about once.
     if !speaks_tls(&with_scheme(endpoint.to_owned(), transport)) {
@@ -251,28 +283,36 @@ fn speaks_tls(endpoint: &str) -> bool {
         .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("https"))
 }
 
+/// The key of the TLS setting `name`.
+fn tls_key(name: &str) -> KeyPath {
+    KeyPath::of(TLS_KEY).key(name)
+}
+
+/// How the file the TLS setting `name` names is named in a reason: by the
+/// variable that filled the path, when one did, since the path is then the
+/// variable's to say, and as "the file" otherwise, since the path is shown
+/// beside it.
+fn named(config: &Config, name: &str) -> String {
+    config
+        .filled()
+        .at(&tls_key(name))
+        .and_then(|fill| fill.names().next())
+        .map_or_else(|| "the file".to_owned(), |variable| format!("`{variable}`"))
+}
+
 /// The TLS material `telemetry.otlp.tls` names, loaded as the exporters
-/// load it. A refusal is under the key of the file at fault, and names the
-/// variable that filled the path where one did, as the mask shows it.
-fn tls(config: &Config) -> Result<Tls, ConfigError> {
+/// load it, with `client_key` what the client key's file holds. A refusal
+/// is under the key of the file at fault, and names the variable that
+/// filled the path where one did, as the mask shows it.
+fn tls(config: &Config, client_key: Option<&SecretString>) -> Result<Tls, ConfigError> {
     let tls = &config.telemetry.otlp.tls;
-    let key = |name: &str| KeyPath::of(TLS_KEY).key(name);
     let refused = |name: &str, reason: String| {
         config.refused(Refusal::Invalid {
-            key: key(name),
+            key: tls_key(name),
             reason,
         })
     };
-    // How the file is named in a reason: by the variable that filled the
-    // path, when one did, since the path is then the variable's to say, and
-    // as "the file" otherwise, since the path is shown beside it.
-    let named = |name: &str| -> String {
-        config
-            .filled()
-            .at(&key(name))
-            .and_then(|fill| fill.names().next())
-            .map_or_else(|| "the file".to_owned(), |variable| format!("`{variable}`"))
-    };
+    let named = |name: &str| named(config, name);
     let read = |name: &str, path: &Path| {
         std::fs::read(path).map_err(|error| {
             refused(
@@ -300,24 +340,13 @@ fn tls(config: &Config) -> Result<Tls, ConfigError> {
         }
         None => None,
     };
-    let identity = match (&tls.client_key, &tls.client_cert) {
+    let identity = match (client_key, &tls.client_cert) {
         (None, None) => None,
-        (Some(key_path), Some(certificate_path)) => {
+        (Some(key_pem), Some(certificate_path)) => {
             let certificate_pem = read("client_cert", certificate_path)?;
-            let key_pem = SecretString::from(
-                String::from_utf8(read("client_key", key_path)?).map_err(|_| {
-                    refused(
-                        "client_key",
-                        format!(
-                            "{} names a file that isn't a PEM private key",
-                            named("client_key")
-                        ),
-                    )
-                })?,
-            );
             let identity = ClientIdentity {
                 certificate: certificate_pem,
-                key: key_pem,
+                key: key_pem.clone(),
             };
             // The reason the client's library gives is left out: it reads
             // the key, and what it says of one isn't held to say nothing

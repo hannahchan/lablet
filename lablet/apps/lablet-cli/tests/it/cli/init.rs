@@ -23,14 +23,10 @@ fn telemetry_files(lab: &Lab) -> Vec<PathBuf> {
     files
 }
 
-/// `lablet` with `args` in `lab`, with both exporter selectors `none`, so
-/// a config that states nothing of the network sends to no collector.
+/// `lablet` with `args` in `lab`, which sends to no collector: a starter
+/// names no endpoint, so nothing goes over the network.
 fn without_a_collector(lab: &Lab, args: &[&str]) -> super::harness::Ran {
-    let mut command = lab.lablet(args);
-    command
-        .env("OTEL_TRACES_EXPORTER", "none")
-        .env("OTEL_LOGS_EXPORTER", "none");
-    ran(command, "")
+    ran(lab.lablet(args), "")
 }
 
 /// The starter names no file, so a run of it as it's written leaves none;

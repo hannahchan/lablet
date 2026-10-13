@@ -294,6 +294,8 @@ struct At {
 
 /// One `${...}` of a text, as written.
 struct Reference<'a> {
+    /// Where in the text the reference begins.
+    start: usize,
     /// The reference whole, `${` to `}`.
     whole: &'a str,
     /// The variable's name.
@@ -325,6 +327,22 @@ pub(crate) fn fill_of(text: &str) -> Fill {
     }
 }
 
+/// `text` as the config wrote it out, with each `${NAME}` as `placeholder`
+/// and each `${NAME:-default}` as its default, which is text the config
+/// wrote whatever the variable holds.
+pub(crate) fn written_out(text: &str, placeholder: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut done = 0;
+    for reference in references(text) {
+        let at = reference.start;
+        out.push_str(&text[done..at]);
+        out.push_str(reference.default.unwrap_or(placeholder));
+        done = at + reference.whole.len();
+    }
+    out.push_str(&text[done..]);
+    out
+}
+
 /// Every reference of `text`, in order; an escape and a `${` that begins no
 /// reference are passed over.
 fn references(text: &str) -> Vec<Reference<'_>> {
@@ -339,6 +357,7 @@ fn references(text: &str) -> Vec<Reference<'_>> {
             && let Some((name, default)) = parts(inside)
         {
             found.push(Reference {
+                start: text.len() - rest.len() + at,
                 whole: &rest[at..rest.len() - beyond.len()],
                 name,
                 default,

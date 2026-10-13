@@ -12,7 +12,7 @@ use lablet_run::telemetry::SCOPE;
 use lablet_run::telemetry::generated::SCHEMA_URL;
 use opentelemetry::InstrumentationScope;
 use opentelemetry_sdk::Resource;
-use secrecy::ExposeSecret as _;
+use secrecy::{ExposeSecret as _, SecretString};
 
 use crate::export::{self, FileTarget, OtelBuildError, OtlpSettings, Telemetry, Transport};
 use crate::otel_env::Sdk;
@@ -45,22 +45,22 @@ pub struct Exports {
 /// The check gone on from `settled`, with the telemetry's settings read
 /// from the config, once, here, so a check and a build agree on what they
 /// come to: the check's end and what the telemetry is built from. What a
-/// client key's file holds is handed on to be cut from what a tool returns.
+/// client key's file holds is handed on to be cut from what a tool returns
+/// whenever the config states the key, endpoint or none.
 ///
 /// # Errors
 ///
-/// Returns the refusal of a TLS file that can't be loaded, and of what the
-/// network exporter would refuse but for what only making it finds (see
-/// `export::validate`).
+/// Returns the refusal of a client key's file that can't be read, whether
+/// or not an endpoint is named, of a TLS file that can't be loaded, and of
+/// what the network exporter would refuse but for what only making it
+/// finds (see `export::validate`).
 pub fn settle(settled: Settled) -> Result<(Prepared, Exports), BuildError> {
     let config = settled.config();
     let resource = export::resource(VERSION, config.telemetry.resource.pairs());
-    let otlp = network(config)?;
+    let key = otlp::client_key(config)?;
+    let otlp = network(config, key.as_ref())?;
     let target = file_target(config);
-    let client_key = otlp
-        .as_ref()
-        .and_then(OtlpSettings::client_key)
-        .map(|key| Secret::new(key.expose_secret()));
+    let client_key = key.map(|key| Secret::new(key.expose_secret()));
     let prepared = settled.finish(lablet_prepare::Telemetry {
         file: match &target {
             Some(FileTarget::Path(path)) => Some(path.clone()),
@@ -261,8 +261,11 @@ pub fn otlp_refused(config: &Config, error: OtelBuildError) -> BuildError {
 /// the exporter finds, trust roots that can't be loaded or other TLS that
 /// can't be set up, and the HTTP client (see `validate`); a check installs
 /// no exporter.
-fn network(config: &Config) -> Result<Option<OtlpSettings>, BuildError> {
-    let otlp = otlp::settings(config)?;
+fn network(
+    config: &Config,
+    key: Option<&SecretString>,
+) -> Result<Option<OtlpSettings>, BuildError> {
+    let otlp = otlp::settings(config, key)?;
     if let Some(settings) = &otlp {
         export::validate(settings).map_err(|error| otlp_refused(config, error))?;
     }

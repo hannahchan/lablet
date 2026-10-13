@@ -288,15 +288,21 @@ impl RawConfig {
             filled: &self.filled,
         })
         .map_err(|fault| self.refusal(fault))?;
-        // A credential key written as `null` states nothing, so a value set
-        // in code afterwards isn't held to the text's rule; a `${VAR}` that
-        // came out unset keeps its place, since the text beside it may be a
-        // key.
+        // A credential key, or a URL that may hold user information,
+        // written as `null` states nothing, so a value set in code
+        // afterwards isn't held to the text's rule; a credential's `${VAR}`
+        // that came out unset keeps its place, since the text beside it may
+        // be a key. A URL's does not: an empty `${VAR:-}` states none, as
+        // `null` does, and no line reports an unset URL, so its place would
+        // serve only to hold a URL set in code to the text's rule. The
+        // record stays, for what `--resolved` shows. An HTTP server's `url`
+        // can't be `null`.
         let mut places = self.places.clone();
         places.retain(|key, _| {
-            !(is_credential(key)
-                && key.find(&self.tree) == Some(&Value::Null)
-                && self.filled.at(key).is_none())
+            let unstated = key.find(&self.tree) == Some(&Value::Null);
+            !(unstated
+                && ((is_credential(key) && self.filled.at(key).is_none())
+                    || URLS.iter().any(|url| *key == KeyPath::of(url))))
         });
         Ok(Config {
             source: self.source.clone(),
@@ -328,6 +334,10 @@ impl RawConfig {
         }
     }
 }
+
+/// The URLs, beside an HTTP server's, whose user information is a
+/// credential.
+const URLS: [&str; 2] = ["model.base_url", "telemetry.otlp.endpoint"];
 
 /// The first key of `value`, under `key`, whose text wants a fill: one that
 /// holds `${`, in any setting but a prompt, which no fill reads.

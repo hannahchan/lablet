@@ -3,13 +3,9 @@
 //! environment the test states, since a test can't set a variable of its
 //! own process.
 
-use lablet_config::Format;
+use lablet_config::{Format, RawConfig};
 
 use super::*;
-
-fn config(text: &str) -> Config {
-    Config::from_str(text, Format::Yaml).unwrap()
-}
 
 const ENDS: &str = "
 - response:
@@ -21,11 +17,36 @@ const ENDS: &str = "
 /// A config of the fake provider ending at once, with `telemetry` stated
 /// beside it, in `scratch`.
 fn ending(scratch: &lablet_test_support::Scratch, telemetry: &str) -> Config {
+    ending_filled(scratch, telemetry, &[])
+}
+
+/// [`ending`], with each `${VAR}` filled from `held`.
+fn ending_filled(
+    scratch: &lablet_test_support::Scratch,
+    telemetry: &str,
+    held: &[(&str, &str)],
+) -> Config {
     let script = scratch.write("script.yaml", ENDS);
-    config(&format!(
-        "model: {{ provider: fake, script: '{}' }}\nprompt: {{ system: Hi. }}\ntelemetry: {telemetry}",
-        script.display()
-    ))
+    let held: Vec<(String, String)> = held
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect();
+    RawConfig::from_str(
+        &format!(
+            "model: {{ provider: fake, script: '{}' }}\nprompt: {{ system: Hi. }}\ntelemetry: {telemetry}",
+            script.display()
+        ),
+        Format::Yaml,
+    )
+    .unwrap()
+    .substituted(move |asked: &str| {
+        held.iter()
+            .find(|(name, _)| name == asked)
+            .map(|(_, value)| std::ffi::OsString::from(value))
+    })
+    .unwrap()
+    .config()
+    .unwrap()
 }
 
 /// The report of `config`, in an environment where `set` names are set.
@@ -44,11 +65,12 @@ async fn the_report_says_where_a_run_sends_and_writes_and_that_nothing_is_named(
 
     let path = scratch.at("runs.otlp.jsonl").display().to_string();
     let both = reported(
-        &ending(
+        &ending_filled(
             &scratch,
             &format!(
-                "{{ file: {{ path: '{path}' }}, otlp: {{ endpoint: 'http://user:pw@127.0.0.1:1/base?token=x', protocol: grpc }} }}"
+                "{{ file: {{ path: '{path}' }}, otlp: {{ endpoint: 'http://${{U}}:${{P}}@127.0.0.1:1/base?token=x', protocol: grpc }} }}"
             ),
+            &[("U", "user"), ("P", "pw-0123456789abcdef")],
         ),
         &["OTEL_EXPORTER_OTLP_COMPRESSION"],
     )

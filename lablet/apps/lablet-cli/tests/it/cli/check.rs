@@ -625,6 +625,53 @@ fn the_resolved_config_comments_each_setting_with_its_line_its_override_or_the_e
     );
 }
 
+/// `--resolved` comments each propagator of a list written as one text,
+/// `tracecontext,b3`, with where the text was written, since no item has a
+/// line of its own: the key's line, or `# --set` where an override set it.
+/// A text a variable filled is written back whole, as the file wrote it,
+/// with `# environment`.
+#[test]
+fn the_resolved_config_comments_each_propagator_written_as_one_text_with_where_the_text_was_written()
+ {
+    let lab = Lab::new("check-resolved-propagators-text");
+    lab.write("script.yaml", ENDS);
+    let items = |comment: &str| {
+        format!("  propagators:\n  - tracecontext # {comment}\n  - b3 # {comment}\n")
+    };
+    for (written, set, expected) in [
+        ("'tracecontext, B3'", None, items("line 7")),
+        (
+            "baggage",
+            Some("telemetry.propagators=tracecontext,b3"),
+            items("--set"),
+        ),
+        (
+            "${LABLET_TEST_PROPAGATORS}",
+            None,
+            "  propagators: ${LABLET_TEST_PROPAGATORS} # environment\n".to_owned(),
+        ),
+    ] {
+        lab.write(
+            "lablet.yaml",
+            &format!(
+                "model:\n  provider: fake\n  script: script.yaml\nprompt:\n  system: Hi.\n\
+                 telemetry:\n  propagators: {written}\n"
+            ),
+        );
+        let mut args = vec!["check", "--config", "lablet.yaml", "--resolved"];
+        if let Some(set) = set {
+            args.extend(["--set", set]);
+        }
+        let mut command = lab.lablet(&args);
+        command.env("LABLET_TEST_PROPAGATORS", "tracecontext,b3");
+
+        let run = ran(command, "");
+
+        assert_eq!(run.code, Some(0), "{run:?}");
+        assert!(run.stdout.contains(&expected), "{written}: {run:?}");
+    }
+}
+
 /// A relative path the file writes starts at the file's directory, from
 /// whichever directory lablet runs in, and one `--set` writes where lablet
 /// runs; `--resolved` keeps each as written.
@@ -893,6 +940,88 @@ fn a_whole_url_variable_that_holds_a_user_or_password_is_refused_by_its_name() {
         );
     }
     assert!(!own.stderr.contains(password), "{own:?}");
+}
+
+/// R17's URL form: a password a URL's text writes out, in the file, in a
+/// `${VAR:-default}`'s default or beside a `${VAR}`, or by `--set`, is
+/// refused by `check` and by `run` by its line or as an override, and
+/// nothing of what the URL holds is shown; a user and a password each a
+/// `${VAR}` passes.
+#[test]
+fn a_url_s_password_written_out_is_refused_by_check_and_by_run_and_never_shown() {
+    let lab = Lab::new("check-url-written-out");
+    lab.write("script.yaml", ENDS);
+    let password = "gwsecretpassword1234567";
+    let (url, user) = ("LABLET_TEST_GATEWAY_URL", "LABLET_TEST_GW_USER");
+    let with = |subcommand: &[&str], text: &str, set: Option<&str>| {
+        lab.write("lablet.yaml", text);
+        let mut args = [subcommand, &["--config", "lablet.yaml"][..]].concat();
+        if let Some(set) = set {
+            args.extend(["--set", set]);
+        }
+        let mut command = lab.lablet(&args);
+        command
+            .env(KEY, "placeholder")
+            .env(user, "gwuser-0123456789abcdef")
+            .env_remove(url);
+        ran(command, "")
+    };
+    let collector = |endpoint: &str| {
+        format!(
+            "model:\n  provider: fake\n  script: script.yaml\nprompt:\n  system: Hi.\ntelemetry:\n  \
+             otlp:\n    endpoint: {endpoint}\n"
+        )
+    };
+    let why = "is refused: its user or password isn't a ${VAR}, and what it holds isn't shown";
+    let rotate = "and rotate it if this was one";
+    let in_file = format!(
+        "config: telemetry.otlp.endpoint (line 8) {why}; write \
+         https://${{GW_USER}}:${{GW_PASS}}@gw/v1, {rotate}"
+    );
+    let by_override = format!(
+        "config: telemetry.otlp.endpoint (an override) {why}; write --set \
+         'telemetry.otlp.endpoint=https://${{GW_USER}}:${{GW_PASS}}@gw/v1', {rotate}"
+    );
+    let literal = format!("https://gwuser:{password}@127.0.0.1:1");
+    for (subcommand, args) in [("check", &[][..]), ("run", &["--prompt", PROMPT][..])] {
+        let subcommand = [&[subcommand][..], args].concat();
+        for (text, set, said) in [
+            (collector(&format!("'{literal}'")), None, &in_file),
+            (
+                collector(&format!("'${{{url}:-{literal}}}'")),
+                None,
+                &in_file,
+            ),
+            (
+                collector(&format!("'https://${{{user}}}:{password}@127.0.0.1:1'")),
+                None,
+                &in_file,
+            ),
+            (
+                collector("null"),
+                Some(format!("telemetry.otlp.endpoint={literal}")),
+                &by_override,
+            ),
+        ] {
+            let refusal = with(&subcommand, &text, set.as_deref());
+            refused(&refusal, said);
+            assert!(!refusal.stderr.contains(password), "{refusal:?}");
+            assert!(!lab.telemetry().exists(), "a run began: {refusal:?}");
+        }
+    }
+
+    let own = with(
+        &["check"],
+        &collector(&format!("'https://${{{user}}}@127.0.0.1:1'")),
+        None,
+    );
+    assert_eq!(own.code, Some(0), "{own:?}");
+    assert!(
+        own.stderr.contains(&format!(
+            "own:       {user} (line 8) -> telemetry.otlp.endpoint; no process inherits it\n"
+        )),
+        "{own:?}"
+    );
 }
 
 /// R40 and R38 at the command line, from `check` and from `run`: an `env`

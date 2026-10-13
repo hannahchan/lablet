@@ -216,7 +216,9 @@ pub(crate) fn sdk_of(held: &[(&str, &str)]) -> Sdk {
 pub(crate) fn otlp_of(text: &str) -> super::OtlpSettings {
     let config = lablet_config::Config::from_str(text, lablet_config::Format::Yaml)
         .unwrap_or_else(|error| panic!("{text} is a config: {error}"));
-    crate::otlp::settings(&config)
+    let key = crate::otlp::client_key(&config)
+        .unwrap_or_else(|error| panic!("{text} is refused: {error}"));
+    crate::otlp::settings(&config, key.as_ref())
         .unwrap_or_else(|error| panic!("{text} is refused: {error}"))
         .unwrap_or_else(|| panic!("{text} exports nothing over the network"))
 }

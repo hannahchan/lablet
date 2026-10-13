@@ -148,17 +148,54 @@ async fn an_endpoint_the_exporter_refuses_is_refused_by_its_key_as_the_config_wr
 
 /// C20: the user information of a refused endpoint is a secret, and where
 /// it ends can't be told once it may hold an unencoded `/`, so the refusal
-/// of an endpoint that holds an `@` shows no value: with a scheme, without
-/// one, which the gRPC exporter gives one, and with a `/` in the password,
-/// which a URL reads as ending the authority.
+/// of an endpoint that holds an `@` shows no value: with each half a
+/// `${VAR}`, with a scheme and without one, which the gRPC exporter gives
+/// one, and written with a `/` in the password, which a URL reads as ending
+/// the authority, so no user information is found to refuse as written out.
+/// A user and password written out, with a scheme and without, are refused
+/// before the exporter is asked, by R17's URL form, unshown too.
 #[tokio::test]
 async fn a_refused_endpoint_that_holds_an_at_is_shown_with_no_value() {
     const PASSWORD: &str = "hunter2-0123456789abcdef";
     let scratch = Lab::new("otlp-bad-endpoint-user-information");
+    let held = [("U", "user"), ("P", PASSWORD)];
+    for (endpoint, reason) in [
+        (
+            "http://${U}:${P}@[not a host".to_owned(),
+            "`U` holds what isn't a URL the exporter accepts",
+        ),
+        (
+            "${U}:${P}@[not a host".to_owned(),
+            "`U` holds what isn't a URL the exporter accepts",
+        ),
+        (
+            format!("https://user:ab/{PASSWORD}@[not a host"),
+            "it isn't a URL the exporter accepts",
+        ),
+    ] {
+        let config = filled(
+            &scratch.tree(
+                ENDS,
+                json!({ "telemetry": { "otlp": { "endpoint": endpoint } } }),
+            ),
+            &held,
+        );
+
+        let refused = refusal(config).await;
+
+        assert_eq!(
+            refused.to_string(),
+            format!("telemetry.otlp.endpoint (line 1): its value is refused: {reason}"),
+            "{endpoint}"
+        );
+        assert!(
+            !format!("{refused:?}").contains(PASSWORD),
+            "{endpoint}: {refused:?}"
+        );
+    }
     for endpoint in [
         format!("http://user:{PASSWORD}@[not a host"),
         format!("user:{PASSWORD}@[not a host"),
-        format!("https://user:ab/{PASSWORD}@[not a host"),
     ] {
         let config = scratch.config(
             ENDS,
@@ -169,8 +206,9 @@ async fn a_refused_endpoint_that_holds_an_at_is_shown_with_no_value() {
 
         assert_eq!(
             refused.to_string(),
-            "telemetry.otlp.endpoint (line 1): its value is refused: it isn't a URL the exporter \
-             accepts",
+            "telemetry.otlp.endpoint (line 1) is refused: its user or password isn't a ${VAR}, \
+             and what it holds isn't shown; write https://${GW_USER}:${GW_PASS}@gw/v1, and \
+             rotate it if this was one",
             "{endpoint}"
         );
         assert!(

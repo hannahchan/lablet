@@ -37,3 +37,31 @@ fn a_value_without_a_scheme_starts_with_its_authority() {
 
     assert_eq!(without_user_information("u:p@h:4317"), "h:4317");
 }
+
+/// R17's URL form and R63 read the URL as the config wrote it: a `${VAR}`
+/// writes nothing out, and a default writes its text, whatever the
+/// variable holds.
+#[test]
+fn a_written_url_writes_a_user_or_password_out_only_in_its_own_text_or_a_default() {
+    use WrittenInformation::{Absent, Variables, WrittenOut};
+    for (written, expected) in [
+        ("https://${U}@gw", Variables),
+        ("https://${U}:${P}@gw/v1", Variables),
+        ("${U}:${P}@gw:4317", Variables),
+        ("https://${U}:${P:-}@gw", Variables),
+        ("https://d:pw@gw/v1", WrittenOut),
+        ("https://${U}:literalpw@gw", WrittenOut),
+        ("https://pre${U}:${P}@gw", WrittenOut),
+        ("https://${U}::${P}@gw", WrittenOut),
+        ("${GW:-https://d:pw@gw/v1}", WrittenOut),
+        ("https://${U}:${P:-pw}@gw", WrittenOut),
+        ("${GW}", Absent),
+        ("${GW:-}", Absent),
+        ("${GW:-https://gw/v1}", Absent),
+        ("https://${HOST}/v1", Absent),
+        ("https://gw/v1", Absent),
+        ("$${U}:${P}@gw", WrittenOut),
+    ] {
+        assert_eq!(written_information(written), expected, "{written}");
+    }
+}

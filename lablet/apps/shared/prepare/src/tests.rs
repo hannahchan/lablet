@@ -611,3 +611,142 @@ fn a_relative_path_is_refused_until_the_config_is_given_a_directory() {
     );
     passes(&dash, None);
 }
+
+/// A gateway's password, which every test of a URL below writes out or
+/// fills, and none may show.
+const PASSWORD: &str = "gwsecretpassword1234567";
+
+/// A config of the OpenAI provider with `url` at `key`, one of
+/// `model.base_url`, `telemetry.otlp.endpoint` and, for anything else, an
+/// HTTP server's `url`.
+fn url_at(key: &str, url: &str) -> String {
+    let model = "model: { provider: openai, api_key: '${K}' }\nprompt: { system: Hi. }";
+    match key {
+        "model.base_url" => format!(
+            "model: {{ provider: openai, api_key: '${{K}}', base_url: '{url}' }}\nprompt: {{ system: Hi. }}"
+        ),
+        "telemetry.otlp.endpoint" => {
+            format!("{model}\ntelemetry: {{ otlp: {{ endpoint: '{url}' }} }}")
+        }
+        _ => format!("{model}\ntools: {{ mcp: [{{ name: s, transport: http, url: '{url}' }}] }}"),
+    }
+}
+
+/// R17's URL form and R63, one rule over the URL as the text wrote it: at
+/// `model.base_url`, `telemetry.otlp.endpoint` and an HTTP server's `url`,
+/// user information written out, in a default among it, is refused
+/// unshown, by its line; one a variable gives from outside the written
+/// text is refused by the variable's name; one made of `${VAR}`s alone
+/// passes.
+#[test]
+fn a_url_s_user_or_password_written_out_is_refused_unshown_by_its_line() {
+    let held = [
+        ("U", "gwuser"),
+        ("P", PASSWORD),
+        ("GW", "https://gwuser:gwsecretpassword1234567@gw.example/v1"),
+        ("K", KEY),
+    ];
+    // A default is the text written whether or not its variable is set.
+    let without_gw: Vec<(&str, &str)> = held
+        .iter()
+        .copied()
+        .filter(|(name, _)| *name != "GW")
+        .collect();
+    for (key, line) in [
+        ("model.base_url", 1),
+        ("telemetry.otlp.endpoint", 3),
+        ("tools.mcp[0].url", 3),
+    ] {
+        let written_out = format!(
+            "{key} (line {line}) is refused: its user or password isn't a ${{VAR}}, and what it \
+             holds isn't shown; write https://${{GW_USER}}:${{GW_PASS}}@gw/v1, and rotate it if \
+             this was one"
+        );
+        for url in [
+            format!("https://gwuser:{PASSWORD}@gw.example/v1"),
+            format!("https://${{U}}:{PASSWORD}@gw.example/v1"),
+            format!("${{GW:-https://d:{PASSWORD}@gw.example/v1}}"),
+        ] {
+            for set in [&held[..], &without_gw] {
+                let refusal = refused(&filled(&url_at(key, &url), set), None);
+                assert_eq!(refusal, written_out, "{url}");
+                assert!(!refusal.contains(PASSWORD), "{refusal}");
+            }
+        }
+        for url in [
+            "https://${U}@gw.example/v1",
+            "https://${U}:${P}@gw.example/v1",
+        ] {
+            // A server goes on to the refusal of what this lablet has no
+            // adapter for, past every rule of the URL.
+            match prepare(&filled(&url_at(key, url), &held), None) {
+                Ok(_) | Err(BuildError::Unsupported { .. }) => {}
+                Err(error) => panic!("{url}: {error}"),
+            }
+        }
+        let whole = refused(&filled(&url_at(key, "${GW}"), &held), None);
+        assert_eq!(
+            whole,
+            format!(
+                "{key} (line {line}) is refused: `GW` holds a user or password, which isn't \
+                 shown; write each as its own ${{VAR}}, as https://${{GW_USER}}:${{GW_PASS}}@gw/v1"
+            )
+        );
+        assert!(!whole.contains(PASSWORD), "{whole}");
+    }
+}
+
+/// R17's URL form for an override, whose fix is the override's own, with a
+/// server named by its number; and a URL set in code, after the text wrote
+/// none or `null`, passes, since a host has no other way to give it.
+#[test]
+fn a_url_s_password_an_override_writes_is_refused_and_one_set_in_code_passes() {
+    let mut by_override = RawConfig::from_str(
+        &url_at("model.base_url", "https://gw.example/v1"),
+        Format::Yaml,
+    )
+    .unwrap();
+    by_override
+        .set(&format!(
+            "model.base_url=https://gwuser:{PASSWORD}@gw.example/v1"
+        ))
+        .unwrap();
+    let mut server =
+        RawConfig::from_str(&url_at("tools.mcp", "https://gw.example/v1"), Format::Yaml).unwrap();
+    server
+        .set(&format!(
+            "tools.mcp.0.url=https://gwuser:{PASSWORD}@gw.example/v1"
+        ))
+        .unwrap();
+    for (raw, key) in [(by_override, "model.base_url"), (server, "tools.mcp.0.url")] {
+        let config = raw
+            .substituted(|name: &str| (name == "K").then(|| OsString::from(KEY)))
+            .unwrap()
+            .config()
+            .unwrap();
+        let refusal = refused(&config, None);
+        assert_eq!(
+            refusal,
+            format!(
+                "{} (an override) is refused: its user or password isn't a ${{VAR}}, and what it \
+                 holds isn't shown; write --set '{key}=https://${{GW_USER}}:${{GW_PASS}}@gw/v1', \
+                 and rotate it if this was one",
+                key.replace(".0.", "[0].")
+            )
+        );
+        assert!(!refusal.contains(PASSWORD), "{refusal}");
+    }
+
+    let in_code = format!("https://gwuser:{PASSWORD}@gw.example/v1");
+    for written in ["", ", base_url: null"] {
+        let mut config = filled(
+            &format!(
+                "model: {{ provider: openai, api_key: '${{K}}'{written} }}\nprompt: {{ system: Hi. }}\ntelemetry: {{ otlp: {{ endpoint: null }} }}"
+            ),
+            &[("K", KEY)],
+        );
+        config.model.base_url = Some(in_code.clone());
+        config.telemetry.otlp.endpoint = Some(in_code.clone());
+        passes(&config, None);
+    }
+}

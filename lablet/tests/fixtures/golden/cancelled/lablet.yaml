@@ -1,7 +1,7 @@
 # The config of the golden run that retries, captures content, runs two
 # read_file calls as one group and is cancelled during a bash call. A relative
-# path starts at the directory lablet runs in; the golden test rebases these
-# on this directory.
+# path starts at this file's directory, wherever lablet runs, and the golden
+# test rebases these on this directory as a run of the file does.
 model:
   provider: fake
   script: lablet-script.yaml

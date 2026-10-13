@@ -32,6 +32,11 @@ fn filled(text: &str, held: &[(&str, &str)]) -> Config {
         .unwrap()
 }
 
+/// What `config` resolves to, with its client key read as a build reads it.
+fn settings(config: &Config) -> Result<Option<OtlpSettings>, ConfigError> {
+    super::settings(config, client_key(config)?.as_ref())
+}
+
 /// What the config `text` resolves to.
 fn resolved(text: &str) -> Result<Option<OtlpSettings>, ConfigError> {
     settings(&config(text))

@@ -44,6 +44,7 @@ tools:
     enabled: [] # bash, read_file, write_file; task_complete is implied by run.completion: explicit
     timeout: 120s
     env: {} # added on top of the environment bash inherits, each entry passed as set; a credential goes under credentials instead
+    credentials: {} # NAME: ${VAR}, each given to bash under NAME and to no other process; its variable reaches no process, its value is cut from every result, and it leaves the digest; lablet's own key may be listed here, with a warning
   mcp:
     - name: docs # letters, digits, - and _
       transport: stdio

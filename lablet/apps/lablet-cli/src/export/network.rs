@@ -8,8 +8,8 @@
 //! each with lablet's TLS, so their reading never decides. Headers are
 //! merged the other way, the process environment's over the code's, so on
 //! each request, after that merge, a gRPC interceptor and a client that
-//! wraps the HTTP one replace them: the exporter's own headers are kept at
-//! the values the exporter gives them and the config's set is put on, so a
+//! wraps the HTTP one replace them: the exporter's own headers are written
+//! at the values the exporter gives them and the config's set is put on, so a
 //! header variable of the environment reaches no request, one that names
 //! an own header among them. Compression is the one setting the exporter's
 //! reading decides, since its builder has no setting for none and the
@@ -130,7 +130,7 @@ pub enum OtelBuildError {
 }
 
 /// The headers of one signal's exporter: those the exporter sets of its
-/// own on its transport, which are kept at the values it gives them, and
+/// own on its transport, which are written at the values it gives them, and
 /// the config's set, which goes on; everything else the exporter merged
 /// from the process environment comes off.
 #[derive(Debug)]
@@ -141,27 +141,22 @@ struct Headers {
     content_type: Option<HeaderValue>,
 }
 
-/// What the exporter's own user agent begins with, which tonic appends its
-/// own to on gRPC.
-const EXPORTER_AGENT: &[u8] = b"OTel-OTLP-Exporter-Rust/";
+/// The pinned exporter's own user agent, which it sends of its own and
+/// tonic appends its own to on gRPC. A canary holds it to what the crate
+/// sends, so a bump of the crate fails it rather than sending a stale one.
+pub(crate) const EXPORTER_AGENT: &str = "OTel-OTLP-Exporter-Rust/0.33.0";
 
 impl Headers {
     /// Replaces `headers`, which the exporter has given what it read of the
     /// process environment, with the exporter's own and the config's set,
     /// so a header the environment sets reaches no request, whatever the
     /// exporter read. The environment's headers are merged over the
-    /// exporter's own, so an own header keeps the exporter's value alone:
-    /// the user agent while it's the exporter's, and on HTTP the body's
-    /// type, which the protocol decides, and the encoding `body` is
-    /// compressed in.
+    /// exporter's own, so an own header is written again at the exporter's
+    /// value: its user agent, and on HTTP the body's type, which the
+    /// protocol decides, and the encoding `body` is compressed in.
     fn apply(&self, headers: &mut HeaderMap, body: &[u8]) {
         let mut kept = HeaderMap::new();
-        if let Some(agent) = headers
-            .remove(USER_AGENT)
-            .filter(|agent| agent.as_bytes().starts_with(EXPORTER_AGENT))
-        {
-            kept.insert(USER_AGENT, agent);
-        }
+        kept.insert(USER_AGENT, HeaderValue::from_static(EXPORTER_AGENT));
         if let Some(content_type) = &self.content_type {
             kept.insert(CONTENT_TYPE, content_type.clone());
             if let Some(encoding) = encoding_of(body) {

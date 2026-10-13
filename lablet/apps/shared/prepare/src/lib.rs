@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 
 use lablet_config::{
     Config, ConfigError, Context, Format, KeyPath, McpServer, Place, Places, Provider, Refusal,
-    ResolvedConfig, Secret, Tools, TranscriptFormat, user_information,
+    ResolvedConfig, Secret, Tools, TranscriptFormat, WrittenInformation, user_information,
+    written_information,
 };
 use lablet_model::{RunOutcome, StopReason, ToolSpec};
 use lablet_provider_fake::{Script, ScriptFormat, ScriptSource};
@@ -456,12 +457,13 @@ enum Ready {
 /// Returns the [`BuildError`] of the first thing the check refuses, in the
 /// order a build meets them: a setting a rule refuses; a credential written
 /// out, or with a default that isn't empty, a header value among them, or a
-/// URL's user information that a variable gave it whole; a key
-/// the provider needs that isn't set; a `tools.builtin.env` entry that names
-/// a credential's variable, or one `bash` inherits already; a `credentials`
-/// entry `env` sets too; `bash` with no environment handed in; what this
-/// lablet has no adapter for; a relative path in a config that no directory
-/// was given for; and a file the config names that can't be read.
+/// URL's user information written out, or that a variable gave it whole; a
+/// key the provider needs that isn't set; a `tools.builtin.env` entry that
+/// names a credential's variable, or one `bash` inherits already; a
+/// `credentials` entry `env` sets too; `bash` with no environment handed
+/// in; what this lablet has no adapter for; a relative path in a config
+/// that no directory was given for; and a file the config names that can't
+/// be read.
 pub fn prepare(config: &Config, base: Base) -> Result<Settled, BuildError> {
     let refused = |refusal| BuildError::Config(config.refused(refusal));
     let settings = Settings::of(config).map_err(refused)?;
@@ -700,10 +702,13 @@ fn credentials_are_variables(config: &Config) -> Result<(), BuildError> {
     urls_hold_their_credentials_as_variables(config)
 }
 
-/// R63: a URL's user and password are each their own `${VAR}`, so a
-/// variable that gives a URL user information the written text doesn't
-/// hold, as one that holds the whole URL does, is refused, by its name and
-/// showing nothing of what it holds.
+/// R17's URL form and R63: a URL's user and password are each their own
+/// `${VAR}`, read off the URL as the text wrote it, a default's text among
+/// it. User information the text writes out is refused unshown, as a key
+/// written out is; a variable that gives a URL user information the
+/// written text doesn't hold, as one that holds the whole URL does, is
+/// refused by its name, showing nothing of what it holds. A URL set in code
+/// has no written text, and passes: it's own, and cut.
 fn urls_hold_their_credentials_as_variables(config: &Config) -> Result<(), BuildError> {
     let mut urls = vec![
         (
@@ -724,25 +729,50 @@ fn urls_hold_their_credentials_as_variables(config: &Config) -> Result<(), Build
         }
     }
     for (key, url) in urls {
-        let Some(fill) = config.filled().at(&key) else {
+        let Some(place) = config.place_at(&key) else {
             continue;
         };
-        if url.and_then(user_information).is_none()
-            || user_information(&fill.written).is_some()
-            || fill.variables.is_empty()
-        {
+        let fill = config.filled().at(&key);
+        let Some(written) = fill.map(|fill| fill.written.as_str()).or(url) else {
             continue;
+        };
+        match written_information(written) {
+            WrittenInformation::WrittenOut => {
+                let fix = "https://${GW_USER}:${GW_PASS}@gw/v1";
+                let fix = match place {
+                    // An override names an item of a list by its number.
+                    Place::Override => format!(
+                        "--set '{}={fix}'",
+                        key.to_string().replace('[', ".").replace(']', "")
+                    ),
+                    Place::Line(_) => fix.to_owned(),
+                };
+                return Err(refusal_unshown(
+                    config,
+                    &key,
+                    format!(
+                        "its user or password isn't a ${{VAR}}, and what it holds isn't shown; \
+                         write {fix}, and rotate it if this was one"
+                    ),
+                ));
+            }
+            WrittenInformation::Absent if url.and_then(user_information).is_some() => {
+                let Some(fill) = fill.filter(|fill| !fill.variables.is_empty()) else {
+                    continue;
+                };
+                let names: Vec<String> = fill.names().map(|name| format!("`{name}`")).collect();
+                return Err(refusal_unshown(
+                    config,
+                    &key,
+                    format!(
+                        "{} holds a user or password, which isn't shown; write each as its own \
+                         ${{VAR}}, as https://${{GW_USER}}:${{GW_PASS}}@gw/v1",
+                        names.join(" or ")
+                    ),
+                ));
+            }
+            WrittenInformation::Absent | WrittenInformation::Variables => {}
         }
-        let names: Vec<String> = fill.names().map(|name| format!("`{name}`")).collect();
-        return Err(refusal_unshown(
-            config,
-            &key,
-            format!(
-                "{} holds a user or password, which isn't shown; write each as its own ${{VAR}}, \
-                 as https://${{GW_USER}}:${{GW_PASS}}@gw/v1",
-                names.join(" or ")
-            ),
-        ));
     }
     Ok(())
 }

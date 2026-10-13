@@ -139,7 +139,9 @@ fn the_telemetry_is_on_standard_error_when_its_path_is_a_dash_once_variables_are
 /// with no value when that holds an `@`: user information is a secret, and
 /// where it ends can't be told once it may hold an unencoded `/`. An
 /// endpoint a variable filled is refused naming the variable, and shows
-/// nothing of what it holds.
+/// nothing of what it holds. User information written out reaches no
+/// exporter, since the check refuses it first, but for one with a `/` in
+/// its password, which no URL reader finds.
 #[test]
 fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_and_a_filled_one_names_its_variable()
  {
@@ -154,19 +156,29 @@ fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_and_a_filled_one
          exporter accepts"
     );
 
-    for endpoint in [
-        format!("http://user:{PASSWORD}@[not a host"),
-        format!("user:{PASSWORD}@[not a host"),
-        format!("https://user:ab/{PASSWORD}@[not a host"),
+    for (endpoint, reason) in [
+        (
+            "http://${U}:${P}@[not a host".to_owned(),
+            "`U` holds what isn't a URL the exporter accepts",
+        ),
+        (
+            "${U}:${P}@[not a host".to_owned(),
+            "`U` holds what isn't a URL the exporter accepts",
+        ),
+        (
+            format!("https://user:ab/{PASSWORD}@[not a host"),
+            "it isn't a URL the exporter accepts",
+        ),
     ] {
-        let written = config(&format!(
-            "telemetry: {{ otlp: {{ endpoint: '{endpoint}' }} }}"
-        ));
+        let written = filled(
+            &format!("telemetry: {{ otlp: {{ endpoint: '{endpoint}' }} }}"),
+            &[("U", "user"), ("P", PASSWORD)],
+        )
+        .unwrap();
         let shown = otlp_refused(&written, refused(Signal::Traces));
         assert_eq!(
             shown.to_string(),
-            "telemetry.otlp.endpoint (line 1): its value is refused: it isn't a URL the exporter \
-             accepts",
+            format!("telemetry.otlp.endpoint (line 1): its value is refused: {reason}"),
             "{endpoint}"
         );
         assert!(!format!("{shown:?}").contains(PASSWORD), "{shown:?}");
@@ -292,6 +304,69 @@ async fn a_client_keys_contents_are_cut_from_a_tools_result_and_its_path_is_not(
     assert!(!cut.contains(line), "{cut}");
     assert!(cut.contains(&key_path), "the path is no secret: {cut}");
     assert!(!format!("{derived:?}").contains(line));
+}
+
+/// A client key's contents are cut whenever the config states the key,
+/// with no endpoint named and no certificate beside it, since the file is
+/// a secret wherever the run exports; a stated file that can't be read is
+/// refused by its key, endpoint or none, naming the variable that filled
+/// its path.
+#[tokio::test]
+async fn a_client_keys_contents_are_cut_whenever_it_is_stated_and_an_unreadable_one_is_refused() {
+    let receiver = Receiver::start(Mode::Answers).await;
+    let scratch = lablet_test_support::Scratch::new("secrets-client-key-alone");
+    let key_path = scratch
+        .write("client.key", receiver.client_key())
+        .display()
+        .to_string();
+    let missing = scratch.at("missing.key").display().to_string();
+    let script = scratch.write("script.yaml", ENDS).display().to_string();
+    scratch.create_dir("work");
+    let work = scratch.at("work").display().to_string();
+    let text = |otlp: &str| {
+        format!(
+            "model: {{ provider: fake, script: '{script}' }}\nprompt: {{ system: Hi. }}\ntelemetry: {{ otlp: {{ tls: {{ client_key: '${{KEY_FILE}}' }}{otlp} }} }}\ntools: {{ builtin: {{ root: '{work}', enabled: [bash] }} }}"
+        )
+    };
+
+    let config = filled(&text(""), &[("KEY_FILE", &key_path)]).unwrap();
+    let (prepared, exports) = settled(&config);
+    assert!(exports.otlp.is_none());
+    let derived = prepared.into_secrets();
+    let own: Vec<String> = derived
+        .own
+        .iter()
+        .map(lablet_secrets::Credential::as_own)
+        .collect();
+    assert_eq!(
+        own,
+        ["telemetry.otlp.tls.client_key (line 3) -> its file's contents; cut"]
+    );
+    let line = receiver.client_key().lines().nth(1).unwrap();
+    assert!(!derived.values.redacted(line).contains(line));
+
+    for otlp in ["", ", endpoint: 'https://collector.internal:4318'"] {
+        let config = filled(&text(otlp), &[("KEY_FILE", &missing)]).unwrap();
+        let refused = settle(prepare(&config, Some(Vec::new())).unwrap())
+            .err()
+            .unwrap();
+        let BuildError::Config(ConfigError::Invalid {
+            key,
+            place,
+            value,
+            reason,
+        }) = refused
+        else {
+            panic!("{refused:?}");
+        };
+        assert_eq!(key, "telemetry.otlp.tls.client_key", "{otlp}");
+        assert_eq!(place, Some(Place::Line(3)));
+        assert_eq!(value.as_deref(), Some("\"${KEY_FILE}\""));
+        assert!(
+            reason.starts_with("`KEY_FILE` names a file that can't be read: "),
+            "{reason}"
+        );
+    }
 }
 
 /// The endpoint a `telemetry:` line shows: its scheme, host, port and path,

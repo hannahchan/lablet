@@ -732,6 +732,34 @@ fn a_filled_number_is_typed_and_one_that_does_not_parse_is_refused_without_its_v
     }
 }
 
+/// A client key the config states is named on `own:` and its contents cut
+/// whenever it's stated, with no endpoint named and nothing sent: the file
+/// is a secret wherever the run exports.
+#[test]
+fn a_client_key_stated_with_no_endpoint_is_named_on_own_and_nothing_is_sent() {
+    let lab = Lab::new("otlp-client-key-alone");
+    lab.write("script.yaml", ENDS);
+    lab.write(
+        "client.key",
+        "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC\n-----END PRIVATE KEY-----\n",
+    );
+    lab.write(
+        "lablet.yaml",
+        "model:\n  provider: fake\n  script: script.yaml\nprompt:\n  system: Hi.\ntelemetry:\n  otlp:\n    \
+         tls:\n      client_key: client.key\n",
+    );
+
+    let checked = lab.run(&["check", "--config", "lablet.yaml"]);
+
+    assert_eq!(checked.code, Some(0), "{checked:?}");
+    for line in [
+        "own:       telemetry.otlp.tls.client_key (line 9) -> its file's contents; cut\n",
+        "telemetry: none named, so a run sends and writes nothing\n",
+    ] {
+        assert!(checked.stderr.contains(line), "{line}: {checked:?}");
+    }
+}
+
 /// The pod block of the design, for a cluster that injects the OpenTelemetry
 /// variables: each setting a `${VAR:-}`, and a second token for a command
 /// that exports.

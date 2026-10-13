@@ -66,9 +66,17 @@ const REORDERED: [(&str, bool); 4] = [
     ("telemetry.propagators", true),
 ];
 
-/// What the file wrote of each list of [`REORDERED`], the text of each item
-/// in the file's order.
-pub(crate) struct Written(Vec<Vec<Option<String>>>);
+/// What the file wrote of each list of [`REORDERED`].
+pub(crate) struct Written(Vec<List>);
+
+/// What the file wrote of one list.
+enum List {
+    /// The text of each item, in the file's order.
+    Items(Vec<Option<String>>),
+    /// One text that holds every item, as the propagators may be written,
+    /// whose place is the list's.
+    Text,
+}
 
 /// What the file wrote of each list of [`REORDERED`], from `tree`, the tree
 /// the config was read from as the fill left it: all `--resolved` keeps of
@@ -77,17 +85,15 @@ pub(crate) fn written(tree: &Value) -> Written {
     Written(
         REORDERED
             .iter()
-            .map(|(list, _)| {
-                KeyPath::of(list)
-                    .find(tree)
-                    .and_then(Value::as_array)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .map(|item| item.as_str().map(str::to_owned))
-                            .collect()
-                    })
-                    .unwrap_or_default()
+            .map(|(list, _)| match KeyPath::of(list).find(tree) {
+                Some(Value::String(_)) => List::Text,
+                Some(Value::Array(items)) => List::Items(
+                    items
+                        .iter()
+                        .map(|item| item.as_str().map(str::to_owned))
+                        .collect(),
+                ),
+                _ => List::Items(Vec::new()),
             })
             .collect(),
     )
@@ -132,7 +138,8 @@ fn held(checked: &Checked) -> Vec<Vec<String>> {
 /// The setting whose place `key`'s comment says: `key` itself, but for an
 /// item of a list of [`REORDERED`], whose place by its index would be
 /// another item's, the first item the file wrote with its value, and none
-/// when no item has it.
+/// when no item has it; and the list itself for an item of a list the file
+/// wrote as one text.
 fn as_written(held: &[Vec<String>], written: &Written, key: &KeyPath) -> Option<KeyPath> {
     for (((list, loosely), held), written) in REORDERED.iter().zip(held).zip(&written.0) {
         let list = KeyPath::of(list);
@@ -141,6 +148,10 @@ fn as_written(held: &[Vec<String>], written: &Written, key: &KeyPath) -> Option<
             .map(|index| held[index].as_str())
         else {
             continue;
+        };
+        let written = match written {
+            List::Items(items) => items,
+            List::Text => return Some(list),
         };
         let index = written.iter().position(|item| {
             item.as_deref().is_some_and(|item| {
