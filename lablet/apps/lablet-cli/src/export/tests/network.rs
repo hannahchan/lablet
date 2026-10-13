@@ -1,11 +1,10 @@
 //! The network exporters against the in-process receiver, each built from
-//! settings a config and an environment resolve to through the seam: what
-//! both destinations hold of one run, what a closed port costs, what a
-//! collector that accepts and never answers costs a run's end and leaves
-//! the file, each signal's protocol and endpoint, gzip, TLS to the
-//! collector with the trust roots and the client's identity the
-//! environment names, and the headers on the wire, which pins what the
-//! exporter merges from the process environment and what lablet does
+//! settings a config resolves to: what both destinations hold of one run,
+//! what a closed port costs, what a collector that accepts and never
+//! answers costs a run's end and leaves the file, each protocol and
+//! endpoint, TLS to the collector with the trust roots and the client's
+//! identity the config names, and the headers on the wire, which pins what
+//! the exporter merges from the process environment and what lablet does
 //! after it.
 
 use std::path::Path;
@@ -38,10 +37,17 @@ fn to(protocol: &str, endpoint: &str, headers: Option<&str>) -> String {
     format!("telemetry: {{ otlp: {{ protocol: {protocol}, endpoint: '{endpoint}'{headers} }} }}")
 }
 
-/// The settings that send to `endpoint` over `protocol`, with nothing from
-/// the environment.
+/// The config that sends to `endpoint` over `protocol` with the `tls`
+/// section `tls`.
+fn to_with_tls(protocol: &str, endpoint: &str, tls: &str) -> String {
+    format!(
+        "telemetry: {{ otlp: {{ protocol: {protocol}, endpoint: '{endpoint}', tls: {{ {tls} }} }} }}"
+    )
+}
+
+/// The settings that send to `endpoint` over `protocol`.
 fn sending(protocol: &str, endpoint: &str) -> OtlpSettings {
-    otlp_of(&to(protocol, endpoint, None), &[])
+    otlp_of(&to(protocol, endpoint, None))
 }
 
 /// The listener a request of `protocol` comes in on, without TLS.
@@ -305,7 +311,7 @@ async fn an_http_receiver_that_never_answers_holds_the_run_end_under_one_flush_b
     .await;
 }
 
-// Each signal's protocol and endpoint, gzip, and TLS, from the environment
+// TLS, from the config
 
 /// One run of spans and its wide event, exported to `settings` alone.
 async fn exported_to(settings: OtlpSettings, test: &str) -> Result<(), String> {
@@ -318,74 +324,6 @@ async fn exported_to(settings: OtlpSettings, test: &str) -> Result<(), String> {
     let flushed = run(&telemetry, RUN, Records::None).await;
     let _ = telemetry.shutdown().await;
     flushed.map_err(|error| error.to_string())
-}
-
-#[tokio::test]
-async fn a_signal_goes_over_its_own_protocol_to_its_own_endpoint() {
-    let traces = Receiver::start(Mode::Answers).await;
-    let logs = Receiver::start(Mode::Answers).await;
-    let logs_endpoint = format!("{}/v1/logs", logs.http_endpoint());
-    let settings = otlp_of(
-        "",
-        &[
-            ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf"),
-            ("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "grpc"),
-            (
-                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-                &traces.grpc_endpoint(),
-            ),
-            ("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "http/json"),
-            ("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", &logs_endpoint),
-        ],
-    );
-
-    exported_to(settings, "network-per-signal").await.unwrap();
-
-    let (to_traces, to_logs) = (traces.requests(), logs.requests());
-    assert!(!to_traces.is_empty() && !to_logs.is_empty());
-    for request in &to_traces {
-        assert_eq!(
-            (request.transport, request.signal),
-            (receiver::Transport::Grpc, receiver::Signal::Traces)
-        );
-    }
-    for request in &to_logs {
-        assert_eq!(
-            (request.transport, request.signal),
-            (receiver::Transport::Http, receiver::Signal::Logs)
-        );
-        assert_eq!(header(request, "content-type"), Some("application/json"));
-    }
-    assert_eq!(traces.exported().unwrap().spans.len(), SPANS_PER_RUN);
-    assert_eq!(logs.exported().unwrap().records_of(WIDE).len(), 1);
-}
-
-#[tokio::test]
-async fn gzip_compresses_both_transports() {
-    for protocol in ["grpc", "http/protobuf", "http/json"] {
-        let receiver = Receiver::start(Mode::Answers).await;
-        let settings = otlp_of(
-            &to(protocol, &endpoint_of(&receiver, protocol), None),
-            &[("OTEL_EXPORTER_OTLP_COMPRESSION", "gzip")],
-        );
-
-        exported_to(settings, "network-gzip").await.unwrap();
-
-        let requests = receiver.requests();
-        assert!(!requests.is_empty(), "{protocol}");
-        for request in &requests {
-            let encoding = match protocol {
-                "grpc" => header(request, "grpc-encoding"),
-                _ => header(request, "content-encoding"),
-            };
-            assert_eq!(encoding, Some("gzip"), "{protocol}: {request:?}");
-        }
-        assert_eq!(
-            receiver.exported().unwrap().spans.len(),
-            SPANS_PER_RUN,
-            "{protocol}"
-        );
-    }
 }
 
 /// The receiver's CA, its client's certificate and key, each in a file of
@@ -405,17 +343,30 @@ impl Material {
             key: file("client.key", receiver.client_key()),
         }
     }
+
+    /// The `tls` section that trusts the receiver's CA.
+    fn trusting(&self) -> String {
+        format!("ca_file: '{}'", self.ca)
+    }
+
+    /// The `tls` section that trusts the receiver's CA and shows the
+    /// client's certificate.
+    fn identified(&self) -> String {
+        format!(
+            "ca_file: '{}', client_cert: '{}', client_key: '{}'",
+            self.ca, self.certificate, self.key
+        )
+    }
 }
 
-/// The receiver's CA is in no platform's store, and the variable alone
-/// names it, so a run that reaches the listeners that speak TLS trusted
-/// the certificate the variable names.
+/// The receiver's CA is in no platform's store, and `tls.ca_file` alone
+/// names it, so a run that reaches the listeners that speak TLS trusted the
+/// certificate the config names.
 #[tokio::test]
-async fn a_private_ca_named_by_the_certificate_variable_is_the_one_trusted() {
+async fn a_private_ca_the_config_names_is_the_one_trusted() {
     let receiver = Receiver::start(Mode::Answers).await;
     let scratch = Scratch::new("network-private-ca");
     let material = Material::of(&receiver, &scratch);
-    let held = [("OTEL_EXPORTER_OTLP_CERTIFICATE", material.ca.as_str())];
 
     for (protocol, endpoint, listener) in [
         (
@@ -429,8 +380,8 @@ async fn a_private_ca_named_by_the_certificate_variable_is_the_one_trusted() {
             receiver::Transport::Https,
         ),
     ] {
-        let trusting = otlp_of(&to(protocol, &endpoint, None), &held);
-        let platform = otlp_of(&to(protocol, &endpoint, None), &[]);
+        let trusting = otlp_of(&to_with_tls(protocol, &endpoint, &material.trusting()));
+        let platform = otlp_of(&to(protocol, &endpoint, None));
 
         let trusted = exported_to(trusting, "network-private-ca").await;
         let refused = exported_to(platform, "network-private-ca").await;
@@ -445,20 +396,14 @@ async fn a_private_ca_named_by_the_certificate_variable_is_the_one_trusted() {
     }
 }
 
+/// A collector that asks for a client certificate takes the run only with
+/// `tls.client_cert` and `tls.client_key` stated: TLS to the collector end
+/// to end, on both transports.
 #[tokio::test]
-async fn a_receiver_that_asks_for_a_client_certificate_gets_the_one_the_environment_names() {
+async fn a_receiver_that_asks_for_a_client_certificate_gets_the_one_the_config_names() {
     let receiver = Receiver::start(Mode::Answers).await;
     let scratch = Scratch::new("network-client-tls");
     let material = Material::of(&receiver, &scratch);
-    let trusting = [("OTEL_EXPORTER_OTLP_CERTIFICATE", material.ca.as_str())];
-    let identified = [
-        ("OTEL_EXPORTER_OTLP_CERTIFICATE", material.ca.as_str()),
-        (
-            "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
-            material.certificate.as_str(),
-        ),
-        ("OTEL_EXPORTER_OTLP_CLIENT_KEY", material.key.as_str()),
-    ];
 
     for (protocol, endpoint, listener) in [
         (
@@ -472,12 +417,19 @@ async fn a_receiver_that_asks_for_a_client_certificate_gets_the_one_the_environm
             receiver::Transport::HttpsClientTls,
         ),
     ] {
-        let config = to(protocol, &endpoint, None);
         let before = receiver.requests().len();
 
-        let anonymous = exported_to(otlp_of(&config, &trusting), "network-client-tls").await;
+        let anonymous = exported_to(
+            otlp_of(&to_with_tls(protocol, &endpoint, &material.trusting())),
+            "network-client-tls",
+        )
+        .await;
         let after_anonymous = receiver.requests().len();
-        let shown = exported_to(otlp_of(&config, &identified), "network-client-tls").await;
+        let shown = exported_to(
+            otlp_of(&to_with_tls(protocol, &endpoint, &material.identified())),
+            "network-client-tls",
+        )
+        .await;
 
         anonymous.unwrap_err();
         assert_eq!(
@@ -499,16 +451,11 @@ async fn a_receiver_that_asks_for_a_client_certificate_gets_the_one_the_environm
 /// A collector whose address drops the connection's first packet holds a
 /// connect for as long as the platform retries it, a minute or more, and
 /// nothing on this host can stand in for one, so the bound is read off the
-/// endpoint the channel is made from.
+/// endpoint the channel is made from: the specification's ten seconds, for
+/// both signals.
 #[test]
-fn a_grpc_connection_is_bounded_by_the_timeout_of_its_signal() {
-    let settings = otlp_of(
-        &to("grpc", "https://localhost:4317", None),
-        &[
-            ("OTEL_EXPORTER_OTLP_TIMEOUT", "1500"),
-            ("OTEL_EXPORTER_OTLP_LOGS_TIMEOUT", "2500"),
-        ],
-    );
+fn a_grpc_connection_is_bounded_by_the_specifications_timeout() {
+    let settings = otlp_of(&to("grpc", "https://localhost:4317", None));
 
     let bounds: Vec<_> = settings
         .destinations()
@@ -521,8 +468,8 @@ fn a_grpc_connection_is_bounded_by_the_timeout_of_its_signal() {
     assert_eq!(
         bounds,
         [
-            (Signal::Traces, Some(Duration::from_millis(1_500))),
-            (Signal::Logs, Some(Duration::from_millis(2_500))),
+            (Signal::Traces, Some(Duration::from_secs(10))),
+            (Signal::Logs, Some(Duration::from_secs(10))),
         ]
     );
 }
@@ -530,7 +477,8 @@ fn a_grpc_connection_is_bounded_by_the_timeout_of_its_signal() {
 /// tonic bounds a request by the timeout but connects a lazy channel
 /// before the request, so a handshake with a peer that holds the socket
 /// and never answers isn't bounded by it unless lablet states it there
-/// too.
+/// too. The timeout is shortened here, since the config has no field for
+/// it and ten seconds would outlast the bound the test holds.
 #[tokio::test]
 async fn a_grpc_tls_handshake_that_never_ends_fails_the_export_by_its_timeout() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -544,13 +492,17 @@ async fn a_grpc_tls_handshake_that_never_ends_fails_the_export_by_its_timeout() 
     let receiver = Receiver::start(Mode::Answers).await;
     let scratch = Scratch::new("network-stalled-handshake");
     let material = Material::of(&receiver, &scratch);
-    let settings = otlp_of(
-        &to("grpc", &format!("https://{silent}"), None),
-        &[
-            ("OTEL_EXPORTER_OTLP_CERTIFICATE", material.ca.as_str()),
-            ("OTEL_EXPORTER_OTLP_TIMEOUT", "500"),
-        ],
-    );
+    let mut settings = otlp_of(&to_with_tls(
+        "grpc",
+        &format!("https://{silent}"),
+        &material.trusting(),
+    ));
+    for destination in [&mut settings.traces, &mut settings.logs]
+        .into_iter()
+        .flatten()
+    {
+        destination.timeout = Duration::from_millis(500);
+    }
 
     let began = Instant::now();
     let exported = exported_to(settings, "network-stalled-handshake").await;
@@ -577,31 +529,12 @@ const GENERIC: &str = "x-generic=env%20value,authorization=Bearer%20generic";
 /// `OTEL_EXPORTER_OTLP_TRACES_HEADERS` is set to nothing.
 const LOGS: &str = "x-logs=l";
 
-/// One run through lablet's telemetry, with the network settings resolved
-/// from the child's own environment as a build resolves them, and the
-/// config's headers, when it states any.
-async fn exported_by_lablet(protocol: &str, endpoint: &str, headers: Option<&str>) {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the child's own environment is what the parent set for it"
-    )]
-    let environment = |name: &str| std::env::var_os(name);
-    let config = lablet_config::Config::from_str(
-        &to(protocol, endpoint, headers),
-        lablet_config::Format::Yaml,
-    )
-    .unwrap();
-    let exporter = crate::otel_env::OtelEnv::read(&environment).exporter;
-    let settings = crate::otlp::settings(&config, &exporter).unwrap().unwrap();
-    exported_to(settings, "headers-child").await.unwrap();
-}
-
 /// The child's side, which does nothing unless the test below started it:
-/// it exports to the receiver the parent started, without and with the
-/// config's headers, on each transport, with the environment the parent
-/// gave it.
+/// it exports to the receiver the parent started, with no headers, with
+/// the config's map and with the config's text, on each transport, under
+/// the environment the parent gave it.
 #[test]
-fn a_child_process_exports_with_the_headers_its_environment_and_its_config_state() {
+fn a_child_process_exports_with_the_headers_its_config_states() {
     #[expect(
         clippy::disallowed_methods,
         reason = "a test reads the variable its parent set, to know which side it's on"
@@ -614,27 +547,35 @@ fn a_child_process_exports_with_the_headers_its_environment_and_its_config_state
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
         for (protocol, endpoint) in [("grpc", grpc), ("http/protobuf", http)] {
-            exported_by_lablet(protocol, endpoint, None).await;
-            exported_by_lablet(protocol, endpoint, Some("{ x-lablet: config }")).await;
+            for headers in [
+                None,
+                Some("{ x-lablet: config }"),
+                Some("'x-lablet=config,x-text=t%20t'"),
+            ] {
+                exported_to(otlp_of(&to(protocol, endpoint, headers)), "headers-child")
+                    .await
+                    .unwrap();
+            }
         }
     });
 }
 
-/// With the config's headers unstated, the environment's go to the config's
-/// endpoint: the signal's variable's when it holds one, else the generic
-/// one's, even where the exporter, reading an empty traces variable, would
-/// send none. With the config's stated, they're all that's sent: every
-/// name either variable sets is taken off, whichever the exporter merged.
+/// The headers on the wire are the config's alone, in either form: the
+/// environment's header variables, which the exporter merges on its own,
+/// reach no request, whether the config states headers or none.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_headers_on_the_wire_are_the_configs_or_else_the_environments() {
+async fn the_headers_on_the_wire_are_the_configs_alone_whatever_the_environment_sets() {
     let receiver = Receiver::start(Mode::Answers).await;
     let child = tokio::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "export::tests::network::a_child_process_exports_with_the_headers_its_environment_and_its_config_state",
+            "export::tests::network::a_child_process_exports_with_the_headers_its_config_states",
             "--test-threads=1",
         ])
-        .env(CHILD, format!("{},{}", receiver.grpc_endpoint(), receiver.http_endpoint()))
+        .env(
+            CHILD,
+            format!("{},{}", receiver.grpc_endpoint(), receiver.http_endpoint()),
+        )
         .env("OTEL_EXPORTER_OTLP_HEADERS", GENERIC)
         .env("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "")
         .env("OTEL_EXPORTER_OTLP_LOGS_HEADERS", LOGS)
@@ -657,126 +598,101 @@ async fn the_headers_on_the_wire_are_the_configs_or_else_the_environments() {
             .iter()
             .filter(|request| request.transport == transport)
             .collect();
-        let (environments, configs): (Vec<&Received>, Vec<&Received>) = of
+        let (none, configs): (Vec<&Received>, Vec<&Received>) = of
             .into_iter()
             .partition(|request| header(request, "x-lablet").is_none());
-        assert_eq!(environments.len(), 2, "{transport:?}: {requests:?}");
-        assert_eq!(configs.len(), 2, "{transport:?}: {requests:?}");
-        for request in environments {
-            match request.signal {
-                receiver::Signal::Traces => {
-                    assert_eq!(
-                        header(request, "x-generic"),
-                        Some("env value"),
-                        "{transport:?}"
-                    );
-                    assert_eq!(
-                        header(request, "authorization"),
-                        Some("Bearer generic"),
-                        "{transport:?}"
-                    );
-                    assert_eq!(header(request, "x-logs"), None, "{transport:?}");
-                }
-                receiver::Signal::Logs => {
-                    assert_eq!(header(request, "x-logs"), Some("l"), "{transport:?}");
-                    assert_eq!(header(request, "x-generic"), None, "{transport:?}");
-                    assert_eq!(header(request, "authorization"), None, "{transport:?}");
-                }
-            }
-        }
-        for request in configs {
-            assert_eq!(header(request, "x-lablet"), Some("config"), "{transport:?}");
+        assert_eq!(none.len(), 2, "{transport:?}: {requests:?}");
+        assert_eq!(configs.len(), 4, "{transport:?}: {requests:?}");
+        for request in none.iter().chain(&configs) {
             for name in ["x-generic", "authorization", "x-logs"] {
                 assert_eq!(
                     header(request, name),
                     None,
-                    "{transport:?}: an environment header reached the config's headers: \
-                     {request:?}"
+                    "{transport:?}: an environment header reached a request: {request:?}"
                 );
             }
         }
+        for request in configs {
+            assert_eq!(header(request, "x-lablet"), Some("config"), "{transport:?}");
+        }
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.transport == transport
+                    && header(request, "x-text") == Some("t t"))
+                .count(),
+            2,
+            "the text form's second header, decoded, on both signals: {requests:?}"
+        );
     }
-    assert_eq!(requests.len(), 2 * 4);
+    assert_eq!(requests.len(), 2 * 6);
 }
 
-/// Set in the environment of the child process the test below starts, to
-/// the receiver's two endpoints, gRPC then HTTP, with a comma between.
-const UNREAD_CHILD: &str = "LABLET_TEST_OTLP_UNREAD_HEADERS_CHILD";
+/// The exporter's own headers are its own on the wire whatever the
+/// environment's header variables set them to: the environment's value
+/// replaced the exporter's, so on HTTP the body's type is the protocol's
+/// and its encoding the one the body is compressed in, uncompressed or
+/// under the compression variable the exporter reads itself, and a user
+/// agent the environment gave goes on both transports.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_exporters_own_headers_keep_its_values_whatever_the_environment_sets_them_to() {
+    for (compression, named, encoding) in [
+        (None, "gzip", None),
+        (Some("gzip"), "identity", Some("gzip")),
+    ] {
+        let receiver = Receiver::start(Mode::Answers).await;
+        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "export::tests::network::a_child_process_exports_with_the_headers_its_config_states",
+                "--test-threads=1",
+            ])
+            .env(
+                CHILD,
+                format!("{},{}", receiver.grpc_endpoint(), receiver.http_endpoint()),
+            )
+            .env(
+                "OTEL_EXPORTER_OTLP_HEADERS",
+                format!("content-type=text/plain,user-agent=hostile-agent,content-encoding={named}"),
+            );
+        if let Some(compression) = compression {
+            command.env("OTEL_EXPORTER_OTLP_COMPRESSION", compression);
+        }
+        let child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "the child failed, so a collector refused what it was sent:\n{}\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
 
-/// The child's side of the test below, which does nothing unless that test
-/// started it: it exports to the receiver, without and with the config's
-/// headers, on each transport, with settings resolved from an environment
-/// that sets nothing, whatever its process environment sets.
-#[test]
-fn a_child_process_exports_with_settings_read_from_an_empty_environment() {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "a test reads the variable its parent set, to know which side it's on"
-    )]
-    let Some(endpoints) = std::env::var_os(UNREAD_CHILD) else {
-        return;
-    };
-    let endpoints = endpoints.to_str().unwrap().to_owned();
-    let (grpc, http) = endpoints.split_once(',').unwrap();
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    runtime.block_on(async {
-        for (protocol, endpoint) in [("grpc", grpc), ("http/protobuf", http)] {
-            for headers in [None, Some("{ x-lablet: config }")] {
-                exported_to(
-                    otlp_of(&to(protocol, endpoint, headers), &[]),
-                    "unread-headers-child",
-                )
-                .await
-                .unwrap();
+        let requests = receiver.requests();
+        assert_eq!(requests.len(), 2 * 6, "{requests:?}");
+        for request in &requests {
+            assert!(
+                request
+                    .headers
+                    .iter()
+                    .all(|(_, value)| !value.contains("hostile-agent") && value != "text/plain"),
+                "{request:?}"
+            );
+            if request.transport == receiver::Transport::Http {
+                assert_eq!(
+                    header(request, "content-type"),
+                    Some("application/x-protobuf"),
+                    "{request:?}"
+                );
+                assert_eq!(header(request, "content-encoding"), encoding, "{request:?}");
             }
         }
-    });
-}
-
-/// The exporter merges the process environment's headers on its own, and
-/// lablet replaces what it merged rather than taking off the names it read
-/// itself, so a header lablet didn't resolve reaches no request: here the
-/// process sets one, and the environment lablet resolved from sets none.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_header_lablet_did_not_resolve_reaches_no_request() {
-    let receiver = Receiver::start(Mode::Answers).await;
-    let child = tokio::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "export::tests::network::a_child_process_exports_with_settings_read_from_an_empty_environment",
-            "--test-threads=1",
-        ])
-        .env(UNREAD_CHILD, format!("{},{}", receiver.grpc_endpoint(), receiver.http_endpoint()))
-        .env("OTEL_EXPORTER_OTLP_HEADERS", "x-unread=1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&child.stdout);
-    assert!(
-        child.status.success(),
-        "the child failed:\n{stdout}\n{}",
-        String::from_utf8_lossy(&child.stderr)
-    );
-    assert!(
-        stdout.contains("test result: ok. 1 passed;"),
-        "the child ran other than one test:\n{stdout}"
-    );
-
-    let requests = receiver.requests();
-    assert_eq!(requests.len(), 2 * 4, "{requests:?}");
-    for request in &requests {
-        assert_eq!(header(request, "x-unread"), None, "{request:?}");
     }
-    assert_eq!(
-        requests
-            .iter()
-            .filter(|request| header(request, "x-lablet") == Some("config"))
-            .count(),
-        2 * 2
-    );
 }
 
 // TLS to the collector, from a child process whose environment names the
@@ -788,8 +704,7 @@ const TLS_CHILD: &str = "LABLET_TEST_OTLP_TLS_CHILD";
 
 /// Set in the environment of the child process the second test below
 /// starts, to the cases it makes the exporters of, with a comma between:
-/// each `refused` or `made`, which is what becomes of it, an `insecure`
-/// value or none, and an endpoint.
+/// each `refused` or `made`, which is what becomes of it, and an endpoint.
 const NO_ROOTS_CHILD: &str = "LABLET_TEST_OTLP_NO_ROOTS_CHILD";
 
 /// Runs the child test `name` with `variable` set to `value`, and with
@@ -843,10 +758,11 @@ fn a_child_process_exports_a_run_to_each_endpoint_over_tls() {
     });
 }
 
-/// With no certificate variable set, the gRPC exporter speaks TLS to an
-/// `https` endpoint, and to one without a scheme, which it gives
-/// `https://`, and trusts the roots the platform has or, in their place,
-/// the ones `SSL_CERT_FILE` names: here the receiver's CA alone.
+/// With no `tls.ca_file`, the gRPC exporter speaks TLS to an `https`
+/// endpoint, and to one without a scheme, which it gives `https://`, and
+/// trusts the roots the platform has or, in their place, the ones
+/// `SSL_CERT_FILE` names, a process convention the crates read: here the
+/// receiver's CA alone.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_grpc_exporter_trusts_the_roots_its_environment_names_with_a_scheme_or_without() {
     let receiver = Receiver::start(Mode::Answers).await;
@@ -899,17 +815,8 @@ fn a_child_process_with_no_roots_to_trust_makes_no_exporter_that_speaks_tls() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
         for case in cases.split(',') {
-            let mut parts = case.splitn(3, ' ');
-            let (becomes, insecure, endpoint) = (
-                parts.next().unwrap(),
-                parts.next().unwrap(),
-                parts.next().unwrap(),
-            );
-            let held: &[(&str, &str)] = match insecure {
-                "-" => &[],
-                value => &[("OTEL_EXPORTER_OTLP_INSECURE", value)],
-            };
-            let settings = otlp_of(&to("grpc", endpoint, None), held);
+            let (becomes, endpoint) = case.split_once(' ').unwrap();
+            let settings = otlp_of(&to("grpc", endpoint, None));
             assert_eq!(validate(&settings), Ok(()), "{case}");
 
             let built = Telemetry::builder(scope()).otlp(settings).build();
@@ -934,9 +841,9 @@ fn a_child_process_with_no_roots_to_trust_makes_no_exporter_that_speaks_tls() {
 
 /// Trust roots that can't be loaded fail the build, as TLS rather than as
 /// the endpoint, and a check, which makes no exporter, takes the endpoint.
-/// An endpoint without a scheme is spoken to without TLS when the
-/// environment says it's insecure, `true` in any case, so no roots are
-/// loaded for it.
+/// An endpoint without a scheme is `https://`, so it's refused too, and one
+/// written `http://` is spoken to without TLS, so no roots are loaded for
+/// it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_grpc_endpoint_over_tls_with_no_roots_to_trust_is_refused_for_tls_by_the_build_alone() {
     let scratch = Scratch::new("network-no-roots");
@@ -947,10 +854,7 @@ async fn a_grpc_endpoint_over_tls_with_no_roots_to_trust_is_refused_for_tls_by_t
     child(
         "export::tests::network::a_child_process_with_no_roots_to_trust_makes_no_exporter_that_speaks_tls",
         NO_ROOTS_CHILD,
-        &format!(
-            "refused - https://{closed},refused - {closed},refused true https://{closed},\
-             made true {closed},made TRUE {closed},refused false {closed}"
-        ),
+        &format!("refused https://{closed},refused {closed},made http://{closed}"),
         &roots,
     )
     .await;
@@ -962,8 +866,8 @@ async fn a_grpc_endpoint_over_tls_with_no_roots_to_trust_is_refused_for_tls_by_t
 const REPLACED_CHILD: &str = "LABLET_TEST_OTLP_REPLACED_ROOTS_CHILD";
 
 /// The child's side of the test below, which does nothing unless that test
-/// started it: the export, with the certificate variable naming the other
-/// CA, must fail.
+/// started it: the export, with `tls.ca_file` naming the other CA, must
+/// fail.
 #[test]
 fn a_child_process_exports_with_an_unrelated_ca_named() {
     #[expect(
@@ -977,26 +881,27 @@ fn a_child_process_exports_with_an_unrelated_ca_named() {
     let (endpoint, other_ca) = given.split_once(',').unwrap();
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
-        let settings = otlp_of(
-            &to("grpc", endpoint, None),
-            &[("OTEL_EXPORTER_OTLP_CERTIFICATE", other_ca)],
-        );
+        let settings = otlp_of(&to_with_tls(
+            "grpc",
+            endpoint,
+            &format!("ca_file: '{other_ca}'"),
+        ));
         let exported = exported_to(settings, "replaced-roots-child").await;
         assert!(
             exported.is_err(),
-            "the roots `SSL_CERT_FILE` names were trusted beside the certificate variable's"
+            "the roots `SSL_CERT_FILE` names were trusted beside the config's CA"
         );
     });
 }
 
-/// A certificate the variable names replaces the roots rather than joining
+/// A certificate `tls.ca_file` names replaces the roots rather than joining
 /// them: the gRPC exporter's platform roots, which `SSL_CERT_FILE` stands in
-/// for here, hold the receiver's CA, and the variable names another, so an
+/// for here, hold the receiver's CA, and the config names another, so an
 /// exporter that trusted both would reach the receiver. The HTTP exporter
 /// can't be held to it this way on every platform: its client verifies
 /// with the platform's verifier, which reads no `SSL_CERT_FILE` on macOS.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_certificate_variable_replaces_the_roots_the_platform_has() {
+async fn the_ca_file_replaces_the_roots_the_platform_has() {
     let receiver = Receiver::start(Mode::Answers).await;
     let other = Receiver::start(Mode::Answers).await;
     let scratch = Scratch::new("network-replaced-roots");

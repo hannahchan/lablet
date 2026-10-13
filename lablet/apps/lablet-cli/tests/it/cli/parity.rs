@@ -59,8 +59,6 @@ tools:
 telemetry:
   file:
     path: {directory}/telemetry.otlp.jsonl
-  otlp:
-    enabled: false
 "
         ),
     );

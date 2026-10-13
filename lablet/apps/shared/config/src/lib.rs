@@ -3,10 +3,13 @@
 //! A key the config doesn't know is an error, and that's the whole policy:
 //! nothing is ignored, so nothing a config states is without effect.
 //!
-//! A path is taken as the config writes it. One that isn't absolute starts
-//! at the working directory, wherever the config's own file is, so a config
-//! read from text and the same config read from a file name the same
-//! files.
+//! A path is taken as the config writes it, and one that isn't absolute is
+//! the caller's to place: [`Config::relative_to`] makes every relative path
+//! the file wrote absolute against a directory, the file's own, and leaves
+//! one an override gave where lablet runs, while the written form is kept
+//! for every message, the resolved config and the digest. A config made in
+//! code or from text has no directory, so a relative path in one is refused
+//! when the config is checked unless `relative_to` was called.
 //!
 //! A `${VAR}` is filled before the config is typed, by
 //! [`RawConfig::substituted`], from wherever the caller says a variable's
@@ -37,20 +40,21 @@ use lablet_model::ConfigDigest;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use key::KeyPath;
-use key::Places;
-
-pub use key::Place;
+pub use key::{KeyPath, Place, Places};
 pub use model::Setting;
 pub use model::{Api, CacheScope, Effort, Model, Pricing, Provider, Thinking};
 pub use prompt::{Prompt, SkillsMode};
 pub use raw::RawConfig;
-pub use resolved::{Applied, ResolvedBuiltin, ResolvedConfig, ResolvedModel, ResolvedTools};
+pub use resolved::{
+    Applied, Commented, ResolvedBuiltin, ResolvedConfig, ResolvedModel, ResolvedTools,
+};
 pub use run::{Completion, Context, Run, TranscriptFormat};
 pub use secret::Secret;
 pub use shown::{Masked, WrittenBack, is_credential, shown};
 pub use substitute::{Fill, Filled, Variable};
-pub use telemetry::{Otlp, OtlpProtocol, Telemetry, TelemetryFile};
+pub use telemetry::{
+    Headers, Otlp, OtlpProtocol, Propagator, Propagators, Resource, Telemetry, TelemetryFile, Tls,
+};
 pub use tools::{
     Builtin, BuiltinTool, McpLifetime, McpNames, McpResult, McpServer, OutputCut, Tools,
 };
@@ -280,9 +284,14 @@ pub struct Config {
     #[serde(skip)]
     prompt_file: Option<PathBuf>,
     /// What the fill changed, each key with the text as written, and
-    /// whether it ran.
+    /// whether it ran; and each path [`Config::relative_to`] made absolute,
+    /// as the file wrote it.
     #[serde(skip)]
     filled: Filled,
+    /// Whether [`Config::relative_to`] placed the relative paths, so one
+    /// left relative is an override's, which starts where lablet runs.
+    #[serde(skip)]
+    based: bool,
 }
 
 impl fmt::Debug for Config {
@@ -342,10 +351,111 @@ impl Config {
     }
 
     /// What the fill changed: each key a `${VAR}` or a `$${` was written
-    /// at, with the text as written and the variables it named.
+    /// at, with the text as written and the variables it named, and each
+    /// path [`Config::relative_to`] placed, with no variable.
     #[must_use]
     pub fn filled(&self) -> &Filled {
         &self.filled
+    }
+
+    /// Where each setting was written, for a message or a listing that
+    /// names a setting's line or its override.
+    #[must_use]
+    pub fn places(&self) -> &Places {
+        &self.places
+    }
+
+    /// Whether [`Config::relative_to`] was called, so every relative path
+    /// left in the config is an override's and starts where lablet runs.
+    #[must_use]
+    pub fn based(&self) -> bool {
+        self.based
+    }
+
+    /// The config with every relative path the file wrote made absolute
+    /// against `base`, the file's directory, so a path in the file starts
+    /// there wherever lablet runs. A path an override gave is left as it
+    /// is, since it starts where lablet runs, and so is `-`, which is
+    /// standard error and no path. Each path placed is recorded as the
+    /// file wrote it, so every message, the resolved config and the digest
+    /// show the written form, and one file has one digest on every machine.
+    #[must_use]
+    pub fn relative_to(mut self, base: impl AsRef<Path>) -> Self {
+        let base = base.as_ref();
+        let mut placed: Vec<(KeyPath, String, String)> = Vec::new();
+        let mut place = |key: KeyPath, path: &mut PathBuf, written_at: &Places| {
+            let is_stderr = key == KeyPath::of("telemetry.file.path") && path.as_os_str() == "-";
+            if path.is_absolute() || is_stderr || written_at.of(&key) == Some(Place::Override) {
+                return;
+            }
+            let joined = base.join(&*path);
+            placed.push((
+                key,
+                path.display().to_string(),
+                joined.display().to_string(),
+            ));
+            *path = joined;
+        };
+        let written_at = &self.places;
+        let mut paths: Vec<(KeyPath, &mut PathBuf)> = Vec::new();
+        paths.extend(
+            self.model
+                .script
+                .iter_mut()
+                .map(|path| (KeyPath::of("model.script"), path)),
+        );
+        paths.extend(
+            self.prompt
+                .system_file
+                .iter_mut()
+                .map(|path| (KeyPath::of("prompt.system_file"), path)),
+        );
+        paths.extend(
+            self.prompt
+                .skills
+                .iter_mut()
+                .enumerate()
+                .map(|(index, path)| (KeyPath::of("prompt.skills").index(index), path)),
+        );
+        paths.extend(
+            self.run
+                .transcript_path
+                .iter_mut()
+                .map(|path| (KeyPath::of("run.transcript_path"), path)),
+        );
+        paths.extend(
+            self.tools
+                .builtin
+                .root
+                .iter_mut()
+                .map(|path| (KeyPath::of("tools.builtin.root"), path)),
+        );
+        paths.extend(
+            self.telemetry
+                .file
+                .path
+                .iter_mut()
+                .map(|path| (KeyPath::of("telemetry.file.path"), path)),
+        );
+        let tls = &mut self.telemetry.otlp.tls;
+        paths.extend(
+            [
+                ("ca_file", &mut tls.ca_file),
+                ("client_cert", &mut tls.client_cert),
+                ("client_key", &mut tls.client_key),
+            ]
+            .into_iter()
+            .filter_map(|(name, path)| {
+                path.as_mut()
+                    .map(|path| (KeyPath::of("telemetry.otlp.tls").key(name), path))
+            }),
+        );
+        for (key, path) in paths {
+            place(key, path, written_at);
+        }
+        self.filled = self.filled.rebased(placed);
+        self.based = true;
+        self
     }
 
     /// Whether the config was made in code rather than read from text, so
@@ -375,6 +485,7 @@ impl Config {
             places: _,
             prompt_file: _,
             filled,
+            based: _,
         } = self;
         let applied = |setting| model.applies(setting);
         ResolvedConfig {

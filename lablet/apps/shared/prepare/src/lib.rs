@@ -18,13 +18,13 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use lablet_config::{
-    Config, ConfigError, Context, Format, KeyPath, Place, Provider, Refusal, ResolvedConfig, Tools,
-    TranscriptFormat,
+    Config, ConfigError, Context, Format, KeyPath, McpServer, Place, Places, Provider, Refusal,
+    ResolvedConfig, Secret, Tools, TranscriptFormat, user_information,
 };
 use lablet_model::{RunOutcome, StopReason, ToolSpec};
 use lablet_provider_fake::{Script, ScriptFormat, ScriptSource};
 use lablet_run::FilterList;
-use lablet_secrets::{self as secrets, Credential, Derived, Handed, Named, Variables};
+use lablet_secrets::{self as secrets, Credential, Derived, Variables};
 
 pub use root::{OwnFile, held};
 pub use settings::{BuiltinSettings, Selected, Settings, System};
@@ -265,12 +265,12 @@ impl fmt::Display for Passed {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Checked {
     resolved: ResolvedConfig,
+    places: Places,
     tools: Vec<ToolSpec>,
     own: Vec<Credential>,
     given: Vec<Credential>,
     env: Vec<Passed>,
     environment: Option<Environment>,
-    cut: Vec<Named>,
 }
 
 impl Checked {
@@ -288,7 +288,6 @@ impl Checked {
             mut own,
             mut given,
             dropped: _,
-            cut,
             values: _,
             dropping: _,
         } = secrets;
@@ -325,12 +324,12 @@ impl Checked {
             .collect();
         Self {
             resolved: config.resolved(),
+            places: config.places().clone(),
             tools,
             own,
             given,
             env,
             environment,
-            cut,
         }
     }
 
@@ -340,6 +339,13 @@ impl Checked {
     #[must_use]
     pub fn resolved(&self) -> &ResolvedConfig {
         &self.resolved
+    }
+
+    /// Where each setting of the config was written, for the comments
+    /// `check --resolved` puts after each setting.
+    #[must_use]
+    pub fn places(&self) -> &Places {
+        &self.places
     }
 
     /// The tools a run of the config is offered, in the order they're
@@ -389,15 +395,6 @@ impl Checked {
     pub fn digest(&self) -> lablet_model::ConfigDigest {
         self.resolved.digest()
     }
-
-    /// The names whose values the command line still cuts without dropping
-    /// them, the OTLP variables its seam sends, each followed by a note when
-    /// its value isn't cut: not set, empty, or under the floor. Never a
-    /// value.
-    #[must_use]
-    pub fn cut(&self) -> Vec<String> {
-        self.cut.iter().map(ToString::to_string).collect()
-    }
 }
 
 /// A config checked up to its telemetry, which the root settles before
@@ -417,9 +414,9 @@ pub struct Telemetry<'a> {
     /// The telemetry file the root writes, which the root of the built-in
     /// tools may not hold.
     pub file: Option<PathBuf>,
-    /// The values the root still reads from its environment and sends, to
-    /// be cut from what a tool returns without dropping their variables.
-    pub handed: &'a [Handed<'a>],
+    /// What the file `telemetry.otlp.tls.client_key` names holds, where the
+    /// root read it, to be cut from what a tool returns.
+    pub client_key: Option<&'a Secret>,
 }
 
 /// What checking a config comes to, which a build goes on from once the
@@ -458,11 +455,13 @@ enum Ready {
 ///
 /// Returns the [`BuildError`] of the first thing the check refuses, in the
 /// order a build meets them: a setting a rule refuses; a credential written
-/// out, or with a default that isn't empty; a key the provider needs that
-/// isn't set; a `tools.builtin.env` entry that names a credential's
-/// variable, or one `bash` inherits already; a `credentials` entry `env`
-/// sets too; `bash` with no environment handed in; what this lablet has no
-/// adapter for; and a file the config names that can't be read.
+/// out, or with a default that isn't empty, a header value among them, or a
+/// URL's user information that a variable gave it whole; a key
+/// the provider needs that isn't set; a `tools.builtin.env` entry that names
+/// a credential's variable, or one `bash` inherits already; a `credentials`
+/// entry `env` sets too; `bash` with no environment handed in; what this
+/// lablet has no adapter for; a relative path in a config that no directory
+/// was given for; and a file the config names that can't be read.
 pub fn prepare(config: &Config, base: Base) -> Result<Settled, BuildError> {
     let refused = |refusal| BuildError::Config(config.refused(refusal));
     let settings = Settings::of(config).map_err(refused)?;
@@ -473,6 +472,7 @@ pub fn prepare(config: &Config, base: Base) -> Result<Settled, BuildError> {
     bash_has_a_base(config, &settings, base.is_some())?;
     warn_of_an_own_credential_given(config, &variables);
     supported(config)?;
+    paths_are_placed(config)?;
 
     let system = match &settings.system {
         System::Text(text) => text.clone(),
@@ -524,7 +524,11 @@ impl Settled {
         let capture_content = config.telemetry.capture_content.unwrap_or(false);
         // The values are held only for an executor to cut, and the built-in
         // tools are the one executor a run can have.
-        let secrets = secrets::derived(&config, telemetry.handed, settings.builtin.is_some());
+        let secrets = secrets::derived(
+            &config,
+            telemetry.client_key.map(Secret::expose_secret),
+            settings.builtin.is_some(),
+        );
         Prepared {
             config,
             settings,
@@ -669,9 +673,10 @@ fn is_written_as_a_variable(text: &str) -> bool {
 
 /// Holds each credential the config's text writes to a `${VAR}`:
 /// `model.api_key` and each entry of `tools.builtin.credentials` written in
-/// the text is a variable, with a default that's empty if it has one. A
-/// credential the text didn't write was set in code, as a `Secret`, and
-/// passes.
+/// the text is a variable, with a default that's empty if it has one, and
+/// each value of `telemetry.otlp.headers`, in either form, holds one, and a
+/// URL's user and password are each their own. A credential the text
+/// didn't write was set in code, as a `Secret`, and passes.
 fn credentials_are_variables(config: &Config) -> Result<(), BuildError> {
     let key = KeyPath::of("model.api_key");
     if let Some(secret) = &config.model.api_key {
@@ -690,6 +695,230 @@ fn credentials_are_variables(config: &Config) -> Result<(), BuildError> {
             name,
             "it",
         )?;
+    }
+    headers_hold_variables(config)?;
+    urls_hold_their_credentials_as_variables(config)
+}
+
+/// R63: a URL's user and password are each their own `${VAR}`, so a
+/// variable that gives a URL user information the written text doesn't
+/// hold, as one that holds the whole URL does, is refused, by its name and
+/// showing nothing of what it holds.
+fn urls_hold_their_credentials_as_variables(config: &Config) -> Result<(), BuildError> {
+    let mut urls = vec![
+        (
+            KeyPath::of("model.base_url"),
+            config.model.base_url.as_deref(),
+        ),
+        (
+            KeyPath::of("telemetry.otlp.endpoint"),
+            config.telemetry.otlp.endpoint.as_deref(),
+        ),
+    ];
+    for (index, server) in config.tools.mcp.iter().enumerate() {
+        if let McpServer::Http { url, .. } = server {
+            urls.push((
+                KeyPath::of("tools.mcp").index(index).key("url"),
+                Some(url.as_str()),
+            ));
+        }
+    }
+    for (key, url) in urls {
+        let Some(fill) = config.filled().at(&key) else {
+            continue;
+        };
+        if url.and_then(user_information).is_none()
+            || user_information(&fill.written).is_some()
+            || fill.variables.is_empty()
+        {
+            continue;
+        }
+        let names: Vec<String> = fill.names().map(|name| format!("`{name}`")).collect();
+        return Err(refusal_unshown(
+            config,
+            &key,
+            format!(
+                "{} holds a user or password, which isn't shown; write each as its own ${{VAR}}, \
+                 as https://${{GW_USER}}:${{GW_PASS}}@gw/v1",
+                names.join(" or ")
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// R62: a header value with no `${VAR}` in it is a token written out, in
+/// the map form at its name, and in the text form in the pair that holds
+/// none; neither is shown. Text beside a `${VAR}`, as `Bearer ${T}`, is
+/// allowed. A default that isn't empty is refused as a credential's is.
+fn headers_hold_variables(config: &Config) -> Result<(), BuildError> {
+    let key = KeyPath::of("telemetry.otlp.headers");
+    let Some(headers) = &config.telemetry.otlp.headers else {
+        return Ok(());
+    };
+    let rotate = "and rotate it if this was a token";
+    if headers.text().is_some() {
+        if config.place_at(&key).is_none() {
+            return Ok(());
+        }
+        let Some(fill) = config
+            .filled()
+            .at(&key)
+            .filter(|fill| !fill.variables.is_empty())
+        else {
+            return Err(refusal_unshown(
+                config,
+                &key,
+                format!(
+                    "it holds no ${{VAR}}, and what it holds isn't shown; write each value as a \
+                     ${{VAR}}, as authorization=Bearer%20${{TOKEN}}, {rotate}"
+                ),
+            ));
+        };
+        if fill.default().is_some_and(|default| !default.is_empty()) {
+            return Err(refusal_unshown(
+                config,
+                &key,
+                format!(
+                    "a credential's default can only be empty, and what follows :- isn't shown; \
+                     write ${{{}:-}}",
+                    fill.variables[0].name
+                ),
+            ));
+        }
+        if fill.is_one_variable() {
+            return Ok(());
+        }
+        // Each pair the file wrote, by its written text: a pair whose value
+        // holds no reference is a token written out.
+        for pair in fill.written.split(',').map(str::trim) {
+            let Some((name, value)) = pair.split_once('=') else {
+                continue;
+            };
+            let (name, value) = (name.trim(), value.trim());
+            if !name.is_empty() && !value.is_empty() && !value.contains("${") {
+                return Err(refusal_unshown(
+                    config,
+                    &key,
+                    format!(
+                        "its pair `{name}` holds no ${{VAR}}, and what it holds isn't shown; write \
+                         {name}=${{{}}}, {rotate}",
+                        variable_name(name)
+                    ),
+                ));
+            }
+        }
+        return Ok(());
+    }
+    for (name, _) in headers.iter() {
+        let at = key.key(name);
+        if config.place_at(&at).is_none() {
+            continue;
+        }
+        match config.filled().at(&at) {
+            Some(fill) if !fill.variables.is_empty() => {
+                if let Some(default) = fill.default()
+                    && !default.is_empty()
+                {
+                    return Err(refusal_unshown(
+                        config,
+                        &at,
+                        format!(
+                            "a credential's default can only be empty, and what follows :- isn't \
+                             shown; write ${{{}:-}}",
+                            fill.variables[0].name
+                        ),
+                    ));
+                }
+            }
+            _ => {
+                return Err(refusal_unshown(
+                    config,
+                    &at,
+                    format!(
+                        "it holds no ${{VAR}}, and what it holds isn't shown; write {name}: \
+                         ${{{}}}, {rotate}",
+                        variable_name(name)
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The variable a fix suggests for the header `name`: its name in capitals,
+/// with `_` for what a variable's name can't hold.
+fn variable_name(name: &str) -> String {
+    name.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// R51: a relative path in a config that was given no directory to start
+/// at is refused by its key, since a config made in code or from text has
+/// none, and a library resolves none; `Config::relative_to` places them.
+fn paths_are_placed(config: &Config) -> Result<(), BuildError> {
+    if config.based() {
+        return Ok(());
+    }
+    let tls = &config.telemetry.otlp.tls;
+    let paths: Vec<(KeyPath, Option<&Path>)> = [
+        ("model.script", config.model.script.as_deref()),
+        ("prompt.system_file", config.prompt.system_file.as_deref()),
+        ("run.transcript_path", config.run.transcript_path.as_deref()),
+        ("tools.builtin.root", config.tools.builtin.root.as_deref()),
+        (
+            "telemetry.file.path",
+            config
+                .telemetry
+                .file
+                .path
+                .as_deref()
+                .filter(|path| path.as_os_str() != "-"),
+        ),
+        ("telemetry.otlp.tls.ca_file", tls.ca_file.as_deref()),
+        ("telemetry.otlp.tls.client_cert", tls.client_cert.as_deref()),
+        ("telemetry.otlp.tls.client_key", tls.client_key.as_deref()),
+    ]
+    .into_iter()
+    .map(|(key, path)| (KeyPath::of(key), path))
+    .chain(
+        config
+            .prompt
+            .skills
+            .iter()
+            .enumerate()
+            .map(|(index, skill)| {
+                (
+                    KeyPath::of("prompt.skills").index(index),
+                    Some(skill.as_path()),
+                )
+            }),
+    )
+    .collect();
+    for (key, path) in paths {
+        let Some(path) = path else {
+            continue;
+        };
+        if path.is_relative() {
+            let reason = if config.source().is_some() {
+                "a library resolves no relative path; make the path absolute, or call \
+                 .relative_to(dir) with the file's directory"
+            } else {
+                "a config made in code or from text has no directory; make the path absolute, or \
+                 call .relative_to(dir)"
+            };
+            return Err(BuildError::Config(
+                config.refused(Refusal::invalid(&key.to_string(), reason)),
+            ));
+        }
     }
     Ok(())
 }
@@ -794,14 +1023,24 @@ fn key_is_set(config: &Config) -> Result<(), BuildError> {
                 format!("it's empty, and {needs}"),
             )),
         },
-        None => match fill.and_then(|fill| fill.names().next()) {
+        // A `${VAR}` that came out empty leaves the key unset, and the record
+        // says whether the variable was set to nothing or not at all.
+        None => match fill.and_then(|fill| fill.variables.first()) {
             Some(variable) => Err(refusal(
                 config,
                 &key,
                 config
                     .written_text("model.api_key")
                     .map(|text| format!("{text:?}")),
-                format!("`{variable}` isn't set, and {needs}; set it"),
+                format!(
+                    "`{}` {}, and {needs}; set it",
+                    variable.name,
+                    if variable.set {
+                        "is empty"
+                    } else {
+                        "isn't set"
+                    }
+                ),
             )),
             None if config.made_in_code() => Err(BuildError::Config(ConfigError::Missing {
                 key: key.to_string(),

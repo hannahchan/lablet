@@ -1,13 +1,16 @@
-//! The seam where lablet reads the OpenTelemetry environment, once, from the
-//! environment a check or a build reads everything else from, parsing each
-//! variable as the specification parses it, through `lablet-otel-env`. The
-//! modules that build from the values take them from here and state each
-//! one on the SDK, so the crates' own reading of the process environment
-//! never decides.
+//! The seam where lablet read the OpenTelemetry environment, kept with no
+//! production caller: each variable parsed as the specification parses it,
+//! through `lablet-otel-env`, from an environment a caller hands in. The
+//! command line's settings come from its config alone, and the canaries in
+//! `export/tests/canaries/` record what the crates read of the environment
+//! that lablet doesn't. Of the three modules, [`context`]'s composition of
+//! the propagators is still in use, fed by `telemetry.propagators`, and
+//! [`Sdk::default`] is what the composition states on every builder, so the
+//! crates' own reading of the sampler and the batch variables never decides.
 
-mod context;
-mod exporter;
-mod sdk;
+pub mod context;
+pub mod exporter;
+pub mod sdk;
 
 pub use context::Context;
 pub use exporter::Exporter;

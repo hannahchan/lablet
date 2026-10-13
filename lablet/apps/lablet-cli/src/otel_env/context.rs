@@ -1,9 +1,12 @@
 //! The resource's and the inbound context's share of the seam: the
 //! service's name, the resource's attributes, the propagators, and the
-//! variables those propagators extract a parent from.
+//! variables those propagators extract a parent from. No production code
+//! reads them; the composition of the propagators, `composite`, is fed by
+//! `telemetry.propagators` and in use.
 
 use std::collections::BTreeSet;
 
+use lablet_config::Propagators;
 use lablet_env_carrier::variable;
 use opentelemetry::Context as OtelContext;
 use opentelemetry::propagation::text_map_propagator::FieldIter;
@@ -25,17 +28,17 @@ const PROPAGATORS: &str = "OTEL_PROPAGATORS";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Context {
     /// What `OTEL_SERVICE_NAME` names the service, when it's set.
-    pub(crate) service_name: Option<String>,
+    pub service_name: Option<String>,
     /// The pairs of `OTEL_RESOURCE_ATTRIBUTES`, each key and value
     /// percent-decoded, in the order it holds them.
-    pub(crate) resource_attributes: Vec<(String, String)>,
+    pub resource_attributes: Vec<(String, String)>,
     /// The propagators, in the order `OTEL_PROPAGATORS` names them; none
     /// when it's `none`.
-    pub(crate) propagators: Vec<Propagator>,
+    pub propagators: Vec<Propagator>,
     /// What the variable of each key the propagators name holds, by the
     /// variable's name, for those that are set, in the order of their
     /// names.
-    pub(crate) carried: Vec<(String, String)>,
+    pub carried: Vec<(String, String)>,
 }
 
 /// What an environment that sets nothing gives.
@@ -46,7 +49,9 @@ impl Default for Context {
 }
 
 impl Context {
-    pub(super) fn read(variables: &Variables<'_>) -> Self {
+    /// Reads the resource's and the context's variables from `variables`.
+    #[must_use]
+    pub fn read(variables: &Variables<'_>) -> Self {
         let propagators = variables
             .get(PROPAGATORS)
             .unwrap_or_else(|| vec![Propagator::TraceContext, Propagator::Baggage]);
@@ -68,9 +73,28 @@ impl Context {
 
     /// The composite of the propagators, in their order: lablet's own,
     /// never the global one.
-    pub(crate) fn propagator(&self) -> TextMapCompositePropagator {
+    #[must_use]
+    pub fn propagator(&self) -> TextMapCompositePropagator {
         composite(&self.propagators)
     }
+}
+
+/// The composite of the propagators `telemetry.propagators` names, in
+/// their order, or of the specification's two when it names none: lablet's
+/// own, never the global one.
+pub(crate) fn configured(propagators: Option<&Propagators>) -> TextMapCompositePropagator {
+    let named = propagators.cloned().unwrap_or_else(Propagators::specified);
+    let propagators: Vec<Propagator> = named
+        .names()
+        .iter()
+        .map(|name| match name {
+            lablet_config::Propagator::TraceContext => Propagator::TraceContext,
+            lablet_config::Propagator::Baggage => Propagator::Baggage,
+            lablet_config::Propagator::B3 => Propagator::B3,
+            lablet_config::Propagator::B3Multi => Propagator::B3Multi,
+        })
+        .collect();
+    composite(&propagators)
 }
 
 /// The composite of `propagators`, in their order.
@@ -138,9 +162,10 @@ impl Injector for Fielded<'_> {
     }
 }
 
-/// A propagator lablet serves, of those the specification names.
+/// A propagator lablet serves, of those the specification names, as the
+/// seam reads them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Propagator {
+pub enum Propagator {
     /// The W3C trace context: `traceparent` and `tracestate`.
     TraceContext,
     /// The W3C baggage: `baggage`.

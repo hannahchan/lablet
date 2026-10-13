@@ -11,14 +11,11 @@ fn destination(transport: Transport, endpoint: &str, headers: &[(&str, &str)]) -
     Destination {
         transport,
         endpoint: SecretString::from(endpoint),
-        endpoint_variable: None,
         headers: headers
             .iter()
             .map(|(name, value)| ((*name).to_owned(), SecretString::from(*value)))
             .collect(),
-        taken_off: Vec::new(),
         timeout: Duration::from_secs(10),
-        gzip: false,
         tls: Tls::default(),
     }
 }
@@ -37,11 +34,10 @@ const TRANSPORTS: [Transport; 3] = [
     Transport::HttpJson,
 ];
 
-/// The headers of an HTTP exporter that sets `set` and takes off
-/// `taken_off`.
-fn headers(set: &[(&str, &str)], taken_off: &[&str]) -> Headers {
+/// The headers of an HTTP/protobuf exporter that sets `set`.
+fn headers(set: &[(&str, &str)]) -> Headers {
     Headers {
-        own: &HTTP_OWN,
+        content_type: Some(HeaderValue::from_static("application/x-protobuf")),
         set: set
             .iter()
             .map(|(name, value)| {
@@ -51,12 +47,14 @@ fn headers(set: &[(&str, &str)], taken_off: &[&str]) -> Headers {
                 )
             })
             .collect(),
-        taken_off: taken_off
-            .iter()
-            .map(|name| HeaderName::from_str(name).unwrap())
-            .collect(),
     }
 }
+
+/// A body of protobuf, as the exporter makes one uncompressed.
+const PROTOBUF: &[u8] = b"\x0a\x00";
+
+/// The user agent the exporter gives a request of its own.
+const AGENT: &str = "OTel-OTLP-Exporter-Rust/0.33.0";
 
 fn values<'a>(map: &'a HeaderMap, name: &str) -> Vec<&'a str> {
     map.get_all(name)
@@ -71,50 +69,79 @@ fn values<'a>(map: &'a HeaderMap, name: &str) -> Vec<&'a str> {
 /// corrected, so a header lablet didn't resolve goes whatever its name.
 #[test]
 fn the_resolved_headers_replace_every_value_of_their_name_and_only_the_exporters_own_stay() {
-    let headers = headers(&[("authorization", "Bearer config")], &[]);
+    let headers = headers(&[("authorization", "Bearer config")]);
     let mut map = HeaderMap::new();
     map.append("authorization", "Bearer env".parse().unwrap());
     map.append("authorization", "Bearer code".parse().unwrap());
     map.append("x-unread", "env".parse().unwrap());
     map.append("content-type", "application/x-protobuf".parse().unwrap());
-    map.append("user-agent", "exporter".parse().unwrap());
+    map.append("user-agent", AGENT.parse().unwrap());
 
-    headers.apply(&mut map);
+    headers.apply(&mut map, PROTOBUF);
 
     assert_eq!(values(&map, "authorization"), ["Bearer config"]);
     assert!(map.get("x-unread").is_none());
     assert_eq!(values(&map, "content-type"), ["application/x-protobuf"]);
-    assert_eq!(values(&map, "user-agent"), ["exporter"]);
+    assert_eq!(values(&map, "user-agent"), [AGENT]);
     assert!(
         map.get("authorization").unwrap().is_sensitive(),
         "the value is marked sensitive, so a `Debug` of the map hides it"
     );
 }
 
-/// One of the exporter's own names the environment sets is taken off too,
-/// since the exporter's merge left the environment's value under it.
+/// Every header the exporter merged from the process environment comes
+/// off, whatever its name, the exporter's own names among them: the
+/// environment's value replaced the exporter's, so the body's type is the
+/// protocol's, its encoding the one the body is compressed in, and a user
+/// agent that isn't the exporter's goes.
 #[test]
-fn the_environments_headers_are_taken_off_and_the_configs_put_on() {
-    let headers = headers(&[("x-config", "yes")], &["authorization", "user-agent"]);
-    let mut map = HeaderMap::new();
-    map.insert("authorization", "Bearer env".parse().unwrap());
-    map.insert("user-agent", "env".parse().unwrap());
-    map.insert("content-encoding", "gzip".parse().unwrap());
+fn the_environments_headers_come_off_and_the_configs_go_on() {
+    let headers = headers(&[("x-config", "yes")]);
+    let merged = || {
+        let mut map = HeaderMap::new();
+        map.insert("authorization", "Bearer env".parse().unwrap());
+        map.insert("x-env", "env".parse().unwrap());
+        map.insert("user-agent", "env".parse().unwrap());
+        map.insert("content-type", "text/plain".parse().unwrap());
+        map.insert("content-encoding", "gzip".parse().unwrap());
+        map
+    };
 
-    headers.apply(&mut map);
+    let mut plain = merged();
+    headers.apply(&mut plain, PROTOBUF);
+    let mut compressed = merged();
+    compressed.insert("content-encoding", "identity".parse().unwrap());
+    headers.apply(&mut compressed, &[0x1f, 0x8b, 0x08]);
+    let mut zstd = merged();
+    headers.apply(&mut zstd, &[0x28, 0xb5, 0x2f, 0xfd]);
 
-    let mut names: Vec<_> = map.keys().map(HeaderName::as_str).collect();
+    let mut names: Vec<_> = plain.keys().map(HeaderName::as_str).collect();
     names.sort_unstable();
-    assert_eq!(names, ["content-encoding", "x-config"]);
+    assert_eq!(names, ["content-type", "x-config"]);
+    assert_eq!(values(&plain, "content-type"), ["application/x-protobuf"]);
+    assert_eq!(values(&compressed, "content-encoding"), ["gzip"]);
+    assert_eq!(values(&zstd, "content-encoding"), ["zstd"]);
+    assert_eq!(
+        values(&compressed, "content-type"),
+        ["application/x-protobuf"]
+    );
+    let json = Headers {
+        content_type: Some(HeaderValue::from_static("application/json")),
+        set: Vec::new(),
+    };
+    let mut map = merged();
+    json.apply(&mut map, b"{}");
+    assert_eq!(values(&map, "content-type"), ["application/json"]);
+    assert!(map.get("content-encoding").is_none());
 }
 
 #[test]
 fn a_header_the_config_states_and_the_environment_names_is_the_configs() {
-    let headers = headers(&[("authorization", "Bearer config")], &["authorization"]);
+    let headers = headers(&[("authorization", "Bearer config")]);
     let mut map = HeaderMap::new();
     map.insert("authorization", "Bearer env".parse().unwrap());
 
-    headers.apply(&mut map);
+    headers.apply(&mut map, PROTOBUF);
 
     assert_eq!(values(&map, "authorization"), ["Bearer config"]);
 }
@@ -122,8 +149,8 @@ fn a_header_the_config_states_and_the_environment_names_is_the_configs() {
 #[test]
 fn the_grpc_interceptor_sets_the_headers_on_the_requests_metadata() {
     let mut interceptor = interceptor(Arc::new(Headers {
-        own: &GRPC_OWN,
-        ..headers(&[("authorization", "Bearer config")], &["x-env"])
+        content_type: None,
+        ..headers(&[("authorization", "Bearer config")])
     }));
     let mut request = tonic::Request::new(());
     request
@@ -137,12 +164,17 @@ fn the_grpc_interceptor_sets_the_headers_on_the_requests_metadata() {
         .append("x-other", MetadataValue::from_static("env"));
     request
         .metadata_mut()
-        .append("user-agent", MetadataValue::from_static("exporter"));
+        .append("user-agent", MetadataValue::from_static(AGENT));
     request
         .metadata_mut()
         .append("content-type", MetadataValue::from_static("env"));
+    let mut hostile = tonic::Request::new(());
+    hostile
+        .metadata_mut()
+        .append("user-agent", MetadataValue::from_static("env"));
 
     let request = interceptor(request).unwrap();
+    let hostile = interceptor(hostile).unwrap();
 
     let metadata = request.metadata();
     let authorization: Vec<_> = metadata
@@ -154,7 +186,11 @@ fn the_grpc_interceptor_sets_the_headers_on_the_requests_metadata() {
     assert_eq!(metadata.get("x-env"), None);
     assert_eq!(metadata.get("x-other"), None);
     assert_eq!(metadata.get("content-type"), None);
-    assert_eq!(metadata.get("user-agent").unwrap(), "exporter");
+    assert_eq!(metadata.get("user-agent").unwrap(), AGENT);
+    assert!(
+        hostile.metadata().get("user-agent").is_none(),
+        "a user agent the environment gave isn't the exporter's: {hostile:?}"
+    );
 }
 
 // What's refused, and what a refusal says
@@ -224,10 +260,7 @@ async fn the_exporters_of_every_protocol_are_made_from_an_endpoint_nothing_liste
                 "http://127.0.0.1:1",
                 &[("x-token", "a value")],
             )),
-            logs: Some(Destination {
-                gzip: true,
-                ..destination(transport, "http://127.0.0.1:1", &[])
-            }),
+            logs: Some(destination(transport, "http://127.0.0.1:1", &[])),
         };
 
         let (spans, records) = exporters(&settings).unwrap();

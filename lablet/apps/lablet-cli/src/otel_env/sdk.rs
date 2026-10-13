@@ -1,10 +1,12 @@
 //! The SDK's own variables: the sampler and its argument, the span limits,
 //! and the two batch processors' configs, each with the specification's
-//! default where the environment gives none.
+//! default where the environment gives none. No production code reads
+//! them: the composition states [`Sdk::default`], the specification's
+//! defaults, on every builder.
 //!
 //! Each is stated on the SDK whole. The SDK's builders read the same
 //! variables into their defaults, case-sensitively and without a word for a
-//! value they can't use, and what's stated here overwrites every value they
+//! value they can't use, and what's stated overwrites every value they
 //! read.
 
 use std::num::NonZeroUsize;
@@ -80,7 +82,9 @@ impl Default for Sdk {
 }
 
 impl Sdk {
-    pub(super) fn read(variables: &Variables<'_>) -> Self {
+    /// Reads the SDK's variables from `variables`.
+    #[must_use]
+    pub fn read(variables: &Variables<'_>) -> Self {
         Self {
             sampling: Sampling::read(variables),
             limits: Limits::read(variables),

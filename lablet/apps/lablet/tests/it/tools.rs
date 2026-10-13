@@ -426,7 +426,6 @@ fn t16_check_names_the_key(checked: &lablet::Checked, key: &str, in_the_environm
     for copy in copies {
         assert!(!inherited.contains(copy), "{copy} is inherited");
     }
-    assert_eq!(checked.cut(), Vec::<String>::new(), "nothing is handed in");
     assert!(!format!("{checked:?}").contains(key), "{checked:?}");
 }
 

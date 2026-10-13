@@ -248,7 +248,9 @@ async fn a_variable_that_is_not_set_fails_the_fill_by_the_key_it_is_in_and_a_pro
             key: "model.name".to_owned(),
             place: Some(Place::Line(1)),
             value: Some(json!(format!("scripted-${{{UNSET}}}")).to_string()),
-            reason: format!("the variable `{UNSET}` isn't set"),
+            reason: format!(
+                "`{UNSET}` isn't set; set it, or give a default, as ${{{UNSET}:-default}}"
+            ),
         }
     );
 
@@ -446,4 +448,43 @@ async fn every_refusal_of_a_config_is_of_the_config_class() {
         .class(),
         ErrorClass::Config
     );
+}
+
+/// R51: a relative path in a config made from text is refused by its key,
+/// since the config has no directory, and accepted once `relative_to` has
+/// placed it at one.
+#[tokio::test]
+async fn a_relative_path_is_refused_until_relative_to_places_it() {
+    let scratch = Lab::new("check-relative-path");
+    scratch.write("prompts/sys.md", "You fix tests.");
+    let text = format!(
+        "model: {{ provider: fake, script: '{}' }}\nprompt: {{ system_file: prompts/sys.md }}",
+        scratch.write("run.yaml", ENDS).display()
+    );
+    let config = yaml(&text);
+
+    let refused = check(&config).await.unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "prompt.system_file (line 2): \"prompts/sys.md\" is refused: a config made in code or from \
+         text has no directory; make the path absolute, or call .relative_to(dir)"
+    );
+    assert_eq!(
+        crate::harness::quiet(config.clone())
+            .await
+            .unwrap_err()
+            .to_string(),
+        refused.to_string()
+    );
+
+    let placed = config.relative_to(scratch.path());
+    let checked = check(&placed).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(checked.resolved()).unwrap()["prompt"]["system_file"],
+        json!("prompts/sys.md"),
+        "the resolved form keeps the path as written"
+    );
+    let mut lablet = crate::harness::quiet(placed).await.unwrap();
+    lablet.run(request()).await;
+    lablet.shutdown().await;
 }

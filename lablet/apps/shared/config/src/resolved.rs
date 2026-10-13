@@ -12,6 +12,7 @@ use serde::{Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
+use super::key::KeyPath;
 use super::model::{Api, CacheScope, Effort, Pricing, Provider, Thinking};
 use super::secret::Secret;
 use super::shown::{Masked, WrittenBack, debug_tree};
@@ -58,6 +59,13 @@ pub(crate) struct Sections<'a> {
 }
 
 impl ResolvedConfig {
+    /// What the fill changed, each key with the text as written, which the
+    /// resolved form writes back.
+    #[must_use]
+    pub fn filled(&self) -> &Filled {
+        &self.filled
+    }
+
     pub(crate) fn sections(&self) -> Sections<'_> {
         Sections {
             run: &self.run,
@@ -72,6 +80,45 @@ impl ResolvedConfig {
 impl Serialize for ResolvedConfig {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         Masked::new(&self.sections(), &self.filled, WrittenBack::Every).serialize(serializer)
+    }
+}
+
+impl ResolvedConfig {
+    /// The resolved config as it serialises, with a YAML comment after each
+    /// setting `comments` gives one for: what `check --resolved` prints,
+    /// where the comment says the line the setting was written on, that an
+    /// override set it, or that the environment filled it.
+    #[must_use]
+    pub fn commented<'a>(
+        &'a self,
+        comments: &'a dyn Fn(&KeyPath) -> Option<String>,
+    ) -> Commented<'a> {
+        Commented {
+            resolved: self,
+            comments,
+        }
+    }
+}
+
+/// A resolved config with a comment after each setting its source names.
+/// The comments go through `serde_saphyr`'s own wrapper, so they're YAML
+/// comments to it and a pair of comment and value to any other format: it
+/// serialises for YAML alone.
+pub struct Commented<'a> {
+    resolved: &'a ResolvedConfig,
+    comments: &'a dyn Fn(&KeyPath) -> Option<String>,
+}
+
+impl Serialize for Commented<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let sections = self.resolved.sections();
+        Masked::commented(
+            &sections,
+            &self.resolved.filled,
+            WrittenBack::Every,
+            self.comments,
+        )
+        .serialize(serializer)
     }
 }
 

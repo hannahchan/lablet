@@ -70,11 +70,15 @@ tools:
 
 telemetry:
   capture_content: null # null captures nothing, as false does; true captures; no variable is read
+  propagators: null # a list, or OpenTelemetry's comma text, of tracecontext, baggage, b3 and b3multi, or none alone; null means tracecontext,baggage
   otlp:
-    enabled: null # null leaves each signal to OTEL_TRACES_EXPORTER and OTEL_LOGS_EXPORTER, on unless none; true turns both on and false both off, whatever they say; false is refused beside an endpoint, which it would make a setting without effect
-    endpoint: null # e.g. http://localhost:4318; null means the signal's variable, then OTEL_EXPORTER_OTLP_ENDPOINT, then http://localhost:4318 on http or http://localhost:4317 on grpc; on http it's a base URL to which /v1/traces and /v1/logs are appended, as OTEL_EXPORTER_OTLP_ENDPOINT is
-    protocol: null # grpc | http/protobuf | http/json; null means the signal's variable, then OTEL_EXPORTER_OTLP_PROTOCOL, then http/protobuf
-    headers: null # null sends the environment's headers, the signal's variable's else OTEL_EXPORTER_OTLP_HEADERS, wherever the endpoint came from; a stated map, {} included, is all that's sent; every value is a secret: cut everywhere and left out of the digest
+    endpoint: null # e.g. http://localhost:4318; null exports nothing over the network; a base URL to which /v1/traces and /v1/logs are appended on http, and both signals go there
+    protocol: null # grpc | http/protobuf | http/json; null means http/protobuf
+    headers: null # a map, or OpenTelemetry's k=v text with each value percent-decoded; every value holds a ${VAR} and is a secret: cut everywhere and left out of the digest
+    tls:
+      ca_file: null # a PEM file whose certificates replace the platform's roots for this exporter alone
+      client_cert: null # a PEM file, the exporter's certificate for a collector that asks for one; it lands together with client_key
+      client_key: null # its PEM private key, whose contents are cut out of every tool result
   file:
     path: null # OTLP/JSON lines; file path, "-" for stderr, which implies --quiet; null writes no file
-  resource: {} # extra resource attributes, stated over OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES and winning a key both name; service.version and telemetry.sdk.* are lablet's and the SDK's
+  resource: {} # extra resource attributes, a map or OpenTelemetry's k=v text; the first service.name names the service, lablet when none does; service.version and telemetry.sdk.* are lablet's and the SDK's

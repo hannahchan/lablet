@@ -1,11 +1,10 @@
 //! The command line's composition: a filled config and the process's
 //! environment in, a composed run or a checked config out. It checks the
 //! config through `lablet-prepare`, settles the telemetry's settings from
-//! the config and the SDK's environment between the check's two halves,
-//! builds the tools and the provider through the wiring kernels, the tools
-//! with the propagators the environment names, and connects them to the
-//! loop and the runner itself, with the tracer and the logger of the SDK it
-//! builds.
+//! the config's `telemetry` section between the check's two halves, builds
+//! the tools and the provider through the wiring kernels, the tools with the
+//! propagators the config names, and connects them to the loop and the
+//! runner itself, with the tracer and the logger of the SDK it builds.
 
 use std::ffi::OsString;
 use std::sync::Arc;
@@ -13,7 +12,6 @@ use std::sync::Arc;
 use lablet_clock_tokio::TokioClock;
 use lablet_config::Config;
 use lablet_model::{ConfigDigest, FinishedRun};
-use lablet_otel_env::Env;
 use lablet_prepare::{BuildError, Checked, Wiring, prepare};
 use lablet_provider_wiring::Played;
 use lablet_run::{
@@ -27,8 +25,8 @@ use opentelemetry::trace::FutureExt as _;
 
 use crate::export::Telemetry;
 use crate::exports::{otlp_refused, settle};
-use crate::input;
-use crate::propagation::Inbound;
+use crate::input::{self, Retired, UNREAD};
+use crate::propagation::{self, Inbound};
 
 pub use crate::exports::telemetry_on_stderr;
 
@@ -41,6 +39,37 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// diagnostic log, and a `RUST_LOG` directive that names it, are as they
 /// were.
 const TARGET: &str = "lablet::lablet";
+
+/// What `check` reports beside what the kernels check: where a run's
+/// telemetry goes, and which retired variables are set and read no more.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Report {
+    checked: Checked,
+    telemetry: Vec<String>,
+    unread: Vec<Retired>,
+}
+
+impl Report {
+    /// What the config passed its check with.
+    #[must_use]
+    pub fn checked(&self) -> &Checked {
+        &self.checked
+    }
+
+    /// Where a run sends and writes its telemetry, a form each, and empty
+    /// when nothing is named.
+    #[must_use]
+    pub fn telemetry(&self) -> &[String] {
+        &self.telemetry
+    }
+
+    /// The variables of the retired roster that are set, and read only
+    /// where the file writes `${NAME}`, which none of these does.
+    #[must_use]
+    pub fn unread(&self) -> &[Retired] {
+        &self.unread
+    }
+}
 
 /// Checks `config` whole, as [`build`] does, and stops before the provider
 /// is selected, so the answer is the same for every provider: one this
@@ -56,30 +85,58 @@ const TARGET: &str = "lablet::lablet";
 pub async fn check(
     config: &Config,
     environment: Vec<(OsString, OsString)>,
-) -> Result<Checked, BuildError> {
-    check_in(config, &input::variable, environment).await
+) -> Result<Report, BuildError> {
+    check_in(config, environment, &input::is_set).await
 }
 
-/// [`check`], where `env` is what the seam reads of the environment.
-pub(crate) async fn check_in(
+/// [`check`], where `set` says whether a variable of the process's
+/// environment is set, for the names the report asks about: what a test
+/// states in place of the process's environment.
+///
+/// # Errors
+///
+/// Returns what [`check`] returns.
+pub async fn check_in(
     config: &Config,
-    env: Env<'_>,
     environment: Vec<(OsString, OsString)>,
-) -> Result<Checked, BuildError> {
-    let (prepared, _, inbound) = settle(prepare(config, Some(environment))?, env)?;
-    let Built { tools, environment } =
-        lablet_tools_wiring::tools(&prepared, inbound.propagator).await?;
-    Ok(Checked::new(
-        config,
-        tools.specs().to_vec(),
-        prepared.into_secrets(),
-        environment,
-    ))
+    set: &(dyn Fn(&str) -> bool + Sync),
+) -> Result<Report, BuildError> {
+    let (prepared, exports) = settle(prepare(config, Some(environment))?)?;
+    // A check starts no run, so no context is read; the propagator is for
+    // the fields a command is given.
+    let propagator = Arc::new(propagation::propagator(
+        config.telemetry.propagators.as_ref(),
+    ));
+    let Built { tools, environment } = lablet_tools_wiring::tools(&prepared, propagator).await?;
+    let telemetry = exports.report(config, set);
+    let unread = UNREAD
+        .iter()
+        .copied()
+        .filter(|retired| set(retired.name))
+        // A name the file writes `${NAME}` for is read there, so it isn't
+        // unread.
+        .filter(|retired| {
+            !config
+                .filled()
+                .iter()
+                .any(|(_, fill)| fill.names().any(|name| name == retired.name))
+        })
+        .collect();
+    Ok(Report {
+        checked: Checked::new(
+            config,
+            tools.specs().to_vec(),
+            prepared.into_secrets(),
+            environment,
+        ),
+        telemetry,
+        unread,
+    })
 }
 
 /// The run `config` says, composed, with `environment` the base every
-/// process it starts begins from: the seam reads the process's environment
-/// once, here, for the SDK's settings and the inbound context.
+/// process it starts begins from: the context variables are read once,
+/// here, through the input module, for the inbound context.
 ///
 /// # Errors
 ///
@@ -90,22 +147,14 @@ pub async fn build(
     config: Config,
     environment: Vec<(OsString, OsString)>,
 ) -> Result<Composed, BuildError> {
-    build_in(config, &input::variable, environment).await
-}
-
-pub(crate) async fn build_in(
-    config: Config,
-    env: Env<'_>,
-    environment: Vec<(OsString, OsString)>,
-) -> Result<Composed, BuildError> {
-    let (prepared, exports, inbound) = settle(prepare(&config, Some(environment))?, env)?;
+    let (prepared, exports) = settle(prepare(&config, Some(environment))?)?;
+    let inbound = propagation::inbound(config.telemetry.propagators.as_ref());
     let Built { tools, .. } =
         lablet_tools_wiring::tools(&prepared, Arc::clone(&inbound.propagator)).await?;
     let wiring = prepared.wiring()?;
-    let variables = exports.endpoint_variables();
     let telemetry = exports
         .telemetry()
-        .map_err(|error| otlp_refused(&config, variables, error))?;
+        .map_err(|error| otlp_refused(&config, error))?;
     Ok(wire(wiring, tools, telemetry, inbound))
 }
 

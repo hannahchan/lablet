@@ -1,4 +1,4 @@
-//! How a duration and a path are written in a config.
+//! How a duration, a path and a map of texts are written in a config.
 
 /// A duration as text in humantime's syntax, as `500ms` and `10m` are.
 ///
@@ -55,5 +55,24 @@ pub mod path {
 
     pub fn list<S: Serializer>(paths: &[PathBuf], serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(paths.iter().map(|path| Shown(path)))
+    }
+}
+
+/// A map of texts whose entry a `${VAR}` left unstated is left out: the
+/// fill makes a value that was one reference and came out empty `null`, and
+/// a map of texts has no entry for one.
+pub mod map {
+    use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Deserializer};
+
+    pub fn without_nulls<'de, D: Deserializer<'de>, V: Deserialize<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<String, V>, D::Error> {
+        let entries: BTreeMap<String, Option<V>> = BTreeMap::deserialize(deserializer)?;
+        Ok(entries
+            .into_iter()
+            .filter_map(|(name, value)| Some((name, value?)))
+            .collect())
     }
 }

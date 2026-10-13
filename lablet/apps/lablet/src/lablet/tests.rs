@@ -94,7 +94,6 @@ async fn the_transcript_a_wide_event_names_is_whole_when_an_exporter_is_handed_t
         ENDS,
         &json!({
             "run": { "transcript_path": transcript },
-            "telemetry": { "otlp": { "enabled": false } },
         }),
     );
     let looking = Looking::default();

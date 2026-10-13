@@ -7,9 +7,8 @@ use std::time::Duration;
 use lablet_run::telemetry::{Bridge, Logger};
 use opentelemetry::InstrumentationScope;
 use opentelemetry::global::BoxedTracer;
-use opentelemetry::logs::{LoggerProvider as _, NoopLoggerProvider};
+use opentelemetry::logs::LoggerProvider as _;
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry::trace::noop::NoopTracer;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::logs::{BatchLogProcessor, LogExporter, SdkLoggerProvider};
@@ -51,7 +50,6 @@ pub struct TelemetryBuilder {
     file: Option<FileTarget>,
     otlp: Option<OtlpSettings>,
     sdk: Sdk,
-    disabled: bool,
     #[cfg(test)]
     hooked: Vec<Hooked>,
 }
@@ -64,7 +62,6 @@ impl std::fmt::Debug for TelemetryBuilder {
             .field("file", &self.file)
             .field("otlp", &self.otlp)
             .field("sdk", &self.sdk)
-            .field("disabled", &self.disabled)
             .finish_non_exhaustive()
     }
 }
@@ -102,17 +99,6 @@ impl TelemetryBuilder {
         self
     }
 
-    /// No telemetry at all, whatever else is said: the API's no-op tracer
-    /// and a logger that drops what it's handed, as the specification's
-    /// no-op SDK is, so nothing is written or sent and no span has an id of
-    /// its own. A span opened in a context with a span keeps that span's
-    /// context.
-    #[must_use]
-    pub fn disabled(mut self) -> Self {
-        self.disabled = true;
-        self
-    }
-
     /// Exports to `spans` and `records` too, as a destination registered
     /// where the network's is, after the file's.
     #[cfg(test)]
@@ -128,9 +114,11 @@ impl TelemetryBuilder {
     }
 
     /// The providers, with a batch processor of the SDK's for each
-    /// destination and signal. With a network destination it must be
-    /// called inside a tokio runtime, which the gRPC channel's worker runs
-    /// on.
+    /// destination and signal; with no destination named, providers with no
+    /// processor, so a run sends and writes nothing and still has spans of
+    /// its own to give a command its context from. With a network
+    /// destination it must be called inside a tokio runtime, which the gRPC
+    /// channel's worker runs on.
     ///
     /// # Errors
     ///
@@ -145,17 +133,9 @@ impl TelemetryBuilder {
             file,
             otlp,
             sdk,
-            disabled,
             #[cfg(test)]
             hooked,
         } = self;
-        if disabled {
-            return Ok(Telemetry {
-                scope,
-                providers: None,
-                sink: None,
-            });
-        }
 
         // A provider flushes and stops its processors one after the other,
         // in the order they were added, so the file's come first: it never
@@ -192,10 +172,10 @@ impl TelemetryBuilder {
         }
         Ok(Telemetry {
             scope,
-            providers: Some(Providers {
+            providers: Providers {
                 tracer: tracer_provider.build(),
                 logger: logger_provider.build(),
-            }),
+            },
             sink,
         })
     }
@@ -241,8 +221,7 @@ where
 #[derive(Debug, Clone)]
 pub struct Telemetry {
     scope: InstrumentationScope,
-    /// `None` when there's no telemetry at all.
-    providers: Option<Providers>,
+    providers: Providers,
     sink: Option<Sink>,
 }
 
@@ -264,7 +243,6 @@ impl Telemetry {
             file: None,
             otlp: None,
             sdk: Sdk::default(),
-            disabled: false,
             #[cfg(test)]
             hooked: Vec::new(),
         }
@@ -275,26 +253,18 @@ impl Telemetry {
     /// say.
     #[must_use]
     pub fn tracer(&self) -> BoxedTracer {
-        match &self.providers {
-            Some(providers) => BoxedTracer::new(Box::new(
-                providers.tracer.tracer_with_scope(self.scope.clone()),
-            )),
-            None => BoxedTracer::new(Box::new(NoopTracer::new())),
-        }
+        BoxedTracer::new(Box::new(
+            self.providers.tracer.tracer_with_scope(self.scope.clone()),
+        ))
     }
 
     /// Lablet's logger, of the scope the CLI root handed over,
     /// whose records reach every destination.
     #[must_use]
     pub fn logger(&self) -> Box<dyn Logger> {
-        match &self.providers {
-            Some(providers) => Box::new(Bridge::new(
-                providers.logger.logger_with_scope(self.scope.clone()),
-            )),
-            None => Box::new(Bridge::new(
-                NoopLoggerProvider::new().logger_with_scope(self.scope.clone()),
-            )),
-        }
+        Box::new(Bridge::new(
+            self.providers.logger.logger_with_scope(self.scope.clone()),
+        ))
     }
 
     /// Called before every run. It lets go of the file that's open, so
@@ -321,9 +291,7 @@ impl Telemetry {
     /// Returns a [`FlushError`] holding what each provider's processors
     /// said of a flush that failed or gave up.
     pub async fn flush_providers(&self) -> Result<(), FlushError> {
-        let Some(Providers { tracer, logger }) = self.providers.clone() else {
-            return Ok(());
-        };
+        let Providers { tracer, logger } = self.providers.clone();
         both(move || tracer.force_flush(), move || logger.force_flush()).await
     }
 
@@ -341,9 +309,7 @@ impl Telemetry {
     /// them: the 0.33 SDK's batch processors drop what that export returned,
     /// and report it only on the diagnostic log, as their own export error.
     pub async fn shutdown(&self) -> Result<(), FlushError> {
-        let Some(Providers { tracer, logger }) = self.providers.clone() else {
-            return Ok(());
-        };
+        let Providers { tracer, logger } = self.providers.clone();
         both(
             move || tracer.shutdown_with_timeout(SHUTDOWN),
             move || logger.shutdown_with_timeout(SHUTDOWN),

@@ -14,19 +14,16 @@
 //! field alone. The framework that set any other variable is the party that
 //! can name it.
 //!
-//! The command line's seam still reads the OTLP header and endpoint
-//! variables from its environment and sends what they hold, so it hands
-//! their values in to be cut, as it hands in what a client key's file holds;
-//! every command still inherits those variables.
+//! What the file `telemetry.otlp.tls.client_key` names holds is cut too,
+//! where the command line reads it: a file and no variable, so nothing is
+//! dropped for it, and it's handed in by the root that read it.
 
 use std::collections::BTreeSet;
-use std::fmt::{self, Write as _};
+use std::fmt::Write as _;
 
 use lablet_model::Secrets;
-use secrecy::{ExposeSecret as _, SecretString};
 
-use lablet_config::{Config, Fill, KeyPath, McpServer, Place, Secret, user_information};
-use lablet_otel_env::decode_headers;
+use lablet_config::{Config, Fill, Headers, KeyPath, McpServer, Place, Secret, user_information};
 
 /// What a run drops, gives and cuts, derived from its config.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,17 +37,13 @@ pub struct Derived {
     /// The variables that filled an own or given field, which every process
     /// a run starts is dropped by name.
     pub dropped: BTreeSet<String>,
-    /// The names whose values are cut and nothing else: what the command
-    /// line still reads from its environment and sends, which every command
-    /// inherits, in the order they're printed.
-    pub cut: Vec<Named>,
     /// The values, behind a `Debug` form that shows none of them. Empty
     /// when the run has no executor to hand them to, since nothing would
     /// cut them and holding them would serve nothing.
     pub values: Secrets,
-    /// The own and given values alone, which the drop by value matches: a
-    /// value the command line hands in to be cut is left out, since every
-    /// command still inherits its variable.
+    /// The values the drop by value matches, which are the same values: a
+    /// variable of the environment handed in that holds one under another
+    /// name is dropped.
     pub dropping: Secrets,
 }
 
@@ -80,24 +73,17 @@ pub struct Credential {
     pub matcher: Secrets,
 }
 
-/// A name `check` prints among what's cut, and what became of its value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Named {
-    /// Where the value comes from.
-    pub source: Source,
-    /// Whether it's cut.
-    pub held: Held,
-}
-
 /// Where a value comes from, which is how it's named.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
-    /// A variable, filled into the field or read by the command line's seam.
+    /// A variable, filled into the field.
     Variable(String),
     /// Written in the config, at this key.
     Key(KeyPath),
     /// Set in code, as a `Secret`.
     Code,
+    /// What the file the field names holds, which the root read.
+    Contents,
 }
 
 /// Whether a value is cut, and when it isn't, why not: the reasons a
@@ -149,7 +135,7 @@ impl Credential {
     pub fn variable(&self) -> Option<&str> {
         match &self.source {
             Source::Variable(name) => Some(name),
-            Source::Key(_) | Source::Code => None,
+            Source::Key(_) | Source::Code | Source::Contents => None,
         }
     }
 
@@ -191,6 +177,23 @@ impl Credential {
                 at(self.place),
                 self.held.note()
             ),
+            // A file's contents reach no process either way, and the line
+            // says what's cut rather than who doesn't get it.
+            Source::Contents => {
+                return match self.held {
+                    Held::Cut => format!(
+                        "{}{} -> its file's contents; cut",
+                        self.field,
+                        at(self.place)
+                    ),
+                    held => format!(
+                        "{}{} -> its file's contents{}",
+                        self.field,
+                        at(self.place),
+                        held.note()
+                    ),
+                };
+            }
         };
         for copy in &self.copies {
             let _ = write!(line, ", or {copy}, which holds it");
@@ -215,6 +218,11 @@ impl Credential {
     pub fn as_given(&self) -> String {
         let entry = self.given_as().unwrap_or_default().to_owned();
         let mut line = match &self.source {
+            // A `${VAR:-}` that came out empty gives nothing, which the line
+            // says in place of a name `bash` doesn't get.
+            Source::Variable(name) if self.held == Held::Unset => {
+                return format!("none: {name}{} is unset", at(self.place));
+            }
             Source::Variable(name) if *name == entry => {
                 format!("{name}{}{} -> bash", at(self.place), self.held.note())
             }
@@ -229,61 +237,18 @@ impl Credential {
                 at(self.place),
                 self.held.note()
             ),
+            Source::Contents => format!(
+                "{}{} -> its file's contents{} -> bash",
+                self.field,
+                at(self.place),
+                self.held.note()
+            ),
         };
         for copy in &self.copies {
             let _ = write!(line, ", or {copy}, which holds it");
         }
         line
     }
-}
-
-impl Named {
-    /// The name alone, which the list is ordered by.
-    fn name(&self) -> String {
-        match &self.source {
-            Source::Variable(name) => name.clone(),
-            Source::Key(key) => key.to_string(),
-            Source::Code => "set in code".to_owned(),
-        }
-    }
-}
-
-impl fmt::Display for Named {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.name())?;
-        match self.held {
-            Held::Cut => Ok(()),
-            Held::Unset => f.write_str(" (not set, not cut)"),
-            Held::Empty => f.write_str(" (empty, not cut)"),
-            Held::Short => write!(f, " (under {} bytes, not cut)", Secrets::MIN_BYTES),
-        }
-    }
-}
-
-/// A value the command line still reads from its environment and cuts
-/// without dropping its variable: the OTLP header and endpoint variables
-/// the seam sends, and what a client key's file holds.
-#[derive(Debug, Clone, Copy)]
-pub struct Handed<'a> {
-    /// The variable's name.
-    pub name: &'a str,
-    /// What it holds, or what the file it names holds.
-    pub value: &'a SecretString,
-    /// What of the value is cut.
-    pub kind: HandedKind,
-}
-
-/// What's cut of a value the command line hands in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HandedKind {
-    /// The value whole, as `env` prints it, and each header it decodes to,
-    /// which a request carries.
-    Headers,
-    /// The user information of a URL, in each form a command could print
-    /// it; a value with none is no secret.
-    Url,
-    /// What a file holds: the whole and each line.
-    Contents,
 }
 
 /// The variables that fill lablet's credentials, each with the field it
@@ -322,7 +287,7 @@ impl Variables {
 /// record the fill kept.
 #[must_use]
 pub fn variables(config: &Config) -> Variables {
-    let derived = derived(config, &[], false);
+    let derived = derived(config, None, false);
     let named = |credentials: &[Credential]| -> Vec<(String, KeyPath)> {
         credentials
             .iter()
@@ -340,21 +305,20 @@ pub fn variables(config: &Config) -> Variables {
 }
 
 /// Lablet's credentials as `config` defines them, with which variable filled
-/// each read off the record the fill kept, and `handed` cut beside them:
-/// each named under `cut`, never dropped, and its forms among the values.
+/// each read off the record the fill kept, and `client_key`, what the file
+/// `telemetry.otlp.tls.client_key` names holds where the root read it, cut
+/// beside them as an own credential that no variable gave.
 ///
 /// The values are held, in [`Derived::values`], only `with_values`, which is
 /// when the run has an executor to hand them to.
 #[must_use]
-pub fn derived(config: &Config, handed: &[Handed<'_>], with_values: bool) -> Derived {
+pub fn derived(config: &Config, client_key: Option<&str>, with_values: bool) -> Derived {
     let mut set = Set {
         config,
         with_values,
         own: Vec::new(),
         given: Vec::new(),
-        cut: Vec::new(),
         values: Vec::new(),
-        credentials: 0,
     };
     let model = KeyPath::of("model.api_key");
     match (&config.model.api_key, config.filled().at(&model)) {
@@ -362,8 +326,11 @@ pub fn derived(config: &Config, handed: &[Handed<'_>], with_values: bool) -> Der
         (None, Some(fill)) => set.unset(&model, fill, Side::Own),
         (None, None) => {}
     }
-    if let Some(headers) = &config.telemetry.otlp.headers {
-        set.headers(&KeyPath::of("telemetry.otlp.headers"), headers);
+    let headers = KeyPath::of("telemetry.otlp.headers");
+    match (&config.telemetry.otlp.headers, config.filled().at(&headers)) {
+        (Some(stated), _) => set.otlp_headers(&headers, stated),
+        (None, Some(fill)) => set.unset(&headers, fill, Side::Own),
+        (None, None) => {}
     }
     set.url(
         &KeyPath::of("telemetry.otlp.endpoint"),
@@ -385,9 +352,11 @@ pub fn derived(config: &Config, handed: &[Handed<'_>], with_values: bool) -> Der
         let key = credentials.key(name);
         set.secret(&key, secret, config.filled().at(&key), Side::Given);
     }
-    set.credentials = set.values.len();
-    for Handed { name, value, kind } in handed {
-        set.handed(name, value.expose_secret(), *kind);
+    // An entry whose `${VAR:-}` came out empty isn't in the map, and
+    // `given:` says so.
+    set.unset_within(&credentials, &config.tools.builtin.credentials, Side::Given);
+    if let Some(contents) = client_key {
+        set.contents(&KeyPath::of("telemetry.otlp.tls.client_key"), contents);
     }
     set.finish()
 }
@@ -405,10 +374,7 @@ struct Set<'a> {
     with_values: bool,
     own: Vec<Credential>,
     given: Vec<Credential>,
-    cut: Vec<Named>,
     values: Vec<String>,
-    /// How many of `values` are own or given, which come first.
-    credentials: usize,
 }
 
 impl Set<'_> {
@@ -478,39 +444,102 @@ impl Set<'_> {
         }
     }
 
-    /// A value the command line hands in: cut in `kind`'s forms, named, and
-    /// never dropped.
-    fn handed(&mut self, name: &str, value: &str, kind: HandedKind) {
-        let forms: Vec<String> = match kind {
-            HandedKind::Headers => std::iter::once(value.to_owned())
-                .chain(
-                    decode_headers(value)
-                        .into_iter()
-                        .map(|(_, decoded)| decoded),
-                )
-                .collect(),
-            HandedKind::Url => match user_information(value) {
-                Some(information) => information_forms(information),
-                None => return,
-            },
-            HandedKind::Contents => vec![value.to_owned()],
-        };
-        let held = Held::of(&forms[0]);
-        if self.with_values {
-            self.values.extend(forms);
-        }
-        self.cut.push(Named {
-            source: Source::Variable(name.to_owned()),
+    /// What the file the setting at `key` names holds: own, cut whole and by
+    /// each line, as a value with several lines is, from no variable.
+    fn contents(&mut self, key: &KeyPath, contents: &str) {
+        let held = self.value(contents);
+        self.own.push(Credential {
+            field: key.clone(),
+            place: self.config.place_at(key),
+            source: Source::Contents,
             held,
+            given_by: None,
+            copies: Vec::new(),
+            matcher: Secrets::new([contents.to_owned()]),
         });
     }
 
     /// Every value of a `headers` map at `key`: own, from its variables or
-    /// written out.
+    /// written out. An entry whose `${VAR:-}` came out empty is unset, and
+    /// named so.
     fn headers(&mut self, key: &KeyPath, headers: &std::collections::BTreeMap<String, Secret>) {
         for (name, value) in headers {
             let at = key.key(name);
             self.secret(&at, value, self.config.filled().at(&at), Side::Own);
+        }
+        self.unset_within(key, headers, Side::Own);
+    }
+
+    /// `telemetry.otlp.headers` in either form. The text form is one
+    /// setting: each variable that filled it is own at the field, and what's
+    /// cut is the text whole and each value it decodes to, since a request
+    /// carries the values and a command could print the text.
+    fn otlp_headers(&mut self, key: &KeyPath, headers: &Headers) {
+        let Some(text) = headers.text() else {
+            let pairs: std::collections::BTreeMap<String, Secret> = headers
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect();
+            self.headers(key, &pairs);
+            return;
+        };
+        let text = text.expose_secret();
+        let held = Held::of(text);
+        let mut forms = vec![text.to_owned()];
+        forms.extend(
+            headers
+                .iter()
+                .map(|(_, value)| value.expose_secret().to_owned()),
+        );
+        if self.with_values {
+            self.values.extend(forms.iter().cloned());
+        }
+        let matcher = Secrets::new(forms);
+        let fill = self.config.filled().at(key);
+        let sources: Vec<Source> = match fill {
+            Some(fill) if !fill.variables.is_empty() => fill
+                .variables
+                .iter()
+                .map(|variable| Source::Variable(variable.name.clone()))
+                .collect(),
+            _ if self.config.place_at(key).is_none() => vec![Source::Code],
+            _ => vec![Source::Key(key.clone())],
+        };
+        for source in sources {
+            self.own.push(Credential {
+                field: key.clone(),
+                place: self.config.place_at(key),
+                source,
+                held,
+                given_by: None,
+                copies: Vec::new(),
+                matcher: matcher.clone(),
+            });
+        }
+    }
+
+    /// Each entry of the map at `key` the record says a `${VAR}` filled and
+    /// the map doesn't hold: its variable came out unset or empty, so the
+    /// entry isn't stated, which `check` says.
+    fn unset_within<V>(
+        &mut self,
+        key: &KeyPath,
+        held: &std::collections::BTreeMap<String, V>,
+        side: Side,
+    ) {
+        let unset: Vec<(KeyPath, Fill)> = self
+            .config
+            .filled()
+            .within(key)
+            .filter(|(at, fill)| {
+                *at != key
+                    && !fill.variables.is_empty()
+                    && at.last_key().is_some_and(|name| !held.contains_key(name))
+            })
+            .map(|(at, fill)| (at.clone(), fill.clone()))
+            .collect();
+        for (at, fill) in unset {
+            self.unset(&at, &fill, side);
         }
     }
 
@@ -578,13 +607,9 @@ impl Set<'_> {
             with_values: _,
             mut own,
             given,
-            mut cut,
             values,
-            credentials,
         } = self;
-        cut.sort_by_key(Named::name);
-        cut.dedup();
-        let dropping = Secrets::new(values[..credentials].iter().cloned());
+        let dropping = Secrets::new(values.iter().cloned());
         // Under Q5 an own credential may be listed under `credentials` too:
         // the same variable written there knowingly.
         for credential in &mut own {
@@ -605,7 +630,6 @@ impl Set<'_> {
             own,
             given,
             dropped,
-            cut,
             values: Secrets::new(values),
             dropping,
         }

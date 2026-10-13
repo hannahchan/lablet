@@ -85,9 +85,9 @@ fn a_directive_naming_the_module_a_warning_was_written_in_still_shows_it() {
 
 /// Each group of lablet's own warnings is under the target it was under
 /// before the command line had a package of its own, the composition's, the
-/// inbound context's, the network exporter's settings' and the
-/// environment's parsing, so a `RUST_LOG` filter written against them keeps
-/// working.
+/// inbound context's and the network exporter's settings', so a `RUST_LOG`
+/// filter written against them keeps working. The file for TLS is warned
+/// about once, though both signals go to the endpoint.
 #[tokio::test(flavor = "multi_thread")]
 async fn each_group_of_lablet_s_own_warnings_keeps_the_target_a_filter_names() {
     let receiver = Receiver::start(Mode::Answers).await;
@@ -96,39 +96,39 @@ async fn each_group_of_lablet_s_own_warnings_keeps_the_target_a_filter_names() {
         "blocked",
         "a file, where the transcript's directory would be",
     );
-    let certificate = lab.write("collector.pem", receiver.client_certificate());
+    let certificate = lab.write("collector.pem", receiver.ca_certificate());
     lab.write_config(
         ENDS,
         json!({
             "run": { "transcript_path": blocked.join("transcript.json") },
-            "telemetry": { "otlp": { "enabled": true, "endpoint": receiver.http_endpoint() } },
+            "telemetry": { "otlp": {
+                "endpoint": receiver.http_endpoint(),
+                // A file for TLS beside an endpoint that doesn't speak it is
+                // the exporter's settings' one warning.
+                "tls": { "ca_file": certificate },
+            } },
         }),
     );
     let mut command = lab.lablet(&["run", "--config", CONFIG, "--prompt", PROMPT]);
-    command
-        .env("TRACEPARENT", "not-a-trace-parent")
-        .env("OTEL_BSP_MAX_QUEUE_SIZE", "0")
-        .env("OTEL_EXPORTER_OTLP_CERTIFICATE", &certificate)
-        .env(
-            "RUST_LOG",
-            "error,lablet::lablet=warn,lablet::propagation=warn,lablet::otlp=warn,\
-             lablet::otel_env=warn",
-        );
+    command.env("TRACEPARENT", "not-a-trace-parent").env(
+        "RUST_LOG",
+        "error,lablet::lablet=warn,lablet::propagation=warn,lablet::otlp=warn",
+    );
 
     let run = ran(command, "");
 
     assert_eq!(run.code, Some(0), "{run:?}");
-    for target in [
-        "lablet::lablet",
-        "lablet::propagation",
-        "lablet::otlp",
-        "lablet::otel_env",
-    ] {
+    for target in ["lablet::lablet", "lablet::propagation", "lablet::otlp"] {
         assert!(
             run.stderr.contains(&format!(" WARN {target}: ")),
             "{target}: {run:?}"
         );
     }
+    assert_eq!(
+        run.stderr.matches(" WARN lablet::otlp: ").count(),
+        1,
+        "{run:?}"
+    );
 }
 
 #[test]
@@ -194,7 +194,6 @@ async fn a_debug_log_holds_neither_the_endpoint_nor_a_header_value_a_variable_ga
         lab.write_config(
             ENDS,
             json!({ "telemetry": { "otlp": {
-                "enabled": true,
                 "endpoint": format!("${{{ENDPOINT}}}"),
                 "protocol": protocol,
                 "headers": { "authorization": format!("Bearer ${{{TOKEN}}}") },

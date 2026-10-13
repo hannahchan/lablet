@@ -1,6 +1,7 @@
-//! The canaries of the gaps lablet fills in the resource and the inbound
-//! context, and of the SDK's warning about a sampler it reads for itself,
-//! which the command line's diagnostic log leaves out.
+//! The canaries of what the SDK reads of the environment for the resource
+//! and the propagators, which lablet doesn't read, and of the SDK's warning
+//! about a sampler it reads for itself, which the command line's diagnostic
+//! log leaves out.
 
 use std::collections::HashMap;
 use std::io;
@@ -60,10 +61,11 @@ fn env_resource_detector_child() {
     assert_eq!(detected.get(&Key::new("team")), Some(Value::from("a%2Cb")));
 }
 
-/// Lablet decodes the pairs itself, from the seam, rather than decoding what
-/// this detector gives. When the SDK decodes them, this fails, and lablet's
-/// own detector can give way to the SDK's once
-/// `canary_resource_builder_puts_the_pairs_over_otel_service_name` fails too.
+/// Lablet builds its resource from the config alone, with
+/// `Resource::builder_empty`, so this detector never runs for it; the seam's
+/// dormant parser decodes the pairs itself. When the SDK decodes them, this
+/// fails, and the parser can give way to the detector should the seam ever
+/// read again.
 #[test]
 fn canary_env_resource_detector_leaves_an_escape_undecoded() {
     in_a_child(
@@ -90,12 +92,11 @@ fn resource_builder_precedence_child() {
     );
 }
 
-/// Lablet puts `OTEL_SERVICE_NAME` over the pairs' `service.name`, as the
-/// specification orders them, where the SDK's builder merges the pairs
-/// last. A release that decodes the pairs but keeps this order would fail
-/// the decoding canary alone, and giving way to the SDK's detector then
-/// would let the pairs name the service. When the SDK takes the variable
-/// over the pairs, this fails.
+/// The SDK's `Resource::builder` merges the pairs over `OTEL_SERVICE_NAME`,
+/// the reverse of the specification's order, which is why lablet builds
+/// from nothing and the seam's parser put the variable over the pairs. When
+/// the SDK takes the variable over the pairs, this fails, and the parser's
+/// order is the SDK's.
 #[test]
 fn canary_resource_builder_puts_the_pairs_over_otel_service_name() {
     in_a_child(
@@ -131,7 +132,6 @@ async fn global_propagator_child() {
         },
         "prompt": { "system": "You fix failing tests." },
         "telemetry": {
-            "otlp": { "enabled": false },
             "file": { "path": scratch.at("telemetry.otlp.jsonl") },
         },
     });
@@ -161,10 +161,11 @@ async fn global_propagator_child() {
     assert_eq!(injected, HashMap::new());
 }
 
-/// Lablet extracts through propagators of its own and never sets the
-/// global one. When building the providers, or anything else a build
-/// calls, comes to install a global propagator from `OTEL_PROPAGATORS`,
-/// this fails, and lablet's must be held apart from it.
+/// Lablet extracts through propagators of its own, the ones its config
+/// names, and never sets the global one. When building the providers, or
+/// anything else a build calls, comes to install a global propagator from
+/// `OTEL_PROPAGATORS`, which lablet doesn't read, this fails, and lablet's
+/// must be held apart from it.
 #[test]
 fn canary_the_global_propagator_is_a_no_op_after_a_lablet_is_built() {
     in_a_child(
@@ -223,9 +224,9 @@ fn sdk_sampler_warning_child() {
 }
 
 /// The command line's diagnostic log leaves out the SDK's warnings named
-/// `TracerProvider.Config.*`, since lablet states the sampler it read
-/// itself. When the SDK stops reading the variable, or stops warning of it,
-/// this fails, and the filter can go.
+/// `TracerProvider.Config.*`, since lablet states the sampler, parent-based
+/// always on, and reads no variable for it. When the SDK stops reading the
+/// variable, or stops warning of it, this fails, and the filter can go.
 #[test]
 fn canary_the_sdk_warns_of_a_sampler_it_reads_for_itself() {
     in_a_child(

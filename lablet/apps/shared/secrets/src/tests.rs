@@ -4,7 +4,6 @@
 use std::ffi::OsString;
 
 use lablet_conformance::receiver::{Mode, Receiver};
-use secrecy::SecretString;
 
 use super::*;
 use lablet_config::{Format, RawConfig};
@@ -35,7 +34,7 @@ fn filled(text: &str, held: &[(&str, &str)]) -> Config {
 /// What `derived` makes of the config `text` filled from `held`, for a run
 /// that has an executor and nothing handed in.
 fn derived_from(text: &str, held: &[(&str, &str)]) -> Derived {
-    derived(&filled(text, held), &[], true)
+    derived(&filled(text, held), None, true)
 }
 
 fn names(names: &[&str]) -> BTreeSet<String> {
@@ -71,7 +70,6 @@ fn the_variable_that_fills_the_key_is_own_dropped_and_its_value_cut() {
     assert_eq!(derived.dropped, names(&["WORK_KEY"]));
     assert_eq!(derived.values, secrets(&[KEY]));
     assert_eq!(derived.dropping, secrets(&[KEY]));
-    assert!(derived.cut.is_empty());
     assert!(!format!("{derived:?}").contains(KEY), "{derived:?}");
 }
 
@@ -82,7 +80,7 @@ fn a_key_set_in_code_is_own_and_names_no_variable() {
     let mut config = Config::default();
     config.model.api_key = Some(Secret::new(KEY));
 
-    let derived = derived(&config, &[], true);
+    let derived = derived(&config, None, true);
 
     assert_eq!(
         own(&derived),
@@ -106,7 +104,6 @@ fn a_config_that_names_no_credential_holds_nothing() {
             own: Vec::new(),
             given: Vec::new(),
             dropped: BTreeSet::new(),
-            cut: Vec::new(),
             values: Secrets::default(),
             dropping: Secrets::default(),
         }
@@ -317,7 +314,7 @@ fn the_values_are_held_only_for_a_run_that_has_an_executor() {
         &[("WORK_KEY", KEY)],
     );
 
-    let without = derived(&config, &[], false);
+    let without = derived(&config, None, false);
 
     assert_eq!(without.values, Secrets::default());
     assert_eq!(without.dropping, Secrets::default());
@@ -358,80 +355,124 @@ fn a_percent_escape_is_decoded_and_what_is_no_escape_is_kept() {
     assert_eq!(percent_decoded("plain"), "plain");
 }
 
-/// What the command line hands in is cut, named under `cut:` and never
-/// dropped: a header variable whole and by each header, an endpoint
-/// variable's user information in each form, and what a client key's file
-/// holds; a value under the floor or empty is named with why it isn't cut,
-/// and a URL with no user information isn't named.
+/// What the file `telemetry.otlp.tls.client_key` names holds, where the
+/// root read it, is own: cut whole and by each line, named under `own:` as
+/// the file's contents, dropped by no name, since no variable gave it, and
+/// among the values a variable of the environment is dropped by.
 #[tokio::test]
-async fn what_is_handed_in_is_cut_and_named_and_never_dropped() {
-    const TOKEN: &str = "Bearer sk-0123456789abcdef";
+async fn a_client_keys_contents_are_own_cut_and_named_and_no_variable_is_dropped_for_them() {
     let receiver = Receiver::start(Mode::Answers).await;
-    let headers = SecretString::from("x-env=1,authorization=Bearer%20sk-0123456789abcdef");
-    let endpoint = SecretString::from("https://collector-user:pw%40-0123456789abcdef@c:4317/v1");
-    let host_only = SecretString::from("https://collector.internal:4317");
-    let short = SecretString::from("a=b");
-    let key = SecretString::from(receiver.client_key());
-    let handed = [
-        Handed {
-            name: "OTEL_EXPORTER_OTLP_HEADERS",
-            value: &headers,
-            kind: HandedKind::Headers,
-        },
-        Handed {
-            name: "OTEL_EXPORTER_OTLP_ENDPOINT",
-            value: &endpoint,
-            kind: HandedKind::Url,
-        },
-        Handed {
-            name: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-            value: &host_only,
-            kind: HandedKind::Url,
-        },
-        Handed {
-            name: "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
-            value: &short,
-            kind: HandedKind::Headers,
-        },
-        Handed {
-            name: "OTEL_EXPORTER_OTLP_CLIENT_KEY",
-            value: &key,
-            kind: HandedKind::Contents,
-        },
-    ];
+    let key = receiver.client_key();
+    let config = filled(
+        "model: { provider: fake, script: run.yaml }\ntelemetry: { otlp: { endpoint: 'https://c:4318', tls: { client_cert: c.pem, client_key: '${KEY_FILE}' } } }\n",
+        &[("KEY_FILE", "/keys/client.key")],
+    );
 
-    let cut_only = derived(&filled(FAKE, &[]), &handed, true);
+    let derived = derived(&config, Some(key), true);
 
-    let cut: Vec<String> = cut_only.cut.iter().map(ToString::to_string).collect();
     assert_eq!(
-        cut,
+        own(&derived),
+        ["telemetry.otlp.tls.client_key (line 2) -> its file's contents; cut"]
+    );
+    assert!(
+        derived.dropped.is_empty(),
+        "the variable holds a path, which is no secret"
+    );
+    let line = key.lines().nth(1).unwrap();
+    for value in [key, line] {
+        assert_ne!(derived.values.redacted(value), value, "{value} isn't cut");
+        assert_ne!(
+            derived.dropping.redacted(value),
+            value,
+            "{value} isn't dropped by value"
+        );
+    }
+    assert!(!format!("{derived:?}").contains(line), "{derived:?}");
+
+    let without = derived_from_key(&config, Some(key), false);
+    assert_eq!(without.values, Secrets::default());
+    assert_eq!(
+        own(&without),
+        own(&derived),
+        "named without an executor too"
+    );
+}
+
+/// `derived` with a client key, as a root hands one in.
+fn derived_from_key(config: &Config, key: Option<&str>, with_values: bool) -> Derived {
+    derived(config, key, with_values)
+}
+
+/// `telemetry.otlp.headers` as OpenTelemetry's `k=v` text is one setting: the
+/// variable that filled it is own at the field, what's cut is the text and
+/// each value it decodes to, and a text that comes out unset is named so.
+#[test]
+fn a_headers_text_is_own_by_its_variable_and_cut_as_the_text_and_as_each_value() {
+    let text = "
+model: { provider: fake, script: run.yaml }
+telemetry:
+  otlp:
+    headers: '${OTEL_EXPORTER_OTLP_HEADERS:-}'
+";
+    let token = "tok-0123456789abcdef";
+    let value = format!("authorization=Bearer%20{token},x-env=1");
+
+    let derived = derived_from(text, &[("OTEL_EXPORTER_OTLP_HEADERS", &value)]);
+    assert_eq!(
+        own(&derived),
+        ["OTEL_EXPORTER_OTLP_HEADERS (line 5) -> telemetry.otlp.headers; no process inherits it"]
+    );
+    assert_eq!(derived.dropped, names(&["OTEL_EXPORTER_OTLP_HEADERS"]));
+    assert_eq!(
+        derived.values,
+        secrets(&[&value, &format!("Bearer {token}"), "1"]),
+        "the text whole, and each decoded value"
+    );
+
+    let unset = derived_from(text, &[]);
+    assert_eq!(
+        own(&unset),
         [
-            "OTEL_EXPORTER_OTLP_CLIENT_KEY",
-            "OTEL_EXPORTER_OTLP_ENDPOINT",
-            "OTEL_EXPORTER_OTLP_HEADERS",
-            "OTEL_EXPORTER_OTLP_LOGS_HEADERS (under 16 bytes, not cut)",
+            "OTEL_EXPORTER_OTLP_HEADERS (line 5) (unset, not cut) -> telemetry.otlp.headers; no \
+             process inherits it"
         ]
     );
-    assert!(cut_only.dropped.is_empty(), "every command inherits them");
-    assert_eq!(
-        cut_only.dropping,
-        Secrets::default(),
-        "nothing is dropped by value for them"
-    );
-    let line = receiver.client_key().lines().nth(1).unwrap().to_owned();
-    for value in [
-        "x-env=1,authorization=Bearer%20sk-0123456789abcdef",
-        TOKEN,
-        "collector-user:pw%40-0123456789abcdef",
-        "collector-user:pw@-0123456789abcdef",
-        "pw@-0123456789abcdef",
-        &line,
-    ] {
-        assert_ne!(cut_only.values.redacted(value), value, "{value} isn't cut");
-    }
-    assert!(!format!("{cut_only:?}").contains("sk-0123"), "{cut_only:?}");
+    assert_eq!(unset.values, Secrets::default());
+}
 
-    let without = derived(&filled(FAKE, &[]), &handed, false);
-    assert_eq!(without.values, Secrets::default());
-    assert_eq!(without.cut, cut_only.cut, "named without an executor too");
+/// A map entry or a credentials entry whose `${VAR:-}` came out empty isn't
+/// in its map, and is still named: own as unset, and given as `none:`.
+#[test]
+fn an_entry_whose_variable_came_out_empty_is_named_as_unset() {
+    let text = "
+model: { provider: fake, script: run.yaml }
+telemetry: { otlp: { headers: { Authorization: '${T:-}', X-Env: '${E}' } } }
+tools: { builtin: { root: ., enabled: [bash], credentials: { OTEL_EXPORTER_OTLP_HEADERS: '${COMMAND_OTLP_HEADERS:-}', G: '${G}' } } }
+";
+
+    let derived = derived_from(
+        text,
+        &[("E", "e-0123456789abcdef"), ("G", "g-0123456789abcdef")],
+    );
+
+    assert_eq!(
+        own(&derived),
+        [
+            "E (line 3) -> telemetry.otlp.headers.X-Env; no process inherits it",
+            "T (line 3) (unset, not cut) -> telemetry.otlp.headers.Authorization; no process \
+             inherits it",
+        ],
+        "the entries that are stated, then those left out"
+    );
+    assert_eq!(
+        given(&derived),
+        [
+            "G (line 4) -> bash",
+            "none: COMMAND_OTLP_HEADERS (line 4) is unset",
+        ]
+    );
+    assert_eq!(
+        derived.dropped,
+        names(&["T", "E", "G", "COMMAND_OTLP_HEADERS"])
+    );
 }

@@ -146,7 +146,6 @@ async fn the_file_and_the_receiver_hold_the_same_run() {
         "run": { "retry_backoff_base": "1ms", "retry_backoff_max": "1ms" },
         "tools": { "builtin": lab.builtin(&["bash"]) },
         "telemetry": { "otlp": {
-            "enabled": true,
             "endpoint": receiver.grpc_endpoint(),
             "protocol": "grpc",
         } },
@@ -192,7 +191,7 @@ async fn an_endpoint_nothing_listens_on_leaves_the_outcome_what_a_good_destinati
         &unreachable,
         REJECTS_THE_KEY,
         "unreachable",
-        json!({ "telemetry": { "otlp": { "enabled": true, "endpoint": format!("http://{closed}") } } }),
+        json!({ "telemetry": { "otlp": { "endpoint": format!("http://{closed}") } } }),
     )
     .await;
 

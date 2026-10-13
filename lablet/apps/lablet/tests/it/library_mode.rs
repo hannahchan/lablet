@@ -98,7 +98,7 @@ async fn library_mode_ignores_child() {
         ENDS,
         json!({ "telemetry": {
             "file": { "path": file },
-            "otlp": { "enabled": true, "endpoint": "notaurl" },
+            "otlp": { "endpoint": "notaurl" },
             "resource": { "team": "evals" },
         } }),
     );
@@ -228,7 +228,6 @@ async fn header_variable_child() {
     lablet.shutdown().await;
 
     assert!(checked.own().is_empty(), "the config names no credential");
-    assert_eq!(checked.cut(), Vec::<String>::new());
     assert!(
         checked
             .inherited()

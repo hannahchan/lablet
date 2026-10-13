@@ -58,6 +58,14 @@ impl KeyPath {
             && matches!(self.0.last(), Some(Segment::Index(_)))
     }
 
+    /// Whether this path is an entry of the map at `map`: `map` and one key
+    /// after it.
+    pub(crate) fn is_entry_of(&self, map: &Self) -> bool {
+        self.0.len() == map.0.len() + 1
+            && self.0.starts_with(&map.0)
+            && matches!(self.0.last(), Some(Segment::Key(_)))
+    }
+
     /// The last key of the path, when the path ends in a key: the name of
     /// a map's entry.
     #[must_use]
@@ -117,19 +125,21 @@ impl fmt::Display for Place {
 pub struct Places(Option<Arc<BTreeMap<KeyPath, Place>>>);
 
 impl Places {
-    pub fn new(places: BTreeMap<KeyPath, Place>) -> Self {
+    pub(crate) fn new(places: BTreeMap<KeyPath, Place>) -> Self {
         Self(Some(Arc::new(places)))
     }
 
-    /// Where the setting at `key` was written, as [`place_in`] says; `None`
+    /// Where the setting at `key` was written, as `place_in` says; `None`
     /// for a setting the config doesn't state, and for any setting of a
     /// config made in code.
+    #[must_use]
     pub fn of(&self, key: &KeyPath) -> Option<Place> {
         place_in(self.0.as_ref()?, key)
     }
 
     /// Whether the config was read from text, so each setting it states has
     /// a place; a config made in code has none.
+    #[must_use]
     pub fn are_known(&self) -> bool {
         self.0.is_some()
     }

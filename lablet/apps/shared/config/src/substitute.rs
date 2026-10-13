@@ -5,10 +5,13 @@
 //! over the raw tree, and it always fills as text: a text takes each
 //! `${NAME}` as what the variable holds and each `${NAME:-default}` as the
 //! default when the variable is unset or empty, and `$${` as the text `${`.
-//! Neither prompt is filled, so no prompt is scanned. What was written is
-//! recorded by its key, so every message, the resolved config and the digest
-//! can show a setting as the file wrote it, and nothing a variable holds
-//! reaches them.
+//! One rule is stated once: a text that is one reference and nothing else,
+//! and comes out empty, isn't stated, so the setting is left null. Neither
+//! prompt is filled, so no prompt is scanned. What was written is recorded
+//! by its key, so every message, the resolved config and the digest can
+//! show a setting as the file wrote it, and nothing a variable holds reaches
+//! them. A setting that holds a number, a Boolean or a float types a filled
+//! text when it's read, in the config's reader.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -24,9 +27,10 @@ use super::shown::is_credential;
 /// it holds, and is never scanned.
 const UNFILLED: [&str; 2] = ["prompt.system", "prompt.system_file"];
 
-/// The one key an unset variable doesn't refuse: the provider decides
-/// whether a key is needed, so a `${VAR}` there that's unset leaves the
-/// setting unset, recorded, for the check to refuse by provider.
+/// The one key an unset variable with no default doesn't refuse: the
+/// provider decides whether a key is needed, so a `${VAR}` there that's
+/// unset leaves the setting unset, recorded, for the check to refuse by
+/// provider.
 const API_KEY: &str = "model.api_key";
 
 /// A variable a text named: its name, and whether it was set to something.
@@ -135,6 +139,31 @@ impl Filled {
         self.fills.iter()
     }
 
+    /// The record with each of `paths`, a key with the path as the file
+    /// wrote it and the path it was made absolute to, recorded as written,
+    /// so that `relative_to` leaves every message, the resolved config and
+    /// the digest showing the path as the file wrote it. A key the fill
+    /// already changed keeps what it wrote. Whether the fill ran is as it
+    /// was.
+    pub(crate) fn rebased(
+        &self,
+        paths: impl IntoIterator<Item = (KeyPath, String, String)>,
+    ) -> Self {
+        let mut fills: BTreeMap<KeyPath, Fill> = (*self.fills).clone();
+        for (key, written, filled) in paths {
+            let fill = fills.entry(key).or_insert(Fill {
+                written,
+                variables: Vec::new(),
+                filled: String::new(),
+            });
+            fill.filled = filled;
+        }
+        Self {
+            ran: self.ran,
+            fills: Arc::new(fills),
+        }
+    }
+
     /// The record without `key` and the keys within it, after an override
     /// set a value there that no fill saw.
     pub(crate) fn without(&self, key: &KeyPath) -> Self {
@@ -151,11 +180,14 @@ impl Filled {
     }
 }
 
-/// Why a text couldn't be filled, at which key, and the text as written.
+/// Why a text couldn't be filled, at which key, and whether the refusal may
+/// show the text as written: one of a `${` that begins no variable's name
+/// shows nothing, since what follows may be anything.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Unfilled {
     pub(crate) key: KeyPath,
     pub(crate) reason: String,
+    pub(crate) shown: bool,
 }
 
 /// Fills every text of `tree` but the prompts', in place, and records what
@@ -180,10 +212,14 @@ fn fill_in(
             if is_unfilled(key) {
                 return Ok(());
             }
-            let at_api_key = *key == KeyPath::of(API_KEY);
-            match replaced(text, lookup, at_api_key).map_err(|reason| Unfilled {
+            let at = At {
+                api_key: *key == KeyPath::of(API_KEY),
+                credential: is_credential(key),
+            };
+            match replaced(text, lookup, at).map_err(|(reason, shown)| Unfilled {
                 key: key.clone(),
                 reason,
+                shown,
             })? {
                 Replaced::Unchanged => {}
                 Replaced::Text(filled, variables) => {
@@ -241,17 +277,52 @@ enum Replaced {
     /// The text with each reference and escape replaced, and the variables
     /// it named.
     Text(String, Vec<Variable>),
-    /// The text named an unset variable at the one key that leaves the
-    /// setting unset.
+    /// The text is one reference and nothing else, and came out empty, so
+    /// the setting isn't stated.
     Unset(Vec<Variable>),
+}
+
+/// Which rules the key a text is at puts on its fill.
+#[derive(Clone, Copy)]
+struct At {
+    /// `model.api_key`, where an unset variable with no default leaves the
+    /// key unset rather than refusing it.
+    api_key: bool,
+    /// A credential, whose fix for an unset variable is `${VAR:-}`.
+    credential: bool,
 }
 
 /// One `${...}` of a text, as written.
 struct Reference<'a> {
     /// The reference whole, `${` to `}`.
     whole: &'a str,
+    /// The variable's name.
+    name: &'a str,
     /// What follows `:-`, when the reference has a default.
     default: Option<&'a str>,
+}
+
+/// The record a fill of `text` would make, with no variable looked up: what
+/// a refusal made before the fill shows a credential's text through, so a
+/// `${VAR}` written whole is shown and anything else isn't.
+pub(crate) fn fill_of(text: &str) -> Fill {
+    let mut variables: Vec<Variable> = Vec::new();
+    for reference in references(text) {
+        if !variables
+            .iter()
+            .any(|variable| variable.name == reference.name)
+        {
+            variables.push(Variable {
+                name: reference.name.to_owned(),
+                set: false,
+            });
+        }
+    }
+    Fill {
+        written: text.to_owned(),
+        variables,
+        filled: String::new(),
+    }
 }
 
 /// Every reference of `text`, in order; an escape and a `${` that begins no
@@ -265,10 +336,11 @@ fn references(text: &str) -> Vec<Reference<'_>> {
             rest = beyond;
         } else if let Some(reference) = after.strip_prefix('{')
             && let Some((inside, beyond)) = reference.split_once('}')
-            && let Some((_, default)) = parts(inside)
+            && let Some((name, default)) = parts(inside)
         {
             found.push(Reference {
                 whole: &rest[at..rest.len() - beyond.len()],
+                name,
                 default,
             });
             rest = beyond;
@@ -296,22 +368,23 @@ fn parts(inside: &str) -> Option<(&str, Option<&str>)> {
 ///
 /// # Errors
 ///
-/// Returns why the text was refused: a `${` that begins no reference to a
-/// variable, a variable with no default that isn't set, or one that holds
-/// what isn't UTF-8. No reason shows what a variable holds.
+/// Returns why the text was refused, and whether the refusal may show the
+/// text: a `${` that begins no reference to a variable, a variable with no
+/// default that isn't set, or one that holds what isn't UTF-8. No reason
+/// shows what a variable holds.
 fn replaced(
     text: &str,
     lookup: &dyn Fn(&str) -> Option<OsString>,
-    at_api_key: bool,
-) -> Result<Replaced, String> {
+    at: At,
+) -> Result<Replaced, (String, bool)> {
     let mut written = String::with_capacity(text.len());
     let mut variables: Vec<Variable> = Vec::new();
     let mut changed = false;
     let mut unset = false;
     let mut rest = text;
-    while let Some(at) = rest.find('$') {
-        written.push_str(&rest[..at]);
-        let after = &rest[at + 1..];
+    while let Some(place) = rest.find('$') {
+        written.push_str(&rest[..place]);
+        let after = &rest[place + 1..];
         if let Some(beyond) = after.strip_prefix("${") {
             written.push_str("${");
             changed = true;
@@ -323,26 +396,44 @@ fn replaced(
                     parts(inside).map(|(name, default)| (name, default, beyond))
                 })
                 .ok_or_else(|| {
-                    "`${` begins a variable, written `${NAME}` with a name of ASCII letters, \
-                     digits and `_`; write `$${` for the text `${`"
-                        .to_owned()
+                    (
+                        "its ${ begins no variable's name; write $${ for ${".to_owned(),
+                        false,
+                    )
                 })?;
             let value = lookup(name);
             let set = value.is_some();
             let value = match value {
-                Some(value) => Some(
-                    value
-                        .into_string()
-                        .map_err(|_| format!("the variable `{name}` holds what isn't UTF-8"))?,
-                ),
+                Some(value) => Some(value.into_string().map_err(|_| {
+                    (
+                        format!("the variable `{name}` holds what isn't UTF-8"),
+                        true,
+                    )
+                })?),
                 None => None,
             };
             match (value, default) {
                 (Some(value), None) => written.push_str(&value),
                 (Some(value), Some(_)) if !value.is_empty() => written.push_str(&value),
                 (_, Some(default)) => written.push_str(default),
-                (None, None) if at_api_key => unset = true,
-                (None, None) => return Err(format!("the variable `{name}` isn't set")),
+                (None, None) if at.api_key => unset = true,
+                (None, None) if at.credential => {
+                    return Err((
+                        format!(
+                            "`{name}` isn't set; set it, or write ${{{name}:-}} to give it only \
+                             when set"
+                        ),
+                        true,
+                    ));
+                }
+                (None, None) => {
+                    return Err((
+                        format!(
+                            "`{name}` isn't set; set it, or give a default, as ${{{name}:-default}}"
+                        ),
+                        true,
+                    ));
+                }
             }
             if !variables.iter().any(|variable| variable.name == name) {
                 variables.push(Variable {
@@ -358,7 +449,14 @@ fn replaced(
         }
     }
     written.push_str(rest);
-    Ok(if unset {
+    // A text that is one reference whole and came out empty states nothing,
+    // wherever it is: `${E:-}` with `E` unset names no endpoint, and an
+    // empty `${KEY}` sets no key.
+    let whole = {
+        let references = references(text);
+        references.len() == 1 && references[0].whole == text
+    };
+    Ok(if unset || (whole && written.is_empty()) {
         Replaced::Unset(variables)
     } else if changed {
         Replaced::Text(written, variables)

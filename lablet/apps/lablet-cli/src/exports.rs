@@ -1,30 +1,36 @@
-//! What a checked config's telemetry is built from, read from the config
-//! and the SDK's environment between the two halves of `lablet-prepare`'s
+//! What a checked config's telemetry is built from, read from the config's
+//! `telemetry` section alone between the two halves of `lablet-prepare`'s
 //! check, and its building, so that the kernel reads no SDK setting and the
-//! command line's root alone builds an SDK. What the seam still reads of
-//! the environment and sends, the OTLP header variables and the endpoint
-//! variables' user information, is handed in to be cut, since every command
-//! still inherits those variables.
+//! command line's root alone builds an SDK. Nothing of the environment is
+//! read here: a setting comes from a variable only where the file wrote a
+//! `${VAR}`, and every value the crates would read from the environment for
+//! themselves is stated on their builders.
 
-use lablet_config::{Config, ConfigError, KeyPath, shown};
-use lablet_otel_env::{ENDPOINT_VARIABLES, Env, HEADER_VARIABLES};
+use lablet_config::{Config, ConfigError, KeyPath, Place, Secret, shown, user_information};
 use lablet_prepare::{BuildError, Prepared, Settled};
 use lablet_run::telemetry::SCOPE;
 use lablet_run::telemetry::generated::SCHEMA_URL;
-use lablet_secrets::{Handed, HandedKind};
 use opentelemetry::InstrumentationScope;
 use opentelemetry_sdk::Resource;
-use secrecy::SecretString;
+use secrecy::ExposeSecret as _;
 
-use crate::export::{self, FileTarget, OtelBuildError, OtlpSettings, Signal, Telemetry};
-use crate::input;
-use crate::otel_env::{Exporter, OtelEnv, Sdk};
+use crate::export::{self, FileTarget, OtelBuildError, OtlpSettings, Telemetry, Transport};
+use crate::otel_env::Sdk;
 use crate::otlp;
-use crate::propagation::{self, Inbound};
 
 /// The version of lablet, the workspace's, which the instrumentation scope
 /// names.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The compression variables the 0.33 exporter reads for itself, which
+/// lablet can't state none for on its builders: the one read of the
+/// environment a run makes beyond the config, said on `check`'s
+/// `telemetry:` line when an endpoint is named.
+pub const COMPRESSION_VARIABLES: [&str; 3] = [
+    "OTEL_EXPORTER_OTLP_COMPRESSION",
+    "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION",
+    "OTEL_EXPORTER_OTLP_LOGS_COMPRESSION",
+];
 
 /// What a checked config's telemetry is built from.
 pub struct Exports {
@@ -32,112 +38,53 @@ pub struct Exports {
     pub target: Option<FileTarget>,
     /// What the network exporter is built from, when the run has one.
     pub otlp: Option<OtlpSettings>,
-    /// Whether `OTEL_SDK_DISABLED` turns all telemetry off.
-    pub disabled: bool,
-    /// The sampler, the span limits and the batch processors' settings.
-    pub sdk: Sdk,
     /// What every export describes itself with.
     pub resource: Resource,
 }
 
-/// The check gone on from `settled`, with the SDK's settings read from the
-/// config and from `env`, once, here, so a check and a build warn of the
-/// same values and agree on what they come to: the check's end, what the
-/// telemetry is built from, and the context every run starts from. The
-/// values the seam reads and sends, and what a client key's file holds,
-/// are handed on to be cut from what a tool returns.
+/// The check gone on from `settled`, with the telemetry's settings read
+/// from the config, once, here, so a check and a build agree on what they
+/// come to: the check's end and what the telemetry is built from. What a
+/// client key's file holds is handed on to be cut from what a tool returns.
 ///
 /// # Errors
 ///
-/// Returns the refusal of what the network exporter would refuse, but for
-/// what only making it finds (see [`export::validate`]).
-pub fn settle(settled: Settled, env: Env<'_>) -> Result<(Prepared, Exports, Inbound), BuildError> {
-    let OtelEnv {
-        sdk,
-        exporter,
-        context,
-    } = OtelEnv::read(env);
+/// Returns the refusal of a TLS file that can't be loaded, and of what the
+/// network exporter would refuse but for what only making it finds (see
+/// `export::validate`).
+pub fn settle(settled: Settled) -> Result<(Prepared, Exports), BuildError> {
     let config = settled.config();
-    let resource = export::resource(
-        VERSION,
-        config.telemetry.resource.clone().into_iter().collect(),
-        &context,
-    );
-    let inbound = propagation::inbound(&context);
-    let otlp = network(config, &exporter)?;
-    let disabled = exporter.sdk_disabled;
-    let target = file_target(config, disabled);
-    let read: Vec<(&str, SecretString, HandedKind)> = HEADER_VARIABLES
-        .iter()
-        .map(|name| (*name, HandedKind::Headers))
-        .chain(
-            ENDPOINT_VARIABLES
-                .iter()
-                .map(|name| (*name, HandedKind::Url)),
-        )
-        .filter_map(|(name, kind)| {
-            // The environment is lossily read as a command's output is, so
-            // a value that isn't UTF-8 is cut from the output of the same
-            // bytes.
-            let value = env(name)?;
-            Some((
-                name,
-                SecretString::from(value.to_string_lossy().into_owned()),
-                kind,
-            ))
-        })
-        .collect();
-    let client_keys = otlp
+    let resource = export::resource(VERSION, config.telemetry.resource.pairs());
+    let otlp = network(config)?;
+    let target = file_target(config);
+    let client_key = otlp
         .as_ref()
-        .map(OtlpSettings::client_keys)
-        .unwrap_or_default();
-    let handed: Vec<Handed<'_>> = read
-        .iter()
-        .map(|(name, value, kind)| Handed {
-            name,
-            value,
-            kind: *kind,
-        })
-        .chain(client_keys.iter().map(|(name, contents)| Handed {
-            name,
-            value: contents,
-            kind: HandedKind::Contents,
-        }))
-        .collect();
+        .and_then(OtlpSettings::client_key)
+        .map(|key| Secret::new(key.expose_secret()));
     let prepared = settled.finish(lablet_prepare::Telemetry {
         file: match &target {
             Some(FileTarget::Path(path)) => Some(path.clone()),
             Some(FileTarget::Stderr) | None => None,
         },
-        handed: &handed,
+        client_key: client_key.as_ref(),
     });
-    drop(handed);
-    drop(read);
-    drop(client_keys);
+    drop(client_key);
     Ok((
         prepared,
         Exports {
             target,
             otlp,
-            disabled,
-            sdk,
             resource,
         },
-        inbound,
     ))
 }
 
 impl Exports {
-    /// The variable each signal's endpoint was read from, traces then logs,
-    /// for a refusal of what only making the network exporter finds.
-    #[must_use]
-    pub fn endpoint_variables(&self) -> [Option<&'static str>; 2] {
-        self.otlp
-            .as_ref()
-            .map_or([None; 2], OtlpSettings::endpoint_variables)
-    }
-
-    /// The telemetry of every run, under lablet's instrumentation scope.
+    /// The telemetry of every run, under lablet's instrumentation scope,
+    /// with the specification's defaults stated on every builder: the
+    /// sampler, parent-based always on, the span limits and the batch
+    /// processors' settings, which the crates would otherwise read from the
+    /// environment.
     ///
     /// # Errors
     ///
@@ -148,18 +95,15 @@ impl Exports {
         let Self {
             target,
             otlp,
-            disabled,
-            sdk,
             resource,
         } = self;
         let scope = InstrumentationScope::builder(SCOPE)
             .with_version(VERSION)
             .with_schema_url(SCHEMA_URL)
             .build();
-        let mut telemetry = Telemetry::builder(scope).resource(resource).sdk(sdk);
-        if disabled {
-            telemetry = telemetry.disabled();
-        }
+        let mut telemetry = Telemetry::builder(scope)
+            .resource(resource)
+            .sdk(Sdk::default());
         if let Some(target) = target {
             telemetry = telemetry.file(target);
         }
@@ -168,36 +112,89 @@ impl Exports {
         }
         telemetry.build()
     }
+
+    /// Where a run of `config` sends and writes its telemetry, as `check`'s
+    /// `telemetry:` line says it: `file (line 17)`, `OTLP http/protobuf to
+    /// http://localhost:4318 (line 16)`, and, with an endpoint named, that
+    /// a compression variable `set` says is set is read by the exporter
+    /// itself. `None` when nothing is named.
+    #[must_use]
+    pub fn report(&self, config: &Config, set: &dyn Fn(&str) -> bool) -> Vec<String> {
+        let mut forms = Vec::new();
+        if self.target.is_some() {
+            forms.push(format!(
+                "file{}",
+                at(config.place_of("telemetry.file.path"))
+            ));
+        }
+        if let Some(otlp) = &self.otlp {
+            let transport = otlp
+                .destinations()
+                .next()
+                .map_or(Transport::HttpProtobuf, |(_, destination)| {
+                    destination.transport
+                });
+            let protocol = match transport {
+                Transport::Grpc => "grpc",
+                Transport::HttpProtobuf => "http/protobuf",
+                Transport::HttpJson => "http/json",
+            };
+            let endpoint = config
+                .telemetry
+                .otlp
+                .endpoint
+                .as_deref()
+                .map_or_else(String::new, |endpoint| {
+                    format!(" to {}", endpoint_shown(endpoint))
+                });
+            forms.push(format!(
+                "OTLP {protocol}{endpoint}{}",
+                at(config.place_of("telemetry.otlp.endpoint"))
+            ));
+            for variable in COMPRESSION_VARIABLES {
+                if set(variable) {
+                    forms.push(format!(
+                        "{variable} is set, and the exporter reads it itself"
+                    ));
+                }
+            }
+        }
+        forms
+    }
 }
 
-/// Whether a `Lablet` built from `config`, which was filled, writes its
-/// telemetry to standard error, which a `telemetry.file.path` of `-` does
-/// unless `OTEL_SDK_DISABLED` turns all telemetry off. It's the answer a
+/// Where a setting was written, as a line says it after the name.
+fn at(place: Option<Place>) -> String {
+    place.map(|place| format!(" ({place})")).unwrap_or_default()
+}
+
+/// The endpoint as a line may show it: its scheme, host, port and path,
+/// which a parsed URL's are, less its user information and anything from a
+/// `?` or a `#` on, which may hold a credential.
+fn endpoint_shown(endpoint: &str) -> String {
+    let without = match user_information(endpoint) {
+        Some(information) => endpoint.replacen(&format!("{information}@"), "", 1),
+        None => endpoint.to_owned(),
+    };
+    let end = without.find(['?', '#']).unwrap_or(without.len());
+    without[..end].to_owned()
+}
+
+/// Whether a `Lablet` built from `config` writes its telemetry to standard
+/// error, which a `telemetry.file.path` of `-` does. It's the answer a
 /// build comes to, for a caller that has to know before the build: one that
 /// shares standard error with the telemetry says nothing of its own there,
 /// and a log that reports on the build is installed before it.
 #[must_use]
 pub fn telemetry_on_stderr(config: &Config) -> bool {
-    telemetry_on_stderr_in(config, &input::variable)
-}
-
-/// [`telemetry_on_stderr`], where `env` is what the seam reads of the
-/// environment.
-pub(crate) fn telemetry_on_stderr_in(config: &Config, env: Env<'_>) -> bool {
-    // Whether the network exporter is on changes nothing about `-`, so the
-    // answer is read from the path and `OTEL_SDK_DISABLED` alone, with no
-    // other variable read and warned about before the log is installed.
-    let disabled = Exporter::sdk_disabled_in(env);
-    file_target(config, disabled) == Some(FileTarget::Stderr)
+    file_target(config) == Some(FileTarget::Stderr)
 }
 
 /// Where the telemetry file of `config` goes, and `None` when it writes no
-/// file: a null path, or `OTEL_SDK_DISABLED` turning all telemetry off,
-/// which `disabled` says. Only a path that's `-` whole is standard error,
-/// so `-/` names a file.
-fn file_target(config: &Config, disabled: bool) -> Option<FileTarget> {
+/// file. Only a path that's `-` whole is standard error, so `-/` names a
+/// file.
+fn file_target(config: &Config) -> Option<FileTarget> {
     match &config.telemetry.file.path {
-        _ if disabled => None,
         None => None,
         Some(path) if path.as_os_str() == "-" => Some(FileTarget::Stderr),
         Some(path) => Some(FileTarget::Path(path.clone())),
@@ -207,32 +204,18 @@ fn file_target(config: &Config, disabled: bool) -> Option<FileTarget> {
 /// The refusal of what the network exporter couldn't be built from, shown
 /// from `config` as the file wrote it: a header by its key alone, since
 /// every header value is a secret, and the endpoint as the config writes
-/// it, or no value when it states none or one that holds an `@`. User
-/// information is a secret, and where it ends can't be told when it holds
-/// an unencoded `/`, `?` or `#`. A refusal of an endpoint a variable named,
-/// or of TLS to it, names the variable, which `variables` gives for each
-/// signal, and shows nothing of what it holds.
+/// it, or no value when it holds an `@`. User information is a secret, and
+/// where it ends can't be told when it holds an unencoded `/`, `?` or `#`.
+/// A refusal of an endpoint a variable filled names the variable and shows
+/// nothing of what it holds.
 #[must_use]
-pub fn otlp_refused(
-    config: &Config,
-    variables: [Option<&'static str>; 2],
-    error: OtelBuildError,
-) -> BuildError {
+pub fn otlp_refused(config: &Config, error: OtelBuildError) -> BuildError {
     const KEY: &str = "telemetry.otlp.endpoint";
-    let variable = |signal| match signal {
-        Signal::Traces => variables[0],
-        Signal::Logs => variables[1],
-    };
-    let from_environment = |variable: &str, what: &str| {
-        BuildError::Config(ConfigError::Invalid {
-            key: KEY.to_owned(),
-            place: config.place_of(KEY),
-            value: None,
-            reason: format!(
-                "`{variable}`, which is read since the config states no endpoint, {what}"
-            ),
-        })
-    };
+    let key = KeyPath::of(KEY);
+    let variable = config
+        .filled()
+        .at(&key)
+        .and_then(|fill| fill.names().next());
     let reason = match error {
         OtelBuildError::Header { name, reason } => {
             let key = KeyPath::of("telemetry.otlp.headers").key(&name);
@@ -243,29 +226,23 @@ pub fn otlp_refused(
                 reason: reason.to_owned(),
             });
         }
-        OtelBuildError::Endpoint { signal } => match variable(signal) {
-            Some(variable) => {
-                return from_environment(variable, "holds what isn't a URL the exporter accepts");
-            }
+        OtelBuildError::Endpoint { .. } => match variable {
+            Some(variable) => format!("`{variable}` holds what isn't a URL the exporter accepts"),
             None => "it isn't a URL the exporter accepts".to_owned(),
         },
         OtelBuildError::Exporter { reason, .. } => {
             format!("the exporter couldn't be made: {reason}")
         }
-        OtelBuildError::Tls { signal, reason } => match variable(signal) {
-            Some(variable) => {
-                return from_environment(
-                    variable,
-                    &format!("names the collector, and TLS to it couldn't be set up: {reason}"),
-                );
-            }
+        OtelBuildError::Tls { reason, .. } => match variable {
+            Some(variable) => format!(
+                "`{variable}` names the collector, and TLS to it couldn't be set up: {reason}"
+            ),
             None => format!("TLS to the collector couldn't be set up: {reason}"),
         },
         OtelBuildError::HttpClient { reason, .. } => {
             format!("the HTTP client couldn't be made: {reason}")
         }
     };
-    let key = KeyPath::of(KEY);
     let value = config
         .written_text(KEY)
         .filter(|_| config.telemetry.otlp.endpoint.is_some())
@@ -284,11 +261,10 @@ pub fn otlp_refused(
 /// the exporter finds, trust roots that can't be loaded or other TLS that
 /// can't be set up, and the HTTP client (see `validate`); a check installs
 /// no exporter.
-fn network(config: &Config, exporter: &Exporter) -> Result<Option<OtlpSettings>, BuildError> {
-    let otlp = otlp::settings(config, exporter)?;
+fn network(config: &Config) -> Result<Option<OtlpSettings>, BuildError> {
+    let otlp = otlp::settings(config)?;
     if let Some(settings) = &otlp {
-        export::validate(settings)
-            .map_err(|error| otlp_refused(config, settings.endpoint_variables(), error))?;
+        export::validate(settings).map_err(|error| otlp_refused(config, error))?;
     }
     Ok(otlp)
 }

@@ -8,11 +8,12 @@
 //! each with lablet's TLS, so their reading never decides. Headers are
 //! merged the other way, the process environment's over the code's, so on
 //! each request, after that merge, a gRPC interceptor and a client that
-//! wraps the HTTP one replace them: the exporter's own headers are kept,
-//! but for a name the environment's header variables set, and the resolved
-//! set is put on. Compression is the one setting the exporter's reading
-//! still decides, when lablet resolves none, since its builder has no
-//! setting for none; lablet reads the variables as it reads them.
+//! wraps the HTTP one replace them: the exporter's own headers are kept at
+//! the values the exporter gives them and the config's set is put on, so a
+//! header variable of the environment reaches no request, one that names
+//! an own header among them. Compression is the one setting the exporter's
+//! reading decides, since its builder has no setting for none and the
+//! config has no field for it; a canary holds that read.
 
 use std::fmt;
 use std::str::FromStr as _;
@@ -20,7 +21,7 @@ use std::sync::Arc;
 
 use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
 use opentelemetry_otlp::{
-    Compression, ExporterBuildError, LogExporter, Protocol, SpanExporter, WithExportConfig as _,
+    ExporterBuildError, LogExporter, Protocol, SpanExporter, WithExportConfig as _,
     WithHttpConfig as _, WithTonicConfig as _,
 };
 use reqwest::header::{
@@ -129,37 +130,42 @@ pub enum OtelBuildError {
 }
 
 /// The headers of one signal's exporter: those the exporter sets of its
-/// own on its transport, which are kept, the names the environment's
-/// header variables set, which never are, and the resolved set, which goes
-/// on.
+/// own on its transport, which are kept at the values it gives them, and
+/// the config's set, which goes on; everything else the exporter merged
+/// from the process environment comes off.
 #[derive(Debug)]
 struct Headers {
     set: Vec<(HeaderName, SecretString)>,
-    own: &'static [HeaderName],
-    taken_off: Vec<HeaderName>,
+    /// The type of the body on HTTP, which the protocol decides; `None` on
+    /// gRPC, where tonic sets it beneath the interceptor.
+    content_type: Option<HeaderValue>,
 }
 
-/// What the gRPC exporter puts in a request's metadata of its own, before
-/// the environment's headers.
-static GRPC_OWN: [HeaderName; 1] = [USER_AGENT];
-
-/// What the HTTP exporter puts on a request of its own: the body's type and
-/// encoding, and its user agent.
-static HTTP_OWN: [HeaderName; 3] = [CONTENT_TYPE, CONTENT_ENCODING, USER_AGENT];
+/// What the exporter's own user agent begins with, which tonic appends its
+/// own to on gRPC.
+const EXPORTER_AGENT: &[u8] = b"OTel-OTLP-Exporter-Rust/";
 
 impl Headers {
     /// Replaces `headers`, which the exporter has given what it read of the
-    /// process environment, with the exporter's own and the resolved set,
-    /// so a header the environment sets reaches a request only through
-    /// what lablet resolved, whatever the exporter read.
-    fn apply(&self, headers: &mut HeaderMap) {
+    /// process environment, with the exporter's own and the config's set,
+    /// so a header the environment sets reaches no request, whatever the
+    /// exporter read. The environment's headers are merged over the
+    /// exporter's own, so an own header keeps the exporter's value alone:
+    /// the user agent while it's the exporter's, and on HTTP the body's
+    /// type, which the protocol decides, and the encoding `body` is
+    /// compressed in.
+    fn apply(&self, headers: &mut HeaderMap, body: &[u8]) {
         let mut kept = HeaderMap::new();
-        for name in self.own {
-            if self.taken_off.contains(name) {
-                continue;
-            }
-            if let Some(value) = headers.remove(name) {
-                kept.insert(name, value);
+        if let Some(agent) = headers
+            .remove(USER_AGENT)
+            .filter(|agent| agent.as_bytes().starts_with(EXPORTER_AGENT))
+        {
+            kept.insert(USER_AGENT, agent);
+        }
+        if let Some(content_type) = &self.content_type {
+            kept.insert(CONTENT_TYPE, content_type.clone());
+            if let Some(encoding) = encoding_of(body) {
+                kept.insert(CONTENT_ENCODING, HeaderValue::from_static(encoding));
             }
         }
         *headers = kept;
@@ -174,6 +180,20 @@ impl Headers {
     }
 }
 
+/// The encoding a body the exporter made is compressed in, told by the
+/// magic number it begins with: the exporter compresses as the variables it
+/// reads itself say, and a body it didn't compress is protobuf or JSON,
+/// which begin with neither.
+fn encoding_of(body: &[u8]) -> Option<&'static str> {
+    if body.starts_with(&[0x1f, 0x8b]) {
+        Some("gzip")
+    } else if body.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]) {
+        Some("zstd")
+    } else {
+        None
+    }
+}
+
 /// The interceptor of a gRPC exporter, which runs after the exporter has
 /// appended the process environment's metadata.
 fn interceptor(
@@ -181,7 +201,8 @@ fn interceptor(
 ) -> impl FnMut(tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> + Clone {
     move |mut request| {
         let mut map = std::mem::replace(request.metadata_mut(), MetadataMap::new()).into_headers();
-        headers.apply(&mut map);
+        // The body is tonic's, which sets its type and encoding itself.
+        headers.apply(&mut map, &[]);
         *request.metadata_mut() = MetadataMap::from_headers(map);
         Ok(request)
     }
@@ -199,14 +220,15 @@ struct Blocking {
 #[async_trait::async_trait]
 impl HttpClient for Blocking {
     async fn send_bytes(&self, mut request: Request<Bytes>) -> Result<Response<Bytes>, HttpError> {
-        self.headers.apply(request.headers_mut());
+        let body = request.body().clone();
+        self.headers.apply(request.headers_mut(), &body);
         self.client.send_bytes(request).await
     }
 }
 
 /// The blocking client of `destination`, with its timeout and its TLS. A
-/// certificate the environment names replaces the platform's roots, as
-/// other SDKs use it.
+/// certificate the config names replaces the platform's roots, as other
+/// SDKs use it.
 fn blocking_client(
     signal: Signal,
     destination: &Destination,
@@ -238,12 +260,12 @@ fn chain(error: &dyn std::error::Error) -> String {
 }
 
 /// The TLS a gRPC exporter speaks to an `https` endpoint: the certificates
-/// the environment names in place of the platform's roots, or else the
-/// roots `with_enabled_roots` turns on, those the `tls-roots` feature of
-/// `opentelemetry-otlp` builds tonic with: the platform's, as
+/// `telemetry.otlp.tls.ca_file` names in place of the platform's roots, or
+/// else the roots `with_enabled_roots` turns on, those the `tls-roots`
+/// feature of `opentelemetry-otlp` builds tonic with: the platform's, as
 /// `rustls-native-certs` loads them, or in their place the certificates
 /// `SSL_CERT_FILE` and `SSL_CERT_DIR` name. And the client's identity,
-/// when the environment names one.
+/// when the config names one.
 fn client_tls(tls: &Tls) -> ClientTlsConfig {
     let config = match &tls.roots {
         Some(roots) => ClientTlsConfig::new().ca_certificate(Certificate::from_pem(roots)),
@@ -333,10 +355,10 @@ pub fn validate(settings: &OtlpSettings) -> Result<(), OtelBuildError> {
 
 /// The headers of `destination`, each one checked.
 fn headers_of(destination: &Destination) -> Result<Headers, OtelBuildError> {
-    let own: &'static [HeaderName] = if destination.transport == Transport::Grpc {
-        &GRPC_OWN
-    } else {
-        &HTTP_OWN
+    let content_type = match destination.transport {
+        Transport::Grpc => None,
+        Transport::HttpProtobuf => Some(HeaderValue::from_static("application/x-protobuf")),
+        Transport::HttpJson => Some(HeaderValue::from_static("application/json")),
     };
     let set = destination
         .headers
@@ -353,16 +375,7 @@ fn headers_of(destination: &Destination) -> Result<Headers, OtelBuildError> {
             Ok((header, value.clone()))
         })
         .collect::<Result<_, _>>()?;
-    let taken_off = destination
-        .taken_off
-        .iter()
-        .filter_map(|name| HeaderName::from_str(name).ok())
-        .collect();
-    Ok(Headers {
-        set,
-        own,
-        taken_off,
-    })
+    Ok(Headers { set, content_type })
 }
 
 /// The exporters `settings` describe, of spans and of log records, each
@@ -401,27 +414,24 @@ fn refused(signal: Signal, error: ExporterBuildError) -> OtelBuildError {
     }
 }
 
-/// Compression is stated only when it's gzip: the exporter's builder has
-/// no setting for none, and when none is resolved the exporter's own
-/// reading of the same variables, which the seam reads as it does, comes
-/// to none too.
+/// Compression isn't stated: the exporter's builder has no setting for
+/// none, and the config has no field, so the exporter's own reading of
+/// `OTEL_EXPORTER_OTLP_COMPRESSION` and its signal forms decides.
 macro_rules! exporter {
     ($name:ident, $exporter:ident, $signal:expr) => {
         fn $name(destination: &Destination) -> Result<$exporter, OtelBuildError> {
             let signal = $signal;
             let headers = Arc::new(headers_of(destination)?);
             if destination.transport == Transport::Grpc {
-                let mut builder = $exporter::builder()
+                $exporter::builder()
                     .with_tonic()
                     .with_channel(channel(signal, destination)?)
                     .with_interceptor(interceptor(headers))
-                    .with_timeout(destination.timeout);
-                if destination.gzip {
-                    builder = builder.with_compression(Compression::Gzip);
-                }
-                builder.build().map_err(|error| refused(signal, error))
+                    .with_timeout(destination.timeout)
+                    .build()
+                    .map_err(|error| refused(signal, error))
             } else {
-                let mut builder = $exporter::builder()
+                $exporter::builder()
                     .with_http()
                     .with_protocol(http_protocol(destination.transport))
                     .with_endpoint(destination.endpoint.expose_secret())
@@ -429,11 +439,9 @@ macro_rules! exporter {
                     .with_http_client(Blocking {
                         client: blocking_client(signal, destination)?,
                         headers,
-                    });
-                if destination.gzip {
-                    builder = builder.with_compression(Compression::Gzip);
-                }
-                builder.build().map_err(|error| refused(signal, error))
+                    })
+                    .build()
+                    .map_err(|error| refused(signal, error))
             }
         }
     };

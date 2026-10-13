@@ -410,7 +410,4 @@ fn otel_sdk_disabled_is_a_specification_boolean() {
     let (exporter, warnings) = read(&[("OTEL_SDK_DISABLED", "1")]);
     assert!(!exporter.sdk_disabled);
     assert_eq!(warnings.len(), 1);
-    assert!(Exporter::sdk_disabled_in(&|name: &str| {
-        (name == "OTEL_SDK_DISABLED").then(|| "True".into())
-    }));
 }

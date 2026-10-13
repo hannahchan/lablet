@@ -140,26 +140,28 @@ fn run_command(args: RunArgs) -> u8 {
 
 fn check_command(args: &CheckArgs) -> u8 {
     log(diagnostics::filter(rust_log().as_deref(), false));
-    let config = match config::read(&args.config, &args.overrides.set) {
-        Ok(config) => config,
+    let (config, written) = match config::read_with_tree(&args.config, &args.overrides.set) {
+        // The tree holds every value a variable gave; of it, only what the
+        // file wrote of the reordered lists is kept.
+        Ok((config, tree)) => (config, check::written(&tree)),
         Err(refusal) => return refuse(&refusal),
     };
     let Some(runtime) = runtime() else {
         return report::NOT_STARTED;
     };
     let environment = lablet_cli::input::process_environment();
-    let checked = runtime.block_on(lablet_cli::compose::check(&config, environment));
+    let report = runtime.block_on(lablet_cli::compose::check(&config, environment));
     runtime.shutdown_background();
-    let checked = match checked {
-        Ok(checked) => checked,
+    let report = match report {
+        Ok(report) => report,
         Err(error) => return refuse(&error.into()),
     };
-    match check::answer(&checked, args.resolved) {
+    match check::answer(report.checked(), args.resolved.then_some(&written)) {
         Ok(answer) => {
             if !answer.is_empty() {
                 print(&answer, false);
             }
-            say(&check::summary(&checked));
+            say(&check::summary(&report));
             0
         }
         Err(error) => {

@@ -462,7 +462,7 @@ fn checked_names_the_env_entries_and_the_copies_of_a_credential() {
     );
     let mut config = config;
     config.model.api_key = Some(Secret::new(KEY));
-    let secrets = secrets::derived(&config, &[], true);
+    let secrets = secrets::derived(&config, None, true);
     let environment = Environment {
         inherited: vec!["HOME".to_owned()],
         by_name: BTreeSet::new(),
@@ -489,4 +489,125 @@ fn checked_names_the_env_entries_and_the_copies_of_a_credential() {
     assert_eq!(checked.inherited(), ["HOME"]);
     assert_eq!(checked.digest(), config.digest());
     assert!(!format!("{checked:?}").contains(KEY));
+}
+
+/// R62: a header value with no `${VAR}` in it is refused without being
+/// shown, in the map form by its name and in the text form by its pair, and
+/// a text beside a `${VAR}` or a text that is one `${VAR}` passes. A header
+/// set in code passes as a credential set in code does.
+#[test]
+fn a_header_value_with_no_variable_is_refused_and_never_shown() {
+    let scratch = lablet_test_support::Scratch::new("prepare-headers");
+    let token = "literal-0123456789abcdef";
+    let held = [
+        ("T", "tok-0123456789abcdef"),
+        ("H", "authorization=Bearer%20x"),
+    ];
+    let with = |telemetry: &str| {
+        filled(
+            &format!(
+                "model: {{ provider: fake, script: '{}' }}\nprompt: {{ system: Hi. }}\ntelemetry:\n  otlp:\n    headers: {telemetry}\n",
+                scratch
+                    .write(
+                        "script.yaml",
+                        "- response: { content: [{ text: Done. }], finish: end_turn }\n"
+                    )
+                    .display()
+            ),
+            &held,
+        )
+    };
+
+    let literal = refused(
+        &with(&format!(
+            "{{ Authorization: 'Bearer ${{T}}', X-Literal: {token} }}"
+        )),
+        None,
+    );
+    assert_eq!(
+        literal,
+        "telemetry.otlp.headers.X-Literal (line 5) is refused: it holds no ${VAR}, and what it \
+         holds isn't shown; write X-Literal: ${X_LITERAL}, and rotate it if this was a token"
+    );
+    assert!(!literal.contains(token));
+    let pair = refused(
+        &with(&format!("'authorization=Bearer%20${{T}},x-tenant={token}'")),
+        None,
+    );
+    assert_eq!(
+        pair,
+        "telemetry.otlp.headers (line 5) is refused: its pair `x-tenant` holds no ${VAR}, and what \
+         it holds isn't shown; write x-tenant=${X_TENANT}, and rotate it if this was a token"
+    );
+    assert!(!pair.contains(token));
+    let text = refused(&with(&format!("'authorization=Bearer%20{token}'")), None);
+    assert_eq!(
+        text,
+        "telemetry.otlp.headers (line 5) is refused: it holds no ${VAR}, and what it holds isn't \
+         shown; write each value as a ${VAR}, as authorization=Bearer%20${TOKEN}, and rotate it \
+         if this was a token"
+    );
+    assert_eq!(
+        refused(&with("'${H:-x=default}'"), None),
+        "telemetry.otlp.headers (line 5) is refused: a credential's default can only be empty, \
+         and what follows :- isn't shown; write ${H:-}"
+    );
+
+    passes(&with("{ Authorization: 'Bearer ${T}' }"), None);
+    passes(&with("'${H}'"), None);
+    passes(&with("'${H:-}'"), None);
+    passes(&with("'authorization=Bearer%20${T},x-tenant=${T}'"), None);
+    passes(&with("{}"), None);
+    let mut in_code = with("null");
+    in_code.telemetry.otlp.headers = Some([("X-Code", Secret::new(token))].into());
+    passes(&in_code, None);
+}
+
+/// R51: a relative path in a config that no directory was given for is
+/// refused by its key, and `Config::relative_to` places it.
+#[test]
+fn a_relative_path_is_refused_until_the_config_is_given_a_directory() {
+    let scratch = lablet_test_support::Scratch::new("prepare-paths");
+    scratch.write(
+        "script.yaml",
+        "- response: { content: [{ text: Done. }], finish: end_turn }\n",
+    );
+    scratch.write("prompts/sys.md", "Hi.");
+    let text = format!(
+        "model: {{ provider: fake, script: '{}' }}\nprompt: {{ system_file: prompts/sys.md }}\n",
+        scratch.at("script.yaml").display()
+    );
+
+    assert_eq!(
+        refused(&filled(&text, &[]), None),
+        "prompt.system_file (line 2): \"prompts/sys.md\" is refused: a config made in code or from \
+         text has no directory; make the path absolute, or call .relative_to(dir)"
+    );
+    passes(&filled(&text, &[]).relative_to(scratch.path()), None);
+
+    let path = scratch.write("lablet.yaml", &text);
+    let from_file = lablet_config::Config::from_path(&path).unwrap();
+    assert_eq!(
+        refused(&from_file, None),
+        "prompt.system_file (line 2): \"prompts/sys.md\" is refused: a library resolves no \
+         relative path; make the path absolute, or call .relative_to(dir) with the file's \
+         directory"
+    );
+    let mut in_code = Config::default();
+    in_code.model.provider = Provider::Fake;
+    in_code.model.script = Some("run.yaml".into());
+    in_code.prompt.system = Some("Hi.".to_owned());
+    assert_eq!(
+        refused(&in_code, None),
+        "model.script: \"run.yaml\" is refused: a config made in code or from text has no \
+         directory; make the path absolute, or call .relative_to(dir)"
+    );
+    let dash = filled(
+        &format!(
+            "model: {{ provider: fake, script: '{}' }}\nprompt: {{ system: Hi. }}\ntelemetry: {{ file: {{ path: '-' }} }}\n",
+            scratch.at("script.yaml").display()
+        ),
+        &[],
+    );
+    passes(&dash, None);
 }

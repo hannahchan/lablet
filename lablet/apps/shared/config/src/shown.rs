@@ -190,13 +190,20 @@ fn within(shown: &str, prefix: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with(['.', '[']))
 }
 
+/// What says the comment a setting gets after its value, when it gets one.
+pub type Comments<'a> = &'a dyn Fn(&KeyPath) -> Option<String>;
+
 /// `value` serialised through the mask: each key `filled` records within
 /// `mode` is written as the file wrote it, in place of what the fill gave
-/// it, and everything else as `value` writes itself.
+/// it, and everything else as `value` writes itself. With `comments`, each
+/// setting they name is written through `serde_saphyr`'s `Commented`, which
+/// that format writes as a YAML comment after the value and another as a
+/// pair, so comments are for the YAML `check --resolved` prints alone.
 pub struct Masked<'a, T: ?Sized> {
     pub(crate) value: &'a T,
     pub(crate) filled: &'a Filled,
     pub(crate) mode: WrittenBack,
+    comments: Option<Comments<'a>>,
 }
 
 impl<'a, T: ?Sized> Masked<'a, T> {
@@ -206,6 +213,23 @@ impl<'a, T: ?Sized> Masked<'a, T> {
             value,
             filled,
             mode,
+            comments: None,
+        }
+    }
+
+    /// [`Masked::new`], with a comment after each setting `comments` names
+    /// one for.
+    pub fn commented(
+        value: &'a T,
+        filled: &'a Filled,
+        mode: WrittenBack,
+        comments: Comments<'a>,
+    ) -> Self {
+        Self {
+            value,
+            filled,
+            mode,
+            comments: Some(comments),
         }
     }
 }
@@ -218,6 +242,7 @@ impl<T: Serialize + ?Sized> Serialize for Masked<'_, T> {
                 path: KeyPath::default(),
                 filled: self.filled,
                 mode: self.mode,
+                comments: self.comments,
             },
         })
     }
@@ -229,9 +254,41 @@ struct At<'a> {
     path: KeyPath,
     filled: &'a Filled,
     mode: WrittenBack,
+    comments: Option<Comments<'a>>,
+}
+
+/// `value` with the comment `comment` after it, or as it is when there's
+/// none: `serde_saphyr`'s wrapper is a tuple struct it knows by name.
+fn with_comment<S: Serializer, T: Serialize + ?Sized>(
+    serializer: S,
+    value: &T,
+    comment: Option<String>,
+) -> Result<S::Ok, S::Error> {
+    match comment {
+        Some(comment) => serde_saphyr::Commented(value, comment).serialize(serializer),
+        None => value.serialize(serializer),
+    }
+}
+
+/// A value and its comment, serialised together, for a field or an entry
+/// that takes the value by reference.
+struct Said<'a, T: ?Sized> {
+    value: &'a T,
+    comment: Option<String>,
+}
+
+impl<T: Serialize + ?Sized> Serialize for Said<'_, T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        with_comment(serializer, self.value, self.comment.clone())
+    }
 }
 
 impl At<'_> {
+    /// The comment the setting at this path gets, when it gets one.
+    fn comment(&self) -> Option<String> {
+        self.comments.and_then(|comments| comments(&self.path))
+    }
+
     /// The written text to serialise at `key` in place of the value there,
     /// when the record has one that's written back.
     fn written_back(&self, key: &KeyPath) -> Option<&str> {
@@ -260,11 +317,19 @@ impl At<'_> {
         written_item(self.filled, list, index, item.as_str()?)
     }
 
+    /// Whether the record has an entry of the map at this path.
+    fn has_entries(&self) -> bool {
+        self.filled
+            .iter()
+            .any(|(key, _)| key.is_entry_of(&self.path))
+    }
+
     fn key(&self, name: &str) -> Self {
         At {
             path: self.path.key(name),
             filled: self.filled,
             mode: self.mode,
+            comments: self.comments,
         }
     }
 
@@ -273,6 +338,7 @@ impl At<'_> {
             path: self.path.index(index),
             filled: self.filled,
             mode: self.mode,
+            comments: self.comments,
         }
     }
 }
@@ -418,10 +484,15 @@ impl<'a, S: Serializer> Serializer for Masking<'a, S> {
     }
 
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap, S::Error> {
+        // A map the record has entries of may hold none of them and still be
+        // written some at its end, so it isn't told it's empty: YAML would
+        // begin it as `{}`.
+        let len = len.filter(|len| *len > 0 || !self.at.has_entries());
         Ok(Entries {
             inner: self.inner.serialize_map(len)?,
             at: self.at,
             key: None,
+            seen: Vec::new(),
         })
     }
 
@@ -470,9 +541,16 @@ macro_rules! elements {
                 let index = self.index;
                 self.index += 1;
                 let at = self.at.index(index);
+                let comment = at.comment();
                 match at.written_back_item(&self.at.path, index, value) {
-                    Some(written) => self.inner.$method(&written),
-                    None => self.inner.$method(&Within { value, at }),
+                    Some(written) => self.inner.$method(&Said {
+                        value: &written,
+                        comment,
+                    }),
+                    None => self.inner.$method(&Said {
+                        value: &Within { value, at },
+                        comment,
+                    }),
                 }
             }
 
@@ -490,12 +568,18 @@ elements!(SerializeTupleVariant, serialize_field);
 
 /// The entries of a map, each at its key. A key is text in every map a
 /// config holds; one that isn't is serialised as it is, at no key of the
-/// record's.
+/// record's. An entry whose `${VAR}` came out empty isn't stated, so the map
+/// has none for it, and it's written back after the map's own as the file
+/// wrote it: the written form and the digest are then the file's whether or
+/// not the variable is set, a credential's name among them.
 struct Entries<'a, S> {
     inner: S,
     at: At<'a>,
     /// The key last serialised, for the value that follows it.
     key: Option<String>,
+    /// Every key serialised, so the record's entries the map has none for
+    /// are told at its end.
+    seen: Vec<String>,
 }
 
 impl<S: SerializeMap> SerializeMap for Entries<'_, S> {
@@ -506,6 +590,7 @@ impl<S: SerializeMap> SerializeMap for Entries<'_, S> {
         self.key = serde_json::to_value(key)
             .ok()
             .and_then(|key| key.as_str().map(str::to_owned));
+        self.seen.extend(self.key.clone());
         self.inner.serialize_key(key)
     }
 
@@ -513,16 +598,44 @@ impl<S: SerializeMap> SerializeMap for Entries<'_, S> {
         match self.key.take() {
             Some(key) => {
                 let at = self.at.key(&key);
+                let comment = at.comment();
                 match at.written_back(&at.path) {
-                    Some(written) => self.inner.serialize_value(written),
-                    None => self.inner.serialize_value(&Within { value, at }),
+                    Some(written) => self.inner.serialize_value(&Said {
+                        value: written,
+                        comment,
+                    }),
+                    None => self.inner.serialize_value(&Said {
+                        value: &Within { value, at },
+                        comment,
+                    }),
                 }
             }
             None => self.inner.serialize_value(value),
         }
     }
 
-    fn end(self) -> Result<S::Ok, S::Error> {
+    fn end(mut self) -> Result<S::Ok, S::Error> {
+        let unstated: Vec<(String, String)> = self
+            .at
+            .filled
+            .iter()
+            .filter(|(key, _)| key.is_entry_of(&self.at.path))
+            .filter_map(|(key, fill)| {
+                let name = key.last_key()?;
+                (!self.seen.iter().any(|seen| seen == name))
+                    .then(|| (name.to_owned(), fill.written.clone()))
+            })
+            .collect();
+        for (name, written) in unstated {
+            let comment = self.at.key(&name).comment();
+            self.inner.serialize_entry(
+                &name,
+                &Said {
+                    value: written.as_str(),
+                    comment,
+                },
+            )?;
+        }
         self.inner.end()
     }
 }
@@ -545,9 +658,22 @@ macro_rules! fields {
                 value: &T,
             ) -> Result<(), S::Error> {
                 let at = self.at.key(key);
+                let comment = at.comment();
                 match at.written_back(&at.path) {
-                    Some(written) => self.inner.serialize_field(key, written),
-                    None => self.inner.serialize_field(key, &Within { value, at }),
+                    Some(written) => self.inner.serialize_field(
+                        key,
+                        &Said {
+                            value: written,
+                            comment,
+                        },
+                    ),
+                    None => self.inner.serialize_field(
+                        key,
+                        &Said {
+                            value: &Within { value, at },
+                            comment,
+                        },
+                    ),
                 }
             }
 

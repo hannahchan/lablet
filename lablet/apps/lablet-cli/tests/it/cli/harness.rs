@@ -21,16 +21,18 @@ impl Lab {
     }
 
     /// The binary with `args`, to be run in the directory, with no
-    /// `RUST_LOG` of the test's and none of its `OTEL_*` or context
-    /// variables, since an endpoint among them would turn the network
-    /// exporter on under every test, and a `TRACEPARENT` would give every
-    /// run a parent; a test that needs one sets it with `env` after.
+    /// `RUST_LOG` of the test's, none of its `OTEL_*` or context variables,
+    /// since the crates read compression for themselves and a `TRACEPARENT`
+    /// would give every run a parent, and no `ANTHROPIC_API_KEY`, which
+    /// `check` would name on `unread:`; a test that needs one sets it with
+    /// `env` after.
     pub fn lablet(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_lablet"));
         command
             .args(args)
             .current_dir(self.path())
-            .env_remove("RUST_LOG");
+            .env_remove("RUST_LOG")
+            .env_remove("ANTHROPIC_API_KEY");
         #[expect(
             clippy::disallowed_methods,
             reason = "the test reads the names of its own environment, to take the OpenTelemetry variables off the binary's"

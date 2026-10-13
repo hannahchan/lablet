@@ -1185,6 +1185,7 @@ version = "0.1.0"
 dependencies = [
  "humantime",
  "lablet-model",
+ "lablet-otel-env",
  "lablet-test-support",
  "schemars",
  "serde",
@@ -1350,8 +1351,6 @@ dependencies = [
  "lablet-config",
  "lablet-conformance",
  "lablet-model",
- "lablet-otel-env",
- "secrecy",
  "tokio",
 ]
 

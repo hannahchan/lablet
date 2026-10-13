@@ -4,7 +4,10 @@
 //! serde's own reader of a tree says what was wrong and not where, and its
 //! words hold the value it read. This one knows the path of every value it
 //! hands on, so a refusal names its key, and a refusal holds only what was
-//! expected: the value is shown from the tree, as it was written.
+//! expected: the value is shown from the tree, as it was written. It also
+//! knows which texts the fill wrote, so a setting that's a number, a
+//! Boolean or a float reads a filled text as an override's value is read,
+//! and refuses one that doesn't read as its kind without showing it.
 
 use std::fmt::{self, Display};
 
@@ -16,6 +19,8 @@ use serde::de::{
 use serde_json::Value;
 
 use super::key::KeyPath;
+use super::raw::scalar;
+use super::substitute::Filled;
 
 /// Why a value of the tree was refused, and at which key.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,10 +130,86 @@ impl de::Error for Fault {
     }
 }
 
-/// The value at `path` of a tree, as a serde deserialiser.
+/// The value at `path` of a tree, as a serde deserialiser, with the record
+/// of what the fill wrote.
 pub struct At<'a> {
     pub value: &'a Value,
     pub path: KeyPath,
+    pub filled: &'a Filled,
+}
+
+/// The kinds of setting that type a filled text.
+#[derive(Clone, Copy)]
+enum Kind {
+    Bool,
+    Integer,
+    Float,
+}
+
+impl Kind {
+    /// What a filled text that doesn't read as this kind holds no.
+    const fn holds_no(self) -> &'static str {
+        match self {
+            Self::Bool => "neither `true` nor `false`",
+            Self::Integer => "no whole number",
+            Self::Float => "no number",
+        }
+    }
+}
+
+impl<'a> At<'a> {
+    fn child(&self, value: &'a Value, path: KeyPath) -> Self {
+        At {
+            value,
+            path,
+            filled: self.filled,
+        }
+    }
+
+    /// The value as a setting of `kind` reads it: a text the fill wrote is
+    /// read as an override's value is, since a variable holds text whatever
+    /// the setting takes, and refused without being shown when it doesn't
+    /// read as the kind; anything else is read as the tree holds it.
+    fn typed<'de, V: Visitor<'de>>(self, kind: Kind, visitor: V) -> Result<V::Value, Fault> {
+        let Value::String(text) = self.value else {
+            return self.deserialize_any(visitor);
+        };
+        let Some(variable) = self
+            .filled
+            .at(&self.path)
+            .and_then(|fill| fill.names().next())
+        else {
+            return self.deserialize_any(visitor);
+        };
+        let read = scalar(text);
+        let accepted = match (kind, &read) {
+            (Kind::Bool, Value::Bool(_)) | (Kind::Float, Value::Number(_)) => true,
+            (Kind::Integer, Value::Number(number)) => {
+                number.as_u64().is_some() || number.as_i64().is_some()
+            }
+            _ => false,
+        };
+        if !accepted {
+            return Err(Fault::refused(format!(
+                "`{variable}` holds {}, and isn't shown; fix it",
+                kind.holds_no()
+            )));
+        }
+        At {
+            value: &read,
+            path: self.path,
+            filled: self.filled,
+        }
+        .deserialize_any(visitor)
+    }
+}
+
+macro_rules! typed {
+    ($($method:ident => $kind:expr),* $(,)?) => {$(
+        fn $method<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Fault> {
+            self.typed($kind, visitor)
+        }
+    )*};
 }
 
 impl<'de> Deserializer<'de> for At<'_> {
@@ -148,14 +229,30 @@ impl<'de> Deserializer<'de> for At<'_> {
             Value::String(value) => visitor.visit_str(value),
             Value::Array(items) => visitor.visit_seq(Items {
                 rest: items.iter().enumerate(),
-                path: &self.path,
+                at: &self,
             }),
             Value::Object(entries) => visitor.visit_map(Entries {
                 rest: entries.iter(),
-                path: &self.path,
+                at: &self,
                 value: None,
             }),
         }
+    }
+
+    typed! {
+        deserialize_bool => Kind::Bool,
+        deserialize_i8 => Kind::Integer,
+        deserialize_i16 => Kind::Integer,
+        deserialize_i32 => Kind::Integer,
+        deserialize_i64 => Kind::Integer,
+        deserialize_i128 => Kind::Integer,
+        deserialize_u8 => Kind::Integer,
+        deserialize_u16 => Kind::Integer,
+        deserialize_u32 => Kind::Integer,
+        deserialize_u64 => Kind::Integer,
+        deserialize_u128 => Kind::Integer,
+        deserialize_f32 => Kind::Float,
+        deserialize_f64 => Kind::Float,
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Fault> {
@@ -195,20 +292,19 @@ impl<'de> Deserializer<'de> for At<'_> {
         visitor.visit_enum(Variant {
             name,
             value,
-            path: &self.path,
+            at: &self,
         })
     }
 
     serde::forward_to_deserialize_any! {
-        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
-        bytes byte_buf unit unit_struct seq tuple tuple_struct map struct
-        identifier ignored_any
+        char str string bytes byte_buf unit unit_struct seq tuple tuple_struct
+        map struct identifier ignored_any
     }
 }
 
 struct Items<'a, I> {
     rest: I,
-    path: &'a KeyPath,
+    at: &'a At<'a>,
 }
 
 impl<'de, 'a, I: Iterator<Item = (usize, &'a Value)>> SeqAccess<'de> for Items<'_, I> {
@@ -221,19 +317,16 @@ impl<'de, 'a, I: Iterator<Item = (usize, &'a Value)>> SeqAccess<'de> for Items<'
         let Some((index, value)) = self.rest.next() else {
             return Ok(None);
         };
-        let path = self.path.index(index);
-        seed.deserialize(At {
-            value,
-            path: path.clone(),
-        })
-        .map(Some)
-        .map_err(|fault| fault.at(&path))
+        let path = self.at.path.index(index);
+        seed.deserialize(self.at.child(value, path.clone()))
+            .map(Some)
+            .map_err(|fault| fault.at(&path))
     }
 }
 
 struct Entries<'a, I> {
     rest: I,
-    path: &'a KeyPath,
+    at: &'a At<'a>,
     /// The value of the key last read, with its path.
     value: Option<(&'a Value, KeyPath)>,
 }
@@ -248,11 +341,11 @@ impl<'de, 'a, I: Iterator<Item = (&'a String, &'a Value)>> MapAccess<'de> for En
         let Some((key, value)) = self.rest.next() else {
             return Ok(None);
         };
-        self.value = Some((value, self.path.key(key)));
+        self.value = Some((value, self.at.path.key(key)));
         let key: StrDeserializer<'_, Fault> = key.as_str().into_deserializer();
         seed.deserialize(key)
             .map(Some)
-            .map_err(|fault| fault.at(self.path))
+            .map_err(|fault| fault.at(&self.at.path))
     }
 
     fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> Result<V::Value, Fault> {
@@ -260,11 +353,8 @@ impl<'de, 'a, I: Iterator<Item = (&'a String, &'a Value)>> MapAccess<'de> for En
             .value
             .take()
             .ok_or_else(|| Fault::refused("a value was read before its key".to_owned()))?;
-        seed.deserialize(At {
-            value,
-            path: path.clone(),
-        })
-        .map_err(|fault| fault.at(&path))
+        seed.deserialize(self.at.child(value, path.clone()))
+            .map_err(|fault| fault.at(&path))
     }
 }
 
@@ -273,7 +363,7 @@ impl<'de, 'a, I: Iterator<Item = (&'a String, &'a Value)>> MapAccess<'de> for En
 struct Variant<'a> {
     name: &'a str,
     value: Option<&'a Value>,
-    path: &'a KeyPath,
+    at: &'a At<'a>,
 }
 
 impl<'de, 'a> EnumAccess<'de> for Variant<'a> {
@@ -287,7 +377,8 @@ impl<'de, 'a> EnumAccess<'de> for Variant<'a> {
             variant,
             Held {
                 value: self.value,
-                path: self.path.key(self.name),
+                path: self.at.path.key(self.name),
+                filled: self.at.filled,
             },
         ))
     }
@@ -297,6 +388,7 @@ impl<'de, 'a> EnumAccess<'de> for Variant<'a> {
 struct Held<'a> {
     value: Option<&'a Value>,
     path: KeyPath,
+    filled: &'a Filled,
 }
 
 impl Held<'_> {
@@ -305,6 +397,7 @@ impl Held<'_> {
             Some(value) => Ok(At {
                 value,
                 path: self.path.clone(),
+                filled: self.filled,
             }),
             None => Err(Fault::refused(
                 "expected a mapping of the value's name to what it holds".to_owned(),

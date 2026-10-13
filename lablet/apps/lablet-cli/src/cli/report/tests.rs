@@ -40,10 +40,7 @@ async fn finished(script: &str, budget: Option<u64>) -> FinishedRun {
             "name": "scripted-1",
         },
         "prompt": { "system": SYSTEM },
-        "telemetry": {
-            "file": { "path": scratch.at("telemetry.otlp.jsonl") },
-            "otlp": { "enabled": false },
-        },
+        "telemetry": { "file": { "path": scratch.at("telemetry.otlp.jsonl") } },
     });
     let config = Config::from_str(&config.to_string(), Format::Json).unwrap();
     let mut lablet = lablet_cli::compose::build(config, lablet_cli::input::process_environment())

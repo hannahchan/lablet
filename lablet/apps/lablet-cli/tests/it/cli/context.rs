@@ -1,9 +1,10 @@
-//! The inbound context and the SDK's own environment through the binary,
-//! with the variables given to the process, since a test can't set one of
-//! its own: a run under an inbound `TRACEPARENT` is its child, a run under
-//! one that isn't sampled exports no span, a command is under its tool
-//! span, a run such a command starts is a child of that span, and what the
-//! SDK says of a setting it read for itself stays out of the diagnostic log.
+//! The inbound context through the binary, with the variables given to the
+//! process, since a test can't set one of its own: a run under an inbound
+//! `TRACEPARENT` is its child, a run under one that isn't sampled exports no
+//! span, a command is under its tool span, a run such a command starts is a
+//! child of that span, `telemetry.propagators` names the propagators where
+//! `OTEL_PROPAGATORS` changes nothing, and what the SDK says of a sampler
+//! variable it read for itself stays out of the diagnostic log.
 
 use lablet_conformance::otlp::Exported;
 use serde_json::{Value, json};
@@ -56,11 +57,28 @@ const PRINTS: &str = "
 /// Runs `script` in a lab of its own, with its telemetry in its file and
 /// no network exporter, and `env` given to the process.
 fn completed(test: &str, script: &str, env: &[(&str, &str)]) -> (Lab, Ran) {
-    completed_with(test, script, json!({}), env)
+    completed_with(test, script, json!({}), &Value::Null, env)
 }
 
-/// [`completed`], with `tools.builtin.env` stating `stated`.
-fn completed_with(test: &str, script: &str, stated: Value, env: &[(&str, &str)]) -> (Lab, Ran) {
+/// [`completed`], with `telemetry.propagators` stating `propagators`.
+fn completed_through(
+    test: &str,
+    script: &str,
+    propagators: &str,
+    env: &[(&str, &str)],
+) -> (Lab, Ran) {
+    completed_with(test, script, json!({}), &json!(propagators), env)
+}
+
+/// [`completed`], with `tools.builtin.env` stating `stated` and
+/// `telemetry.propagators` stating `propagators`.
+fn completed_with(
+    test: &str,
+    script: &str,
+    stated: Value,
+    propagators: &Value,
+    env: &[(&str, &str)],
+) -> (Lab, Ran) {
     let lab = Lab::new(test);
     lab.write("work/notes.md", "Nothing yet.");
     let mut builtin = lab.builtin(&["bash", "read_file"]);
@@ -69,7 +87,7 @@ fn completed_with(test: &str, script: &str, stated: Value, env: &[(&str, &str)])
         script,
         json!({
             "tools": { "builtin": builtin },
-            "telemetry": { "otlp": { "enabled": false }, "capture_content": true },
+            "telemetry": { "capture_content": true, "propagators": propagators },
             "run": { "transcript_path": "transcript.json" },
         }),
     );
@@ -172,12 +190,19 @@ fn a_run_under_an_unsampled_traceparent_exports_its_records_and_no_span() {
     }
 }
 
+/// `propagators: none` reads no context variable, so a run is a trace of
+/// its own; `OTEL_PROPAGATORS=none` in the environment isn't read, so under
+/// it a run is still its parent's child.
 #[test]
-fn with_otel_propagators_none_a_run_is_a_trace_of_its_own() {
-    let (lab, _) = completed(
+fn with_propagators_none_a_run_is_a_trace_of_its_own_and_otel_propagators_changes_nothing() {
+    let (lab, _) = completed_through(
         "context-none",
         ENDS,
-        &[("OTEL_PROPAGATORS", "none"), ("TRACEPARENT", SAMPLED)],
+        "none",
+        &[
+            ("OTEL_PROPAGATORS", "tracecontext"),
+            ("TRACEPARENT", SAMPLED),
+        ],
     );
 
     let exported = lab.exported();
@@ -185,6 +210,14 @@ fn with_otel_propagators_none_a_run_is_a_trace_of_its_own() {
     assert_eq!(root.parent_span_id, None);
     assert_ne!(root.trace_id, TRACE_ID);
     assert_eq!(root.trace_state, "");
+
+    let (lab, _) = completed(
+        "context-variable-none",
+        ENDS,
+        &[("OTEL_PROPAGATORS", "none"), ("TRACEPARENT", SAMPLED)],
+    );
+    let root = lab.exported().spans_of(key::INVOKE_AGENT)[0].clone();
+    assert_eq!(root.parent_span_id.as_deref(), Some(PARENT_ID));
 }
 
 #[test]
@@ -235,40 +268,50 @@ fn inbound_baggage_is_emitted_nowhere() {
     }
 }
 
-/// The SDK's tracer provider reads `OTEL_TRACES_SAMPLER` for itself, in
-/// lower case only, and warns of the fallback it would use; lablet reads it
-/// in any case and states the sampler, so that warning would name one the
-/// run doesn't use. A warning of lablet's own still shows the log is on.
+/// The SDK's tracer provider reads `OTEL_TRACES_SAMPLER` for itself and
+/// warns of the fallback it would use; lablet reads no sampler variable and
+/// states the sampler, parent-based always on, so the variable decides
+/// nothing and that warning would name a sampler the run doesn't use. A
+/// warning of lablet's own, about a `TRACEPARENT` it can't read, still
+/// shows the log is on.
 #[test]
 fn the_sdks_warning_about_a_sampler_it_read_itself_stays_out_of_the_log() {
-    for (sampler, spans) in [("ALWAYS_OFF", 0), ("traceidratio", 2)] {
+    for sampler in ["ALWAYS_OFF", "always_off", "traceidratio"] {
         let (lab, run) = completed(
             &format!("context-sampler-{}", sampler.to_ascii_lowercase()),
             ENDS,
             &[
                 ("OTEL_TRACES_SAMPLER", sampler),
-                ("OTEL_PROPAGATORS", "xray"),
+                ("OTEL_TRACES_SAMPLER_ARG", "0"),
+                ("TRACEPARENT", "not-a-trace-parent"),
             ],
         );
 
         assert!(
             run.stderr
-                .contains("`OTEL_PROPAGATORS` holds `xray`, which isn't one lablet serves"),
+                .contains("`TRACEPARENT` holds a value that isn't a W3C trace parent"),
             "{run:?}"
         );
         for said in ["TracerProvider.Config", "fallback", "OTEL_TRACES_SAMPLER"] {
             assert!(!run.stderr.contains(said), "{sampler}: {said}: {run:?}");
         }
-        assert_eq!(lab.exported().spans.len(), spans, "{sampler}");
+        assert_eq!(
+            lab.exported().spans.len(),
+            2,
+            "{sampler}: the variable decides nothing"
+        );
     }
 }
 
-/// `b3` and `b3multi` each extract the run's parent from their own
-/// variables and inject a command's from its tool span into them, and a
-/// command inherits none of the others.
+/// `propagators: b3` and `b3multi` each extract the run's parent from their
+/// own variables and inject a command's from its tool span into them, and a
+/// command inherits none of the others. `OTEL_PROPAGATORS=b3` in the
+/// environment changes nothing: under the default propagators `B3` isn't
+/// read and `TRACEPARENT` is.
 #[test]
 fn b3_and_b3multi_carry_the_inbound_context_to_a_command_under_its_tool_span() {
     let single = format!("{TRACE_ID}-{PARENT_ID}-1");
+    let other = "00-11111111111111111111111111111111-2222222222222222-01";
     for (propagators, inbound) in [
         ("b3", vec![("B3", single.as_str())]),
         (
@@ -281,12 +324,13 @@ fn b3_and_b3multi_carry_the_inbound_context_to_a_command_under_its_tool_span() {
         ),
     ] {
         let mut env = vec![
-            ("OTEL_PROPAGATORS", propagators),
-            ("TRACEPARENT", SAMPLED),
+            ("OTEL_PROPAGATORS", "tracecontext"),
+            ("TRACEPARENT", other),
             ("BAGGAGE", "inherited=1"),
         ];
         env.extend(inbound);
-        let (lab, _) = completed(&format!("context-{propagators}"), PRINTS, &env);
+        let (lab, _) =
+            completed_through(&format!("context-{propagators}"), PRINTS, propagators, &env);
 
         let root = lab.exported().spans_of(key::INVOKE_AGENT)[0].clone();
         assert_eq!(root.trace_id, TRACE_ID, "{propagators}");
@@ -306,17 +350,32 @@ fn b3_and_b3multi_carry_the_inbound_context_to_a_command_under_its_tool_span() {
             "{propagators}"
         );
     }
+
+    let (lab, _) = completed(
+        "context-b3-variable",
+        ENDS,
+        &[
+            ("OTEL_PROPAGATORS", "b3"),
+            ("B3", &single),
+            ("TRACEPARENT", other),
+        ],
+    );
+    let root = lab.exported().spans_of(key::INVOKE_AGENT)[0].clone();
+    assert_eq!(
+        root.trace_id, "11111111111111111111111111111111",
+        "`OTEL_PROPAGATORS` isn't read: the default propagators extract `TRACEPARENT`"
+    );
 }
 
-/// Under `none`, nothing is injected, and a context variable the command
-/// would inherit is another span's, so it's removed.
+/// Under `propagators: none`, nothing is injected, and a context variable
+/// the command would inherit is another span's, so it's removed.
 #[test]
-fn under_otel_propagators_none_a_command_gets_no_context_variable() {
-    let (lab, _) = completed(
+fn under_propagators_none_a_command_gets_no_context_variable() {
+    let (lab, _) = completed_through(
         "context-command-none",
         PRINTS,
+        "none",
         &[
-            ("OTEL_PROPAGATORS", "none"),
             ("TRACEPARENT", SAMPLED),
             ("TRACESTATE", TRACESTATE),
             ("BAGGAGE", "inherited=1"),
@@ -338,6 +397,7 @@ fn a_traceparent_the_config_states_is_the_one_a_command_gets() {
         "context-command-stated",
         PRINTS,
         json!({ "TRACEPARENT": stated }),
+        &Value::Null,
         &[("TRACEPARENT", SAMPLED), ("TRACESTATE", TRACESTATE)],
     );
 

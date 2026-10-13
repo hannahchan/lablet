@@ -12,7 +12,7 @@ pub(super) use crate::export::testing::{
     WIDE, after, emit_run, otlp_of, scope, sdk_of,
 };
 use crate::export::{FileTarget, OtlpSettings, Telemetry, resource};
-use crate::otel_env::{self, Sdk};
+use crate::otel_env::Sdk;
 
 /// The file every run in `scratch` is appended to, unless a test says
 /// otherwise.
@@ -59,7 +59,7 @@ pub(super) fn built(settings: Settings) -> Telemetry {
         sdk,
     } = settings;
     let mut builder = Telemetry::builder(scope())
-        .resource(resource(VERSION, attributes, &otel_env::Context::default()))
+        .resource(resource(VERSION, &attributes))
         .sdk(sdk);
     if let Some(target) = target {
         builder = builder.file(target);

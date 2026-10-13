@@ -208,7 +208,8 @@ impl RawConfig {
     /// variable is unset or empty, and `$${` the text `${`. Each key the
     /// fill changed is recorded with the text as written, so every message,
     /// the resolved config and the digest show it as the file wrote it, and
-    /// after the fill every `${` left is text.
+    /// after the fill every `${` left is text. A text that is one reference
+    /// whole and comes out empty leaves its setting unstated, `null`.
     ///
     /// A `${VAR}` at `model.api_key` whose variable is unset leaves the key
     /// unset rather than refusing it, since whether a key is needed is the
@@ -217,10 +218,11 @@ impl RawConfig {
     /// # Errors
     ///
     /// Returns [`ConfigError::Invalid`] for the first text that can't be
-    /// filled: a `${` that begins no reference to a variable, a variable
-    /// with no default that isn't set, or one that holds what isn't UTF-8.
-    /// The refusal names the key and where it was written, shows the text
-    /// as written, and shows nothing a variable holds.
+    /// filled, a variable with no default that isn't set, or one that holds
+    /// what isn't UTF-8, and [`ConfigError::Refused`] for a `${` that begins
+    /// no reference to a variable, which shows nothing of the text. Each
+    /// names the key and where it was written, and shows nothing a variable
+    /// holds.
     pub fn substituted(
         mut self,
         lookup: impl Fn(&str) -> Option<OsString>,
@@ -228,8 +230,23 @@ impl RawConfig {
         let mut tree = self.tree.clone();
         let fills = substitute::fill(&mut tree, &lookup).map_err(|unfilled| {
             let key = unfilled.key;
+            if !unfilled.shown {
+                return ConfigError::Refused {
+                    place: place_in(&self.places, &key),
+                    key: key.to_string(),
+                    reason: unfilled.reason,
+                };
+            }
+            // The fill hasn't run, so the text is still as written: the
+            // mask shows it through the record the fill would make, which
+            // shows a credential only as the `${VAR}` it was written as.
+            let text = key.find(&self.tree);
+            let record = text
+                .and_then(Value::as_str)
+                .map(|written| Filled::new([(key.clone(), substitute::fill_of(written))].into()))
+                .unwrap_or_default();
             ConfigError::Invalid {
-                value: shown(&key, key.find(&self.tree), &self.filled),
+                value: shown(&key, text, &record),
                 place: place_in(&self.places, &key),
                 key: key.to_string(),
                 reason: unfilled.reason,
@@ -246,11 +263,12 @@ impl RawConfig {
     ///
     /// Returns [`ConfigError::UnknownKey`] for a key no setting has,
     /// [`ConfigError::Invalid`] for a value of the wrong kind or one the
-    /// setting doesn't take, and for a text that holds a `${` when
-    /// [`RawConfig::substituted`] didn't run, and [`ConfigError::Missing`]
-    /// for a setting that has no default and isn't stated. Each names the
-    /// key and where it was written, and shows the value as the text wrote
-    /// it.
+    /// setting doesn't take, for a filled text at a number, a Boolean or a
+    /// float that doesn't read as one, and for a text that holds a `${`
+    /// when [`RawConfig::substituted`] didn't run, and
+    /// [`ConfigError::Missing`] for a setting that has no default and isn't
+    /// stated. Each names the key and where it was written, and shows the
+    /// value as the text wrote it.
     pub fn config(&self) -> Result<Config, ConfigError> {
         if !self.filled.ran()
             && let Some(key) = wants_a_fill(&self.tree, &KeyPath::default())
@@ -267,6 +285,7 @@ impl RawConfig {
         let config = Config::deserialize(At {
             value: &self.tree,
             path: KeyPath::default(),
+            filled: &self.filled,
         })
         .map_err(|fault| self.refusal(fault))?;
         // A credential key written as `null` states nothing, so a value set
@@ -466,10 +485,11 @@ fn tree_of(node: Node, path: &KeyPath, places: &mut BTreeMap<KeyPath, Place>) ->
     }
 }
 
-/// The value an override gives: what YAML reads it as when that's a
-/// scalar, and otherwise the text as it's written, since an override
-/// states one value and `-` or `a: b` would be a list or a mapping.
-fn scalar(text: &str) -> Value {
+/// The value an override gives, and the value a filled text reads as where
+/// the setting is a number, a Boolean or a float: what YAML reads it as when
+/// that's a scalar, and otherwise the text as it's written, since an
+/// override states one value and `-` or `a: b` would be a list or a mapping.
+pub(crate) fn scalar(text: &str) -> Value {
     match serde_saphyr::from_str_with_options::<Spanned<Node>>(text, yaml_options()) {
         Ok(Spanned {
             value:

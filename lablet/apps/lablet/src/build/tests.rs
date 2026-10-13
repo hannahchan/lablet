@@ -65,11 +65,6 @@ async fn the_check_names_what_a_run_drops_and_cuts_and_never_a_value() {
         ]
     );
     assert!(checked.given().is_empty());
-    assert_eq!(
-        checked.cut(),
-        Vec::<String>::new(),
-        "a library hands nothing in"
-    );
     assert!(!format!("{checked:?}").contains(KEY), "{checked:?}");
 }
 
@@ -197,7 +192,8 @@ fn a_variable_that_is_not_set_is_refused_by_the_key_it_is_in() {
 
     assert_eq!(
         error.to_string(),
-        "model.name (line 1): \"${MODEL}\" is refused: the variable `MODEL` isn't set"
+        "model.name (line 1): \"${MODEL}\" is refused: `MODEL` isn't set; set it, or give a default, \
+         as ${MODEL:-default}"
     );
 }
 

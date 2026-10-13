@@ -1,11 +1,9 @@
-//! The resource every export carries is the one the environment lablet is
-//! given says, and only that: the SDK's own reading of the process
-//! environment adds nothing to it, which a child process whose environment
-//! says otherwise holds, since a test can't set a variable of its own
-//! process.
+//! The resource every export carries is the config's, and only that: the
+//! SDK's own reading of the process environment adds nothing to it, which a
+//! child process whose environment says otherwise holds, since a test can't
+//! set a variable of its own process.
 
 use std::collections::BTreeSet;
-use std::ffi::OsString;
 use std::process::{Command, Stdio};
 
 use lablet_conformance::otlp::Exported;
@@ -14,28 +12,16 @@ use serde_json::json;
 
 use super::harness::{CONTENT, RUN, Records, VERSION, WIDE, run, scope};
 use crate::export::{FileTarget, Telemetry, resource};
-use crate::otel_env::OtelEnv;
 
 /// Set in the environment of the child process the test below starts, to
 /// the file the child exports its run to.
 const CHILD: &str = "LABLET_TEST_RESOURCE_CHILD";
 
-/// What the environment the child's lablet is given holds: a service name,
-/// and pairs whose values are escaped, one of them a key the composer
-/// states too.
-const GIVEN: [(&str, &str); 2] = [
-    ("OTEL_SERVICE_NAME", "given-service"),
-    (
-        "OTEL_RESOURCE_ATTRIBUTES",
-        "deployment.environment=given%2Cdecoded,team=a",
-    ),
-];
-
 /// The child's side, which does nothing unless the test below started it:
 /// one run, its content captured, exported to the file the parent named,
-/// with the resource of [`GIVEN`] and the composer stating `team: b`.
+/// with the config's resource, `team: b` and a service name of its own.
 #[tokio::test]
-async fn a_child_process_exports_a_run_with_the_resource_of_the_environment_it_is_given() {
+async fn a_child_process_exports_a_run_with_the_resource_of_its_config() {
     #[expect(
         clippy::disallowed_methods,
         reason = "a test reads the variable its parent set, to know which side it's on"
@@ -43,19 +29,12 @@ async fn a_child_process_exports_a_run_with_the_resource_of_the_environment_it_i
     let Some(path) = std::env::var_os(CHILD) else {
         return;
     };
-    let env = |name: &str| {
-        GIVEN
-            .iter()
-            .find(|(variable, _)| *variable == name)
-            .map(|(_, value)| OsString::from(value))
-    };
-    let context = OtelEnv::read(&env).context;
+    let attributes = vec![
+        ("team".to_owned(), "b".to_owned()),
+        ("service.name".to_owned(), "configured-service".to_owned()),
+    ];
     let telemetry = Telemetry::builder(scope())
-        .resource(resource(
-            VERSION,
-            vec![("team".to_owned(), "b".to_owned())],
-            &context,
-        ))
+        .resource(resource(VERSION, &attributes))
         .file(FileTarget::Path(path.into()))
         .build()
         .unwrap();
@@ -71,7 +50,7 @@ fn the_process_environments_resource_variables_add_nothing_to_the_resource() {
     let child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "export::tests::resource::a_child_process_exports_a_run_with_the_resource_of_the_environment_it_is_given",
+            "export::tests::resource::a_child_process_exports_a_run_with_the_resource_of_its_config",
             "--test-threads=1",
         ])
         .env(CHILD, &path)
@@ -105,12 +84,7 @@ fn the_process_environments_resource_variables_add_nothing_to_the_resource() {
     for resource in resources {
         assert_eq!(
             resource.get("service.name"),
-            Some(&json!("given-service")),
-            "{resource:?}"
-        );
-        assert_eq!(
-            resource.get("deployment.environment"),
-            Some(&json!("given,decoded")),
+            Some(&json!("configured-service")),
             "{resource:?}"
         );
         assert_eq!(resource.get("team"), Some(&json!("b")), "{resource:?}");
@@ -119,7 +93,6 @@ fn the_process_environments_resource_variables_add_nothing_to_the_resource() {
         assert_eq!(
             keys,
             BTreeSet::from([
-                "deployment.environment",
                 "service.name",
                 "service.version",
                 "team",

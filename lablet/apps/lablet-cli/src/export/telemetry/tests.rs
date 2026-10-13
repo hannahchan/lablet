@@ -19,7 +19,6 @@ use crate::export::testing::{
     RUN_KEY, Records, SCHEMA_URL, SPANS_PER_RUN, Scratch, VERSION, WIDE, after, emit_run, otlp_of,
     scope, sdk_of, wide_event,
 };
-use crate::otel_env;
 
 fn exporting(memory: &Memory) -> Telemetry {
     Telemetry::builder(scope())
@@ -475,12 +474,11 @@ async fn every_exporter_is_told_the_sdk_and_what_the_composer_added_its_service_
     let telemetry = Telemetry::builder(scope())
         .resource(resource(
             VERSION,
-            vec![
+            &[
                 ("team".to_owned(), "evals".to_owned()),
                 ("service.name".to_owned(), "not-lablet".to_owned()),
                 ("deployment.environment.name".to_owned(), "ci".to_owned()),
             ],
-            &otel_env::Context::default(),
         ))
         .exporting_to(memory.spans(), memory.records())
         .build()
@@ -667,7 +665,6 @@ fn a_builder_prints_neither_the_endpoint_nor_a_header_value_it_was_given() {
     let builder = Telemetry::builder(scope()).otlp(otlp_of(
         "telemetry: { otlp: { endpoint: 'http://user:hunter2hunter2@collector:4318', headers: \
          { authorization: Bearer hunter2hunter2 } } }",
-        &[],
     ));
 
     let shown = format!("{builder:?}");
@@ -681,8 +678,7 @@ fn a_builder_prints_neither_the_endpoint_nor_a_header_value_it_was_given() {
 async fn a_header_that_is_not_one_fails_the_build_and_names_the_header() {
     let refused = Telemetry::builder(scope())
         .otlp(otlp_of(
-            "telemetry: { otlp: { headers: { no spaces allowed: v } } }",
-            &[],
+            "telemetry: { otlp: { endpoint: 'http://c:4318', headers: { no spaces allowed: v } } }",
         ))
         .build()
         .err()
@@ -697,19 +693,15 @@ async fn a_header_that_is_not_one_fails_the_build_and_names_the_header() {
     );
 }
 
-// OTEL_SDK_DISABLED: the API's no-ops
+// Nothing named
 
+/// With no destination named, a run's spans still have ids of their own,
+/// so a command gets its tool span's context, and nothing is written or
+/// sent: the providers have no processor.
 #[tokio::test]
-async fn with_the_sdk_disabled_a_span_carries_its_parents_context_and_no_id_of_its_own() {
-    let memory = Memory::default();
-    let scratch = Scratch::new("disabled");
-    let path = scratch.at("runs.otlp.jsonl");
-    let telemetry = Telemetry::builder(scope())
-        .disabled()
-        .file(FileTarget::Path(path.clone()))
-        .exporting_to(memory.spans(), memory.records())
-        .build()
-        .unwrap();
+async fn with_nothing_named_a_span_has_an_id_of_its_own_and_nothing_reaches_a_destination() {
+    let scratch = Scratch::new("nothing-named");
+    let telemetry = Telemetry::builder(scope()).build().unwrap();
     let inbound = SpanContext::new(
         TraceId::from_bytes([7; 16]),
         SpanId::from_bytes([8; 8]),
@@ -729,9 +721,13 @@ async fn with_the_sdk_disabled_a_span_carries_its_parents_context_and_no_id_of_i
     let flushed = telemetry.flush(wide).await;
     let shut = telemetry.shutdown().await;
 
-    assert_eq!(within.span().span_context(), &inbound);
-    assert_eq!(child.span_context(), &inbound);
+    let own = within.span().span_context().clone();
+    assert_eq!(own.trace_id(), inbound.trace_id(), "in the inbound trace");
+    assert_ne!(own.span_id(), inbound.span_id(), "a span of its own");
+    assert_ne!(child.span_context().span_id(), own.span_id());
     assert_eq!((flushed, shut), (Ok(()), Ok(())));
-    assert!(memory.exports().is_empty(), "nothing reached a destination");
-    assert!(!path.exists(), "no file was written");
+    assert!(
+        std::fs::read_dir(scratch.path()).unwrap().next().is_none(),
+        "nothing was written"
+    );
 }

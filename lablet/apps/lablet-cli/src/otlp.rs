@@ -1,100 +1,35 @@
 //! Where and how each signal is exported over the network, resolved from
-//! the config and what the seam read of the `OTEL_*` environment: a field
-//! the config states wins, and a field it leaves `null` is the
-//! environment's, the signal's own variable before the generic one, and
-//! then the specification's default. Every value is resolved here, the
-//! endpoint always with its scheme, so the exporter's builders are told
-//! each one and their own reading of the process environment never
-//! decides, but for no compression, which a builder has no setting for.
+//! the config's `telemetry.otlp` section alone: a named endpoint sends both
+//! signals, over the protocol it states or HTTP/protobuf, with the headers
+//! and the TLS it states, and no endpoint sends nothing. Every value is
+//! resolved here, the endpoint always with its scheme, and stated on the
+//! exporter's builders, so their own reading of the process environment
+//! never decides, but for compression, which a builder has no setting for
+//! and the exporter reads for itself.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
 use secrecy::{ExposeSecret as _, SecretString};
 
 use crate::export::{Signal, Transport};
-use crate::otel_env;
-use lablet_config::{Config, ConfigError, Otlp, OtlpProtocol, Refusal};
+use lablet_config::{Config, ConfigError, KeyPath, OtlpProtocol, Refusal};
 
-/// The endpoint of an OTLP/HTTP collector when nothing names one, to which
-/// each signal's path is appended.
-const HTTP_DEFAULT: &str = "http://localhost:4318";
+/// The section the TLS files are named in.
+const TLS_KEY: &str = "telemetry.otlp.tls";
 
-/// The endpoint of an OTLP/gRPC collector when nothing names one.
-const GRPC_DEFAULT: &str = "http://localhost:4317";
-
-/// The key a refusal of what the exporter is sent to is made under.
-const ENDPOINT_KEY: &str = "telemetry.otlp.endpoint";
+/// How long one export may take, its retries included: the specification's
+/// default, stated on every builder since the exporter would otherwise read
+/// `OTEL_EXPORTER_OTLP_TIMEOUT` for it. A field for it waits for a
+/// deployment that asks.
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The target of this module's warnings, the module they were written in
 /// before the kernels were split out, so a line of the diagnostic log, and
 /// a `RUST_LOG` directive that names it, are as they were.
 const TARGET: &str = "lablet::otlp";
-
-/// A value that may be a secret, which no `Debug` form shows.
-#[derive(Clone, PartialEq, Eq)]
-pub(crate) struct Hidden(pub(crate) String);
-
-impl fmt::Debug for Hidden {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("..")
-    }
-}
-
-/// A value, and the variable it was read from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Variable<T> {
-    /// The variable.
-    pub(crate) name: &'static str,
-    /// What it holds, as the seam read it.
-    pub(crate) value: T,
-}
-
-/// The endpoint the environment names for a signal.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InheritedEndpoint {
-    /// The variable it was read from.
-    pub(crate) variable: &'static str,
-    /// Whether that's the generic variable, which takes the signal's path
-    /// on HTTP, where the signal's own is taken as it's written.
-    pub(crate) generic: bool,
-    /// What it holds, as text: a value that isn't UTF-8 is read lossily,
-    /// and then parses as no URL.
-    pub(crate) text: Hidden,
-}
-
-/// What the environment gives one signal's exporter, as the seam reads it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Inherited {
-    /// Whether the signal's selector turns its OTLP exporter on, or
-    /// `None` when it says nothing lablet serves.
-    pub(crate) selected: Option<bool>,
-    /// The protocol, when a variable names one lablet serves.
-    pub(crate) protocol: Option<Transport>,
-    /// The endpoint, when a variable names one.
-    pub(crate) endpoint: Option<InheritedEndpoint>,
-    /// The headers: the signal's variable's when it's set, even to pairs
-    /// that are all dropped, else the generic variable's, when it's set.
-    pub(crate) headers: Option<Vec<(String, Hidden)>>,
-    /// Every header name either variable sets, which comes off every
-    /// request whichever of them the exporter merged in.
-    pub(crate) header_names: Vec<String>,
-    /// How long one export may take.
-    pub(crate) timeout: Duration,
-    /// Whether exports are compressed with gzip.
-    pub(crate) gzip: bool,
-    /// Whether a gRPC endpoint without a scheme is spoken to without TLS.
-    pub(crate) insecure: bool,
-    /// The file of the certificates the exporter trusts, in place of the
-    /// platform's roots.
-    pub(crate) certificate: Option<Variable<PathBuf>>,
-    /// The file of the client's private key.
-    pub(crate) client_key: Option<Variable<PathBuf>>,
-    /// The file of the client's certificate.
-    pub(crate) client_certificate: Option<Variable<PathBuf>>,
-}
 
 /// What the network exporters are built from: each signal's destination,
 /// when its signal is exported over the network.
@@ -113,29 +48,14 @@ impl OtlpSettings {
             .filter_map(|(signal, destination)| Some((signal, destination.as_ref()?)))
     }
 
-    /// The variable each destination's endpoint was read from: `None` for
-    /// one the config states, or the protocol's default.
+    /// What the file `telemetry.otlp.tls.client_key` names holds, when the
+    /// config names one: the exporters' private key, which is cut from
+    /// every tool result.
     #[must_use]
-    pub fn endpoint_variables(&self) -> [Option<&'static str>; 2] {
-        [&self.traces, &self.logs]
-            .map(|destination| destination.as_ref().and_then(|of| of.endpoint_variable))
-    }
-
-    /// The client keys the exporters read, each with the variable that
-    /// names its file, once each.
-    #[must_use]
-    pub fn client_keys(&self) -> Vec<(&'static str, &SecretString)> {
-        let mut keys: Vec<(&'static str, &SecretString)> = Vec::new();
-        for (_, destination) in self.destinations() {
-            if let Some(identity) = &destination.tls.identity
-                && !keys
-                    .iter()
-                    .any(|(variable, _)| *variable == identity.key_variable)
-            {
-                keys.push((identity.key_variable, &identity.key));
-            }
-        }
-        keys
+    pub fn client_key(&self) -> Option<&SecretString> {
+        self.destinations()
+            .find_map(|(_, destination)| destination.tls.identity.as_ref())
+            .map(|identity| &identity.key)
     }
 }
 
@@ -155,20 +75,10 @@ pub(crate) struct Destination {
     /// The endpoint, with its scheme, and with the signal's path on HTTP.
     /// It may carry credentials.
     pub(crate) endpoint: SecretString,
-    /// The variable the endpoint was read from, or `None` when the config
-    /// states it or it's the protocol's default.
-    pub(crate) endpoint_variable: Option<&'static str>,
-    /// The headers every export carries, and the only ones the environment
-    /// may have: the config's, when it states any, else the
-    /// environment's.
+    /// The headers every export carries, and the only ones: the config's.
     pub(crate) headers: Vec<(String, SecretString)>,
-    /// Every header name the environment's variables set, which comes off
-    /// every request before `headers` go on.
-    pub(crate) taken_off: Vec<String>,
     /// How long one export may take, its retries included.
     pub(crate) timeout: Duration,
-    /// Whether exports are compressed with gzip.
-    pub(crate) gzip: bool,
     /// What the exporter trusts and shows of itself over TLS.
     pub(crate) tls: Tls,
 }
@@ -179,7 +89,6 @@ impl fmt::Debug for Destination {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Destination")
             .field("transport", &self.transport)
-            .field("endpoint_variable", &self.endpoint_variable)
             .field(
                 "headers",
                 &self
@@ -188,16 +97,14 @@ impl fmt::Debug for Destination {
                     .map(|(name, _)| name.as_str())
                     .collect::<Vec<_>>(),
             )
-            .field("taken_off", &self.taken_off)
             .field("timeout", &self.timeout)
-            .field("gzip", &self.gzip)
             .field("tls", &self.tls)
             .finish_non_exhaustive()
     }
 }
 
-/// The TLS material the environment names, loaded.
-#[derive(Debug, Default)]
+/// The TLS material the config names, loaded.
+#[derive(Debug, Default, Clone)]
 pub(crate) struct Tls {
     /// The certificates trusted in place of the platform's roots, as PEM.
     pub(crate) roots: Option<Vec<u8>>,
@@ -206,20 +113,17 @@ pub(crate) struct Tls {
 }
 
 /// A client certificate and its private key, as PEM.
+#[derive(Clone)]
 pub(crate) struct ClientIdentity {
     /// The certificate.
     pub(crate) certificate: Vec<u8>,
     /// The private key, which is a secret.
     pub(crate) key: SecretString,
-    /// The variable that names the key's file.
-    pub(crate) key_variable: &'static str,
 }
 
 impl fmt::Debug for ClientIdentity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ClientIdentity")
-            .field("key_variable", &self.key_variable)
-            .finish_non_exhaustive()
+        f.debug_struct("ClientIdentity").finish_non_exhaustive()
     }
 }
 
@@ -233,138 +137,78 @@ impl From<OtlpProtocol> for Transport {
     }
 }
 
-/// What the network exporters are built from, for `config` and `exporter`,
-/// what the seam read of the environment, or `None` when no signal is
-/// exported over the network:
-/// `OTEL_SDK_DISABLED` is `true`, `telemetry.otlp.enabled` is `false`, or
-/// it's `null` and each signal's selector is `none`.
+/// What the network exporters are built from, for `config`, or `None` when
+/// it names no endpoint: nothing goes over the network then, whatever else
+/// the section states.
 ///
-/// The TLS material the environment names is read and loaded here for
-/// each signal that's exported over the network, whether or not its
-/// endpoint speaks TLS, so a check reads what a build reads, a file that
-/// can't be loaded is refused wherever the exporter is on, and a client
-/// key's contents are cut whenever lablet holds them.
+/// The TLS files the config names are read and loaded here whenever an
+/// endpoint is named, whether or not it speaks TLS, so a check reads what
+/// a build reads, a file that can't be loaded is refused wherever the
+/// exporter is on, and a client key's contents are cut whenever lablet
+/// holds them.
 ///
 /// # Errors
 ///
-/// Returns a [`ConfigError`] shown as the file wrote it:
-/// `telemetry.otlp.enabled: false` beside an endpoint, which it would make a
-/// setting without effect; and a certificate, client key or client
-/// certificate the environment names that can't be loaded, or a client key
-/// or certificate named without the other, naming the variable and never
-/// what the file holds.
-pub fn settings(
-    config: &Config,
-    exporter: &otel_env::Exporter,
-) -> Result<Option<OtlpSettings>, ConfigError> {
-    let written = config;
+/// Returns a [`ConfigError`] shown as the file wrote it: a `ca_file`,
+/// `client_cert` or `client_key` that can't be read or loaded, naming a
+/// filled path's variable and never what the file holds, and a client key or
+/// certificate named without the other.
+pub fn settings(config: &Config) -> Result<Option<OtlpSettings>, ConfigError> {
     let otlp = &config.telemetry.otlp;
-    let endpoint = otlp
+    let Some(endpoint) = otlp
         .endpoint
         .as_deref()
-        .filter(|endpoint| !endpoint.is_empty());
-    if otlp.enabled == Some(false) && endpoint.is_some() {
-        // An endpoint that holds an `@` is shown by its key alone, as the
-        // refusal of an endpoint shows it, since user information is a
-        // secret and where it ends can't be told.
-        let shown = match written.written_text(ENDPOINT_KEY) {
-            Some(endpoint) => format!("`telemetry.otlp.endpoint: {endpoint}`"),
-            None => "`telemetry.otlp.endpoint`".to_owned(),
-        };
-        return Err(written.refused(Refusal::invalid(
-            "telemetry.otlp.enabled",
-            format!(
-                "it turns the network exporter off, and {shown} names where it sends; a config \
-                 that wants it off states no endpoint"
-            ),
-        )));
-    }
-    if exporter.sdk_disabled {
+        .filter(|endpoint| !endpoint.is_empty())
+    else {
         return Ok(None);
-    }
-    let traces = destination(written, otlp, endpoint, Signal::Traces, &exporter.traces)?;
-    let logs = destination(written, otlp, endpoint, Signal::Logs, &exporter.logs)?;
-    if traces.is_none() && logs.is_none() {
-        return Ok(None);
-    }
-    Ok(Some(OtlpSettings { traces, logs }))
-}
-
-/// Where `signal` goes, or `None` when it isn't exported over the network.
-fn destination(
-    written: &Config,
-    otlp: &Otlp,
-    stated: Option<&str>,
-    signal: Signal,
-    inherited: &Inherited,
-) -> Result<Option<Destination>, ConfigError> {
-    if !otlp.enabled.or(inherited.selected).unwrap_or(true) {
-        return Ok(None);
-    }
+    };
     let transport = otlp
         .protocol
-        .map(Transport::from)
-        .or(inherited.protocol)
-        .unwrap_or(Transport::HttpProtobuf);
-    let (endpoint, endpoint_variable) = match (stated, &inherited.endpoint) {
-        (Some(stated), _) => (at_signal(stated, transport, signal), None),
-        (None, Some(named)) if named.generic => (
-            at_signal(&named.text.0, transport, signal),
-            Some(named.variable),
-        ),
-        (None, Some(named)) => (named.text.0.clone(), Some(named.variable)),
-        (None, None) => match transport {
-            Transport::Grpc => (GRPC_DEFAULT.to_owned(), None),
-            Transport::HttpProtobuf | Transport::HttpJson => {
-                (at_signal(HTTP_DEFAULT, transport, signal), None)
+        .map_or(Transport::HttpProtobuf, Transport::from);
+    let headers: Vec<(String, SecretString)> = otlp
+        .headers
+        .iter()
+        .flat_map(lablet_config::Headers::iter)
+        .map(|(name, value)| {
+            (
+                name.clone(),
+                SecretString::from(value.expose_secret().to_owned()),
+            )
+        })
+        .collect();
+    let tls = tls(config)?;
+    // Both signals go to the one endpoint, whose scheme a signal's path
+    // doesn't change, so a file is warned about once.
+    if !speaks_tls(&with_scheme(endpoint.to_owned(), transport)) {
+        for (name, path) in [
+            ("ca_file", &otlp.tls.ca_file),
+            ("client_cert", &otlp.tls.client_cert),
+            ("client_key", &otlp.tls.client_key),
+        ] {
+            if path.is_some() {
+                tracing::warn!(
+                    target: TARGET,
+                    "`{TLS_KEY}.{name}` names a file for TLS, and the endpoint doesn't speak TLS, \
+                     so the file isn't used, though it's still loaded and refused when it can't be"
+                );
             }
-        },
-    };
-    let endpoint = with_scheme(endpoint, transport, inherited.insecure);
-    let headers = match &otlp.headers {
-        Some(stated) => stated
-            .iter()
-            .map(|(name, value)| {
-                (
-                    name.clone(),
-                    SecretString::from(value.expose_secret().to_owned()),
-                )
-            })
-            .collect(),
-        None => inherited
-            .headers
-            .iter()
-            .flatten()
-            .map(|(name, value)| (name.clone(), SecretString::from(value.0.clone())))
-            .collect(),
-    };
-    let tls = tls(written, signal, stated.is_some(), inherited)?;
-    if !speaks_tls(&endpoint) {
-        for variable in [
-            &inherited.certificate,
-            &inherited.client_key,
-            &inherited.client_certificate,
-        ]
-        .into_iter()
-        .flatten()
-        {
-            tracing::warn!(
-                target: TARGET,
-                "`{}` names a file for TLS, and the endpoint for {signal} doesn't speak TLS, so \
-                 the file isn't used, though it's still loaded and refused when it can't be",
-                variable.name
-            );
         }
     }
-    Ok(Some(Destination {
-        transport,
-        endpoint: SecretString::from(endpoint),
-        endpoint_variable,
-        headers,
-        taken_off: inherited.header_names.clone(),
-        timeout: inherited.timeout,
-        gzip: inherited.gzip,
-        tls,
+    let destination = |signal| {
+        let endpoint = with_scheme(at_signal(endpoint, transport, signal), transport);
+        Destination {
+            transport,
+            endpoint: SecretString::from(endpoint),
+            headers: headers.clone(),
+            timeout: TIMEOUT,
+            tls: tls.clone(),
+        }
+    };
+    let traces = destination(Signal::Traces);
+    let logs = destination(Signal::Logs);
+    Ok(Some(OtlpSettings {
+        traces: Some(traces),
+        logs: Some(logs),
     }))
 }
 
@@ -389,14 +233,12 @@ fn has_scheme(endpoint: &str) -> bool {
 }
 
 /// `endpoint` with a scheme: a gRPC endpoint written without one is given
-/// `http://` when the environment says it's insecure and `https://`
-/// otherwise, as the specification gives it one. An HTTP endpoint is a URL
-/// with its scheme, or it's refused as one the exporter doesn't accept.
-fn with_scheme(endpoint: String, transport: Transport, insecure: bool) -> String {
+/// `https://`, as the specification gives it one where nothing says the
+/// connection is insecure. An HTTP endpoint is a URL with its scheme, or
+/// it's refused as one the exporter doesn't accept.
+fn with_scheme(endpoint: String, transport: Transport) -> String {
     if transport != Transport::Grpc || has_scheme(&endpoint) {
         endpoint
-    } else if insecure {
-        format!("http://{endpoint}")
     } else {
         format!("https://{endpoint}")
     }
@@ -409,91 +251,105 @@ fn speaks_tls(endpoint: &str) -> bool {
         .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("https"))
 }
 
-/// The TLS material the environment names for `signal`, loaded as the
-/// exporters load it. A refusal is under `telemetry.otlp.endpoint`, and
-/// says when the config states no endpoint, which `stated` tells, since
-/// the config then holds nothing at fault.
-fn tls(
-    written: &Config,
-    signal: Signal,
-    stated: bool,
-    inherited: &Inherited,
-) -> Result<Tls, ConfigError> {
-    let refused = |reason: String| ConfigError::Invalid {
-        key: ENDPOINT_KEY.to_owned(),
-        place: written.place_of(ENDPOINT_KEY),
-        value: None,
-        reason: if stated {
-            format!("TLS to the collector for {signal} can't be set up: {reason}")
-        } else {
-            format!(
-                "the config states no endpoint, and TLS to the collector for {signal}, which \
-                 the environment's variables set, can't be set up: {reason}"
-            )
-        },
-    };
-    let read = |variable: &Variable<PathBuf>| {
-        std::fs::read(&variable.value).map_err(|error| {
-            refused(format!(
-                "`{}` names a file that can't be read: {error}",
-                variable.name
-            ))
+/// The TLS material `telemetry.otlp.tls` names, loaded as the exporters
+/// load it. A refusal is under the key of the file at fault, and names the
+/// variable that filled the path where one did, as the mask shows it.
+fn tls(config: &Config) -> Result<Tls, ConfigError> {
+    let tls = &config.telemetry.otlp.tls;
+    let key = |name: &str| KeyPath::of(TLS_KEY).key(name);
+    let refused = |name: &str, reason: String| {
+        config.refused(Refusal::Invalid {
+            key: key(name),
+            reason,
         })
     };
-    let roots = match &inherited.certificate {
-        Some(certificate) => {
-            let pem = read(certificate)?;
+    // How the file is named in a reason: by the variable that filled the
+    // path, when one did, since the path is then the variable's to say, and
+    // as "the file" otherwise, since the path is shown beside it.
+    let named = |name: &str| -> String {
+        config
+            .filled()
+            .at(&key(name))
+            .and_then(|fill| fill.names().next())
+            .map_or_else(|| "the file".to_owned(), |variable| format!("`{variable}`"))
+    };
+    let read = |name: &str, path: &Path| {
+        std::fs::read(path).map_err(|error| {
+            refused(
+                name,
+                format!("{} names a file that can't be read: {error}", named(name)),
+            )
+        })
+    };
+    let roots = match &tls.ca_file {
+        Some(path) => {
+            let pem = read("ca_file", path)?;
             let held =
                 reqwest::Certificate::from_pem_bundle(&pem).is_ok_and(|held| !held.is_empty());
             if held && tls_loads(Some(&pem), None) {
                 Some(pem)
             } else {
-                return Err(refused(format!(
-                    "`{}` names a file that doesn't hold PEM certificates that can be loaded",
-                    certificate.name
-                )));
+                return Err(refused(
+                    "ca_file",
+                    format!(
+                        "{} names a file that doesn't hold PEM certificates that can be loaded",
+                        named("ca_file")
+                    ),
+                ));
             }
         }
         None => None,
     };
-    let identity = match (&inherited.client_key, &inherited.client_certificate) {
+    let identity = match (&tls.client_key, &tls.client_cert) {
         (None, None) => None,
-        (Some(key), Some(certificate)) => {
-            let certificate_pem = read(certificate)?;
-            let key_pem = SecretString::from(String::from_utf8(read(key)?).map_err(|_| {
-                refused(format!(
-                    "`{}` names a file that isn't a PEM private key",
-                    key.name
-                ))
-            })?);
+        (Some(key_path), Some(certificate_path)) => {
+            let certificate_pem = read("client_cert", certificate_path)?;
+            let key_pem = SecretString::from(
+                String::from_utf8(read("client_key", key_path)?).map_err(|_| {
+                    refused(
+                        "client_key",
+                        format!(
+                            "{} names a file that isn't a PEM private key",
+                            named("client_key")
+                        ),
+                    )
+                })?,
+            );
             let identity = ClientIdentity {
                 certificate: certificate_pem,
                 key: key_pem,
-                key_variable: key.name,
             };
             // The reason the client's library gives is left out: it reads
             // the key, and what it says of one isn't held to say nothing
             // of what it holds.
             if !tls_loads(None, Some(&identity)) {
-                return Err(refused(format!(
-                    "`{}` and `{}` name files that don't hold a PEM client certificate and its \
-                     private key that can be loaded",
-                    certificate.name, key.name
-                )));
+                return Err(refused(
+                    "client_cert",
+                    format!(
+                        "{} and {} name files that don't hold a PEM client certificate and its \
+                         private key that can be loaded",
+                        named("client_cert"),
+                        named("client_key").replace("the file", "`telemetry.otlp.tls.client_key`")
+                    ),
+                ));
             }
             Some(identity)
         }
-        (Some(key), None) => {
-            return Err(refused(format!(
-                "`{}` names a client key, and no client certificate is named beside it",
-                key.name
-            )));
+        (Some(_), None) => {
+            return Err(refused(
+                "client_key",
+                "a client certificate and its key land together, and `telemetry.otlp.tls.client_cert` \
+                 isn't stated; state it beside"
+                    .to_owned(),
+            ));
         }
-        (None, Some(certificate)) => {
-            return Err(refused(format!(
-                "`{}` names a client certificate, and no client key is named beside it",
-                certificate.name
-            )));
+        (None, Some(_)) => {
+            return Err(refused(
+                "client_cert",
+                "a client certificate and its key land together, and `telemetry.otlp.tls.client_key` \
+                 isn't stated; state it beside"
+                    .to_owned(),
+            ));
         }
     };
     Ok(Tls { roots, identity })

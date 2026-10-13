@@ -211,18 +211,12 @@ pub(crate) fn sdk_of(held: &[(&str, &str)]) -> Sdk {
     OtelEnv::read(&env).sdk
 }
 
-/// The network settings the config `text`, in YAML, and an environment
-/// that holds `held`, and nothing else, resolve to, read through the seam
-/// as a build reads them. They must export something.
-pub(crate) fn otlp_of(text: &str, held: &[(&str, &str)]) -> super::OtlpSettings {
-    let env = |name: &str| {
-        held.iter()
-            .find(|(variable, _)| *variable == name)
-            .map(|(_, value)| OsString::from(value))
-    };
+/// The network settings the config `text`, in YAML, resolves to, as a build
+/// resolves them. They must export something.
+pub(crate) fn otlp_of(text: &str) -> super::OtlpSettings {
     let config = lablet_config::Config::from_str(text, lablet_config::Format::Yaml)
         .unwrap_or_else(|error| panic!("{text} is a config: {error}"));
-    crate::otlp::settings(&config, &OtelEnv::read(&env).exporter)
+    crate::otlp::settings(&config)
         .unwrap_or_else(|error| panic!("{text} is refused: {error}"))
         .unwrap_or_else(|| panic!("{text} exports nothing over the network"))
 }

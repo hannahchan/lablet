@@ -1,6 +1,13 @@
 //! The specification's parsing of the OpenTelemetry environment's
 //! variables, which the command line's seam is built on, and the decoding
-//! of a header variable's `k=v` text.
+//! of OpenTelemetry's `k=v` text, which the config's `telemetry.otlp.headers`
+//! and `telemetry.resource` take.
+//!
+//! No production code reads a variable through the parsers: the command
+//! line's settings come from its config alone, and its seam, which calls
+//! them, is kept with the canaries that hold what the crates read. They
+//! stay for a platform that can set the environment and can't write the
+//! file, as a layer beneath it.
 //!
 //! The specification's parsing, for every variable read here: an empty value
 //! is unset; a name chosen from a list is matched in any case, trimmed, and
@@ -22,23 +29,6 @@ pub type Env<'a> = &'a (dyn Fn(&str) -> Option<OsString> + Sync);
 /// before the kernels were split out, so a line of the diagnostic log, and
 /// a `RUST_LOG` directive that names it, are as they were.
 const TARGET: &str = "lablet::otel_env";
-
-/// The OTLP exporter's header variables, generic and for each signal,
-/// whose values the command line's seam still sends, and so cuts.
-pub const HEADER_VARIABLES: [&str; 3] = [
-    "OTEL_EXPORTER_OTLP_HEADERS",
-    "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
-    "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
-];
-
-/// The OTLP exporter's endpoint variables, generic and for each signal,
-/// whose user information the command line's seam still sends to, and so
-/// cuts.
-pub const ENDPOINT_VARIABLES: [&str; 3] = [
-    "OTEL_EXPORTER_OTLP_ENDPOINT",
-    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-];
 
 /// The environment, as the seam reads a variable of it.
 pub struct Variables<'a>(pub Env<'a>);
@@ -230,10 +220,11 @@ impl<T: Choice + PartialEq> Parse for Vec<T> {
 }
 
 /// The headers `value` names, as the exporter reads them from
-/// `OTEL_EXPORTER_OTLP_HEADERS` and its per-signal forms: `name=value`
-/// pairs between commas, each trimmed, with the value percent-decoded. A
-/// pair whose name or value is empty is left out, and a value whose
-/// percent-escapes don't decode is kept as it's written.
+/// `OTEL_EXPORTER_OTLP_HEADERS` and its per-signal forms, and as the
+/// config's `telemetry.otlp.headers` and `telemetry.resource` take their
+/// text form: `name=value` pairs between commas, each trimmed, with the
+/// value percent-decoded. A pair whose name or value is empty is left out,
+/// and a value whose percent-escapes don't decode is kept as it's written.
 #[must_use]
 pub fn decode_headers(value: &str) -> Vec<(String, String)> {
     value

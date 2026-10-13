@@ -1,25 +1,32 @@
 //! The context a run comes from: what the environment says the command
 //! line's run is the child of, extracted through the propagators
-//! `OTEL_PROPAGATORS` names, once, and made current around the run, and
-//! the propagators each process the run starts is given its context
+//! `telemetry.propagators` names, once, and made current around the run,
+//! and the propagators each process the run starts is given its context
 //! through.
 //!
-//! The propagators are lablet's own, and never OpenTelemetry's global one,
-//! which one process holding several `Lablet`s would share, and which a
-//! crate could set without a line of lablet's changing.
+//! The context variables are the one thing of its environment a run reads
+//! beside the config's `${VAR}`s: a process convention, read through the
+//! input module, for the keys the configured propagators' fields name, and
+//! normalised as the specification's environment carriers are. The
+//! propagators are lablet's own, and never OpenTelemetry's global one, which
+//! one process holding several `Lablet`s would share, and which a crate
+//! could set without a line of lablet's changing.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use lablet_config::Propagators;
 use lablet_env_carrier::{EnvExtractor, variable};
+use lablet_otel_env::Env;
 use opentelemetry::Context;
-use opentelemetry::propagation::{Extractor, TextMapPropagator};
+use opentelemetry::propagation::{Extractor, TextMapCompositePropagator, TextMapPropagator};
 use opentelemetry::trace::TraceContextExt as _;
 use tracing_subscriber::layer::{Context as Subscribed, Layer, SubscriberExt as _};
 
-use crate::otel_env;
+use crate::input;
+use crate::otel_env::context::configured;
 
 /// The keys each propagator reads a parent from, and what's said when one
 /// of them is set and the propagator can't make a parent of them.
@@ -64,20 +71,39 @@ pub struct Inbound {
     pub propagator: Arc<dyn TextMapPropagator + Send + Sync>,
 }
 
-/// The inbound context the seam's `context` variables give, extracted
-/// once, through its propagators. With none, a run starts from the empty
-/// context, so it's a trace of its own whatever span its caller has open.
-/// A `TRACEPARENT`, a `B3`, or an `X_B3_TRACEID` or `X_B3_SPANID`, that
-/// the propagator reading it can't make a parent of, and a `BAGGAGE` the
-/// baggage propagator can't read in full, are warned about, never shown.
-pub fn inbound(context: &otel_env::Context) -> Inbound {
-    let environment: BTreeMap<OsString, OsString> = context
-        .carried
-        .iter()
-        .map(|(name, value)| (name.into(), value.into()))
+/// The composite of the propagators `propagators` names, or of the
+/// specification's two when the config names none, which a command's
+/// context is injected through and a check reports the fields of.
+#[must_use]
+pub fn propagator(propagators: Option<&Propagators>) -> TextMapCompositePropagator {
+    configured(propagators)
+}
+
+/// The inbound context the process's environment gives, extracted once,
+/// through the propagators `propagators` names, from the variables their
+/// fields name, read through the input module. With none set, a run starts
+/// from the empty context, so it's a trace of its own whatever span its
+/// caller has open. A `TRACEPARENT`, a `B3`, or an `X_B3_TRACEID` or
+/// `X_B3_SPANID`, that the propagator reading it can't make a parent of,
+/// and a `BAGGAGE` the baggage propagator can't read in full, are warned
+/// about, never shown.
+#[must_use]
+pub fn inbound(propagators: Option<&Propagators>) -> Inbound {
+    inbound_in(propagators, &input::variable)
+}
+
+/// [`inbound`], where `env` is what the context variables are read from.
+pub(crate) fn inbound_in(propagators: Option<&Propagators>, env: Env<'_>) -> Inbound {
+    let propagator = propagator(propagators);
+    let environment: BTreeMap<OsString, OsString> = propagator
+        .fields()
+        .map(variable)
+        .filter_map(|name| {
+            let value = env(&name)?;
+            Some((OsString::from(name), value))
+        })
         .collect();
     let carrier = EnvExtractor(&environment);
-    let propagator = context.propagator();
     let unread = Unread::default();
     // Under a subscriber of its own, so that the baggage propagator's
     // warnings reach neither lablet's log nor a host's.

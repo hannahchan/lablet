@@ -1,14 +1,31 @@
 //! The network exporter through the command line's composition, its
 //! `build` and `run`: where the telemetry goes when an endpoint is stated,
 //! and what a refused endpoint or header is shown as.
-//! Each config states `telemetry.otlp.enabled: true` over the lab's
-//! `false`, beside the endpoint it sends to.
+//! Each config states the endpoint it sends to.
 
-use lablet::{BuildError, ConfigError, Place, StopReason};
+use std::ffi::OsString;
+
+use lablet::{BuildError, Config, ConfigError, Format, Place, RawConfig, StopReason};
 use lablet_conformance::receiver::{self, Mode, Receiver};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::harness::{ENDS, Lab, refusal, request};
+
+/// `tree` read as a config with its `${VAR}`s filled from `variables`, as
+/// the command line fills them, since a header value holds one.
+fn filled(tree: &Value, variables: &[(&str, &str)]) -> Config {
+    RawConfig::from_str(&tree.to_string(), Format::Json)
+        .unwrap()
+        .substituted(|name: &str| {
+            variables
+                .iter()
+                .find(|(variable, _)| *variable == name)
+                .map(|(_, value)| OsString::from(value))
+        })
+        .unwrap()
+        .config()
+        .unwrap()
+}
 
 /// The name of a per-run file in the working directory, which a test
 /// checks no run writes.
@@ -26,7 +43,7 @@ async fn a_run_with_an_endpoint_and_no_file_path_goes_to_the_collector_and_to_no
         ENDS,
         json!({ "telemetry": {
             "file": { "path": null },
-            "otlp": { "enabled": true, "endpoint": receiver.grpc_endpoint(), "protocol": "grpc" },
+            "otlp": { "endpoint": receiver.grpc_endpoint(), "protocol": "grpc" },
         } }),
     );
     assert!(!lablet_cli::compose::telemetry_on_stderr(&config));
@@ -66,14 +83,16 @@ async fn a_run_with_an_endpoint_and_no_file_path_goes_to_the_collector_and_to_no
 async fn a_run_with_an_endpoint_and_a_file_path_goes_to_both_over_http_when_the_config_says_so() {
     let receiver = Receiver::start(Mode::Answers).await;
     let scratch = Lab::new("otlp-both-http");
-    let config = scratch.config(
-        ENDS,
-        json!({ "telemetry": { "otlp": {
-            "enabled": true,
-            "endpoint": receiver.http_endpoint(),
-            "protocol": "http/protobuf",
-            "headers": { "x-token": "a made-up token value" },
-        } } }),
+    let config = filled(
+        &scratch.tree(
+            ENDS,
+            json!({ "telemetry": { "otlp": {
+                "endpoint": receiver.http_endpoint(),
+                "protocol": "http/protobuf",
+                "headers": { "x-token": "${LABLET_TEST_X_TOKEN}" },
+            } } }),
+        ),
+        &[("LABLET_TEST_X_TOKEN", "a made-up token value")],
     );
 
     let mut lablet = lablet_cli::compose::build(config, lablet_cli::input::process_environment())
@@ -111,7 +130,7 @@ async fn an_endpoint_the_exporter_refuses_is_refused_by_its_key_as_the_config_wr
     let scratch = Lab::new("otlp-bad-endpoint");
     let config = scratch.config(
         ENDS,
-        json!({ "telemetry": { "otlp": { "enabled": true, "endpoint": "http://[not a host" } } }),
+        json!({ "telemetry": { "otlp": { "endpoint": "http://[not a host" } } }),
     );
 
     let refused = refusal(config).await;
@@ -143,7 +162,7 @@ async fn a_refused_endpoint_that_holds_an_at_is_shown_with_no_value() {
     ] {
         let config = scratch.config(
             ENDS,
-            json!({ "telemetry": { "otlp": { "enabled": true, "endpoint": endpoint } } }),
+            json!({ "telemetry": { "otlp": { "endpoint": endpoint } } }),
         );
 
         let refused = refusal(config).await;
@@ -164,13 +183,15 @@ async fn a_refused_endpoint_that_holds_an_at_is_shown_with_no_value() {
 #[tokio::test]
 async fn a_header_that_is_not_one_is_refused_by_its_key_and_its_value_is_shown_nowhere() {
     let scratch = Lab::new("otlp-bad-header");
-    let config = scratch.config(
-        ENDS,
-        json!({ "telemetry": { "otlp": {
-            "enabled": true,
-            "endpoint": "http://127.0.0.1:1",
-            "headers": { "not a header name": "a made-up secret value" },
-        } } }),
+    let config = filled(
+        &scratch.tree(
+            ENDS,
+            json!({ "telemetry": { "otlp": {
+                "endpoint": "http://127.0.0.1:1",
+                "headers": { "not a header name": "${LABLET_TEST_SECRET}" },
+            } } }),
+        ),
+        &[("LABLET_TEST_SECRET", "a made-up secret value")],
     );
 
     let refused = refusal(config).await;

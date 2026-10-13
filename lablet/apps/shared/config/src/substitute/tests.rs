@@ -26,10 +26,14 @@ fn nothing(_: &str) -> Option<OsString> {
 
 /// `text` filled in the environment `held`, as a text of its own.
 fn filled_text(text: &str, held: &dyn Fn(&str) -> Option<OsString>) -> Result<String, String> {
-    match replaced(text, held, false)? {
+    let at = At {
+        api_key: false,
+        credential: false,
+    };
+    match replaced(text, held, at).map_err(|(reason, _)| reason)? {
         Replaced::Unchanged => Ok(text.to_owned()),
         Replaced::Text(filled, _) => Ok(filled),
-        Replaced::Unset(_) => unreachable!("only the key leaves a setting unset"),
+        Replaced::Unset(_) => Ok(String::new()),
     }
 }
 
@@ -98,7 +102,7 @@ fn a_reference_with_a_default_takes_it_when_the_variable_is_unset_or_empty() {
 fn a_variable_that_is_not_set_or_is_no_text_is_refused_by_its_name_alone() {
     assert_eq!(
         filled_text("x ${MISSING} y", &nothing),
-        Err("the variable `MISSING` isn't set".to_owned())
+        Err("`MISSING` isn't set; set it, or give a default, as ${MISSING:-default}".to_owned())
     );
     let binary = |_: &str| Some(OsStr::from_bytes(b"sk-\xff").to_owned());
     let refused = filled_text("${KEY}", &binary).unwrap_err();
@@ -113,12 +117,26 @@ fn a_reference_that_names_no_variable_is_refused_with_how_to_write_one() {
     ] {
         let refused = filled_text(text, &held).unwrap_err();
 
-        assert!(
-            refused.starts_with("`${` begins a variable, written `${NAME}`")
-                && refused.ends_with("write `$${` for the text `${`"),
-            "{text}: {refused}"
+        assert_eq!(
+            refused, "its ${ begins no variable's name; write $${ for ${",
+            "{text}"
         );
     }
+    // R12 shows nothing of the text, since what follows the `${` may be
+    // anything.
+    let error = config("model: { name: 'x ${ y' }", &held).unwrap_err();
+    assert_eq!(
+        error,
+        ConfigError::Refused {
+            key: "model.name".to_owned(),
+            place: Some(Place::Line(1)),
+            reason: "its ${ begins no variable's name; write $${ for ${".to_owned(),
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "model.name (line 1) is refused: its ${ begins no variable's name; write $${ for ${"
+    );
 }
 
 /// The record holds each key the fill changed, with the text as written and
@@ -295,11 +313,11 @@ telemetry:
             .otlp
             .headers
             .as_ref()
-            .map(|headers| &headers["H"]),
+            .and_then(|headers| headers.get("H")),
         Some(&Secret::new("value"))
     );
     assert_eq!(real.telemetry.file.path, Some("value.jsonl".into()));
-    assert_eq!(real.telemetry.resource["team"], "value");
+    assert_eq!(real.telemetry.resource.get("team"), Some("value"));
     assert_eq!(
         real.filled().at(&KeyPath::of("prompt.system")),
         None,
@@ -314,15 +332,96 @@ telemetry:
     );
 }
 
-/// A number setting takes a filled text as it takes any text: refused.
+/// A setting that's a number, a Boolean or a float reads a filled text as
+/// an override's value is read, since a variable holds text whatever the
+/// setting takes, and refuses one that doesn't read as its kind without
+/// showing it (R13); a text written in the file is refused as it was.
 #[test]
-fn a_setting_that_holds_no_text_refuses_a_filled_variable_as_it_refuses_text() {
-    let error = config("run: { max_turns: '${N}' }", &env(&[("N", "8")])).unwrap_err();
+fn a_filled_text_is_typed_where_the_setting_is_a_number_a_boolean_or_a_float() {
+    let typed = config(
+        "run: { max_turns: '${N}', retry_jitter: '${J}', max_retries: '${R}' }\ntelemetry: { \
+         capture_content: '${C}' }\nmodel: { seed: '${S}', temperature: '${T}' }",
+        &env(&[
+            ("N", "8"),
+            ("J", "0.5"),
+            ("R", "0"),
+            ("C", "true"),
+            ("S", "-7"),
+            ("T", "1"),
+        ]),
+    )
+    .unwrap();
 
+    assert_eq!(typed.run.max_turns, std::num::NonZeroU32::new(8));
+    assert!((typed.run.retry_jitter - 0.5).abs() < f64::EPSILON);
+    assert_eq!(typed.run.max_retries, 0);
+    assert_eq!(typed.telemetry.capture_content, Some(true));
+    assert_eq!(typed.model.seed, Some(-7));
+    assert!(
+        typed
+            .model
+            .temperature
+            .is_some_and(|t| (t - 1.0).abs() < f64::EPSILON)
+    );
     assert_eq!(
-        error.to_string(),
-        "run.max_turns (line 1): \"${N}\" is refused: expected a nonzero u32",
-        "the refusal shows the setting as written, not what the variable gave"
+        typed
+            .filled()
+            .at(&KeyPath::of("run.max_turns"))
+            .unwrap()
+            .written,
+        "${N}",
+        "the record shows it as written"
+    );
+
+    for (text, key, held, reason) in [
+        (
+            "run: { max_turns: '${N}' }",
+            "run.max_turns",
+            ("N", "eight"),
+            "`N` holds no whole number, and isn't shown; fix it",
+        ),
+        (
+            "run: { max_turns: '${N}' }",
+            "run.max_turns",
+            ("N", "1.5"),
+            "`N` holds no whole number, and isn't shown; fix it",
+        ),
+        (
+            "telemetry: { capture_content: '${C}' }",
+            "telemetry.capture_content",
+            ("C", "yes"),
+            "`C` holds neither `true` nor `false`, and isn't shown; fix it",
+        ),
+        (
+            "run: { retry_jitter: '${J}' }",
+            "run.retry_jitter",
+            ("J", "half"),
+            "`J` holds no number, and isn't shown; fix it",
+        ),
+    ] {
+        let error = config(text, &env(&[held])).unwrap_err();
+        assert_eq!(
+            error,
+            ConfigError::Invalid {
+                key: key.to_owned(),
+                place: Some(Place::Line(1)),
+                value: Some(format!("\"${{{}}}\"", held.0)),
+                reason: reason.to_owned(),
+            },
+            "{text}"
+        );
+        assert!(!error.to_string().contains(held.1), "{error}");
+    }
+    let zero = config("run: { max_turns: '${N}' }", &env(&[("N", "0")])).unwrap_err();
+    assert_eq!(
+        zero.to_string(),
+        "run.max_turns (line 1): \"${N}\" is refused: expected a nonzero u32"
+    );
+    let written = config("run: { max_turns: '8' }", &nothing).unwrap_err();
+    assert_eq!(
+        written.to_string(),
+        "run.max_turns (line 1): \"8\" is refused: expected a nonzero u32",
+        "a text the file wrote is refused as before"
     );
 }
 
@@ -352,11 +451,14 @@ fn a_setting_whose_variable_is_not_set_is_refused_by_its_key_and_shown_as_writte
                 key: key.to_owned(),
                 place: Some(Place::Line(1)),
                 value: Some("\"${UNSET}\"".to_owned()),
-                reason: "the variable `UNSET` isn't set".to_owned(),
+                reason: "`UNSET` isn't set; set it, or give a default, as ${UNSET:-default}"
+                    .to_owned(),
             },
             "{text}"
         );
     }
+    // R11: a credential's fix is the empty default, which gives it only
+    // when set.
     let credential = config(
         "tools: { builtin: { credentials: { T: '${UNSET}' } } }",
         &nothing,
@@ -364,8 +466,8 @@ fn a_setting_whose_variable_is_not_set_is_refused_by_its_key_and_shown_as_writte
     .unwrap_err();
     assert_eq!(
         credential.to_string(),
-        "tools.builtin.credentials.T (line 1): its value is refused: the variable `UNSET` isn't \
-         set",
+        "tools.builtin.credentials.T (line 1): \"${UNSET}\" is refused: `UNSET` isn't set; set \
+         it, or write ${UNSET:-} to give it only when set",
         "a credential is never shown, written or not"
     );
 }
@@ -387,8 +489,10 @@ fn an_unset_variable_at_the_key_leaves_it_unset_and_recorded() {
         }]
     );
 
+    // A whole `${VAR}` that comes out empty states nothing, here as at
+    // every key, and the record says the variable was set.
     let empty = config("model: { api_key: '${KEY}' }", &env(&[("KEY", "")])).unwrap();
-    assert_eq!(empty.model.api_key, Some(Secret::new("")));
+    assert_eq!(empty.model.api_key, None);
     assert!(
         empty
             .filled()
@@ -396,6 +500,56 @@ fn an_unset_variable_at_the_key_leaves_it_unset_and_recorded() {
             .unwrap()
             .variables[0]
             .set
+    );
+}
+
+/// A text that is one reference whole and comes out empty leaves its
+/// setting unstated, wherever it is: a `${VAR:-}` whose variable is unset
+/// or empty, and a `${VAR}` whose variable is empty; a text with anything
+/// beside the reference is the text that's left.
+#[test]
+fn a_whole_reference_that_comes_out_empty_leaves_the_setting_unstated() {
+    let config = config(
+        "
+model: { provider: fake, script: run.yaml, api_key: '${K:-}' }
+telemetry:
+  capture_content: '${C:-}'
+  propagators: '${P:-}'
+  otlp: { endpoint: '${E}', protocol: '${PR:-}', headers: '${H:-}', tls: { ca_file: '${CA:-}' } }
+  resource: '${R:-}'
+  file: { path: '${F:-}' }
+tools: { builtin: { env: { PORT: '${PORT:-}', KEPT: 'x${PORT:-}' }, credentials: { T: '${T:-}' } } }
+",
+        &env(&[("E", ""), ("PORT", "")]),
+    )
+    .unwrap();
+
+    assert_eq!(config.model.api_key, None);
+    assert_eq!(config.telemetry.capture_content, None);
+    assert_eq!(config.telemetry.propagators, None);
+    assert_eq!(config.telemetry.otlp.endpoint, None);
+    assert_eq!(config.telemetry.otlp.protocol, None);
+    assert_eq!(config.telemetry.otlp.headers, None);
+    assert_eq!(config.telemetry.otlp.tls.ca_file, None);
+    assert!(config.telemetry.resource.is_empty());
+    assert_eq!(config.telemetry.file.path, None);
+    assert!(!config.tools.builtin.env.contains_key("PORT"));
+    assert_eq!(config.tools.builtin.env["KEPT"], "x");
+    assert!(!config.tools.builtin.credentials.contains_key("T"));
+    for key in [
+        "model.api_key",
+        "telemetry.otlp.endpoint",
+        "tools.builtin.env.PORT",
+        "tools.builtin.credentials.T",
+    ] {
+        let fill = config.filled().at(&KeyPath::of(key)).unwrap();
+        assert_eq!(fill.variables.len(), 1, "{key}: recorded all the same");
+    }
+    assert!(
+        config
+            .filled()
+            .at(&KeyPath::of("tools.builtin.credentials.T"))
+            .is_some_and(|fill| !fill.variables[0].set)
     );
 }
 

@@ -17,7 +17,7 @@ fn a_port_nothing_listens_on_changes_nothing_and_the_process_exits_within_five_s
     let lab = Lab::new("otlp-closed-port");
     lab.write_config(
         ENDS,
-        json!({ "telemetry": { "otlp": { "enabled": true, "endpoint": format!("http://{closed}") } } }),
+        json!({ "telemetry": { "otlp": { "endpoint": format!("http://{closed}") } } }),
     );
     let plain = Lab::new("otlp-closed-port-plain");
     plain.write_config(ENDS, json!({}));

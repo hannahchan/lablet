@@ -13,7 +13,7 @@ cd lablet/examples/two-turns
 cargo run --locked --manifest-path ../../Cargo.toml --bin lablet -- run --config lablet.yaml --prompt "Read notes.md and say what it holds."
 ```
 
-The config names no file and no collector, so the run sends its telemetry to `localhost:4318`, the OpenTelemetry default, and with nothing listening there its end waits about a second and the diagnostic log says the telemetry was lost. To keep it in a file instead, add `--set telemetry.file.path=lablet-run.otlp.jsonl --set telemetry.otlp.enabled=false`; git ignores a file named `lablet-*.otlp.jsonl`. `cargo xtask weaver live-check` runs this config too, against the registry's live checker.
+The config names no file and no collector, so the run sends its telemetry to `localhost:4318`, the OpenTelemetry default, and with nothing listening there its end waits about a second and the diagnostic log says the telemetry was lost. To keep it in a file instead, add `--set telemetry.file.path=lablet-run.otlp.jsonl`; git ignores a file named `lablet-*.otlp.jsonl`. `cargo xtask weaver live-check` runs this config too, against the registry's live checker.
 
 ## A collector and Jaeger (`docker-compose.yaml`)
 
@@ -45,7 +45,7 @@ Run the config with its file in `replay/`, where the collector reads it, and no 
 
 ```bash
 cd lablet/examples/two-turns
-cargo run --locked --manifest-path ../../Cargo.toml --bin lablet -- run --config lablet.yaml --prompt "Read notes.md and say what it holds." --set telemetry.file.path=../replay/lablet-replay.otlp.jsonl --set telemetry.otlp.enabled=false
+cargo run --locked --manifest-path ../../Cargo.toml --bin lablet -- run --config lablet.yaml --prompt "Read notes.md and say what it holds." --set telemetry.file.path=../replay/lablet-replay.otlp.jsonl
 ```
 
 The collector's OTLP/JSON file receiver reads the file from its start, and the run reaches Jaeger within seconds. It reads lines of up to 64 MiB, as `otel-collector.yaml` sets: the receiver's default is 1 MiB, and it drops a longer line without a message, which one export of a long run's content records can be. Its run id is in the outcome the run printed; find it with the tag `session.id=<run id>`, or as the newest trace of the service `lablet`.

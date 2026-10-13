@@ -1,5 +1,7 @@
-//! The canaries of the gaps lablet fills in the OTLP exporter's reading
-//! of its environment.
+//! The canaries of the OTLP exporter's reading of its environment: what the
+//! 0.33 crates read of it that lablet doesn't, and the gaps lablet's own
+//! code is there for. Lablet's settings come from the config alone, so a
+//! read the crates make is one the hostile golden run and these hold.
 //!
 //! Each canary is a pair: a parent test that starts this test binary again
 //! with the environment the gap is about, and the child's side, which does
@@ -18,7 +20,7 @@ use opentelemetry_sdk::trace::{SpanData, SpanEvents, SpanExporter as _, SpanLink
 
 use crate::export::Telemetry;
 use crate::export::testing::memory::Memory;
-use crate::export::testing::{RUN, Records, emit_run, otlp_of, scope};
+use crate::export::testing::{RUN, Records, SPANS_PER_RUN, emit_run, otlp_of, scope};
 
 /// Set in the environment of a child process to the canary it runs, and
 /// what that canary needs, after a `:`.
@@ -149,14 +151,14 @@ async fn child_builds_a_provider_as_lablet_builds_it() {
     assert_eq!(
         memory.exported_spans().len(),
         1,
-        "the SDK reads `OTEL_SDK_DISABLED`: delete lablet's own reading of it if the SDK's \
-         means what the specification's no-op SDK does, or say in decisions.md why it stays"
+        "the SDK reads `OTEL_SDK_DISABLED`: the hostile golden run sets it, so say in \
+         decisions.md whether the variable comes back as a setting"
     );
 }
 
 /// With `OTEL_SDK_DISABLED=true`, a processor on a provider built as lablet
-/// builds it still sees a span: the SDK doesn't read the variable, so
-/// lablet does.
+/// builds it still sees a span: the SDK doesn't read the variable, and
+/// neither does lablet, so the hostile golden run may set it.
 #[tokio::test(flavor = "multi_thread")]
 async fn canary_the_sdk_does_not_read_otel_sdk_disabled() {
     child(
@@ -177,10 +179,9 @@ async fn child_exports_a_run_through_lablets_builder_chain() {
     };
     let (grpc, http) = endpoints.split_once(',').unwrap();
     for (protocol, endpoint) in [("grpc", grpc), ("http/protobuf", http)] {
-        let settings = otlp_of(
-            &format!("telemetry: {{ otlp: {{ protocol: {protocol}, endpoint: '{endpoint}' }} }}"),
-            &[],
-        );
+        let settings = otlp_of(&format!(
+            "telemetry: {{ otlp: {{ protocol: {protocol}, endpoint: '{endpoint}' }} }}"
+        ));
         let telemetry = Telemetry::builder(scope()).otlp(settings).build().unwrap();
         let wide = emit_run(&telemetry, RUN, Records::None);
         telemetry.flush(wide).await.unwrap();
@@ -189,7 +190,8 @@ async fn child_exports_a_run_through_lablets_builder_chain() {
 }
 
 /// With `OTEL_TRACES_EXPORTER=none`, lablet's builder chain still exports
-/// spans: the crates don't read the variable, so lablet does.
+/// spans: the crates don't read the variable, and lablet reads it no more,
+/// so a named endpoint sends whatever it says.
 #[tokio::test(flavor = "multi_thread")]
 async fn canary_the_builders_do_not_read_otel_traces_exporter() {
     let receiver = Receiver::start(Mode::Answers).await;
@@ -207,9 +209,9 @@ async fn canary_the_builders_do_not_read_otel_traces_exporter() {
         assert!(
             requests.iter().any(|request| request.transport == transport
                 && request.signal == receiver::Signal::Traces),
-            "{transport:?}: the crates read `OTEL_TRACES_EXPORTER`: delete lablet's own reading \
-             of it if theirs means what the specification's does, or say in decisions.md why it \
-             stays: {requests:?}"
+            "{transport:?}: the crates read `OTEL_TRACES_EXPORTER`: a named endpoint would then \
+             send nothing under it, so say in decisions.md whether the variable comes back as a \
+             setting: {requests:?}"
         );
     }
 }
@@ -228,8 +230,9 @@ async fn child_exports_a_span_through_the_crates_exporters() {
 
 /// With the per-signal headers variable empty and the generic one set, the
 /// crate sends no header: it reads an empty variable as set, where the
-/// specification reads it as unset. Lablet takes off every name either
-/// variable sets and sets the resolved set itself.
+/// specification reads it as unset. Lablet reads neither variable and
+/// replaces whatever the crate merged with the config's headers, so the
+/// crate's reading reaches no request.
 #[tokio::test(flavor = "multi_thread")]
 async fn canary_an_empty_signal_header_variable_hides_the_generic_one_in_the_crate() {
     let receiver = Receiver::start(Mode::Answers).await;
@@ -251,9 +254,8 @@ async fn canary_an_empty_signal_header_variable_hides_the_generic_one_in_the_cra
         assert_eq!(
             header(request, "x-generic"),
             None,
-            "the crate reads an empty variable as unset: lablet's taking off of every name \
-             either variable sets still holds, but say in decisions.md that the gap is closed: \
-             {request:?}"
+            "the crate reads an empty variable as unset: lablet's replacing of what the crate \
+             merged still holds, but say in decisions.md that the gap is closed: {request:?}"
         );
     }
 }
@@ -282,11 +284,11 @@ async fn child_exports_a_span_to_an_endpoint_without_a_scheme() {
 
 /// With the per-signal insecure variable empty and the generic one `true`,
 /// the crate's own scheme for an endpoint without one is `https`: it reads
-/// an empty variable as set to what isn't `true`. Lablet gives every
-/// endpoint its scheme, so the crate's rule never applies. The child's
-/// export to the receiver's plain listener fails over TLS, and with the
-/// per-signal variable unset it succeeds, which says the listener takes
-/// plain gRPC.
+/// an empty variable as set to what isn't `true`. Lablet reads neither
+/// variable and gives every endpoint its scheme, so the crate's rule never
+/// applies. The child's export to the receiver's plain listener fails over
+/// TLS, and with the per-signal variable unset it succeeds, which says the
+/// listener takes plain gRPC.
 #[tokio::test(flavor = "multi_thread")]
 async fn canary_an_empty_signal_insecure_variable_hides_the_generic_one_in_the_crate() {
     let receiver = Receiver::start(Mode::Answers).await;
@@ -328,8 +330,9 @@ async fn child_builds_the_crates_exporters_for_endpoints_over_tls() {
 }
 
 /// With the certificate and client identity variables naming files that
-/// don't exist, the crate's own build succeeds: it doesn't read them.
-/// Lablet reads them, and gives the exporters TLS of its own.
+/// don't exist, the crate's own build succeeds: it doesn't read them, and
+/// neither does lablet, whose `telemetry.otlp.tls` gives the exporters TLS
+/// of its own.
 #[tokio::test(flavor = "multi_thread")]
 async fn canary_the_crate_does_not_read_the_certificate_variables() {
     let missing = "/nonexistent/lablet-canary.pem";
@@ -346,4 +349,63 @@ async fn canary_the_crate_does_not_read_the_certificate_variables() {
         ],
     )
     .await;
+}
+
+// The compression variables
+
+#[tokio::test]
+async fn child_exports_a_run_through_lablets_builders_to_each_transport() {
+    let Some(endpoints) = given("compression") else {
+        return;
+    };
+    let (grpc, http) = endpoints.split_once(',').unwrap();
+    for (protocol, endpoint) in [("grpc", grpc), ("http/protobuf", http)] {
+        let settings = otlp_of(&format!(
+            "telemetry: {{ otlp: {{ protocol: {protocol}, endpoint: '{endpoint}' }} }}"
+        ));
+        let telemetry = Telemetry::builder(scope()).otlp(settings).build().unwrap();
+        let wide = emit_run(&telemetry, RUN, Records::None);
+        telemetry.flush(wide).await.unwrap();
+        telemetry.shutdown().await.unwrap();
+    }
+}
+
+/// With `OTEL_EXPORTER_OTLP_COMPRESSION=gzip`, every request lablet's
+/// builders make is compressed: the crate reads the variable for itself
+/// where the builder states no compression, and lablet has no field to
+/// state one with. It's the one read of the environment a run makes beyond
+/// the config, which `check`'s `telemetry:` line says, and it changes the
+/// transport and not what's exported. When the crate stops reading it, this
+/// fails, and the line and the roster's exception can go.
+#[tokio::test(flavor = "multi_thread")]
+async fn canary_the_exporter_reads_the_compression_variable_itself() {
+    let receiver = Receiver::start(Mode::Answers).await;
+
+    child(
+        "child_exports_a_run_through_lablets_builders_to_each_transport",
+        "compression",
+        &format!("{},{}", receiver.grpc_endpoint(), receiver.http_endpoint()),
+        &[("OTEL_EXPORTER_OTLP_COMPRESSION", "gzip")],
+    )
+    .await;
+
+    let requests = receiver.requests();
+    assert!(!requests.is_empty());
+    for request in &requests {
+        let encoding = match request.transport {
+            receiver::Transport::Grpc => header(request, "grpc-encoding"),
+            _ => header(request, "content-encoding"),
+        };
+        assert_eq!(
+            encoding,
+            Some("gzip"),
+            "the crate stopped reading `OTEL_EXPORTER_OTLP_COMPRESSION`: the `telemetry:` \
+             line's note and the roster's exception can go: {request:?}"
+        );
+    }
+    assert_eq!(
+        receiver.exported().unwrap().spans.len(),
+        2 * SPANS_PER_RUN,
+        "what's exported is the same whole"
+    );
 }

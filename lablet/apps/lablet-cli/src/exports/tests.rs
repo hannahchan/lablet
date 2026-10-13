@@ -1,7 +1,6 @@
-//! What the command line reads of the telemetry, against an environment
-//! the test states, since a test can't set a variable of its own process:
-//! where the file goes, what turns it all off, content capture, and the
-//! refusals of what the network exporter would refuse.
+//! What the command line reads of the telemetry, from the config alone:
+//! where the file goes, content capture, the refusals of what the network
+//! exporter would refuse, and what a client key's file holds.
 
 use std::ffi::OsString;
 
@@ -10,55 +9,50 @@ use lablet_conformance::receiver::{Mode, Receiver};
 use lablet_prepare::prepare;
 
 use super::*;
+use crate::export::Signal;
 
 fn config(text: &str) -> Config {
     Config::from_str(text, Format::Yaml).unwrap()
 }
 
-/// The config `text` holds, with each `${VAR}` filled from `env`, or why it
+/// The config `text` holds, with each `${VAR}` filled from `held`, or why it
 /// was refused.
-fn filled(text: &str, env: Env<'_>) -> Result<Config, lablet_config::ConfigError> {
+fn filled(text: &str, held: &[(&str, &str)]) -> Result<Config, lablet_config::ConfigError> {
+    let held: Vec<(String, String)> = held
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect();
     RawConfig::from_str(text, Format::Yaml)?
-        .substituted(|name: &str| env(name))?
+        .substituted(move |asked: &str| -> Option<OsString> {
+            held.iter()
+                .find(|(name, _)| name == asked)
+                .map(|(_, value)| value.into())
+        })?
         .config()
 }
 
-/// An environment that holds `value` under `name` and nothing else.
-fn holding(name: &'static str, value: &'static str) -> impl Fn(&str) -> Option<OsString> {
-    move |asked| (asked == name).then(|| value.into())
-}
-
-fn nothing(_: &str) -> Option<OsString> {
-    None
-}
-
 /// The check of `config` with an empty base handed in, gone on through
-/// [`settle`] with `env` what the seam reads.
-fn settled(config: &Config, env: Env<'_>) -> (Prepared, Exports, Inbound) {
-    settle(prepare(config, Some(Vec::new())).unwrap(), env).unwrap()
+/// [`settle`].
+fn settled(config: &Config) -> (Prepared, Exports) {
+    settle(prepare(config, Some(Vec::new())).unwrap()).unwrap()
 }
 
 /// Where the telemetry file goes: no file for a null path, standard error
-/// for `-`, and no file at all when `OTEL_SDK_DISABLED` turns telemetry
-/// off, whatever the path.
+/// for `-`, and a file for anything else.
 #[test]
-fn a_null_path_writes_no_file_a_dash_is_standard_error_and_a_disabled_sdk_writes_none() {
-    let target = |path: &str, disabled: bool| {
-        file_target(
-            &config(&format!("telemetry: {{ file: {{ path: {path} }} }}")),
-            disabled,
-        )
+fn a_null_path_writes_no_file_and_a_dash_is_standard_error() {
+    let target = |path: &str| {
+        file_target(&config(&format!(
+            "telemetry: {{ file: {{ path: {path} }} }}"
+        )))
     };
 
-    assert_eq!(target("null", false), None);
-    assert_eq!(target(r#""-""#, false), Some(FileTarget::Stderr));
+    assert_eq!(target("null"), None);
+    assert_eq!(target(r#""-""#), Some(FileTarget::Stderr));
     assert_eq!(
-        target("out.jsonl", false),
+        target("out.jsonl"),
         Some(FileTarget::Path("out.jsonl".into()))
     );
-    for path in ["null", r#""-""#, "out.jsonl"] {
-        assert_eq!(target(path, true), None, "{path}");
-    }
 }
 
 /// A config of the fake provider ending at once, with `telemetry` stated
@@ -71,52 +65,46 @@ fn ending(scratch: &lablet_test_support::Scratch, telemetry: &str) -> Config {
     ))
 }
 
-/// O29 before the wire: `OTEL_SDK_DISABLED=true` wins over a config that
-/// names a file and an endpoint, so a build makes neither.
-#[tokio::test]
-async fn otel_sdk_disabled_wins_over_a_named_file_and_endpoint() {
-    let scratch = lablet_test_support::Scratch::new("sdk-disabled");
-    let config = ending(
+/// With nothing named, a build makes neither a file nor a network exporter,
+/// and a named file and endpoint make both.
+#[test]
+fn nothing_named_builds_no_destination_and_a_named_file_and_endpoint_build_both() {
+    let scratch = lablet_test_support::Scratch::new("settle-destinations");
+
+    let (_, nothing) = settled(&ending(&scratch, "{}"));
+    assert_eq!(nothing.target, None);
+    assert!(nothing.otlp.is_none());
+
+    let (_, both) = settled(&ending(
         &scratch,
-        "{ file: { path: runs.otlp.jsonl }, otlp: { endpoint: 'http://127.0.0.1:1' } }",
-    );
-
-    let (_, disabled, _) = settled(&config, &holding("OTEL_SDK_DISABLED", "true"));
-    let (_, enabled, _) = settled(&config, &nothing);
-
-    assert!(disabled.disabled);
-    assert_eq!(disabled.target, None);
-    assert!(disabled.otlp.is_none());
-    assert!(!enabled.disabled);
-    assert!(enabled.target.is_some());
-    assert!(enabled.otlp.is_some());
+        "{ file: { path: /tmp/runs.otlp.jsonl }, otlp: { endpoint: 'http://127.0.0.1:1' } }",
+    ));
+    assert!(both.target.is_some());
+    assert!(both.otlp.is_some());
 }
 
-/// The GenAI instrumentation's switch for capturing content, which lablet
-/// doesn't read: `telemetry.capture_content` decides alone.
-const CAPTURE: &str = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT";
+/// `telemetry.capture_content` decides alone, and a filled text is typed.
+#[test]
+fn capture_content_is_the_configs_alone_and_a_filled_text_is_typed() {
+    let scratch = lablet_test_support::Scratch::new("capture-content");
+    let script = scratch.write("script.yaml", ENDS).display().to_string();
+    let with = |value: &str, held: &[(&str, &str)]| {
+        let config = filled(
+            &format!(
+                "model: {{ provider: fake, script: '{script}' }}\nprompt: {{ system: Hi. }}\ntelemetry: {{ capture_content: {value} }}"
+            ),
+            held,
+        )
+        .unwrap();
+        settled(&config).0.capture_content()
+    };
 
-#[tokio::test]
-async fn the_genai_capture_variable_is_not_read_and_the_config_alone_decides() {
-    let scratch = lablet_test_support::Scratch::new("capture-variable");
-    let config = ending(&scratch, "{ otlp: { enabled: false } }");
-
-    for value in ["TRUE", "true", "false", "1"] {
-        let held = |name: &str| (name == CAPTURE).then(|| value.into());
-        let (prepared, _, _) = settled(&config, &held);
-        assert!(!prepared.capture_content(), "{value}");
-    }
-    assert!(!settled(&config, &nothing).0.capture_content());
-
-    for (stated, value, captured) in [("false", "true", false), ("true", "false", true)] {
-        let config = ending(
-            &scratch,
-            &format!("{{ capture_content: {stated}, otlp: {{ enabled: false }} }}"),
-        );
-        let held = |name: &str| (name == CAPTURE).then(|| value.into());
-        let (prepared, _, _) = settled(&config, &held);
-        assert_eq!(prepared.capture_content(), captured, "{stated}");
-    }
+    assert!(!with("null", &[]));
+    assert!(!with("false", &[]));
+    assert!(with("true", &[]));
+    assert!(with("'${C}'", &[("C", "true")]));
+    assert!(!with("'${C}'", &[("C", "false")]));
+    assert!(!with("'${C:-}'", &[]), "unset, so not stated");
 }
 
 const ENDS: &str = "
@@ -131,40 +119,35 @@ const ENDS: &str = "
 /// `-` whole is standard error.
 #[test]
 fn the_telemetry_is_on_standard_error_when_its_path_is_a_dash_once_variables_are_filled() {
-    let on_stderr = |path: &str, env: Env<'_>| {
-        filled(&format!("telemetry: {{ file: {{ path: {path} }} }}"), env)
-            .is_ok_and(|config| telemetry_on_stderr_in(&config, env))
+    let on_stderr = |path: &str, held: &[(&str, &str)]| {
+        filled(&format!("telemetry: {{ file: {{ path: {path} }} }}"), held)
+            .is_ok_and(|config| telemetry_on_stderr(&config))
     };
 
-    assert!(
-        !on_stderr(r#""-""#, &holding("OTEL_SDK_DISABLED", "true")),
-        "no telemetry is written at all"
-    );
+    assert!(on_stderr(r#""-""#, &[]));
+    assert!(on_stderr("'${T}'", &[("T", "-")]));
 
-    assert!(on_stderr(r#""-""#, &nothing));
-    assert!(on_stderr("'${T}'", &holding("T", "-")));
-
-    assert!(!on_stderr("'${T}'", &holding("T", "telemetry.jsonl")));
-    assert!(!on_stderr("'${T}'", &nothing), "a build refuses it");
-    assert!(!on_stderr(r#""-/""#, &nothing), "it names a file");
-    assert!(!on_stderr("'${T}/'", &holding("T", "-")), "it names a file");
-    assert!(!on_stderr(r#""-.jsonl""#, &nothing));
-    assert!(!on_stderr("null", &nothing));
+    assert!(!on_stderr("'${T}'", &[("T", "telemetry.jsonl")]));
+    assert!(!on_stderr("'${T}'", &[]), "a build refuses it");
+    assert!(!on_stderr(r#""-/""#, &[]), "it names a file");
+    assert!(!on_stderr("'${T}/'", &[("T", "-")]), "it names a file");
+    assert!(!on_stderr(r#""-.jsonl""#, &[]));
+    assert!(!on_stderr("null", &[]));
 }
 
 /// An endpoint the exporter refuses is shown as the config writes it, or
 /// with no value when that holds an `@`: user information is a secret, and
-/// where it ends can't be told once it may hold an unencoded `/`. When the
-/// config states no endpoint, the refusal names the variable the exporter
-/// read in its place, the signal's own before the generic one, and shows
-/// nothing of either.
+/// where it ends can't be told once it may hold an unencoded `/`. An
+/// endpoint a variable filled is refused naming the variable, and shows
+/// nothing of what it holds.
 #[test]
-fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_or_names_the_variable_read() {
+fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_and_a_filled_one_names_its_variable()
+ {
     const PASSWORD: &str = "hunter2-0123456789abcdef";
     let refused = |signal| OtelBuildError::Endpoint { signal };
 
     let written = config("telemetry: { otlp: { endpoint: 'http://[not a host' } }");
-    let shown = otlp_refused(&written, [None, None], refused(Signal::Traces));
+    let shown = otlp_refused(&written, refused(Signal::Traces));
     assert_eq!(
         shown.to_string(),
         "telemetry.otlp.endpoint (line 1): \"http://[not a host\" is refused: it isn't a URL the \
@@ -179,7 +162,7 @@ fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_or_names_the_var
         let written = config(&format!(
             "telemetry: {{ otlp: {{ endpoint: '{endpoint}' }} }}"
         ));
-        let shown = otlp_refused(&written, [None, None], refused(Signal::Traces));
+        let shown = otlp_refused(&written, refused(Signal::Traces));
         assert_eq!(
             shown.to_string(),
             "telemetry.otlp.endpoint (line 1): its value is refused: it isn't a URL the exporter \
@@ -189,34 +172,25 @@ fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_or_names_the_var
         assert!(!format!("{shown:?}").contains(PASSWORD), "{shown:?}");
     }
 
-    let written = config("telemetry: { otlp: { headers: { a: b } } }");
-    let read = [
-        Some("OTEL_EXPORTER_OTLP_ENDPOINT"),
-        Some("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"),
-    ];
-    let shown = otlp_refused(&written, read, refused(Signal::Traces));
+    let from_variable = filled(
+        "telemetry: { otlp: { endpoint: '${COLLECTOR}' } }",
+        &[("COLLECTOR", "http://[not a host")],
+    )
+    .unwrap();
+    let shown = otlp_refused(&from_variable, refused(Signal::Logs));
     assert_eq!(
         shown,
         BuildError::Config(ConfigError::Invalid {
             key: "telemetry.otlp.endpoint".to_owned(),
-            place: None,
-            value: None,
-            reason: "`OTEL_EXPORTER_OTLP_ENDPOINT`, which is read since the config states no \
-                     endpoint, holds what isn't a URL the exporter accepts"
-                .to_owned(),
+            place: Some(Place::Line(1)),
+            value: Some("\"${COLLECTOR}\"".to_owned()),
+            reason: "`COLLECTOR` holds what isn't a URL the exporter accepts".to_owned(),
         })
-    );
-    let shown = otlp_refused(&written, read, refused(Signal::Logs));
-    assert_eq!(
-        shown.to_string(),
-        "telemetry.otlp.endpoint: its value is refused: `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`, which \
-         is read since the config states no endpoint, holds what isn't a URL the exporter accepts"
     );
     assert!(!format!("{shown:?}").contains("not a host"), "{shown:?}");
 
     let shown = otlp_refused(
         &written,
-        [None, None],
         OtelBuildError::HttpClient {
             signal: Signal::Traces,
             reason: "it failed".to_owned(),
@@ -224,46 +198,45 @@ fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_or_names_the_var
     );
     assert_eq!(
         shown.to_string(),
-        "telemetry.otlp.endpoint: its value is refused: the HTTP client couldn't be made: it \
-         failed",
-        "the default endpoint, which the config doesn't state, isn't shown as `null`"
+        "telemetry.otlp.endpoint (line 1): \"http://[not a host\" is refused: the HTTP client \
+         couldn't be made: it failed"
     );
 }
 
 /// TLS to the collector that can't be set up is refused with what stood in
 /// the way and no guess at why, since roots that can't be loaded and an
 /// address TLS can't name are refused alike: by the endpoint as the config
-/// writes it, or by the variable the exporter read it from, showing
-/// nothing of what that holds.
+/// writes it, or by the variable that filled it, showing nothing of what
+/// that holds.
 #[test]
-fn tls_that_cannot_be_set_up_is_refused_by_the_endpoint_as_written_or_the_variable_read() {
+fn tls_that_cannot_be_set_up_is_refused_by_the_endpoint_as_written_or_the_variable_that_filled_it()
+{
     let tls = |signal| OtelBuildError::Tls {
         signal,
         reason: "transport error: no native certs found".to_owned(),
     };
 
     let written = config("telemetry: { otlp: { endpoint: 'https://collector.internal:4317' } }");
-    let shown = otlp_refused(&written, [None, None], tls(Signal::Traces));
+    let shown = otlp_refused(&written, tls(Signal::Traces));
     assert_eq!(
         shown.to_string(),
         "telemetry.otlp.endpoint (line 1): \"https://collector.internal:4317\" is refused: TLS to \
          the collector couldn't be set up: transport error: no native certs found"
     );
 
-    let written = config("telemetry: { otlp: { headers: { a: b } } }");
-    let shown = otlp_refused(
-        &written,
-        [None, Some("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")],
-        tls(Signal::Logs),
-    );
+    let from_variable = filled(
+        "telemetry: { otlp: { endpoint: '${COLLECTOR}' } }",
+        &[("COLLECTOR", "https://collector.internal:4317")],
+    )
+    .unwrap();
+    let shown = otlp_refused(&from_variable, tls(Signal::Logs));
     assert_eq!(
         shown,
         BuildError::Config(ConfigError::Invalid {
             key: "telemetry.otlp.endpoint".to_owned(),
-            place: None,
-            value: None,
-            reason: "`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`, which is read since the config states no \
-                     endpoint, names the collector, and TLS to it couldn't be set up: transport \
+            place: Some(Place::Line(1)),
+            value: Some("\"${COLLECTOR}\"".to_owned()),
+            reason: "`COLLECTOR` names the collector, and TLS to it couldn't be set up: transport \
                      error: no native certs found"
                 .to_owned(),
         })
@@ -274,11 +247,10 @@ fn tls_that_cannot_be_set_up_is_refused_by_the_endpoint_as_written_or_the_variab
     );
 }
 
-/// A client key is read into the TLS identity when its signal's exporter
-/// speaks TLS, and what its file holds is cut from what a tool returns,
-/// each line too, as a value with several lines is. Its variable holds a
-/// path, which is no secret: it's named among what's cut and dropped from
-/// no command.
+/// A client key is read into the TLS identity when the config names one,
+/// and what its file holds is cut from what a tool returns, each line too,
+/// as a value with several lines is, and named under `own:` as the file's
+/// contents. Its path is no secret: nothing is dropped for it.
 #[tokio::test]
 async fn a_client_keys_contents_are_cut_from_a_tools_result_and_its_path_is_not() {
     let receiver = Receiver::start(Mode::Answers).await;
@@ -289,26 +261,29 @@ async fn a_client_keys_contents_are_cut_from_a_tools_result_and_its_path_is_not(
         key_file.display().to_string(),
         certificate_file.display().to_string(),
     );
-    let held = |name: &str| match name {
-        "OTEL_EXPORTER_OTLP_CLIENT_KEY" => Some(OsString::from(&key_path)),
-        "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE" => Some(OsString::from(&certificate_path)),
-        _ => None,
-    };
     scratch.create_dir("work");
-    let config = ending(
-        &scratch,
+    let script = scratch.write("script.yaml", ENDS).display().to_string();
+    let config = filled(
         &format!(
-            "{{ otlp: {{ endpoint: 'https://collector.internal:4318' }} }}\ntools: {{ builtin: \
-             {{ root: '{}', enabled: [bash] }} }}",
+            "model: {{ provider: fake, script: '{script}' }}\nprompt: {{ system: Hi. }}\ntelemetry: {{ otlp: {{ endpoint: 'https://collector.internal:4318', tls: {{ client_cert: '{certificate_path}', client_key: '${{KEY_FILE}}' }} }} }}\ntools: {{ builtin: {{ root: '{}', enabled: [bash] }} }}",
             scratch.at("work").display()
         ),
-    );
+        &[("KEY_FILE", &key_path)],
+    )
+    .unwrap();
 
-    let (prepared, _, _) = settled(&config, &held);
+    let (prepared, _) = settled(&config);
     let derived = prepared.into_secrets();
 
-    let cut: Vec<String> = derived.cut.iter().map(ToString::to_string).collect();
-    assert_eq!(cut, ["OTEL_EXPORTER_OTLP_CLIENT_KEY"]);
+    let own: Vec<String> = derived
+        .own
+        .iter()
+        .map(lablet_secrets::Credential::as_own)
+        .collect();
+    assert_eq!(
+        own,
+        ["telemetry.otlp.tls.client_key (line 3) -> its file's contents; cut"]
+    );
     assert!(derived.dropped.is_empty());
     let key = receiver.client_key();
     let line = key.lines().nth(1).unwrap();
@@ -317,4 +292,19 @@ async fn a_client_keys_contents_are_cut_from_a_tools_result_and_its_path_is_not(
     assert!(!cut.contains(line), "{cut}");
     assert!(cut.contains(&key_path), "the path is no secret: {cut}");
     assert!(!format!("{derived:?}").contains(line));
+}
+
+/// The endpoint a `telemetry:` line shows: its scheme, host, port and path,
+/// and nothing from an `@` before them or a `?` after.
+#[test]
+fn the_endpoint_shown_keeps_the_scheme_host_port_and_path_alone() {
+    assert_eq!(
+        endpoint_shown("https://user:pw%40x@collector:4318/v1?token=t#frag"),
+        "https://collector:4318/v1"
+    );
+    assert_eq!(
+        endpoint_shown("http://localhost:4318"),
+        "http://localhost:4318"
+    );
+    assert_eq!(endpoint_shown("collector:4317"), "collector:4317");
 }

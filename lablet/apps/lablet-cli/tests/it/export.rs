@@ -107,7 +107,7 @@ async fn a_run_end_with_a_collector_that_never_answers_waits_one_flush_bound() {
     let config = scratch.config(
         ENDS,
         json!({ "telemetry": {
-            "otlp": { "enabled": true, "endpoint": receiver.grpc_endpoint(), "protocol": "grpc" },
+            "otlp": { "endpoint": receiver.grpc_endpoint(), "protocol": "grpc" },
         } }),
     );
     let mut lablet = compose::build(config, lablet_cli::input::process_environment())
@@ -171,7 +171,6 @@ async fn the_transcript_a_wide_event_names_is_whole_when_the_wide_event_arrives(
         json!({
             "run": { "transcript_path": transcript },
             "telemetry": { "otlp": {
-                "enabled": true,
                 "endpoint": receiver.grpc_endpoint(),
                 "protocol": "grpc",
             } },

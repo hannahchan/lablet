@@ -238,7 +238,13 @@ telemetry: { resource: { team: evals } }
         resolved["telemetry"],
         json!({
             "capture_content": null,
-            "otlp": { "enabled": null, "endpoint": null, "protocol": null, "headers": null },
+            "propagators": null,
+            "otlp": {
+                "endpoint": null,
+                "protocol": null,
+                "headers": null,
+                "tls": { "ca_file": null, "client_cert": null, "client_key": null },
+            },
             "file": { "path": null },
             "resource": { "team": "evals" },
         })
@@ -321,8 +327,12 @@ fn two_configs_that_differ_only_in_where_they_write_share_a_digest() {
         "telemetry: { file: { path: out/telemetry.jsonl } }",
         "telemetry: { otlp: { endpoint: 'http://localhost:4318', protocol: http/json, headers: { a: b } } }",
         "telemetry: { otlp: { headers: {} } }",
-        "telemetry: { otlp: { enabled: false } }",
+        "telemetry: { otlp: { headers: 'authorization=Bearer%20x' } }",
+        "telemetry: { otlp: { tls: { ca_file: ca.pem, client_cert: c.pem, client_key: c.key } } }",
         "telemetry: { otlp: { protocol: grpc } }",
+        "telemetry: { propagators: b3 }",
+        "telemetry: { propagators: [tracecontext, b3multi] }",
+        "telemetry: { resource: 'service.name=svc,team=evals' }",
         "telemetry: { resource: { team: evals } }",
     ] {
         assert_eq!(digest(output), plain, "{output}");
@@ -703,6 +713,42 @@ fn the_resolved_config_writes_a_filled_setting_as_written_and_reads_back_to_the_
     );
     let read_back = filled(&printed.to_string().replace('\n', " "), &held);
     assert_eq!(read_back.digest(), config.digest());
+}
+
+/// An entry of a map whose `${VAR}` came out empty isn't stated, so the map
+/// holds none for it, and it's written back as the file wrote it: a
+/// command's variable enters the digest as written and a credential's name
+/// stays, whether or not the variable is set, and the resolved config
+/// holds the entry and reads back to the same digest.
+#[test]
+fn an_entry_a_variable_left_unstated_is_written_back_as_the_file_wrote_it() {
+    let text = format!(
+        "{FAKE}tools: {{ builtin: {{ root: work, enabled: [bash], env: {{ A: '1', B: '${{BEE:-}}' }}, \
+         credentials: {{ T: '${{TOK:-}}' }} }} }}"
+    );
+    let unset = filled(&text, &[]);
+    let set = filled(&text, &[("BEE", "2"), ("TOK", "tok-0123456789abcdef")]);
+
+    assert_eq!(unset.tools.builtin.env.keys().collect::<Vec<_>>(), ["A"]);
+    assert!(unset.tools.builtin.credentials.is_empty());
+    assert_eq!(unset.digest(), set.digest());
+    assert_ne!(
+        unset.digest(),
+        digest("tools: { builtin: { root: work, enabled: [bash], env: { A: '1' } } }"),
+        "the entries stay in the digest"
+    );
+
+    let printed = serde_json::to_value(unset.resolved()).unwrap();
+    assert_eq!(
+        printed["tools"]["builtin"]["env"],
+        json!({ "A": "1", "B": "${BEE:-}" })
+    );
+    assert_eq!(
+        printed["tools"]["builtin"]["credentials"],
+        json!({ "T": "${TOK:-}" })
+    );
+    let read_back = filled(&printed.to_string().replace('\n', " "), &[]);
+    assert_eq!(read_back.digest(), unset.digest());
 }
 
 /// A server at `url` with `headers`, as a config states it.

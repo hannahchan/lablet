@@ -1,6 +1,7 @@
 //! The OTLP exporter's share of the seam: `OTEL_SDK_DISABLED`, the two
 //! exporter selectors, and every `OTEL_EXPORTER_OTLP_*` variable, generic
-//! and for each signal.
+//! and for each signal. No production code reads them: the network exporter
+//! is built from `telemetry.otlp` alone.
 //!
 //! Each setting of a signal is its own variable's when that gives one
 //! lablet can use, else the generic variable's, but for the headers: a
@@ -8,6 +9,7 @@
 //! header. Each generic variable is read once for both signals, so a value
 //! lablet can't use is warned about once.
 
+use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr as _;
 use std::time::Duration;
@@ -16,13 +18,74 @@ use reqwest::header::{HeaderName, HeaderValue};
 
 use super::{Choice, Named, Parse, Timeout, Variables};
 use crate::export::{Signal, Transport};
-use crate::otlp::{Hidden, Inherited, InheritedEndpoint, Variable};
-use lablet_otel_env::{ENDPOINT_VARIABLES, Env, HEADER_VARIABLES, decode_headers};
+use lablet_otel_env::decode_headers;
 
 const SDK_DISABLED: &str = "OTEL_SDK_DISABLED";
 
 /// The specification's default of how long one export may take.
 const TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A value that may be a secret, which no `Debug` form shows.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Hidden(pub String);
+
+impl fmt::Debug for Hidden {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("..")
+    }
+}
+
+/// A value, and the variable it was read from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Variable<T> {
+    /// The variable.
+    pub name: &'static str,
+    /// What it holds, as the seam read it.
+    pub value: T,
+}
+
+/// The endpoint the environment names for a signal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InheritedEndpoint {
+    /// The variable it was read from.
+    pub variable: &'static str,
+    /// Whether that's the generic variable, which takes the signal's path
+    /// on HTTP, where the signal's own is taken as it's written.
+    pub generic: bool,
+    /// What it holds, as text: a value that isn't UTF-8 is read lossily,
+    /// and then parses as no URL.
+    pub text: Hidden,
+}
+
+/// What the environment gives one signal's exporter, as the seam reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Inherited {
+    /// Whether the signal's selector turns its OTLP exporter on, or
+    /// `None` when it says nothing lablet serves.
+    pub selected: Option<bool>,
+    /// The protocol, when a variable names one lablet serves.
+    pub protocol: Option<Transport>,
+    /// The endpoint, when a variable names one.
+    pub endpoint: Option<InheritedEndpoint>,
+    /// The headers: the signal's variable's when it's set, even to pairs
+    /// that are all dropped, else the generic variable's, when it's set.
+    pub headers: Option<Vec<(String, Hidden)>>,
+    /// Every header name either variable sets.
+    pub header_names: Vec<String>,
+    /// How long one export may take.
+    pub timeout: Duration,
+    /// Whether exports are compressed with gzip.
+    pub gzip: bool,
+    /// Whether a gRPC endpoint without a scheme is spoken to without TLS.
+    pub insecure: bool,
+    /// The file of the certificates the exporter trusts, in place of the
+    /// platform's roots.
+    pub certificate: Option<Variable<PathBuf>>,
+    /// The file of the client's private key.
+    pub client_key: Option<Variable<PathBuf>>,
+    /// The file of the client's certificate.
+    pub client_certificate: Option<Variable<PathBuf>>,
+}
 
 /// The names of one family of the exporter's variables: the generic one,
 /// or one signal's.
@@ -40,8 +103,8 @@ struct Names {
 
 const GENERIC: Names = Names {
     protocol: "OTEL_EXPORTER_OTLP_PROTOCOL",
-    endpoint: ENDPOINT_VARIABLES[0],
-    headers: HEADER_VARIABLES[0],
+    endpoint: "OTEL_EXPORTER_OTLP_ENDPOINT",
+    headers: "OTEL_EXPORTER_OTLP_HEADERS",
     timeout: "OTEL_EXPORTER_OTLP_TIMEOUT",
     compression: "OTEL_EXPORTER_OTLP_COMPRESSION",
     insecure: "OTEL_EXPORTER_OTLP_INSECURE",
@@ -52,8 +115,8 @@ const GENERIC: Names = Names {
 
 const TRACES: Names = Names {
     protocol: "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
-    endpoint: ENDPOINT_VARIABLES[1],
-    headers: HEADER_VARIABLES[1],
+    endpoint: "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    headers: "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
     timeout: "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
     compression: "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION",
     insecure: "OTEL_EXPORTER_OTLP_TRACES_INSECURE",
@@ -64,8 +127,8 @@ const TRACES: Names = Names {
 
 const LOGS: Names = Names {
     protocol: "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
-    endpoint: ENDPOINT_VARIABLES[2],
-    headers: HEADER_VARIABLES[2],
+    endpoint: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    headers: "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
     timeout: "OTEL_EXPORTER_OTLP_LOGS_TIMEOUT",
     compression: "OTEL_EXPORTER_OTLP_LOGS_COMPRESSION",
     insecure: "OTEL_EXPORTER_OTLP_LOGS_INSECURE",
@@ -98,9 +161,9 @@ pub struct Exporter {
     /// Whether `OTEL_SDK_DISABLED` is `true`: no telemetry at all.
     pub sdk_disabled: bool,
     /// What the environment gives the spans' exporter.
-    pub(crate) traces: Inherited,
+    pub traces: Inherited,
     /// What the environment gives the log records' exporter.
-    pub(crate) logs: Inherited,
+    pub logs: Inherited,
 }
 
 /// What an environment that sets nothing gives.
@@ -111,19 +174,15 @@ impl Default for Exporter {
 }
 
 impl Exporter {
-    pub(super) fn read(variables: &Variables<'_>) -> Self {
+    /// Reads the exporter's variables from `variables`.
+    #[must_use]
+    pub fn read(variables: &Variables<'_>) -> Self {
         let generic = Family::read(variables, &GENERIC);
         Self {
             sdk_disabled: sdk_disabled(variables),
             traces: inherited(variables, Signal::Traces, &generic),
             logs: inherited(variables, Signal::Logs, &generic),
         }
-    }
-
-    /// Whether `OTEL_SDK_DISABLED` in `env` turns all telemetry off, for a
-    /// caller that has to know before anything else is read.
-    pub fn sdk_disabled_in(env: Env<'_>) -> bool {
-        sdk_disabled(&Variables(env))
     }
 }
 

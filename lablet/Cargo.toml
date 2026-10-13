@@ -72,8 +72,8 @@ lablet = { path = "apps/lablet", version = "0.1.0" }
 lablet-cli = { path = "apps/lablet-cli", version = "0.1.0" }
 # Root kernel: the config's wire form, reading, ${VAR} substitution, the schema and the digest
 lablet-config = { path = "apps/shared/config", version = "0.1.0" }
-# Root kernel: the specification's parsing of the OpenTelemetry environment's variables, and
-# the variables both roots read
+# Root kernel: the specification's parsing of the OpenTelemetry environment's variables, which
+# no production code calls, and the k=v decoding the config's text forms use
 lablet-otel-env = { path = "apps/shared/otel-env", version = "0.1.0" }
 # Root kernel: what checking a config comes to, the refusals and the checked values
 lablet-prepare = { path = "apps/shared/prepare", version = "0.1.0" }

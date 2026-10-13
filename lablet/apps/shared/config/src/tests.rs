@@ -116,19 +116,25 @@ fn defaults() -> Config {
         },
         telemetry: Telemetry {
             capture_content: None,
+            propagators: None,
             otlp: Otlp {
-                enabled: None,
                 endpoint: None,
                 protocol: None,
                 headers: None,
+                tls: Tls {
+                    ca_file: None,
+                    client_cert: None,
+                    client_key: None,
+                },
             },
             file: TelemetryFile { path: None },
-            resource: BTreeMap::new(),
+            resource: Resource::default(),
         },
         source: None,
         places: Places::default(),
         prompt_file: None,
         filled: Filled::default(),
+        based: false,
     }
 }
 

@@ -38,13 +38,17 @@
 //!
 //! A fourth run is the two-turns run again in a child process whose
 //! environment sets every variable of the specification's SDK and exporter
-//! pages, and the context variables, each to a value that would change
-//! what's exported if it were read: those lablet honours to values whose
-//! effect its fixture holds, those the config overrides to the opposite of
-//! what it states, and those nothing reads to values that would show. It's
-//! held to a fixture of its own, so the OpenTelemetry crates coming to read
-//! a variable lablet doesn't decide shows as a difference, which the runs
-//! above, under an environment with none of them, can't show.
+//! pages, `OTEL_SDK_DISABLED` and `OTEL_TRACES_SAMPLER` among them, and the
+//! context variables, each to a value that would change what's exported if
+//! it were read. Lablet reads none of them, and states on every builder the
+//! value the crate's default would read from the environment, so the run
+//! exports what the plain two-turns run exports, under the inbound parent
+//! the context variables name: the fixture is that, and the test holds the
+//! two equal besides. The compression variables are the one read the 0.33
+//! exporter makes for itself; they change the transport and not the file,
+//! and a canary holds them. An OpenTelemetry crate coming to read another
+//! variable shows as a difference, which the runs above, under an
+//! environment with none of them, can't show.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -81,8 +85,10 @@ fn fixtures() -> PathBuf {
 /// One golden run: a config file, where it is, and what the run must come
 /// to before its export is compared.
 struct Golden {
-    /// The fixture's directory under [`fixtures`], and the run's id.
+    /// The fixture's directory under [`fixtures`].
     name: &'static str,
+    /// The run's id, `golden-` and the name of the run it's the export of.
+    run_id: &'static str,
     /// The config as its file states it.
     config: &'static str,
     /// The config file's directory, from the directory the test runs in,
@@ -98,6 +104,7 @@ struct Golden {
 
 const STARTER: Golden = Golden {
     name: "starter",
+    run_id: "golden-starter",
     config: include_str!("../../src/cli/init/fake.yaml"),
     directory: "src/cli/init",
     prompt: "Say hello.",
@@ -109,6 +116,7 @@ const STARTER: Golden = Golden {
 
 const TWO_TURNS: Golden = Golden {
     name: "two-turns",
+    run_id: "golden-two-turns",
     config: include_str!("../../../../examples/two-turns/lablet.yaml"),
     directory: "../../examples/two-turns",
     prompt: "Read notes.md and say what it holds.",
@@ -118,7 +126,9 @@ const TWO_TURNS: Golden = Golden {
     records: 1,
 };
 
-/// The two-turns run under [`hostile`], in a child process.
+/// The two-turns run under [`hostile`], in a child process, with the
+/// two-turns run's id, so its export is that run's under the inbound
+/// parent and nothing else.
 const HOSTILE: Golden = Golden {
     name: "hostile",
     ..TWO_TURNS
@@ -128,6 +138,7 @@ const HOSTILE: Golden = Golden {
 /// a call may take 120 s and the run 600 s.
 const CANCELLED: Golden = Golden {
     name: "cancelled",
+    run_id: "golden-cancelled",
     config: include_str!("../../../../tests/fixtures/golden/cancelled/lablet.yaml"),
     directory: "../../tests/fixtures/golden/cancelled",
     prompt: "Read the notes and the plan, then run the build.",
@@ -138,14 +149,16 @@ const CANCELLED: Golden = Golden {
 };
 
 impl Golden {
-    /// The config, with its paths rebased on its directory, its network
-    /// exporter off, its telemetry written to `telemetry`, and whether it
-    /// captures content stated.
+    /// The config, with its paths rebased on its directory and placed from
+    /// the package directory, its telemetry written to `telemetry`, and
+    /// whether it captures content stated. It names no endpoint, so nothing
+    /// goes over the network.
     ///
     /// `model.script` and `tools.builtin.root` are the only relative paths a
     /// golden config may hold: the others a config takes are checked to be
     /// unset, since one that was set would start at the test's directory
-    /// with nothing to say so.
+    /// with nothing to say so. The rebased paths stay relative in the
+    /// record, so the digest the fixtures hold is the same on every machine.
     fn config(&self, telemetry: &Path) -> Config {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"))
             .canonicalize()
@@ -175,10 +188,9 @@ impl Golden {
         // changes nothing a fixture holds, and the file is the only
         // destination and the config's word on content the only one,
         // whatever the environment says.
-        config.telemetry.otlp.enabled = Some(false);
         config.telemetry.file.path = Some(telemetry.to_path_buf());
         config.telemetry.capture_content = Some(config.telemetry.capture_content.unwrap_or(false));
-        config
+        config.relative_to(manifest)
     }
 
     fn fixture(&self) -> PathBuf {
@@ -203,7 +215,7 @@ impl Golden {
         .unwrap();
         let mut request = RunRequest::new(self.prompt)
             .unwrap()
-            .run_id(RunId::new(format!("golden-{}", self.name)).unwrap())
+            .run_id(RunId::new(self.run_id).unwrap())
             .unwrap();
         if let Some(after) = self.cancelled_after {
             let handle = CancelHandle::new();
@@ -278,7 +290,7 @@ impl Golden {
 }
 
 /// Refuses an environment the comparison can't be trusted in: an `OTEL_*`
-/// variable, which lablet, the SDK and the exporter read, one of
+/// variable, which the crates may read for themselves, one of
 /// [`CONTEXT_VARIABLES`], which the propagators read a run's parent from,
 /// and [`UPDATE`] in CI, where a regeneration would pass
 /// whatever the run emitted. Names are read, never a value.
@@ -449,63 +461,71 @@ const INBOUND_SPAN: &str = "00f067aa0ba902b7";
 
 /// The hostile environment: every variable of the specification's SDK and
 /// OTLP exporter pages, and the context variables, each set to a value that
-/// would change what the run exports if it were read. Two are left out,
-/// since their honoured values would leave the fixture empty:
-/// `OTEL_SDK_DISABLED`, which a canary and the command line's tests hold,
-/// and `OTEL_TRACES_SAMPLER`, which the export module's tests hold.
+/// would change what the run exports if it were read. Lablet reads none of
+/// them but the context variables, so the export is the plain run's under
+/// the inbound parent, and the crates read none of them but the compression
+/// variables, which change the transport and not the file.
 fn hostile() -> Vec<(String, String)> {
     let refused = format!("http://{}", Receiver::closed());
     let missing = "/nonexistent/lablet-hostile-golden";
     let mut env: Vec<(String, String)> = [
-        // Honoured, and the fixture, or the assertions after the
-        // comparison, hold each one's effect: `BAGGAGE`'s is that nothing
-        // emits it, and a batch of one is a line of its own.
-        ("OTEL_SERVICE_NAME", "hostile-service"),
-        (
-            "OTEL_RESOURCE_ATTRIBUTES",
-            "service.name=not-this,service.version=9.9.9,telemetry.sdk.name=not-this,\
-             deployment.environment.name=hostile%2Cdecoded,team=a%20b",
-        ),
-        ("OTEL_PROPAGATORS", " TraceContext , baggage "),
+        // The context variables are read, through the propagators the
+        // config names, which are the default two: the parent and the trace
+        // state are on every span, and `BAGGAGE` is in the context and
+        // emitted nowhere.
         (
             "TRACEPARENT",
             "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
         ),
         ("TRACESTATE", "hostile=1"),
         ("BAGGAGE", "hostile=baggage"),
+        // Read by nothing: the two that would silence the run or empty it,
+        // which lablet states the opposite of on every builder.
+        ("OTEL_SDK_DISABLED", "true"),
+        ("OTEL_TRACES_SAMPLER", "always_off"),
+        // Read by nothing: the resource would carry them, the propagators
+        // would change, and a batch of one would be a line of its own.
+        ("OTEL_SERVICE_NAME", "hostile-service"),
+        (
+            "OTEL_RESOURCE_ATTRIBUTES",
+            "service.name=not-this,service.version=9.9.9,telemetry.sdk.name=not-this,\
+             deployment.environment.name=hostile%2Cdecoded,team=a%20b",
+        ),
+        ("OTEL_PROPAGATORS", "b3"),
         ("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "1"),
         ("OTEL_BLRP_MAX_EXPORT_BATCH_SIZE", "1"),
-        // Read by `b3` and `b3multi` alone, which the propagators above
-        // aren't: a parent of another trace.
+        // Read by `b3` and `b3multi` alone, which the config doesn't name,
+        // whatever `OTEL_PROPAGATORS` says: a parent of another trace.
         ("B3", "11111111111111111111111111111111-2222222222222222-1"),
         ("X_B3_TRACEID", "11111111111111111111111111111111"),
         ("X_B3_SPANID", "2222222222222222"),
         ("X_B3_SAMPLED", "1"),
-        // Honoured, with no effect this run can show: it has no span
-        // events or links, its spans hold fewer than 32 attributes, the
-        // three attribute limits leave none to `OTEL_ATTRIBUTE_COUNT_LIMIT`,
-        // the flush exports whatever the delay, and a queue of 64 holds the
-        // run. A sampler argument decides nothing under the default sampler.
-        ("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "32"),
+        // Read by nothing: the limits would cut the spans' attributes and
+        // the queue would drop the run's records.
+        ("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "1"),
         ("OTEL_SPAN_EVENT_COUNT_LIMIT", "0"),
         ("OTEL_SPAN_LINK_COUNT_LIMIT", "0"),
         ("OTEL_EVENT_ATTRIBUTE_COUNT_LIMIT", "1"),
         ("OTEL_LINK_ATTRIBUTE_COUNT_LIMIT", "1"),
         ("OTEL_ATTRIBUTE_COUNT_LIMIT", "1"),
         ("OTEL_BSP_SCHEDULE_DELAY", "3600000"),
-        ("OTEL_BSP_MAX_QUEUE_SIZE", "64"),
+        ("OTEL_BSP_MAX_QUEUE_SIZE", "1"),
         ("OTEL_BLRP_SCHEDULE_DELAY", "3600000"),
-        ("OTEL_BLRP_MAX_QUEUE_SIZE", "64"),
+        ("OTEL_BLRP_MAX_QUEUE_SIZE", "1"),
         ("OTEL_TRACES_SAMPLER_ARG", "0"),
-        // Read, and overridden by the config: it states its file, no
-        // network and no content.
+        // Read by nothing: they would turn the spans off, send the records
+        // to a port that refuses, and capture content.
         ("OTEL_TRACES_EXPORTER", "none"),
         ("OTEL_LOGS_EXPORTER", "otlp"),
         ("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true"),
-        // Read by nothing lablet uses, or inert in the crates.
+        // Read by nothing lablet uses, or inert in the crates: the batch
+        // processors lablet builds export one batch at a time, and never
+        // apply an export timeout of their own.
         ("OTEL_METRICS_EXPORTER", "otlp"),
+        ("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", "delta"),
         ("OTEL_BSP_EXPORT_TIMEOUT", "1"),
         ("OTEL_BLRP_EXPORT_TIMEOUT", "1"),
+        ("OTEL_BSP_MAX_CONCURRENT_EXPORTS", "7"),
         ("OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT", "1"),
         ("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", "1"),
         ("OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT", "1"),
@@ -528,8 +548,8 @@ fn hostile() -> Vec<(String, String)> {
     .map(|(name, value)| (name.to_owned(), value.to_owned()))
     .collect();
     // Each OTLP exporter variable, generic and for each signal, metrics
-    // included. The config's turning the network off overrides those lablet
-    // reads.
+    // included. The config names no endpoint, so no exporter is built to
+    // read any of them, the compression variables included.
     for signal in ["", "TRACES_", "LOGS_", "METRICS_"] {
         for (setting, value) in [
             ("ENDPOINT", refused.as_str()),
@@ -591,20 +611,51 @@ fn the_two_turns_run_under_a_hostile_environment_emits_what_its_fixture_holds() 
 
     let exported = Exported::read(&telemetry).unwrap();
     HOSTILE.compare(&exported);
-    assert_eq!(
-        exported.lines,
-        exported.spans.len() + exported.records.len(),
-        "a batch of one signal to a line"
+    assert!(
+        exported.lines < exported.spans.len() + exported.records.len(),
+        "the batch size of one wasn't read: several signals share a line"
     );
     for span in &exported.spans {
         assert_eq!(span.trace_id, INBOUND_TRACE, "{}", span.name);
+        assert_eq!(span.trace_state, "hostile=1", "{}", span.name);
+        assert_eq!(
+            span.resource.get(key::SERVICE_NAME),
+            Some(&json!("lablet")),
+            "the resource variables weren't read"
+        );
     }
     for record in &exported.records {
         assert_eq!(record.trace_id, INBOUND_TRACE, "{}", record.event_name);
     }
     let root = &exported.spans_of(key::INVOKE_AGENT)[0];
     assert_eq!(root.parent_span_id.as_deref(), Some(INBOUND_SPAN));
+
+    // Less what the inbound parent changes, the export is the plain
+    // two-turns run's: the root's parent and its remote flag, and the trace
+    // state on every span.
+    let mut plain = exported.clone();
+    for span in &mut plain.spans {
+        span.trace_state = String::new();
+        if span.parent_span_id.as_deref() == Some(INBOUND_SPAN) {
+            span.parent_span_id = None;
+            span.flags &= !IS_REMOTE;
+        }
+    }
+    let fixture: Value =
+        serde_json::from_str(&std::fs::read_to_string(TWO_TURNS.fixture()).unwrap()).unwrap();
+    let mut found = Vec::new();
+    differences("", &fixture, &normalised(&plain), &mut found);
+    assert!(
+        found.is_empty(),
+        "under the hostile environment the run differs from the plain two-turns run in more than \
+         its parent:\n  {}",
+        found.join("\n  ")
+    );
 }
+
+/// The bit of a span's OTLP flags that says its parent is remote, which the
+/// inbound parent sets on the root span alone.
+const IS_REMOTE: u32 = 0x200;
 
 /// The export in its normalised form, as the fixture holds it.
 fn normalised(exported: &Exported) -> Value {

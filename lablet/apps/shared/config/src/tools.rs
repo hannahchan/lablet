@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::secret::Secret;
-use super::written::{duration, path};
+use super::written::{duration, map, path};
 
 /// The `tools` section.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -80,12 +80,16 @@ pub struct Builtin {
     /// Variables a command starts with on top of the environment it
     /// inherits, each passed as set: a `${VAR}` here makes nothing a
     /// secret, and one that names the entry's own variable is refused,
-    /// since a command inherits it already.
+    /// since a command inherits it already. An entry whose `${VAR:-}` came
+    /// out empty isn't set.
+    #[serde(deserialize_with = "map::without_nulls")]
     pub env: BTreeMap<String, String>,
     /// Credentials given to `bash`, each under the name written here and
     /// nowhere else: a `${VAR}`, or a `Secret` set in code, never the value
     /// written out. The variable is dropped from what a command inherits,
-    /// and the value is cut out of every tool result.
+    /// and the value is cut out of every tool result. An entry whose
+    /// `${VAR:-}` came out empty isn't given.
+    #[serde(deserialize_with = "map::without_nulls")]
     pub credentials: BTreeMap<String, Secret>,
 }
 
@@ -130,7 +134,7 @@ pub enum McpServer {
         args: Vec<String>,
         /// Variables the server starts with beside the short list it has,
         /// each passed as set: a `${VAR}` here makes nothing a secret.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "map::without_nulls")]
         env: BTreeMap<String, String>,
         /// How long the server may take to start.
         #[serde(default = "startup_timeout", with = "duration")]
@@ -156,7 +160,7 @@ pub enum McpServer {
         /// Headers sent with every request. Every value is lablet's own: a
         /// variable filled into one reaches no command, the value is cut
         /// out of every tool result, and it's left out of the config digest.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "map::without_nulls")]
         headers: BTreeMap<String, Secret>,
         /// How long the server may take to answer its first request.
         #[serde(default = "startup_timeout", with = "duration")]

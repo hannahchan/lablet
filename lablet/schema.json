@@ -24,7 +24,7 @@
             "type": "string"
           },
           "default": {},
-          "description": "Credentials given to `bash`, each under the name written here and\nnowhere else: a `${VAR}`, or a `Secret` set in code, never the value\nwritten out. The variable is dropped from what a command inherits,\nand the value is cut out of every tool result.",
+          "description": "Credentials given to `bash`, each under the name written here and\nnowhere else: a `${VAR}`, or a `Secret` set in code, never the value\nwritten out. The variable is dropped from what a command inherits,\nand the value is cut out of every tool result. An entry whose\n`${VAR:-}` came out empty isn't given.",
           "type": "object"
         },
         "enabled": {
@@ -41,7 +41,7 @@
             "type": "string"
           },
           "default": {},
-          "description": "Variables a command starts with on top of the environment it\ninherits, each passed as set: a `${VAR}` here makes nothing a\nsecret, and one that names the entry's own variable is refused,\nsince a command inherits it already.",
+          "description": "Variables a command starts with on top of the environment it\ninherits, each passed as set: a `${VAR}` here makes nothing a\nsecret, and one that names the entry's own variable is refused,\nsince a command inherits it already. An entry whose `${VAR:-}` came\nout empty isn't set.",
           "type": "object"
         },
         "root": {
@@ -481,34 +481,38 @@
     },
     "Otlp": {
       "additionalProperties": false,
-      "description": "The `telemetry.otlp` section. A field that's `null` is the\nenvironment's, read for each signal: the signal's own variable, else the\ngeneric `OTEL_EXPORTER_OTLP_*` one. The timeout, the compression and TLS\nare the environment's alone.",
+      "description": "The `telemetry.otlp` section. With `endpoint` null nothing goes over the\nnetwork, whatever else is stated.",
       "properties": {
-        "enabled": {
-          "default": null,
-          "description": "Whether a run exports over the network. `None` leaves each signal to\n`OTEL_TRACES_EXPORTER` and `OTEL_LOGS_EXPORTER`, which turn it on\nunless they're `none`. `true` turns both on and `false` both off,\nwhatever they say. `false` is refused beside a stated endpoint,\nwhich it would make a setting without effect.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "endpoint": {
           "default": null,
-          "description": "Where the collector listens. `None` leaves it to the signal's\nvariable and `OTEL_EXPORTER_OTLP_ENDPOINT`, and then to the\nprotocol's default, `http://localhost:4318` or\n`http://localhost:4317`. On HTTP it's a base URL, to which\n`/v1/traces` and `/v1/logs` are appended. Its user information is a\nsecret, cut everywhere and out of the digest; set to nothing it\nstates none.",
+          "description": "Where the collector listens: a base URL, to which `/v1/traces` and\n`/v1/logs` are appended on HTTP, and both signals go there. `None`\nexports nothing over the network. Its user information is a secret,\ncut everywhere and out of the digest.",
           "type": [
             "string",
             "null"
           ]
         },
         "headers": {
-          "additionalProperties": {
-            "type": "string"
-          },
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "description": "OpenTelemetry's `k=v` text, as `authorization=Bearer%20${TOKEN}`, each value percent-decoded",
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
           "default": null,
-          "description": "Headers sent with every export, and the only ones: none the\nenvironment names is sent beside them, `{}` included. `None` sends\nthe environment's, wherever the endpoint came from. Every value is\nlablet's own: a variable filled into one reaches no command, the\nvalue is cut out of every tool result, and it's left out of the\nconfig digest.",
-          "type": [
-            "object",
-            "null"
-          ]
+          "description": "Headers sent with every export, and the only ones: a map, or\nOpenTelemetry's `k=v` text with each value percent-decoded. Every\nvalue is lablet's own and holds a `${VAR}`: a variable filled into one\nreaches no command, the value is cut out of every tool result, and\nit's left out of the config digest."
         },
         "protocol": {
           "anyOf": [
@@ -520,7 +524,16 @@
             }
           ],
           "default": null,
-          "description": "The protocol the collector is sent. `None` leaves it to the\nsignal's variable and `OTEL_EXPORTER_OTLP_PROTOCOL`, and then\nHTTP/protobuf."
+          "description": "The protocol the collector is sent; `None` is HTTP/protobuf."
+        },
+        "tls": {
+          "$ref": "#/$defs/Tls",
+          "default": {
+            "ca_file": null,
+            "client_cert": null,
+            "client_key": null
+          },
+          "description": "TLS to the collector."
         }
       },
       "type": "object"
@@ -633,6 +646,31 @@
         }
       },
       "type": "object"
+    },
+    "Propagator": {
+      "description": "A propagator lablet serves, of those the specification names.",
+      "oneOf": [
+        {
+          "const": "tracecontext",
+          "description": "The W3C trace context: `traceparent` and `tracestate`.",
+          "type": "string"
+        },
+        {
+          "const": "baggage",
+          "description": "The W3C baggage: `baggage`.",
+          "type": "string"
+        },
+        {
+          "const": "b3",
+          "description": "B3's single header: `b3`.",
+          "type": "string"
+        },
+        {
+          "const": "b3multi",
+          "description": "B3's multiple headers: `x-b3-traceid`, `x-b3-spanid`, `x-b3-sampled`\nand `x-b3-flags`.",
+          "type": "string"
+        }
+      ]
     },
     "Provider": {
       "description": "A provider of models.",
@@ -773,11 +811,11 @@
     },
     "Telemetry": {
       "additionalProperties": false,
-      "description": "The `telemetry` section. A field that's `null` is the environment's,\nread as the OpenTelemetry specification reads it, and then the\nspecification's default; a field the config states wins.",
+      "description": "The `telemetry` section. A field that's `null` isn't stated: a run sends\nand writes nothing until the config names a place, and no variable is\nread.",
       "properties": {
         "capture_content": {
           "default": null,
-          "description": "Whether prompts, responses and tool content reach telemetry. `None`\ncaptures nothing, as `false` does; no variable is read.",
+          "description": "Whether prompts, responses and tool content reach telemetry. `None`\ncaptures nothing, as `false` does.",
           "type": [
             "boolean",
             "null"
@@ -793,20 +831,58 @@
         "otlp": {
           "$ref": "#/$defs/Otlp",
           "default": {
-            "enabled": null,
             "endpoint": null,
             "headers": null,
-            "protocol": null
+            "protocol": null,
+            "tls": {
+              "ca_file": null,
+              "client_cert": null,
+              "client_key": null
+            }
           },
           "description": "The OTLP network exporter."
         },
+        "propagators": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "description": "OpenTelemetry's comma text, as `tracecontext,baggage`; `none` alone names no propagator",
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "$ref": "#/$defs/Propagator"
+                  },
+                  "type": "array"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The propagators the inbound context is read through and a command's\ncontext is injected through: a list of names, or OpenTelemetry's\ncomma text, of `tracecontext`, `baggage`, `b3` and `b3multi`, or\n`none` alone. `None` is `tracecontext,baggage`."
+        },
         "resource": {
-          "additionalProperties": {
-            "type": "string"
-          },
+          "anyOf": [
+            {
+              "description": "OpenTelemetry's `k=v` text, as `service.name=lablet,team=evals`, each value percent-decoded",
+              "type": "string"
+            },
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "default": {},
-          "description": "The composer's own resource attributes, which every export carries.\nThey're stated over `OTEL_SERVICE_NAME` and the attributes\n`OTEL_RESOURCE_ATTRIBUTES` names, winning a key both name, and\n`service.version` and the SDK's `telemetry.sdk.*` stay lablet's and\nthe SDK's whichever names them.",
-          "type": "object"
+          "description": "The resource attributes every export carries: a map, or\nOpenTelemetry's `k=v` text with each value percent-decoded. The first\n`service.name` names the service, and `lablet` when none does;\n`service.version` and `telemetry.sdk.*` stay lablet's and the SDK's."
         }
       },
       "type": "object"
@@ -817,7 +893,7 @@
       "properties": {
         "path": {
           "default": null,
-          "description": "The file every run's OTLP/JSON lines are appended to, or `-` for\nstandard error. `None` writes no file. No variable names one, and\nthe file gets both signals whatever the network does.",
+          "description": "The file every run's OTLP/JSON lines are appended to, or `-` for\nstandard error. `None` writes no file, and the file gets both\nsignals whatever the network does.",
           "type": [
             "string",
             "null"
@@ -860,6 +936,37 @@
           "type": "object"
         }
       ]
+    },
+    "Tls": {
+      "additionalProperties": false,
+      "description": "The `telemetry.otlp.tls` section: PEM files, each a path a `${VAR}` may\nfill, read whenever an endpoint is named.",
+      "properties": {
+        "ca_file": {
+          "default": null,
+          "description": "The certificates the exporter trusts, in place of the platform's\nroots, for this exporter alone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_cert": {
+          "default": null,
+          "description": "The exporter's own certificate, for a collector that asks for one;\nit lands together with `client_key`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_key": {
+          "default": null,
+          "description": "The private key of `client_cert`, whose contents are cut out of every\ntool result.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "Tools": {
       "additionalProperties": false,
@@ -1035,11 +1142,16 @@
           "path": null
         },
         "otlp": {
-          "enabled": null,
           "endpoint": null,
           "headers": null,
-          "protocol": null
+          "protocol": null,
+          "tls": {
+            "ca_file": null,
+            "client_cert": null,
+            "client_key": null
+          }
         },
+        "propagators": null,
         "resource": {}
       },
       "description": "What telemetry captures, and where it's exported."
