@@ -99,9 +99,9 @@ pub(crate) fn write(starter: Starter, directory: &Path) -> Result<Vec<PathBuf>, 
 }
 
 /// What `init` says once it has written `paths` into `directory`: what it
-/// wrote, and the command that runs the config. A relative path in a config
-/// starts at the directory lablet runs in, so the command runs from
-/// `directory`.
+/// wrote, and the command that runs the config. The command names the
+/// config by its name alone, a path given on the command line, which starts
+/// where lablet runs, so the command runs from `directory`.
 pub(crate) fn written(paths: &[PathBuf], directory: &Path) -> String {
     let shown: Vec<String> = paths
         .iter()

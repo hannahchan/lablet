@@ -19,8 +19,7 @@ pub enum OwnFile {
     TaskPrompt,
     /// The file `run.transcript_path` names.
     Transcript,
-    /// The file `telemetry.file.path` names, or the one a run has in the
-    /// working directory when it names none.
+    /// The file `telemetry.file.path` names.
     Telemetry,
 }
 

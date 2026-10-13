@@ -199,8 +199,9 @@ opentelemetry-otlp = { version = "=0.33.0", default-features = false, features =
 # behind it, so the config's headers are set after the exporter has merged the
 # environment's.
 opentelemetry-http = "=0.33.0"
-# The `b3` and `b3multi` propagators `OTEL_PROPAGATORS` may name, in the CLI root alone; never
-# its default encoding, the multiple headers, since the specification's `b3` is the single one.
+# The `b3` and `b3multi` propagators `telemetry.propagators` may name, in the CLI root alone;
+# never its default encoding, the multiple headers, since the specification's `b3` is the single
+# one.
 opentelemetry-propagator-b3 = "=0.33.0"
 # Holds a header value of `telemetry.otlp.headers` from the builder to the request, so no
 # `Debug` or log line prints one.

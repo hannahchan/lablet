@@ -27,7 +27,7 @@ lcov.info
 /lablet/coverage/
 mutants.out*/
 
-# Run output: the OTLP/JSON file exporter writes into the working directory.
+# Run output: an OTLP/JSON telemetry file a config names.
 # A committed fixture in this format needs a different name.
 lablet-*.otlp.jsonl
 

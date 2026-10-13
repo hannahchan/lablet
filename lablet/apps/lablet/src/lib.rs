@@ -7,21 +7,61 @@
 //! it, whose summary holds the outcome, and its transcript is written when
 //! the config names a place for one.
 //!
-//! A config's text is read into a [`RawConfig`] first, where an override
-//! can state a setting over the text and the host fills each `${VAR}` from
-//! wherever it says, through [`RawConfig::substituted`], and then into a
-//! [`Config`], which keeps the record of what the fill changed, so its
+//! A host hands a `Lablet` a [`Config`] it owns, made in one of two ways.
+//! It builds one in code, with the key and each credential `bash` is given
+//! set as a [`Secret`]:
+//!
+//! ```no_run
+//! use lablet::config::{BuiltinTool, Provider};
+//! use lablet::{Config, Secret};
+//! # fn vault(_: &str) -> String { String::new() }
+//!
+//! let mut config = Config::default();
+//! config.model.provider = Provider::Anthropic;
+//! config.model.api_key = Some(Secret::new(vault("anthropic")));
+//! config.prompt.system = Some("You fix the failing test and stop.".to_owned());
+//! config.tools.builtin.root = Some("/srv/task/repo".into());
+//! config.tools.builtin.enabled = [BuiltinTool::Bash, BuiltinTool::ReadFile].into();
+//! config
+//!     .tools
+//!     .builtin
+//!     .credentials
+//!     .insert("GITHUB_TOKEN".to_owned(), Secret::new(vault("github")));
+//! ```
+//!
+//! Or it keeps the command line's file: it reads the file into a
+//! [`RawConfig`], where an override can state a setting over the text,
+//! fills each `${VAR}` the file writes from wherever it says, through
+//! [`RawConfig::substituted`], and places the file's relative paths at the
+//! file's directory with [`Config::relative_to`]:
+//!
+//! ```no_run
+//! # fn main() -> Result<(), lablet::ConfigError> {
+//! let directory = std::path::Path::new("/srv/task");
+//! let config = lablet::RawConfig::from_path(directory.join("lablet.yaml"))?
+//!     .substituted(|name| std::env::var_os(name))?
+//!     .config()?
+//!     .relative_to(directory);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! The [`Config`] keeps the record of what the fill changed, so its
 //! messages, its resolved form and its digest show each filled setting as
-//! the file wrote it. Lablet itself reads no environment variable: a host
-//! that builds its config in code sets the key and a tool's credentials as
-//! [`Secret`]s, and hands the environment its processes start from to
+//! the file wrote it. A config that still holds a `${VAR}` is refused when
+//! it's read, and one with a relative path is refused when it's checked
+//! unless the host called `relative_to`, since a config made in code or
+//! from text has no directory. Lablet itself reads no environment variable:
+//! the processes a run starts begin from the environment the host hands
 //! [`Builder::with_process_environment`], which a config that enables
-//! `bash` needs. [`Builder::check`] checks a config as [`Builder::build`]
-//! does and stops before the provider is selected. A run stops early when
-//! the [`CancelHandle`] its request was given is fired.
+//! `bash` needs, less every variable that holds one of lablet's
+//! credentials. [`Builder::check`] checks a config as [`Builder::build`]
+//! does, stops before the provider is selected, and reports the credentials
+//! and what `bash` inherits. A run stops early when the [`CancelHandle`]
+//! its request was given is fired.
 //!
 //! A `Lablet` runs on the OpenTelemetry its host provides, and configures
-//! no SDK of its own. The host hands in an [`Otel`] of three pieces: the
+//! no SDK of its own. The host hands in one [`Otel`] of three pieces: the
 //! tracer provider its spans go to, the logger provider its records go to,
 //! and the propagator a `bash` command's context is injected through. Each
 //! is required, and lablet reads none of OpenTelemetry's globals: a host
@@ -41,7 +81,13 @@
 //! version lablet depends on, so a host's OpenTelemetry crates are that
 //! version.
 //! The host's SDK samples, exports and flushes: a run returns without
-//! flushing anything, and [`Lablet::shutdown`] does no telemetry work. A
+//! flushing anything, and [`Lablet::shutdown`] does no telemetry work of
+//! its own. So a host hands in clones of its SDK's providers and keeps
+//! their handles, to flush them and shut them down itself, after the last
+//! run. The tracer and the logger an `Otel` takes keep the providers they
+//! came from alive, so a provider handed in by value can't be flushed, and
+//! is shut down only when the last `Lablet` and `Otel` that hold it drop,
+//! taking an in-memory exporter's spans and records with it. A
 //! host's `tracing` subscriber sees lablet's diagnostics and none of its
 //! telemetry, and a tool executor finds its call's span in the current
 //! OpenTelemetry context.
@@ -49,23 +95,26 @@
 //! [`FutureExt::with_context`]: opentelemetry::trace::FutureExt::with_context
 //!
 //! What configured an SDK does nothing in library mode, and nothing is said
-//! of it: the config's `telemetry.file`, `telemetry.otlp` and
-//! `telemetry.resource`. No environment variable is read at all: not the
-//! `OTEL_*` variables, nor `TRACEPARENT`, `TRACESTATE` and `BAGGAGE` as the
-//! run's parent, nor the capture variable, since `telemetry.capture_content`
-//! alone decides whether content is captured. Lablet's credentials are
-//! dropped from what a command inherits and cut from what it prints as in
-//! the command line: `model.api_key`, the values of `telemetry.otlp.headers`
-//! and the user information of `telemetry.otlp.endpoint`, though no SDK
-//! uses them, and each entry of `tools.builtin.credentials`, which `bash`
-//! is given under its name.
+//! of it: the config's `telemetry.file`, `telemetry.otlp`,
+//! `telemetry.propagators` and `telemetry.resource`. No environment
+//! variable is read at all: not the `OTEL_*` variables, nor `TRACEPARENT`,
+//! `TRACESTATE` and `BAGGAGE` as the run's parent, nor the capture
+//! variable, since `telemetry.capture_content` alone decides whether
+//! content is captured. Lablet's credentials are dropped from what a
+//! command inherits and cut from what it prints as in the command line:
+//! `model.api_key`, the values of `telemetry.otlp.headers` and the user
+//! information of `telemetry.otlp.endpoint`, though no SDK uses them, and
+//! each entry of `tools.builtin.credentials`, which `bash` is given under
+//! its name.
 //!
 //! A `Lablet` is built and run on a tokio runtime, which its adapters keep
 //! their deadlines on.
 //!
 //! The provider `fake` plays a script in place of a model, so a run needs
-//! no key. Here a host hands in providers of the SDK's own, over its
-//! in-memory exporters, and its own environment for `bash` to start from:
+//! no key. Here a host hands in clones of providers of the SDK's own, over
+//! its in-memory exporters, and its own environment for `bash` to start
+//! from, checks the config, and shuts its providers down once it has read
+//! them:
 //!
 //! ```
 //! use lablet::{Config, Format, Lablet, Otel, OutcomeDocument, RunId, RunRequest, StopReason};
@@ -121,15 +170,16 @@
 //!
 //! let runtime = tokio::runtime::Runtime::new()?;
 //! runtime.block_on(async {
+//!     // Clones, so the host keeps the handles it flushes and shuts down.
 //!     let otel = Otel::new(
 //!         tracer_provider.clone(),
 //!         logger_provider.clone(),
 //!         TraceContextPropagator::new(),
 //!     );
-//!     let mut lablet = Lablet::builder(config, otel)
-//!         .with_process_environment(std::env::vars_os())
-//!         .build()
-//!         .await?;
+//!     let builder = Lablet::builder(config, otel).with_process_environment(std::env::vars_os());
+//!     let checked = builder.check().await?;
+//!     let mut lablet = builder.build().await?;
+//!     assert_eq!(checked.tools(), lablet.tools());
 //!
 //!     let first = lablet.run(RunRequest::new("What's in the directory?")?).await;
 //!     let named = RunId::new("the-second-run")?;
@@ -175,6 +225,10 @@
 //!     assert_eq!(roots, 2);
 //!     Ok::<_, Box<dyn std::error::Error>>(())
 //! })?;
+//! // Read, so they can go: the in-memory exporters forget what they hold
+//! // when their providers shut down.
+//! tracer_provider.shutdown()?;
+//! logger_provider.shutdown()?;
 //! # std::fs::remove_dir_all(directory.to_string())?;
 //! # Ok(())
 //! # }
@@ -192,10 +246,12 @@ pub mod config {
     //! policy: nothing is ignored, so nothing a config states is without
     //! effect.
     //!
-    //! A path is taken as the config writes it. One that isn't absolute
-    //! starts at the working directory, wherever the config's own file is,
-    //! so a config read from text and the same config read from a file name
-    //! the same files.
+    //! A path is taken as the config writes it. One that isn't absolute is
+    //! refused when the config is checked unless the host called
+    //! [`Config::relative_to`], since a config made in code or from text
+    //! has no directory. That places each relative path the file wrote at
+    //! a directory, the file's own for a config read from a file; a path an
+    //! override gave stays as written and starts where the process runs.
     //!
     //! A `${VAR}` is filled by the host, through [`RawConfig::substituted`],
     //! before the config is typed; the record of what the fill changed

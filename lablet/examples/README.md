@@ -1,8 +1,8 @@
 # Examples
 
-Configs to run lablet with, a collector to send the runs to, and a host that runs lablet as a library. A relative path in a config starts at the directory lablet runs in, so run each config from its own directory. The `cargo run` lines below build lablet on their first use.
+Configs to run lablet with, a collector to send the runs to, and a host that runs lablet as a library. A relative path in a config starts at the config's directory, and the commands below name each config by its file name, so run each from the config's directory. The `cargo run` lines below build lablet on their first use.
 
-The `lablet` command takes the OpenTelemetry settings of the environment it runs in, and so does the SDK of the library host below, so run these steps in a shell where no `OTEL_*` variable is set, nor a context variable, `TRACEPARENT`, `TRACESTATE`, `BAGGAGE`, `B3` or an `X_B3_*` one: an endpoint there changes where the runs are sent, a protocol changes the transport, and a `TRACEPARENT` makes the command's run its child. `env | grep -E '^(OTEL_|TRACEPARENT|TRACESTATE|BAGGAGE|B3|X_B3_)'` lists any.
+The `lablet` command takes its settings from its config alone, but it reads the inbound context from its environment, and the SDK of the library host below takes the OpenTelemetry settings of the environment it runs in. So run these steps in a shell where no context variable is set, `TRACEPARENT`, `TRACESTATE`, `BAGGAGE`, `B3` or an `X_B3_*` one, since a `TRACEPARENT` makes the command's run its child, and no `OTEL_*` variable either: an endpoint there changes where the host's runs are sent, and `OTEL_EXPORTER_OTLP_COMPRESSION`, which the exporter reads for itself, changes how the command's are encoded. `env | grep -E '^(OTEL_|TRACEPARENT|TRACESTATE|BAGGAGE|B3|X_B3_)'` lists any.
 
 ## A two-turn run (`two-turns/`)
 
@@ -13,7 +13,7 @@ cd lablet/examples/two-turns
 cargo run --locked --manifest-path ../../Cargo.toml --bin lablet -- run --config lablet.yaml --prompt "Read notes.md and say what it holds."
 ```
 
-The config names no file and no collector, so the run sends its telemetry to `localhost:4318`, the OpenTelemetry default, and with nothing listening there its end waits about a second and the diagnostic log says the telemetry was lost. To keep it in a file instead, add `--set telemetry.file.path=lablet-run.otlp.jsonl`; git ignores a file named `lablet-*.otlp.jsonl`. `cargo xtask weaver live-check` runs this config too, against the registry's live checker.
+The config names no file and no collector, so the run sends and writes no telemetry, and its end waits for nothing. To keep it in a file, add `--set telemetry.file.path=lablet-run.otlp.jsonl`; git ignores a file named `lablet-*.otlp.jsonl`. `cargo xtask weaver live-check` runs this config too, against the registry's live checker, naming its endpoint.
 
 ## A collector and Jaeger (`docker-compose.yaml`)
 
@@ -41,7 +41,7 @@ In Jaeger, select the service `lablet`, put `lablet.turn=2` in the Tags field, a
 
 ### A file replayed through the collector
 
-Run the config with its file in `replay/`, where the collector reads it, and no network export, since the collector isn't on the default port:
+Run the config with its file in `replay/`, where the collector reads it, and no network export, since the config names no endpoint:
 
 ```bash
 cd lablet/examples/two-turns
@@ -52,7 +52,7 @@ The collector's OTLP/JSON file receiver reads the file from its start, and the r
 
 ## A host with an SDK of its own (`traced_run`)
 
-`lablet/apps/lablet/examples/traced_run.rs` runs lablet as a library, as an application instrumented with OpenTelemetry would. It builds an SDK of its own, hands its tracer and logger providers and a trace-context propagator to the `Lablet`, opens a span of its own, and makes a fake-provider run beneath it, whose `bash` call lists an empty directory, so it needs no key. Lablet configures nothing of the host's SDK, which sends over OTLP/HTTP to `http://localhost:4318`, or where `OTEL_EXPORTER_OTLP_ENDPOINT` says, as the SDK reads it. To send to the collector above:
+`lablet/apps/lablet/examples/traced_run.rs` runs lablet as a library, as an application instrumented with OpenTelemetry would. It builds an SDK of its own, hands its tracer and logger providers and a trace-context propagator to the `Lablet`, opens a span of its own, and makes a fake-provider run beneath it, whose `bash` call lists an empty directory, so it needs no key. Lablet configures nothing of the host's SDK, which sends over OTLP/HTTP to `http://localhost:4318`, or where `OTEL_EXPORTER_OTLP_ENDPOINT` says, as the host's SDK reads it for itself. To send to the collector above:
 
 ```bash
 cd lablet

@@ -76,9 +76,10 @@ impl Lablet {
     /// every context variable the command would inherit.
     ///
     /// Library mode leaves alone what configured an OpenTelemetry SDK, and
-    /// says nothing of it: the config's `telemetry.file`, `telemetry.otlp`
-    /// and `telemetry.resource`; and it reads no environment variable, so
-    /// no `OTEL_*` variable and no `TRACEPARENT` names a run's parent.
+    /// says nothing of it: the config's `telemetry.file`, `telemetry.otlp`,
+    /// `telemetry.propagators` and `telemetry.resource`; and it reads no
+    /// environment variable, so no `OTEL_*` variable and no `TRACEPARENT`
+    /// names a run's parent.
     /// Content capture still applies, and lablet's credentials are still
     /// dropped from what a command inherits and cut from what it prints.
     ///
@@ -113,7 +114,9 @@ impl Lablet {
 
     /// Ends this `Lablet`. It does no telemetry work, since the host's SDK
     /// owns the providers, and is where the servers a `Lablet` starts are
-    /// stopped once it starts any.
+    /// stopped once it starts any. It drops the `Lablet`'s hold on the
+    /// providers, so one the host handed in by value, and holds no other
+    /// handle to, is shut down here.
     #[expect(
         clippy::unused_async,
         reason = "the MCP servers phase 8 starts are stopped here, which is awaited"

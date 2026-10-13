@@ -167,8 +167,9 @@ fn prepared(config: &Config, environment: Base) -> Result<Prepared, BuildError> 
 ///
 /// Library mode configures no OpenTelemetry SDK and reads no environment
 /// variable: the host's SDK samples, exports and flushes what lablet emits,
-/// and the config's `telemetry.file`, `telemetry.otlp` and
-/// `telemetry.resource` do nothing, and none of them is warned about.
+/// and the config's `telemetry.file`, `telemetry.otlp`,
+/// `telemetry.propagators` and `telemetry.resource` do nothing, and none of
+/// them is warned about.
 /// `telemetry.capture_content` decides whether content is captured, and
 /// lablet's credentials are still dropped from what a command inherits and
 /// cut from what it prints: `model.api_key`, the values of
@@ -181,7 +182,8 @@ fn prepared(config: &Config, environment: Base) -> Result<Prepared, BuildError> 
 /// Returns [`BuildError::Config`] for a config that states what a config
 /// may not: a setting a rule refuses, a `${VAR}` left in it that no fill
 /// filled, a credential written out rather than as a `${VAR}` or a
-/// `Secret`, a key the provider needs that isn't set, or a file the config
+/// `Secret`, a key the provider needs that isn't set, a relative path in a
+/// config [`Config::relative_to`] wasn't called on, or a file the config
 /// names that can't be read, a script that's refused, or a root that isn't
 /// a directory, and for `bash` enabled with no process environment handed
 /// in. The config is checked whole before the provider is selected, so the

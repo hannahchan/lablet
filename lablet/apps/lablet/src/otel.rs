@@ -18,12 +18,17 @@ use opentelemetry::trace::{Tracer, TracerProvider};
 /// and injects depends only on what its host handed it.
 ///
 /// [`Otel::new`] takes one tracer and one logger of lablet's
-/// instrumentation scope from the providers, and keeps neither provider: the
-/// host keeps both alive for as long as it wants the telemetry and shuts
-/// them down itself, as the doctest does with the clones it hands in, since
-/// an SDK provider shuts its processors down when its last handle drops. A
-/// clone shares them, so one `Otel` builds every `Lablet` of a host, and
-/// each runs on the same three pieces. [`Otel::noop`] is the API's no-op for
+/// instrumentation scope from the providers, and hands lablet neither
+/// provider, so nothing of lablet's flushes or shuts one down. The host
+/// hands in clones and keeps the handles, flushes the providers when it
+/// wants the telemetry sent and shuts them down itself after the last run,
+/// as the crate's doctest does. An SDK's tracer and logger hold the
+/// provider they came from, so a provider handed in by value lives as long
+/// as the last `Otel` or `Lablet` that holds it, can't be flushed, and is
+/// shut down when that drops, taking an in-memory exporter's spans and
+/// records with it. A clone of an `Otel` shares its pieces, so one `Otel`
+/// builds every `Lablet` of a host, and each runs on the same three
+/// pieces. [`Otel::noop`] is the API's no-op for
 /// each, for a host that wants nothing of lablet's telemetry, and a host
 /// that wants one piece silent hands in the API's no-op for that one:
 /// [`NoopTracerProvider`], [`NoopLoggerProvider`] or
