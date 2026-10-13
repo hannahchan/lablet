@@ -303,8 +303,8 @@ fn a_header_set_in_code_is_cut_and_a_handed_in_variable_holding_it_is_dropped() 
 async fn a_lablet_built_with_the_no_op_logger_provider_emits_its_spans_and_no_record() {
     let lab = Lab::new("no-op-logger");
     let otel = lablet::Otel::new(
-        lab.host().tracer_provider(),
-        opentelemetry::logs::NoopLoggerProvider::new(),
+        &lab.host().tracer_provider(),
+        &opentelemetry::logs::NoopLoggerProvider::new(),
         opentelemetry::trace::noop::NoopTextMapPropagator::new(),
     );
     let mut lablet = lablet::Lablet::builder(

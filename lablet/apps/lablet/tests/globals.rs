@@ -159,8 +159,8 @@ async fn lablet_sets_no_global_and_a_global_set_before_the_build_receives_nothin
     let finished = run_on(
         printing(&scratch),
         Otel::new(
-            host.tracer_provider(),
-            host.logger_provider(),
+            &host.tracer_provider(),
+            &host.logger_provider(),
             TraceContextPropagator::new(),
         ),
     )
@@ -212,8 +212,8 @@ async fn lablet_sets_no_global_and_a_global_set_before_the_build_receives_nothin
     let finished = run_on(
         printing(&scratch),
         Otel::new(
-            handed_in.clone(),
-            NoopLoggerProvider::new(),
+            &handed_in,
+            &NoopLoggerProvider::new(),
             TraceContextPropagator::new(),
         ),
     )
@@ -244,8 +244,8 @@ async fn lablet_sets_no_global_and_a_global_set_before_the_build_receives_nothin
     let finished = run_on(
         printing(&scratch),
         Otel::new(
-            global_provider,
-            NoopLoggerProvider::new(),
+            &global_provider,
+            &NoopLoggerProvider::new(),
             TheGlobal(vec!["x-global".to_owned()]),
         ),
     )

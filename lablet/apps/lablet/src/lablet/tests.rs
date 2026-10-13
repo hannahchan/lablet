@@ -97,11 +97,12 @@ async fn the_transcript_a_wide_event_names_is_whole_when_an_exporter_is_handed_t
         }),
     );
     let looking = Looking::default();
+    let logger_provider = SdkLoggerProvider::builder()
+        .with_simple_exporter(looking.clone())
+        .build();
     let otel = Otel::new(
-        NoopTracerProvider::new(),
-        SdkLoggerProvider::builder()
-            .with_simple_exporter(looking.clone())
-            .build(),
+        &NoopTracerProvider::new(),
+        &logger_provider,
         NoopTextMapPropagator::new(),
     );
     let mut lablet = crate::build(config, otel).await.unwrap();

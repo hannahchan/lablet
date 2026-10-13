@@ -17,20 +17,15 @@ use opentelemetry::trace::{Tracer, TracerProvider};
 /// lablet reads none of OpenTelemetry's globals, so what a `Lablet` emits
 /// and injects depends only on what its host handed it.
 ///
-/// [`Otel::new`] takes one tracer and one logger of lablet's
-/// instrumentation scope from the providers, and hands lablet neither
-/// provider, so nothing of lablet's flushes or shuts one down. The host
-/// hands in clones and keeps the handles, flushes the providers when it
-/// wants the telemetry sent and shuts them down itself after the last run,
-/// as the crate's doctest does. An SDK's tracer and logger hold the
-/// provider they came from, so a provider handed in by value lives as long
-/// as the last `Otel` or `Lablet` that holds it, can't be flushed, and is
-/// shut down when that drops, taking an in-memory exporter's spans and
-/// records with it. A clone of an `Otel` shares its pieces, so one `Otel`
-/// builds every `Lablet` of a host, and each runs on the same three
-/// pieces. [`Otel::noop`] is the API's no-op for
-/// each, for a host that wants nothing of lablet's telemetry, and a host
-/// that wants one piece silent hands in the API's no-op for that one:
+/// [`Otel::new`] borrows the providers and takes one tracer and one logger
+/// of lablet's instrumentation scope from them, so the host keeps its
+/// providers and nothing of lablet's flushes or shuts one down: the host
+/// flushes them when it wants the telemetry sent and shuts them down itself
+/// after the last run, as the crate's doctest does. A clone of an `Otel`
+/// shares its pieces, so one `Otel` builds every `Lablet` of a host, and
+/// each runs on the same three pieces. [`Otel::noop`] is the API's no-op
+/// for each, for a host that wants nothing of lablet's telemetry, and a
+/// host that wants one piece silent hands in the API's no-op for that one:
 /// [`NoopTracerProvider`], [`NoopLoggerProvider`] or
 /// [`NoopTextMapPropagator`]. Under the no-op tracer provider a command's
 /// context is the one current where the run is awaited, since the API's
@@ -77,7 +72,7 @@ impl Otel {
     /// use opentelemetry::logs::NoopLoggerProvider;
     /// use opentelemetry::trace::noop::NoopTracerProvider;
     ///
-    /// let otel = lablet::Otel::new(NoopTracerProvider::new(), NoopLoggerProvider::new());
+    /// let otel = lablet::Otel::new(&NoopTracerProvider::new(), &NoopLoggerProvider::new());
     /// ```
     ///
     /// And there's no default to stand in for them:
@@ -86,11 +81,7 @@ impl Otel {
     /// let otel = lablet::Otel::default();
     /// ```
     #[must_use]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "a host hands its providers in, as OpenTelemetry's own setters take one, and lablet keeps the tracer and the logger it takes from them rather than the providers"
-    )]
-    pub fn new<T, L, P>(tracer_provider: T, logger_provider: L, propagator: P) -> Self
+    pub fn new<T, L, P>(tracer_provider: &T, logger_provider: &L, propagator: P) -> Self
     where
         T: TracerProvider,
         T::Tracer: Send + Sync + 'static,
@@ -113,8 +104,8 @@ impl Otel {
     #[must_use]
     pub fn noop() -> Self {
         Self::new(
-            NoopTracerProvider::new(),
-            NoopLoggerProvider::new(),
+            &NoopTracerProvider::new(),
+            &NoopLoggerProvider::new(),
             NoopTextMapPropagator::new(),
         )
     }

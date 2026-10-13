@@ -60,8 +60,8 @@ impl Lab {
     /// propagator, since no test of this binary reads a command's context.
     pub fn otel(&self) -> Otel {
         Otel::new(
-            self.1.tracer_provider(),
-            self.1.logger_provider(),
+            &self.1.tracer_provider(),
+            &self.1.logger_provider(),
             NoopTextMapPropagator::new(),
         )
     }

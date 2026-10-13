@@ -114,9 +114,8 @@ impl Lablet {
 
     /// Ends this `Lablet`. It does no telemetry work, since the host's SDK
     /// owns the providers, and is where the servers a `Lablet` starts are
-    /// stopped once it starts any. It drops the `Lablet`'s hold on the
-    /// providers, so one the host handed in by value, and holds no other
-    /// handle to, is shut down here.
+    /// stopped once it starts any. The host keeps its providers, and shuts
+    /// them down itself after the last run.
     #[expect(
         clippy::unused_async,
         reason = "the MCP servers phase 8 starts are stopped here, which is awaited"

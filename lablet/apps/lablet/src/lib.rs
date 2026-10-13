@@ -88,12 +88,9 @@
 //! version.
 //! The host's SDK samples, exports and flushes: a run returns without
 //! flushing anything, and [`Lablet::shutdown`] does no telemetry work of
-//! its own. So a host hands in clones of its SDK's providers and keeps
-//! their handles, to flush them and shut them down itself, after the last
-//! run. The tracer and the logger an `Otel` takes keep the providers they
-//! came from alive, so a provider handed in by value can't be flushed, and
-//! is shut down only when the last `Lablet` and `Otel` that hold it drop,
-//! taking an in-memory exporter's spans and records with it. A
+//! its own. So [`Otel::new`] borrows the SDK's providers, and the host
+//! keeps them, to flush them and shut them down itself after the last run.
+//! A
 //! host's `tracing` subscriber sees lablet's diagnostics and none of its
 //! telemetry, and a tool executor finds its call's span in the current
 //! OpenTelemetry context.
@@ -117,7 +114,7 @@
 //! their deadlines on.
 //!
 //! The provider `fake` plays a script in place of a model, so a run needs
-//! no key. Here a host hands in clones of providers of the SDK's own, over
+//! no key. Here a host lends `Otel::new` providers of the SDK's own, over
 //! its in-memory exporters, and its own environment for `bash` to start
 //! from, checks the config, and shuts its providers down once it has read
 //! them:
@@ -176,10 +173,9 @@
 //!
 //! let runtime = tokio::runtime::Runtime::new()?;
 //! runtime.block_on(async {
-//!     // Clones, so the host keeps the handles it flushes and shuts down.
 //!     let otel = Otel::new(
-//!         tracer_provider.clone(),
-//!         logger_provider.clone(),
+//!         &tracer_provider,
+//!         &logger_provider,
 //!         TraceContextPropagator::new(),
 //!     );
 //!     let builder = Lablet::builder(config, otel).with_process_environment(std::env::vars_os());

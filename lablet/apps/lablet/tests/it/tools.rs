@@ -578,8 +578,8 @@ async fn the_check_reports_the_context_variables_of_the_host_s_propagator() {
     );
     let config = crate::harness::read_filled(&tree, &[]);
     let otel = lablet::Otel::new(
-        opentelemetry::trace::noop::NoopTracerProvider::new(),
-        opentelemetry::logs::NoopLoggerProvider::new(),
+        &opentelemetry::trace::noop::NoopTracerProvider::new(),
+        &opentelemetry::logs::NoopLoggerProvider::new(),
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );
     let base = [

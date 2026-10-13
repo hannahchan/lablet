@@ -103,8 +103,8 @@ telemetry:
         .build();
 
     let otel = Otel::new(
-        tracer_provider.clone(),
-        logger_provider.clone(),
+        &tracer_provider,
+        &logger_provider,
         TraceContextPropagator::new(),
     );
     // The host's own environment, which `bash` starts from less what holds

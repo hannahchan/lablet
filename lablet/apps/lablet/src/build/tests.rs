@@ -90,8 +90,8 @@ telemetry: {{ capture_content: true }}
         let config = filled(&text, &[("MODEL", model)]).unwrap();
         let host = lablet_conformance::host::Host::new();
         let otel = Otel::new(
-            host.tracer_provider(),
-            host.logger_provider(),
+            &host.tracer_provider(),
+            &host.logger_provider(),
             NoopTextMapPropagator::new(),
         );
         let digest = config.digest().to_string();
