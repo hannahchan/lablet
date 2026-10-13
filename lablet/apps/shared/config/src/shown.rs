@@ -34,6 +34,14 @@ pub fn is_credential(key: &KeyPath) -> bool {
         || key.to_string().contains("].headers")
 }
 
+/// Whether `key` is a URL whose user information is a credential:
+/// `model.base_url`, `telemetry.otlp.endpoint` or an HTTP server's `url`.
+fn is_url(key: &KeyPath) -> bool {
+    let shown = key.to_string();
+    matches!(shown.as_str(), "model.base_url" | "telemetry.otlp.endpoint")
+        || (shown.starts_with("tools.mcp[") && shown.ends_with("].url"))
+}
+
 /// Whether `key` holds a credential the config writes as one `${VAR}` and
 /// nothing else: the key and each of a tool's credentials, where a header
 /// is written with text around its `${VAR}`, as `Bearer ${T}` is.
@@ -79,6 +87,18 @@ pub(crate) fn shown_whole(key: &KeyPath, value: &Value, filled: &Filled) -> Opti
             }
             None => (value.as_str() == Some(Secret::MARKER)).then(|| value.clone()),
         };
+    }
+    // A text the fill changed is shown as written, whatever the setting
+    // reads it into: `telemetry.resource` is written as text and held as a
+    // map, whose entries the record doesn't name.
+    if let Some(fill) = filled.at(key)
+        && !matches!(
+            value,
+            Value::String(_) | Value::Null | Value::Bool(_) | Value::Number(_)
+        )
+    {
+        return (!may_hold_a_credential(&fill.written))
+            .then(|| Value::String(fill.written.clone()));
     }
     match value {
         Value::Object(entries) => entries
@@ -388,7 +408,24 @@ impl<'a, S: Serializer> Serializer for Masking<'a, S> {
         serialize_bool(bool), serialize_i8(i8), serialize_i16(i16), serialize_i32(i32),
         serialize_i64(i64), serialize_i128(i128), serialize_u8(u8), serialize_u16(u16),
         serialize_u32(u32), serialize_u64(u64), serialize_u128(u128), serialize_f32(f32),
-        serialize_f64(f64), serialize_char(char), serialize_str(&str), serialize_bytes(&[u8]),
+        serialize_f64(f64), serialize_char(char), serialize_bytes(&[u8]),
+    }
+
+    fn serialize_str(self, value: &str) -> Result<S::Ok, S::Error> {
+        // A URL's user information the fill didn't give was set in code,
+        // and is written as a secret set in code is: a filled one is
+        // written back as the file wrote it before it gets here.
+        if is_url(&self.at.path)
+            && let Some(information) = crate::url::user_information(value)
+        {
+            let masked = value.replacen(
+                &format!("{information}@"),
+                &format!("{}@", Secret::MARKER),
+                1,
+            );
+            return self.inner.serialize_str(&masked);
+        }
+        self.inner.serialize_str(value)
     }
 
     fn serialize_none(self) -> Result<S::Ok, S::Error> {
@@ -701,6 +738,37 @@ pub(crate) fn debug_tree<T: Serialize>(value: &T, filled: &Filled) -> Value {
         serde_json::to_value(Masked::new(value, filled, WrittenBack::Every)).unwrap_or_default();
     hide(&mut tree);
     tree
+}
+
+/// [`debug_tree`] of a raw tree, with every value at or under a
+/// credential's key written as the marker: before the fill the tree holds
+/// what the text wrote, a credential written out among it, and after it
+/// what each variable held, and neither is typed as a secret yet.
+pub(crate) fn debug_raw_tree(tree: &Value, filled: &Filled) -> Value {
+    let mut shown = debug_tree(tree, filled);
+    mark_credentials(&mut shown, &KeyPath::default());
+    shown
+}
+
+/// Writes every value at or under a credential's key in `value`, which is
+/// at `key`, as the marker.
+fn mark_credentials(value: &mut Value, key: &KeyPath) {
+    match value {
+        Value::Object(entries) => {
+            for (name, item) in entries.iter_mut() {
+                mark_credentials(item, &key.key(name));
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter_mut().enumerate() {
+                mark_credentials(item, &key.index(index));
+            }
+        }
+        Value::String(_) | Value::Bool(_) | Value::Number(_) if is_credential(key) => {
+            *value = Value::String(Secret::MARKER.to_owned());
+        }
+        Value::Null | Value::String(_) | Value::Bool(_) | Value::Number(_) => {}
+    }
 }
 
 /// Hides every text of `tree` that may hold a credential.

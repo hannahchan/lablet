@@ -387,3 +387,37 @@ fn the_check_takes_what_each_protocols_exporter_takes_and_refuses_the_rest() {
         );
     }
 }
+
+/// A header the config names after one of the exporter's own doesn't
+/// replace it: a request carries the pinned agent and, on HTTP, the body's
+/// type and encoding, whatever the config set under those names.
+#[test]
+fn the_configs_headers_do_not_replace_the_exporters_own() {
+    let headers = headers(&[
+        ("user-agent", "evil"),
+        ("content-type", "text/evil"),
+        ("content-encoding", "evil"),
+        ("x-config", "yes"),
+    ]);
+    let mut gzip = HeaderMap::new();
+
+    headers.apply(&mut gzip, &[0x1f, 0x8b, 0x08]);
+
+    assert_eq!(values(&gzip, "user-agent"), [EXPORTER_AGENT]);
+    assert_eq!(values(&gzip, "content-type"), ["application/x-protobuf"]);
+    assert_eq!(values(&gzip, "content-encoding"), ["gzip"]);
+    assert_eq!(values(&gzip, "x-config"), ["yes"]);
+}
+
+/// A body the exporter didn't compress goes with no encoding, whatever the
+/// config names: a collector told `gzip` would refuse a body that isn't.
+#[test]
+fn a_body_left_uncompressed_goes_with_no_encoding_the_config_names() {
+    let headers = headers(&[("content-encoding", "gzip"), ("x-config", "yes")]);
+    let mut plain = HeaderMap::new();
+
+    headers.apply(&mut plain, PROTOBUF);
+
+    assert!(plain.get("content-encoding").is_none(), "{plain:?}");
+    assert_eq!(values(&plain, "x-config"), ["yes"]);
+}

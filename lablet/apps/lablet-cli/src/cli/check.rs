@@ -195,9 +195,26 @@ pub(crate) fn summary(report: &Report) -> String {
         "own",
         checked.own().iter().map(Credential::as_own).collect(),
     );
+    // A credential is given to `bash` alone, so without it nothing gets one.
+    let unused = if checked.environment().is_none() {
+        ", which isn't enabled"
+    } else {
+        ""
+    };
     each(
         "given",
-        checked.given().iter().map(Credential::as_given).collect(),
+        checked
+            .given()
+            .iter()
+            .map(|credential| {
+                let given = credential.as_given();
+                if given.contains("-> bash") {
+                    format!("{given}{unused}")
+                } else {
+                    given
+                }
+            })
+            .collect(),
     );
     each(
         "env",

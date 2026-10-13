@@ -150,10 +150,10 @@ async fn an_endpoint_the_exporter_refuses_is_refused_by_its_key_as_the_config_wr
 /// it ends can't be told once it may hold an unencoded `/`, so the refusal
 /// of an endpoint that holds an `@` shows no value: with each half a
 /// `${VAR}`, with a scheme and without one, which the gRPC exporter gives
-/// one, and written with a `/` in the password, which a URL reads as ending
-/// the authority, so no user information is found to refuse as written out.
-/// A user and password written out, with a scheme and without, are refused
-/// before the exporter is asked, by R17's URL form, unshown too.
+/// one. A user and password written out, with a scheme and without, are
+/// refused before the exporter is asked, by R17's URL form, unshown too,
+/// and one with a `/` in the password, which puts its `@` past the
+/// authority where no reading finds it, by the rule of an unread `@`.
 #[tokio::test]
 async fn a_refused_endpoint_that_holds_an_at_is_shown_with_no_value() {
     const PASSWORD: &str = "hunter2-0123456789abcdef";
@@ -162,15 +162,11 @@ async fn a_refused_endpoint_that_holds_an_at_is_shown_with_no_value() {
     for (endpoint, reason) in [
         (
             "http://${U}:${P}@[not a host".to_owned(),
-            "`U` holds what isn't a URL the exporter accepts",
+            "filled from `U` and `P`, it isn't a URL the exporter accepts",
         ),
         (
             "${U}:${P}@[not a host".to_owned(),
-            "`U` holds what isn't a URL the exporter accepts",
-        ),
-        (
-            format!("https://user:ab/{PASSWORD}@[not a host"),
-            "it isn't a URL the exporter accepts",
+            "filled from `U` and `P`, it isn't a URL the exporter accepts",
         ),
     ] {
         let config = filled(
@@ -193,9 +189,17 @@ async fn a_refused_endpoint_that_holds_an_at_is_shown_with_no_value() {
             "{endpoint}: {refused:?}"
         );
     }
-    for endpoint in [
-        format!("http://user:{PASSWORD}@[not a host"),
-        format!("user:{PASSWORD}@[not a host"),
+    let written_out = "telemetry.otlp.endpoint (line 1) is refused: its user or password isn't a \
+                       ${VAR}, and what it holds isn't shown; write \
+                       https://${GW_USER}:${GW_PASS}@gw/v1, and rotate it if this was one";
+    let unread = "telemetry.otlp.endpoint (line 1) is refused: its text holds an `@` a URL can't \
+                  read as a user or password, and isn't shown; percent-encode a `/`, `?`, `#` or \
+                  `@` in a user or password, or write an `@` in a path as %40; rotate it if this \
+                  was one";
+    for (endpoint, expected) in [
+        (format!("http://user:{PASSWORD}@[not a host"), written_out),
+        (format!("user:{PASSWORD}@[not a host"), written_out),
+        (format!("https://user:ab/{PASSWORD}@[not a host"), unread),
     ] {
         let config = scratch.config(
             ENDS,
@@ -204,13 +208,7 @@ async fn a_refused_endpoint_that_holds_an_at_is_shown_with_no_value() {
 
         let refused = refusal(config).await;
 
-        assert_eq!(
-            refused.to_string(),
-            "telemetry.otlp.endpoint (line 1) is refused: its user or password isn't a ${VAR}, \
-             and what it holds isn't shown; write https://${GW_USER}:${GW_PASS}@gw/v1, and \
-             rotate it if this was one",
-            "{endpoint}"
-        );
+        assert_eq!(refused.to_string(), expected, "{endpoint}");
         assert!(
             !format!("{refused:?}").contains(PASSWORD),
             "{endpoint}: {refused:?}"

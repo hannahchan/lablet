@@ -514,3 +514,25 @@ tools: { builtin: { env: { PORT: '${PORT}', HOST: 'https://u:${PW}@h/x' }, crede
     );
     assert_eq!(hidden.written_text("tools.builtin.env"), None);
 }
+
+/// A text the fill changed that the config reads into a map, as
+/// `telemetry.resource` is, is shown as the file wrote it, not as the map
+/// the filled text became, which holds what the variable held.
+#[test]
+fn a_filled_text_read_into_a_map_is_shown_as_written() {
+    let config = filled(
+        "telemetry: { resource: 'service.name=svc,tok=${T}' }",
+        &[("T", "tok-0123456789abcdef")],
+    );
+    let refusal = config
+        .refused(Refusal::invalid("telemetry.resource", "it's refused"))
+        .to_string();
+    assert_eq!(
+        refusal,
+        "telemetry.resource (line 1): \"service.name=svc,tok=${T}\" is refused: it's refused"
+    );
+    assert_eq!(
+        config.written_text("telemetry.resource").as_deref(),
+        Some("service.name=svc,tok=${T}")
+    );
+}

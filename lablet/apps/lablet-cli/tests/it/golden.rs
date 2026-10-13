@@ -44,11 +44,15 @@
 //! value the crate's default would read from the environment, so the run
 //! exports what the plain two-turns run exports, under the inbound parent
 //! the context variables name: the fixture is that, and the test holds the
-//! two equal besides. The compression variables are the one read the 0.33
-//! exporter makes for itself; they change the transport and not the file,
-//! and a canary holds them. An OpenTelemetry crate coming to read another
-//! variable shows as a difference, which the runs above, under an
-//! environment with none of them, can't show.
+//! two equal besides. Its config also names an OTLP endpoint, a receiver
+//! the test starts, over HTTP, so the network exporters are built under
+//! that environment too, which names another endpoint, protocol, headers
+//! and timeout: the receiver gets both signals as the config sends them.
+//! The compression variables are the one read the 0.33 exporter makes for
+//! itself; they change the transport and not the file, and a canary holds
+//! them. An OpenTelemetry crate coming to read another variable shows as a
+//! difference, which the runs above, under an environment with none of
+//! them, can't show.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -56,10 +60,10 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crate::key;
-use lablet::config::Provider;
+use lablet::config::{OtlpProtocol, Provider};
 use lablet::{CancelHandle, Config, FinishedRun, Format, RunId, RunRequest, StopReason};
 use lablet_conformance::otlp::{Attributes, Exported, LogRecord, Span, SpanKind, Status};
-use lablet_conformance::receiver::Receiver;
+use lablet_conformance::receiver::{self, Mode, Receiver};
 use lablet_env_carrier::CONTEXT_VARIABLES;
 use lablet_run::telemetry::generated::GenAiClientOperationException;
 use lablet_test_support::Scratch;
@@ -207,12 +211,15 @@ impl Golden {
 
     /// Runs once, under its own id, exporting to `telemetry`.
     async fn run_to(&self, telemetry: &Path) -> FinishedRun {
-        let mut lablet = lablet_cli::compose::build(
-            self.config(telemetry),
-            lablet_cli::input::process_environment(),
-        )
-        .await
-        .unwrap();
+        self.run_with(self.config(telemetry)).await
+    }
+
+    /// Runs `config`, one of [`Golden::config`]'s, once, under its own id.
+    async fn run_with(&self, config: Config) -> FinishedRun {
+        let mut lablet =
+            lablet_cli::compose::build(config, lablet_cli::input::process_environment())
+                .await
+                .unwrap();
         let mut request = RunRequest::new(self.prompt)
             .unwrap()
             .run_id(RunId::new(self.run_id).unwrap())
@@ -454,6 +461,10 @@ async fn the_cancelled_run_emits_what_its_fixture_holds() {
 /// the file the child exports its run to.
 const HOSTILE_CHILD: &str = "LABLET_TEST_HOSTILE_GOLDEN_CHILD";
 
+/// Set beside [`HOSTILE_CHILD`], to the OTLP/HTTP endpoint the child's
+/// config names.
+const HOSTILE_ENDPOINT: &str = "LABLET_TEST_HOSTILE_GOLDEN_ENDPOINT";
+
 /// The trace and the span of the sampled parent the hostile environment's
 /// `TRACEPARENT` names.
 const INBOUND_TRACE: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
@@ -548,8 +559,9 @@ fn hostile() -> Vec<(String, String)> {
     .map(|(name, value)| (name.to_owned(), value.to_owned()))
     .collect();
     // Each OTLP exporter variable, generic and for each signal, metrics
-    // included. The config names no endpoint, so no exporter is built to
-    // read any of them, the compression variables included.
+    // included: another endpoint, protocol, headers and timeout than the
+    // config's, which the exporters are built under. Only the compression
+    // variables are read, by the exporter itself.
     for signal in ["", "TRACES_", "LOGS_", "METRICS_"] {
         for (setting, value) in [
             ("ENDPOINT", refused.as_str()),
@@ -582,25 +594,38 @@ async fn a_child_process_runs_the_two_turns_run_under_a_hostile_environment() {
     let Some(telemetry) = std::env::var_os(HOSTILE_CHILD) else {
         return;
     };
-    let finished = HOSTILE.run_to(Path::new(&telemetry)).await;
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test reads the endpoint its parent started a receiver at"
+    )]
+    let endpoint = std::env::var(HOSTILE_ENDPOINT).unwrap();
+    // The `telemetry` section is left out of the digest, so the endpoint
+    // changes nothing the fixture holds.
+    let mut config = HOSTILE.config(Path::new(&telemetry));
+    config.telemetry.otlp.endpoint = Some(endpoint);
+    config.telemetry.otlp.protocol = Some(OtlpProtocol::HttpProtobuf);
+    let finished = HOSTILE.run_with(config).await;
     assert_eq!(finished.summary.outcome.stop_reason(), HOSTILE.stop);
 }
 
-#[test]
-fn the_two_turns_run_under_a_hostile_environment_emits_what_its_fixture_holds() {
+#[tokio::test(flavor = "multi_thread")]
+async fn the_two_turns_run_under_a_hostile_environment_emits_what_its_fixture_holds() {
     refuse_the_environment();
+    let receiver = Receiver::start(Mode::Answers).await;
     let scratch = Scratch::new("golden-hostile");
     let telemetry = scratch.at("telemetry.otlp.jsonl");
-    let child = Command::new(std::env::current_exe().unwrap())
+    let child = tokio::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
             "golden::a_child_process_runs_the_two_turns_run_under_a_hostile_environment",
             "--test-threads=1",
         ])
         .env(HOSTILE_CHILD, &telemetry)
+        .env(HOSTILE_ENDPOINT, receiver.http_endpoint())
         .envs(hostile())
         .stdin(Stdio::null())
         .output()
+        .await
         .unwrap();
     let stdout = String::from_utf8_lossy(&child.stdout);
     assert!(
@@ -651,6 +676,61 @@ fn the_two_turns_run_under_a_hostile_environment_emits_what_its_fixture_holds() 
          its parent:\n  {}",
         found.join("\n  ")
     );
+
+    sent_as_the_config_says(&receiver, &exported);
+}
+
+/// Holds that the network exporters sent both signals to the config's
+/// endpoint, over the config's protocol, with the exporter's own headers
+/// and the config's, which are none: not to the hostile environment's
+/// endpoint, over gRPC, or with its headers. It can't hold the timeout:
+/// the 0.33 exporter hands an HTTP client it's given the timeout only as
+/// the deadline of its retries. They sent what the file holds.
+fn sent_as_the_config_says(receiver: &Receiver, file: &Exported) {
+    let requests = receiver.requests();
+    for signal in [receiver::Signal::Traces, receiver::Signal::Logs] {
+        assert!(
+            requests.iter().any(|request| request.signal == signal),
+            "{signal:?} never reached the config's endpoint: {requests:?}"
+        );
+    }
+    for request in &requests {
+        assert_eq!(request.transport, receiver::Transport::Http, "{request:?}");
+        let names: BTreeSet<&str> = request
+            .headers
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert!(
+            names.is_subset(&BTreeSet::from([
+                "accept",
+                "content-encoding",
+                "content-length",
+                "content-type",
+                "host",
+                "user-agent",
+            ])),
+            "{request:?}"
+        );
+        let header = |name: &str| {
+            request
+                .headers
+                .iter()
+                .find(|(held, _)| held == name)
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(
+            header("content-type"),
+            Some("application/x-protobuf"),
+            "{request:?}"
+        );
+        assert!(
+            header("user-agent").is_some_and(|agent| agent.starts_with("OTel-OTLP-Exporter-Rust/")),
+            "{request:?}"
+        );
+    }
+    let network = receiver.exported().unwrap();
+    assert_eq!(network.ungrouped(), file.ungrouped());
 }
 
 /// The bit of a span's OTLP flags that says its parent is remote, which the

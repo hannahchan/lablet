@@ -472,6 +472,39 @@ fn a_filled_endpoint_that_does_not_parse_is_refused_naming_the_variable_and_not_
     }
 }
 
+/// C20: an endpoint that isn't one variable whole, filled into what the
+/// exporter doesn't accept, as a password holding a backslash makes it, is
+/// refused naming each variable it holds, in order, since any of them may
+/// be what broke it, and never what one holds.
+#[test]
+fn a_filled_endpoint_of_several_variables_that_does_not_parse_names_each() {
+    let lab = Lab::new("otlp-env-bad-endpoint-parts");
+    lab.write_config(
+        ENDS,
+        json!({ "telemetry": { "otlp": { "endpoint": "http://${LABLET_TEST_U}:${LABLET_TEST_P}@127.0.0.1:9" } } }),
+    );
+    let check = ["check", "--config", CONFIG];
+    let run = ["run", "--config", CONFIG, "--prompt", PROMPT];
+
+    for args in [&check[..], &run[..]] {
+        let said = refused_before_a_run(
+            &lab,
+            args,
+            &[
+                ("LABLET_TEST_U", "user-abcdefghijk"),
+                ("LABLET_TEST_P", "pa\\ss-abcdefghijk"),
+            ],
+        );
+
+        assert_eq!(
+            said,
+            "config: telemetry.otlp.endpoint (line 1): its value is refused: filled from \
+             `LABLET_TEST_U` and `LABLET_TEST_P`, it isn't a URL the exporter accepts\n"
+        );
+        assert!(!said.contains("abcdefghijk"), "{said}");
+    }
+}
+
 /// O28: a `ca_file` that can't be read is refused by `check` and by `run`
 /// alike, before any run, by its key and naming the variable that filled
 /// the path, never what a file holds; a `client_key` without its
@@ -575,7 +608,7 @@ fn tls_material_whose_pem_does_not_load_is_refused_by_check_and_run_on_both_prot
                 roots,
                 format!(
                     "config: telemetry.otlp.tls.ca_file (line 1): \"{certificate}\" is refused: the \
-                     file names a file that doesn't hold PEM certificates that can be loaded\n"
+                     setting names a file that doesn't hold PEM certificates that can be loaded\n"
                 ),
                 "{protocol} {args:?}"
             );
@@ -583,7 +616,7 @@ fn tls_material_whose_pem_does_not_load_is_refused_by_check_and_run_on_both_prot
                 identity,
                 format!(
                     "config: telemetry.otlp.tls.client_cert (line 1): \"{certificate}\" is refused: \
-                     the file and `telemetry.otlp.tls.client_key` name files that don't hold a PEM \
+                     the setting and `telemetry.otlp.tls.client_key` name files that don't hold a PEM \
                      client certificate and its private key that can be loaded\n"
                 ),
                 "{protocol} {args:?}"

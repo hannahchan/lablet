@@ -476,3 +476,64 @@ tools: { builtin: { root: ., enabled: [bash], credentials: { OTEL_EXPORTER_OTLP_
         names(&["T", "E", "G", "COMMAND_OTLP_HEADERS"])
     );
 }
+
+/// A client key's armour, `-----BEGIN PRIVATE KEY-----` and its end, is
+/// every PEM's: it's neither cut nor what a variable of the environment is
+/// dropped by, so another key or a certificate isn't taken for this one.
+/// A variable that holds this key is named under its `own:` line.
+#[tokio::test]
+async fn a_client_keys_armour_is_neither_cut_nor_dropped_by() {
+    let receiver = Receiver::start(Mode::Answers).await;
+    let key = receiver.client_key();
+    let config = filled(
+        "model: { provider: fake, script: run.yaml }\ntelemetry: { otlp: { tls: { client_key: /keys/client.key } } }\n",
+        &[],
+    );
+
+    let mut derived = derived(&config, Some(key), true);
+
+    let armour: Vec<&str> = key
+        .lines()
+        .filter(|line| line.starts_with("-----"))
+        .collect();
+    assert_eq!(armour.len(), 2, "{armour:?}");
+    for line in armour {
+        assert_eq!(derived.values.redacted(line), line);
+        assert_eq!(derived.dropping.redacted(line), line);
+    }
+    assert_ne!(derived.dropping.redacted(key), key);
+    derived.own[0].copies = vec!["MY_KEY".to_owned()];
+    assert_eq!(
+        own(&derived),
+        [
+            "telemetry.otlp.tls.client_key (line 2) -> its file's contents, or MY_KEY, which holds it; cut"
+        ]
+    );
+}
+
+/// A key set in code after the file's `${K:-}` or `${K}` came out unset,
+/// `K` unset or set to nothing, is the code's, and is named so, not as
+/// filled from `K`.
+#[test]
+fn a_key_set_in_code_after_its_variable_came_out_unset_is_named_set_in_code() {
+    for (api_key, variables) in [
+        ("${K:-}", &[][..]),
+        ("${K:-}", &[("K", "")][..]),
+        ("${K}", &[("K", "")][..]),
+    ] {
+        let mut config = filled(
+            &format!("model: {{ provider: fake, script: run.yaml, api_key: '{api_key}' }}"),
+            variables,
+        );
+        config.model.api_key = Some(Secret::new(KEY));
+
+        let derived = derived(&config, None, true);
+
+        assert_eq!(
+            own(&derived),
+            ["model.api_key (set in code); no process inherits it"],
+            "{api_key} {variables:?}"
+        );
+        assert!(derived.dropped.is_empty(), "{:?}", derived.dropped);
+    }
+}

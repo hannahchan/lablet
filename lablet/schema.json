@@ -939,7 +939,7 @@
     },
     "Tls": {
       "additionalProperties": false,
-      "description": "The `telemetry.otlp.tls` section: PEM files, each a path a `${VAR}` may\nfill, read whenever an endpoint is named.",
+      "description": "The `telemetry.otlp.tls` section: PEM files, each a path a `${VAR}` may\nfill, loaded when an endpoint is named; `client_key` is read whenever\nit's stated, so what it holds is cut.",
       "properties": {
         "ca_file": {
           "default": null,
@@ -1080,7 +1080,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "What a `Lablet` is built from.\n\nThe sections hold what the config states, with lablet's default wherever\nit states nothing and every provider shares the default. A setting of\nthe `model` section that's one provider's is held as it was stated, and\n[`Config::resolved`] fills in its default. Every `${VAR}` was filled\nbefore the config was typed, by [`RawConfig::substituted`], and the\nconfig keeps the record of what the fill changed, so its `Debug` form,\nits messages and its resolved form show each filled setting as the file\nwrote it. Its serialisation shows the typed values, a secret as\n`[secret]`; it's what the mask reads.\n\nReading a config checks its shape. What a config may not state is\nrefused when it's checked, and when a `Lablet` is built from it.",
+  "description": "What a `Lablet` is built from.\n\nThe sections hold what the config states, with lablet's default wherever\nit states nothing and every provider shares the default. A setting of\nthe `model` section that's one provider's is held as it was stated, and\n[`Config::resolved`] fills in its default. Read through a [`RawConfig`],\nevery `${VAR}` was filled before the config was typed, by\n[`RawConfig::substituted`], and the\nconfig keeps the record of what the fill changed, so its `Debug` form,\nits messages and its resolved form show each filled setting as the file\nwrote it. Its serialisation shows the typed values, a secret as\n`[secret]`; it's what the mask reads.\n\nReading a config checks its shape. What a config may not state is\nrefused when it's checked, and when a `Lablet` is built from it.\n\nIts own `Deserialize` is the in-code path, as a struct literal is: it\nfills nothing and keeps no record, so a `${VAR}` in what it reads is\ntext, and a credential in it counts as set in code. A text with\n`${VAR}`s to fill is read through [`RawConfig`].",
   "properties": {
     "model": {
       "$ref": "#/$defs/Model",

@@ -449,3 +449,45 @@ fn a_run_a_command_starts_is_a_child_of_that_command_s_tool_span() {
         Some(tools[0].span_id.as_str())
     );
 }
+
+/// An inbound `BAGGAGE` holding a given credential's value is dropped by
+/// value, and isn't injected again: a command gets the tool span's
+/// `TRACEPARENT` and no `BAGGAGE`, though one holding nothing of a
+/// credential reaches it.
+#[test]
+fn a_context_variable_dropped_by_value_is_not_injected_again() {
+    let token = "ghp_0123456789abcdef0123456789";
+    let printed_under = |test: &str, baggage: &str| {
+        let lab = Lab::new(test);
+        lab.write("work/notes.md", "Nothing yet.");
+        let mut builtin = lab.builtin(&["bash"]);
+        builtin["credentials"] = json!({ "GH": "${LABLET_TEST_GIVEN}" });
+        lab.write_config(
+            PRINTS,
+            json!({
+                "tools": { "builtin": builtin },
+                "telemetry": { "propagators": "tracecontext,baggage" },
+                "run": { "transcript_path": "transcript.json" },
+            }),
+        );
+        let mut command = lab.lablet(&["run", "--config", CONFIG, "--prompt", PROMPT]);
+        command.envs([
+            ("LABLET_TEST_GIVEN", token),
+            ("TRACEPARENT", SAMPLED),
+            ("BAGGAGE", baggage),
+        ]);
+        let run = ran(command, "");
+        assert_eq!(run.code, Some(0), "{run:?}");
+        printed(&lab)
+    };
+
+    let dropped = printed_under("context-dropped-baggage", &format!("k={token}"));
+    let carried = printed_under("context-carried-baggage", "k=plain-0123456789abcdef");
+
+    assert!(!dropped.contains("BAGGAGE"), "{dropped}");
+    assert!(dropped.contains("TRACEPARENT=00-"), "{dropped}");
+    assert!(
+        carried.contains("BAGGAGE=k=plain-0123456789abcdef"),
+        "{carried}"
+    );
+}

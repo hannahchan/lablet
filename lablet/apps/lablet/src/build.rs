@@ -19,7 +19,6 @@ use lablet_tools_wiring::Built;
 use lablet_transcript_json::JsonTranscripts;
 use opentelemetry::Context;
 use opentelemetry::global::{BoxedSpan, BoxedTracer};
-use opentelemetry::trace::noop::NoopTextMapPropagator;
 use opentelemetry::trace::{SpanBuilder, Tracer};
 
 use crate::lablet::Lablet;
@@ -77,7 +76,9 @@ impl Lablet {
 
 impl Builder {
     /// The environment every process a run starts begins from, which a
-    /// config that enables `bash` needs: `bash` is found on its `PATH`, and
+    /// config that enables `bash` needs: `bash` is found on its `PATH`, or,
+    /// when it holds none, on the host process's own, and the command then
+    /// gets no `PATH`; and
     /// a command inherits it, less every variable that filled one of
     /// lablet's credentials and every variable holding a credential's
     /// value, with `tools.builtin.env` and then `tools.builtin.credentials`
@@ -119,9 +120,11 @@ impl Builder {
     /// [`BuildError::Unsupported`] of the provider.
     pub async fn check(&self) -> Result<Checked, BuildError> {
         let prepared = prepared(&self.config, self.environment.clone())?;
-        // A check starts no command, so there's no context to inject.
-        let untraced = Arc::new(NoopTextMapPropagator::new());
-        let Built { tools, environment } = lablet_tools_wiring::tools(&prepared, untraced).await?;
+        // A check starts no command, so nothing is injected; the host's
+        // propagator names the context variables a command would get.
+        let propagator = Arc::clone(&self.otel.propagator);
+        let Built { tools, environment } =
+            lablet_tools_wiring::tools(&prepared, propagator).await?;
         Ok(Checked::new(
             &self.config,
             tools.specs().to_vec(),

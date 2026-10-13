@@ -798,3 +798,148 @@ fn protocol_http_is_refused_naming_the_three_values() {
         ));
     }
 }
+
+/// A `RawConfig`'s `Debug` form is masked as a config's is: the fill
+/// wrote what each variable holds into its tree, and the form shows each
+/// filled setting as the file wrote it. A credential's value, the key, a
+/// `credentials` value and a header text among them, is the marker before
+/// the fill and after it, since the raw tree types none as a secret, and a
+/// text may write one out.
+#[test]
+fn a_filled_raw_config_s_debug_form_shows_no_filled_value() {
+    let text = "model: { api_key: '${KEY}', name: 'm-${MODEL}', base_url: 'https://${U}:${P}@gw.example/v1' }\ntelemetry: { resource: 'tok=${TOK}' }\n";
+    let held = [
+        ("KEY", KEY),
+        ("MODEL", "model-0123456789"),
+        ("U", "user-0123456789ab"),
+        ("P", "pw-0123456789abcdef"),
+        ("TOK", "tok-0123456789abcdef"),
+    ];
+    let lookup = |asked: &str| {
+        held.iter()
+            .find(|(name, _)| *name == asked)
+            .map(|(_, value)| std::ffi::OsString::from(value))
+    };
+    let raw = RawConfig::from_str(text, Format::Yaml)
+        .unwrap()
+        .substituted(lookup)
+        .unwrap();
+
+    let shown = format!("{raw:?}");
+
+    for (_, hidden) in held {
+        assert!(!shown.contains(hidden), "{hidden}: {shown}");
+    }
+    assert!(
+        shown.contains("m-${MODEL}") && shown.contains(Secret::MARKER),
+        "{shown}"
+    );
+
+    let literals = [
+        "sk-ant-literal0123456789abcdef",
+        "ghp_literal0123456789abcdef",
+        "literalheadertoken0123456789",
+    ];
+    let written = format!(
+        "model: {{ api_key: '{}' }}\ntools: {{ builtin: {{ credentials: {{ GH: '{}' }} }} }}\ntelemetry: {{ otlp: {{ headers: 'authorization=Bearer%20{},x=${{TOK}}' }} }}\n",
+        literals[0], literals[1], literals[2]
+    );
+    let raw = RawConfig::from_str(&written, Format::Yaml).unwrap();
+    let before = format!("{raw:?}");
+    let after = format!("{:?}", raw.substituted(lookup).unwrap());
+    for shown in [before, after] {
+        for literal in literals {
+            assert!(!shown.contains(literal), "{literal}: {shown}");
+        }
+        assert!(shown.contains(Secret::MARKER), "{shown}");
+    }
+}
+
+/// A URL set in code with user information serialises, as `--resolved`
+/// and a host's own serialisation write it, with that information as the
+/// marker a secret set in code is written as, as the key is; a URL the
+/// fill gave is written back as the file wrote it.
+#[test]
+fn a_url_s_user_information_set_in_code_serialises_as_the_marker() {
+    let mut config = Config::default();
+    config.model.base_url = Some("https://u:pw-0123456789abcdef@gw.example/v1".to_owned());
+    config.telemetry.otlp.endpoint = Some("http://u:pw-0123456789abcdef@127.0.0.1:4318".to_owned());
+
+    let written = serde_json::to_string(&config.resolved()).unwrap();
+
+    assert!(!written.contains("pw-0123"), "{written}");
+    assert!(
+        written.contains("https://[secret]@gw.example/v1")
+            && written.contains("http://[secret]@127.0.0.1:4318"),
+        "{written}"
+    );
+    let mut plain = config.clone();
+    plain.model.base_url = Some("https://gw.example/v1".to_owned());
+    plain.telemetry.otlp.endpoint = None;
+    config.telemetry.otlp.endpoint = None;
+    assert_eq!(config.digest(), plain.digest());
+}
+
+/// A value written as one `${VAR}` whole that comes out empty isn't
+/// stated, whatever the setting takes: a number, a duration and a list's
+/// item are left out as an optional setting is, and the setting keeps its
+/// default; the resolved form writes it back as the file wrote it.
+#[test]
+fn a_whole_reference_that_comes_out_empty_is_unstated_in_every_setting() {
+    let config = filled(
+        "model: { max_tokens: '${MT:-}' }\nrun: { max_retries: '${R:-}', timeout: '${T:-}', max_turns: '${M:-}' }\ntools: { allow: [read_file, '${E:-}'] }\n",
+        &[],
+    );
+    let default = Config::default();
+
+    assert_eq!(config.model.max_tokens, default.model.max_tokens);
+    assert_eq!(config.run.max_retries, default.run.max_retries);
+    assert_eq!(config.run.timeout, default.run.timeout);
+    assert_eq!(config.run.max_turns, None);
+    assert_eq!(config.tools.allow, Some(vec!["read_file".to_owned()]));
+    let resolved = serde_json::to_value(config.resolved()).unwrap();
+    assert_eq!(resolved["model"]["max_tokens"], json!("${MT:-}"));
+    assert_eq!(resolved["run"]["timeout"], json!("${T:-}"));
+}
+
+/// R55 for a variable that holds the marker names the variable, whose fix
+/// is to hold the secret; written in the text, the fix is `Secret::new`.
+#[test]
+fn the_marker_a_variable_holds_is_refused_naming_the_variable() {
+    let refusal = RawConfig::from_str("model: { api_key: '${K}' }", Format::Yaml)
+        .unwrap()
+        .substituted(|_: &str| Some(OsString::from(Secret::MARKER)))
+        .unwrap()
+        .config()
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        refusal,
+        "model.api_key (line 1): \"${K}\" is refused: `K` holds the marker lablet writes a secret \
+         set in code as; set it to the secret itself"
+    );
+    let written = Config::from_str("model: { api_key: '[secret]' }", Format::Yaml)
+        .unwrap_err()
+        .to_string();
+    assert!(written.ends_with("set it with Secret::new"), "{written}");
+}
+
+/// A list or a text of no propagator is refused with the fix, `none`, which
+/// names none and says so.
+#[test]
+fn propagators_that_name_none_are_refused_with_the_fix() {
+    for written in ["[]", "''", "' , '"] {
+        let refusal = Config::from_str(
+            &format!("telemetry: {{ propagators: {written} }}"),
+            Format::Yaml,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            refusal.ends_with("is refused: it names no propagator; write `none` to name none"),
+            "{written}: {refusal}"
+        );
+    }
+    let none = Config::from_str("telemetry: { propagators: none }", Format::Yaml).unwrap();
+    assert_eq!(none.telemetry.propagators, Some(Propagators::none()));
+}

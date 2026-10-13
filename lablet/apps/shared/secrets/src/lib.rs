@@ -23,7 +23,9 @@ use std::fmt::Write as _;
 
 use lablet_model::Secrets;
 
-use lablet_config::{Config, Fill, Headers, KeyPath, McpServer, Place, Secret, user_information};
+use lablet_config::{
+    Config, Fill, Headers, KeyPath, McpServer, Place, Secret, came_out_unstated, user_information,
+};
 
 /// What a run drops, gives and cuts, derived from its config.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,19 +182,19 @@ impl Credential {
             // A file's contents reach no process either way, and the line
             // says what's cut rather than who doesn't get it.
             Source::Contents => {
-                return match self.held {
-                    Held::Cut => format!(
-                        "{}{} -> its file's contents; cut",
-                        self.field,
-                        at(self.place)
-                    ),
-                    held => format!(
-                        "{}{} -> its file's contents{}",
-                        self.field,
-                        at(self.place),
-                        held.note()
-                    ),
-                };
+                let mut line = format!(
+                    "{}{} -> its file's contents{}",
+                    self.field,
+                    at(self.place),
+                    self.held.note()
+                );
+                for copy in &self.copies {
+                    let _ = write!(line, ", or {copy}, which holds it");
+                }
+                if self.held == Held::Cut {
+                    line.push_str("; cut");
+                }
+                return line;
             }
         };
         for copy in &self.copies {
@@ -318,6 +320,7 @@ pub fn derived(config: &Config, client_key: Option<&str>, with_values: bool) -> 
         with_values,
         own: Vec::new(),
         given: Vec::new(),
+        given_values: Vec::new(),
         values: Vec::new(),
     };
     let model = KeyPath::of("model.api_key");
@@ -374,14 +377,26 @@ struct Set<'a> {
     with_values: bool,
     own: Vec<Credential>,
     given: Vec<Credential>,
+    /// The value of each given credential, in the order of `given`: empty
+    /// for one that came out unset.
+    given_values: Vec<String>,
     values: Vec<String>,
 }
 
 impl Set<'_> {
     fn push(&mut self, side: Side, credential: Credential) {
+        self.push_valued(side, credential, "");
+    }
+
+    /// `credential`, with the value it gives, which a given one keeps so an
+    /// own credential it copies can be told.
+    fn push_valued(&mut self, side: Side, credential: Credential, value: &str) {
         match side {
             Side::Own => self.own.push(credential),
-            Side::Given => self.given.push(credential),
+            Side::Given => {
+                self.given.push(credential);
+                self.given_values.push(value.to_owned());
+            }
         }
     }
 
@@ -400,8 +415,10 @@ impl Set<'_> {
         let held = self.value(value);
         let matcher = Secrets::new([value.to_owned()]);
         // A key the text didn't write was set in code, wherever the config
-        // came from.
+        // came from, and so is one whose `${VAR}` came out unstated, its
+        // variable unset or set to nothing.
         let sources = match fill {
+            Some(fill) if came_out_unstated(fill) => vec![Source::Code],
             Some(fill) if !fill.variables.is_empty() => fill
                 .variables
                 .iter()
@@ -411,7 +428,7 @@ impl Set<'_> {
             _ => vec![Source::Key(key.clone())],
         };
         for source in sources {
-            self.push(
+            self.push_valued(
                 side,
                 Credential {
                     field: key.clone(),
@@ -422,6 +439,7 @@ impl Set<'_> {
                     copies: Vec::new(),
                     matcher: matcher.clone(),
                 },
+                value,
             );
         }
     }
@@ -446,8 +464,17 @@ impl Set<'_> {
 
     /// What the file the setting at `key` names holds: own, cut whole and by
     /// each line, as a value with several lines is, from no variable.
+    ///
+    /// A PEM's armour, its `-----BEGIN` and `-----END` lines, is every
+    /// PEM's, so it's left out: cut, it would take any other key's or
+    /// certificate's for this one's.
     fn contents(&mut self, key: &KeyPath, contents: &str) {
-        let held = self.value(contents);
+        let body = contents
+            .lines()
+            .filter(|line| !line.starts_with("-----BEGIN ") && !line.starts_with("-----END "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let held = self.value(&body);
         self.own.push(Credential {
             field: key.clone(),
             place: self.config.place_at(key),
@@ -455,7 +482,7 @@ impl Set<'_> {
             held,
             given_by: None,
             copies: Vec::new(),
-            matcher: Secrets::new([contents.to_owned()]),
+            matcher: Secrets::new([body]),
         });
     }
 
@@ -612,17 +639,28 @@ impl Set<'_> {
             with_values: _,
             mut own,
             given,
+            given_values,
             values,
         } = self;
         let dropping = Secrets::new(values.iter().cloned());
         // Under Q5 an own credential may be listed under `credentials` too:
-        // the same variable written there knowingly.
+        // the same variable written there knowingly, or another that holds
+        // its value, which gives `bash` the value as surely.
         for credential in &mut own {
-            if let Source::Variable(name) = &credential.source
-                && let Some(entry) = given
+            let by_name = match &credential.source {
+                Source::Variable(name) => given
                     .iter()
-                    .find(|given| given.variable() == Some(name.as_str()))
-            {
+                    .find(|given| given.variable() == Some(name.as_str())),
+                Source::Key(_) | Source::Code | Source::Contents => None,
+            };
+            let entry = by_name.or_else(|| {
+                given
+                    .iter()
+                    .zip(&given_values)
+                    .find(|(_, value)| !value.is_empty() && credential.holds(value))
+                    .map(|(given, _)| given)
+            });
+            if let Some(entry) = entry {
                 credential.given_by = Some((entry.field.clone(), entry.place));
             }
         }

@@ -65,3 +65,44 @@ fn a_written_url_writes_a_user_or_password_out_only_in_its_own_text_or_a_default
         assert_eq!(written_information(written), expected, "{written}");
     }
 }
+
+/// An `@` past the authority is one no reading takes as user information:
+/// a password's `/`, `?` or `#` puts the `@` after it there, written out,
+/// in a default or by a variable, and so does an `@` in a path; one that's
+/// percent-encoded, or before the authority's end, is read.
+#[test]
+fn an_at_past_the_authority_is_one_no_reading_takes_as_user_information() {
+    for url in [
+        "http://user:pa/ss@127.0.0.1:9",
+        "http://user:pa?ss@h",
+        "http://user:pa#ss@h",
+        "http://h/v1/a@b",
+        "u:pa/ss@h:4317",
+        "http://x/://u:p@h",
+    ] {
+        assert!(holds_an_unread_at(url), "{url}");
+    }
+    for url in [
+        "http://user:pass@127.0.0.1:9/v1",
+        "http://u:p@ss@h/x",
+        "http://127.0.0.1:9/v1/a%40b",
+        "http://u:pa%2Fss@h",
+        "u:p@h:4317",
+    ] {
+        assert!(!holds_an_unread_at(url), "{url}");
+    }
+    for written in [
+        "http://${U}:${P:-pa/ss}@h",
+        "${URL:-http://u:pa/ss@h}",
+        "http://${H}/a@b",
+    ] {
+        assert!(writes_an_unread_at(written), "{written}");
+    }
+    for written in [
+        "http://${U}:${P}@h",
+        "${URL}",
+        "http://${U}:${P:-pass}@h/v1",
+    ] {
+        assert!(!writes_an_unread_at(written), "{written}");
+    }
+}

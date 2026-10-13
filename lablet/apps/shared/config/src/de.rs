@@ -158,6 +158,14 @@ impl Kind {
 }
 
 impl<'a> At<'a> {
+    /// Whether `value`, at `path`, is a text that was one `${VAR}` whole
+    /// and came out empty, which the fill left `null`: it isn't stated, so
+    /// a setting keeps its default and a list or a map holds nothing for
+    /// it, whatever the setting takes.
+    fn unstated(&self, value: &Value, path: &KeyPath) -> bool {
+        value.is_null() && self.filled.at(path).is_some()
+    }
+
     fn child(&self, value: &'a Value, path: KeyPath) -> Self {
         At {
             value,
@@ -314,7 +322,10 @@ impl<'de, 'a, I: Iterator<Item = (usize, &'a Value)>> SeqAccess<'de> for Items<'
         &mut self,
         seed: T,
     ) -> Result<Option<T::Value>, Fault> {
-        let Some((index, value)) = self.rest.next() else {
+        let Some((index, value)) = self
+            .rest
+            .find(|(index, value)| !self.at.unstated(value, &self.at.path.index(*index)))
+        else {
             return Ok(None);
         };
         let path = self.at.path.index(index);
@@ -338,7 +349,10 @@ impl<'de, 'a, I: Iterator<Item = (&'a String, &'a Value)>> MapAccess<'de> for En
         &mut self,
         seed: K,
     ) -> Result<Option<K::Value>, Fault> {
-        let Some((key, value)) = self.rest.next() else {
+        let Some((key, value)) = self
+            .rest
+            .find(|(key, value)| !self.at.unstated(value, &self.at.path.key(key)))
+        else {
             return Ok(None);
         };
         self.value = Some((value, self.at.path.key(key)));

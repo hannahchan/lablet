@@ -564,3 +564,40 @@ async fn a_credential_reaches_bash_under_its_name_and_is_cut_and_an_env_entry_is
         ["GITHUB_TOKEN".to_owned()].into()
     );
 }
+
+/// The check reports what `bash` inherits through the host's own
+/// propagator, as a run gives it: a field it names is a context variable a
+/// command gets in place of an inherited one, and isn't inherited as set.
+#[tokio::test]
+async fn the_check_reports_the_context_variables_of_the_host_s_propagator() {
+    let scratch = Lab::new("check-propagator");
+    let script = calling(&[("bash", json!({ "command": "true" }))]);
+    let tree = scratch.tree(
+        &script,
+        json!({ "tools": { "builtin": scratch.builtin(&["bash"]) } }),
+    );
+    let config = crate::harness::read_filled(&tree, &[]);
+    let otel = lablet::Otel::new(
+        opentelemetry::trace::noop::NoopTracerProvider::new(),
+        opentelemetry::logs::NoopLoggerProvider::new(),
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+    );
+    let base = [
+        ("PATH", "/usr/bin:/bin"),
+        (
+            "TRACEPARENT",
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        ),
+        ("TRACESTATE", "k=v"),
+    ];
+
+    let checked = lablet::Lablet::builder(config, otel)
+        .with_process_environment(base)
+        .check()
+        .await
+        .unwrap();
+
+    let environment = checked.environment().unwrap();
+    assert_eq!(environment.context, ["TRACEPARENT", "TRACESTATE"]);
+    assert_eq!(checked.inherited(), ["PATH"]);
+}

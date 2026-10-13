@@ -842,10 +842,11 @@ fn a_header_s_key_a_url_s_host_and_a_command_s_variables_change_the_digest() {
 }
 
 /// The strip is the digest's alone: the resolved config holds a URL's user
-/// information as written and a header's value as the marker, and reads
-/// back to the same digest once the header is given as a `${VAR}`.
+/// information that no variable gave, and a header's value, as the marker,
+/// and reads back to the same digest once the header is given as a
+/// `${VAR}`.
 #[test]
-fn the_resolved_config_keeps_a_url_as_written_and_a_header_as_the_marker() {
+fn the_resolved_config_keeps_a_url_s_user_information_and_a_header_as_the_marker() {
     let config = yaml(&format!(
         "{FAKE}{}",
         http_server(
@@ -862,7 +863,7 @@ fn the_resolved_config_keeps_a_url_as_written_and_a_header_as_the_marker() {
     );
     assert_eq!(
         printed["tools"]["mcp"][0]["url"],
-        json!("https://u:p@h/mcp")
+        json!("https://[secret]@h/mcp")
     );
     assert!(
         Config::from_str(&printed.to_string(), Format::Json).is_err(),

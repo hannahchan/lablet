@@ -207,7 +207,9 @@ fn file_target(config: &Config) -> Option<FileTarget> {
 /// it, or no value when it holds an `@`. User information is a secret, and
 /// where it ends can't be told when it holds an unencoded `/`, `?` or `#`.
 /// A refusal of an endpoint a variable filled names the variable and shows
-/// nothing of what it holds.
+/// nothing of what it holds; one that isn't a URL names each variable the
+/// endpoint holds, since any of them may be what broke it, but the one that
+/// is the endpoint whole.
 #[must_use]
 pub fn otlp_refused(config: &Config, error: OtelBuildError) -> BuildError {
     const KEY: &str = "telemetry.otlp.endpoint";
@@ -226,9 +228,27 @@ pub fn otlp_refused(config: &Config, error: OtelBuildError) -> BuildError {
                 reason: reason.to_owned(),
             });
         }
-        OtelBuildError::Endpoint { .. } => match variable {
-            Some(variable) => format!("`{variable}` holds what isn't a URL the exporter accepts"),
-            None => "it isn't a URL the exporter accepts".to_owned(),
+        OtelBuildError::Endpoint { .. } => match config.filled().at(&key) {
+            Some(fill) if fill.is_one_variable() => format!(
+                "`{}` holds what isn't a URL the exporter accepts",
+                fill.variables[0].name
+            ),
+            filled => {
+                let names: Vec<String> = filled
+                    .into_iter()
+                    .flat_map(|fill| fill.names().map(|name| format!("`{name}`")))
+                    .collect();
+                match names.split_last() {
+                    None => "it isn't a URL the exporter accepts".to_owned(),
+                    Some((last, [])) => {
+                        format!("filled from {last}, it isn't a URL the exporter accepts")
+                    }
+                    Some((last, rest)) => format!(
+                        "filled from {} and {last}, it isn't a URL the exporter accepts",
+                        rest.join(", ")
+                    ),
+                }
+            }
         },
         OtelBuildError::Exporter { reason, .. } => {
             format!("the exporter couldn't be made: {reason}")

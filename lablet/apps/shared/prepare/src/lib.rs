@@ -19,8 +19,9 @@ use std::path::{Path, PathBuf};
 
 use lablet_config::{
     Config, ConfigError, Context, Format, KeyPath, McpServer, Place, Places, Provider, Refusal,
-    ResolvedConfig, Secret, Tools, TranscriptFormat, WrittenInformation, user_information,
-    written_information,
+    ResolvedConfig, Secret, Tools, TranscriptFormat, Unreadable, WrittenInformation,
+    holds_an_unread_at, is_credential, outside_user_information, unreadable, user_information,
+    writes_an_unread_at, written_information,
 };
 use lablet_model::{RunOutcome, StopReason, ToolSpec};
 use lablet_provider_fake::{Script, ScriptFormat, ScriptSource};
@@ -241,7 +242,8 @@ pub struct Passed {
     /// Where it was written.
     pub place: Option<Place>,
     /// The variable it's a copy of, when the entry is one `${VAR}` of
-    /// another name.
+    /// another name and what it holds isn't cut, as an own or given value
+    /// is.
     pub copied_from: Option<String>,
 }
 
@@ -289,7 +291,7 @@ impl Checked {
             mut own,
             mut given,
             dropped: _,
-            values: _,
+            values,
             dropping: _,
         } = secrets;
         if let Some(environment) = &environment {
@@ -315,6 +317,16 @@ impl Checked {
                     .filter(|fill| fill.is_one_variable())
                     .and_then(|fill| fill.names().next())
                     .filter(|variable| *variable != name)
+                    // A copy of an own or given value is cut, so it isn't
+                    // said to reach `bash` uncut.
+                    .filter(|_| {
+                        config
+                            .tools
+                            .builtin
+                            .env
+                            .get(name)
+                            .is_none_or(|value| values.redacted(value) == *value)
+                    })
                     .map(str::to_owned);
                 Passed {
                     name: name.clone(),
@@ -471,8 +483,9 @@ pub fn prepare(config: &Config, base: Base) -> Result<Settled, BuildError> {
     credentials_are_variables(config)?;
     key_is_set(config)?;
     env_is_no_credential(config, &variables, base.as_deref())?;
+    credential_variables_fill_their_fields(config, &variables)?;
     bash_has_a_base(config, &settings, base.is_some())?;
-    warn_of_an_own_credential_given(config, &variables);
+    warn_of_an_own_credential_given(config);
     supported(config)?;
     paths_are_placed(config)?;
 
@@ -704,11 +717,19 @@ fn credentials_are_variables(config: &Config) -> Result<(), BuildError> {
 
 /// R17's URL form and R63: a URL's user and password are each their own
 /// `${VAR}`, read off the URL as the text wrote it, a default's text among
-/// it. User information the text writes out is refused unshown, as a key
+/// it. First, a text that writes an `@` past the authority is refused
+/// unshown, since a user or password before it is one nothing reads, so
+/// R17 wouldn't see it written out and nothing would cut it; and last, so
+/// is a filled URL that holds one, naming its variables, for what the
+/// rules of each variable pass. User information the text writes out is
+/// refused unshown, as a key
 /// written out is; a variable that gives a URL user information the
 /// written text doesn't hold, as one that holds the whole URL does, is
-/// refused by its name, showing nothing of what it holds. A URL set in code
-/// has no written text, and passes: it's own, and cut.
+/// refused by its name, showing nothing of what it holds; and so is one
+/// that gives it what it can't read as written, which would leave a user or
+/// password where nothing finds it to cut or leave unshown. A URL set in
+/// code has no written text, and is own and cut, unless it holds an `@`
+/// past its authority, which is refused as a filled one is.
 fn urls_hold_their_credentials_as_variables(config: &Config) -> Result<(), BuildError> {
     let mut urls = vec![
         (
@@ -730,12 +751,35 @@ fn urls_hold_their_credentials_as_variables(config: &Config) -> Result<(), Build
     }
     for (key, url) in urls {
         let Some(place) = config.place_at(&key) else {
+            // Set in code: with no text to read it by, a URL that holds an
+            // `@` past its authority keeps a user or password nothing finds to
+            // cut, so it's refused as a filled one is.
+            if url.is_some_and(holds_an_unread_at) {
+                return Err(refusal_unshown(
+                    config,
+                    &key,
+                    format!(
+                        "it holds an `@` a URL can't read as a user or password, and isn't shown; \
+                         {UNREAD_AT_FIX}"
+                    ),
+                ));
+            }
             continue;
         };
         let fill = config.filled().at(&key);
         let Some(written) = fill.map(|fill| fill.written.as_str()).or(url) else {
             continue;
         };
+        if writes_an_unread_at(written) {
+            return Err(refusal_unshown(
+                config,
+                &key,
+                format!(
+                    "its text holds an `@` a URL can't read as a user or password, and isn't \
+                     shown; {UNREAD_AT_FIX}; rotate it if this was one"
+                ),
+            ));
+        }
         match written_information(written) {
             WrittenInformation::WrittenOut => {
                 let fix = "https://${GW_USER}:${GW_PASS}@gw/v1";
@@ -773,8 +817,52 @@ fn urls_hold_their_credentials_as_variables(config: &Config) -> Result<(), Build
             }
             WrittenInformation::Absent | WrittenInformation::Variables => {}
         }
+        let reason = match fill.and_then(unreadable) {
+            None => match fill.zip(url).filter(|(_, url)| holds_an_unread_at(url)) {
+                None => continue,
+                Some((fill, _)) => unread_at_filled(fill.names()),
+            },
+            Some(Unreadable::UserInformation(variable)) => format!(
+                "its user or password `{variable}` holds `/`, `?`, `#` or `@`, which a URL can't \
+                 read, and isn't shown; percent-encode it"
+            ),
+            Some(Unreadable::At(variable)) => format!(
+                "`{variable}` holds an `@`, which may be a user or password a URL can't read, and \
+                 isn't shown; percent-encode it, or write an `@` in a path as %40"
+            ),
+        };
+        return Err(refusal_unshown(config, &key, reason));
     }
     Ok(())
+}
+
+/// How a URL is written so each `@` it holds is read where a URL reads it.
+const UNREAD_AT_FIX: &str = "percent-encode a `/`, `?`, `#` or `@` in a user or password, or \
+                             write an `@` in a path as %40";
+
+/// The reason a filled URL that holds an `@` past its authority is refused,
+/// naming each of its variables, `names`, in order.
+fn unread_at_filled<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    let names: Vec<String> = names.map(|name| format!("`{name}`")).collect();
+    let (give, hold) = if names.len() == 1 {
+        ("gives", "it holds")
+    } else {
+        ("give", "they hold")
+    };
+    format!(
+        "{} {give} it an `@` a URL can't read as a user or password, and what {hold} isn't \
+         shown; {UNREAD_AT_FIX}",
+        and_list(&names)
+    )
+}
+
+/// `items` as a sentence lists them: `a`, `a and b`, `a, b and c`.
+fn and_list(items: &[String]) -> String {
+    match items.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 /// R62: a header value with no `${VAR}` in it is a token written out, in
@@ -827,13 +915,18 @@ fn headers_hold_variables(config: &Config) -> Result<(), BuildError> {
             };
             let (name, value) = (name.trim(), value.trim());
             if !name.is_empty() && !value.is_empty() && !value.contains("${") {
+                let written = match config.place_at(&key) {
+                    Some(Place::Override) => {
+                        format!("--set '{key}={}'", headers_fixed(&fill.written))
+                    }
+                    _ => format!("{name}=${{{}}}", variable_name(name)),
+                };
                 return Err(refusal_unshown(
                     config,
                     &key,
                     format!(
                         "its pair `{name}` holds no ${{VAR}}, and what it holds isn't shown; write \
-                         {name}=${{{}}}, {rotate}",
-                        variable_name(name)
+                         {written}, {rotate}"
                     ),
                 ));
             }
@@ -862,13 +955,17 @@ fn headers_hold_variables(config: &Config) -> Result<(), BuildError> {
                 }
             }
             _ => {
+                let variable = variable_name(name);
+                let written = match config.place_at(&at) {
+                    Some(Place::Override) => format!("--set '{key}.{name}=${{{variable}}}'"),
+                    _ => format!("{name}: ${{{variable}}}"),
+                };
                 return Err(refusal_unshown(
                     config,
                     &at,
                     format!(
-                        "it holds no ${{VAR}}, and what it holds isn't shown; write {name}: \
-                         ${{{}}}, {rotate}",
-                        variable_name(name)
+                        "it holds no ${{VAR}}, and what it holds isn't shown; write {written}, \
+                         {rotate}"
                     ),
                 ));
             }
@@ -878,9 +975,21 @@ fn headers_hold_variables(config: &Config) -> Result<(), BuildError> {
 }
 
 /// The variable a fix suggests for the header `name`: its name in capitals,
-/// with `_` for what a variable's name can't hold.
+/// with `_` for what a variable's name can't hold, and without any `${VAR}`
+/// the name holds; `HEADER_VALUE` for a name that's `${VAR}`s alone.
 fn variable_name(name: &str) -> String {
-    name.chars()
+    let mut bare = name.to_owned();
+    while let Some(start) = bare.find("${") {
+        let end = bare[start..]
+            .find('}')
+            .map_or(bare.len(), |end| start + end + 1);
+        bare.replace_range(start..end, "");
+    }
+    let bare = bare.trim_matches(|character: char| !character.is_ascii_alphanumeric());
+    if bare.is_empty() {
+        return "HEADER_VALUE".to_owned();
+    }
+    bare.chars()
         .map(|character| {
             if character.is_ascii_alphanumeric() {
                 character.to_ascii_uppercase()
@@ -889,6 +998,33 @@ fn variable_name(name: &str) -> String {
             }
         })
         .collect()
+}
+
+/// The text form `written` with each pair that writes its value out given
+/// the variable a fix suggests, and anything else that holds no `${VAR}`
+/// and isn't a pair left out, so the fix of an override, which replaces the
+/// text whole, keeps the other pairs and shows no value.
+fn headers_fixed(written: &str) -> String {
+    written
+        .split(',')
+        .map(str::trim)
+        .filter_map(|pair| {
+            let Some((name, value)) = pair.split_once('=') else {
+                return pair.contains("${").then(|| pair.to_owned());
+            };
+            let (name, value) = (name.trim(), value.trim());
+            if value.contains("${") {
+                Some(pair.to_owned())
+            } else if name.is_empty() {
+                None
+            } else if value.is_empty() {
+                Some(format!("{name}="))
+            } else {
+                Some(format!("{name}=${{{}}}", variable_name(name)))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// R51: a relative path in a config that was given no directory to start
@@ -1164,6 +1300,57 @@ fn env_is_no_credential(
     Ok(())
 }
 
+/// Q6: an own or given `${VAR}` fills no setting but its own field, a URL's
+/// user information or a `credentials` entry, since what it fills anywhere
+/// else reaches the transcript, telemetry and the digest as it is.
+/// `tools.builtin.env` has its own refusals, which name its fix.
+fn credential_variables_fill_their_fields(
+    config: &Config,
+    variables: &Variables,
+) -> Result<(), BuildError> {
+    let env = KeyPath::of("tools.builtin.env");
+    for (key, fill) in config.filled().iter() {
+        let shown = key.to_string();
+        if is_credential(key) || key.is_within(&env) || shown.contains("].credentials") {
+            continue;
+        }
+        // A URL's user information is an own field, and its host and path
+        // are not, so a variable written in both is judged by where else
+        // it is.
+        let is_url = ["model.base_url", "telemetry.otlp.endpoint"].contains(&shown.as_str())
+            || (shown.starts_with("tools.mcp[") && shown.ends_with("].url"));
+        let judged: Vec<&str> = if is_url {
+            outside_user_information(&fill.written)
+        } else {
+            fill.names().collect()
+        };
+        for variable in judged {
+            let fills = if let Some(field) = variables.own_field(variable) {
+                if field == key {
+                    format!("`{variable}` fills `{field}`'s user or password")
+                } else {
+                    format!("`{variable}` fills `{field}`")
+                }
+            } else if let Some(entry) = variables.given_entry(variable) {
+                format!(
+                    "`{variable}` is given under `credentials`{}",
+                    at(config.place_at(entry))
+                )
+            } else {
+                continue;
+            };
+            return Err(BuildError::Config(config.refused(Refusal::Invalid {
+                key: key.clone(),
+                reason: format!(
+                    "{fills}, and a credential's variable fills no other setting; use another \
+                     variable here"
+                ),
+            })));
+        }
+    }
+    Ok(())
+}
+
 /// Holds `bash` to an environment handed in, since a command starts from
 /// nothing else.
 fn bash_has_a_base(config: &Config, settings: &Settings, handed: bool) -> Result<(), BuildError> {
@@ -1187,14 +1374,21 @@ fn bash_has_a_base(config: &Config, settings: &Settings, handed: bool) -> Result
     ))
 }
 
-/// Warns of an own credential listed under `tools.builtin.credentials` too:
-/// allowed, so a task that needs the key gets it when the config says so,
+/// Warns of an own credential listed under `tools.builtin.credentials` too,
+/// by its variable or by another that holds its value: allowed, so a task that needs the key gets it when the config says so,
 /// and said, since `bash` then has it.
-fn warn_of_an_own_credential_given(config: &Config, variables: &Variables) {
-    for (variable, entry) in &variables.given {
-        let Some(field) = variables.own_field(variable) else {
+fn warn_of_an_own_credential_given(config: &Config) {
+    let derived = secrets::derived(config, None, false);
+    let mut warned: Vec<&KeyPath> = Vec::new();
+    for credential in &derived.own {
+        let Some((entry, _)) = &credential.given_by else {
             continue;
         };
+        if warned.contains(&entry) {
+            continue;
+        }
+        warned.push(entry);
+        let field = &credential.field;
         let what = if *field == KeyPath::of("model.api_key") {
             "lablet's own key".to_owned()
         } else {

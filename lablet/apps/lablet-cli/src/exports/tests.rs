@@ -159,11 +159,11 @@ fn a_refused_endpoint_is_shown_as_written_unless_it_holds_an_at_and_a_filled_one
     for (endpoint, reason) in [
         (
             "http://${U}:${P}@[not a host".to_owned(),
-            "`U` holds what isn't a URL the exporter accepts",
+            "filled from `U` and `P`, it isn't a URL the exporter accepts",
         ),
         (
             "${U}:${P}@[not a host".to_owned(),
-            "`U` holds what isn't a URL the exporter accepts",
+            "filled from `U` and `P`, it isn't a URL the exporter accepts",
         ),
         (
             format!("https://user:ab/{PASSWORD}@[not a host"),

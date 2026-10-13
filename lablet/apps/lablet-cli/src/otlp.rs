@@ -290,14 +290,17 @@ fn tls_key(name: &str) -> KeyPath {
 
 /// How the file the TLS setting `name` names is named in a reason: by the
 /// variable that filled the path, when one did, since the path is then the
-/// variable's to say, and as "the file" otherwise, since the path is shown
-/// beside it.
+/// variable's to say, and as "the setting" otherwise, since the path is
+/// shown beside it.
 fn named(config: &Config, name: &str) -> String {
     config
         .filled()
         .at(&tls_key(name))
         .and_then(|fill| fill.names().next())
-        .map_or_else(|| "the file".to_owned(), |variable| format!("`{variable}`"))
+        .map_or_else(
+            || "the setting".to_owned(),
+            |variable| format!("`{variable}`"),
+        )
 }
 
 /// The TLS material `telemetry.otlp.tls` names, loaded as the exporters
@@ -358,7 +361,8 @@ fn tls(config: &Config, client_key: Option<&SecretString>) -> Result<Tls, Config
                         "{} and {} name files that don't hold a PEM client certificate and its \
                          private key that can be loaded",
                         named("client_cert"),
-                        named("client_key").replace("the file", "`telemetry.otlp.tls.client_key`")
+                        named("client_key")
+                            .replace("the setting", "`telemetry.otlp.tls.client_key`")
                     ),
                 ));
             }

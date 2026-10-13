@@ -51,7 +51,7 @@ pub use resolved::{
 pub use run::{Completion, Context, Run, TranscriptFormat};
 pub use secret::Secret;
 pub use shown::{Masked, WrittenBack, is_credential, shown};
-pub use substitute::{Fill, Filled, Variable};
+pub use substitute::{Fill, Filled, Variable, came_out_unstated};
 pub use telemetry::{
     Headers, Otlp, OtlpProtocol, Propagator, Propagators, Resource, Telemetry, TelemetryFile, Tls,
 };
@@ -59,7 +59,8 @@ pub use tools::{
     Builtin, BuiltinTool, McpLifetime, McpNames, McpResult, McpServer, OutputCut, Tools,
 };
 pub use url::{
-    WrittenInformation, user_information, without_user_information, written_information,
+    Unreadable, WrittenInformation, holds_an_unread_at, outside_user_information, unreadable,
+    user_information, without_user_information, writes_an_unread_at, written_information,
 };
 
 /// The format a config's text is in.
@@ -252,8 +253,9 @@ impl Refusal {
 /// The sections hold what the config states, with lablet's default wherever
 /// it states nothing and every provider shares the default. A setting of
 /// the `model` section that's one provider's is held as it was stated, and
-/// [`Config::resolved`] fills in its default. Every `${VAR}` was filled
-/// before the config was typed, by [`RawConfig::substituted`], and the
+/// [`Config::resolved`] fills in its default. Read through a [`RawConfig`],
+/// every `${VAR}` was filled before the config was typed, by
+/// [`RawConfig::substituted`], and the
 /// config keeps the record of what the fill changed, so its `Debug` form,
 /// its messages and its resolved form show each filled setting as the file
 /// wrote it. Its serialisation shows the typed values, a secret as
@@ -261,6 +263,11 @@ impl Refusal {
 ///
 /// Reading a config checks its shape. What a config may not state is
 /// refused when it's checked, and when a `Lablet` is built from it.
+///
+/// Its own `Deserialize` is the in-code path, as a struct literal is: it
+/// fills nothing and keeps no record, so a `${VAR}` in what it reads is
+/// text, and a credential in it counts as set in code. A text with
+/// `${VAR}`s to fill is read through [`RawConfig`].
 #[derive(Clone, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -374,9 +381,12 @@ impl Config {
         self.based
     }
 
-    /// The config with every relative path the file wrote made absolute
-    /// against `base`, the file's directory, so a path in the file starts
-    /// there wherever lablet runs. A path an override gave is left as it
+    /// The config with every relative path the file wrote placed under
+    /// `base`, the file's directory, so a path in the file starts there
+    /// wherever lablet runs. The paths are absolute when `base` is: a
+    /// relative `base`, as `Path::new("lablet.yaml").parent()` gives, leaves
+    /// them relative to where the process runs, since lablet reads no
+    /// working directory of its own. A path an override gave is left as it
     /// is, since it starts where lablet runs, and so is `-`, which is
     /// standard error and no path. Each path placed is recorded as the
     /// file wrote it, so every message, the resolved config and the digest

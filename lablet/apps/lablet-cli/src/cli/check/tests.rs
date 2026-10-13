@@ -226,3 +226,28 @@ fn the_resolved_config_is_yaml_that_reads_back_as_the_config_it_resolves() {
     );
     assert!(yaml.contains("  completion: natural\n"), "{yaml}");
 }
+
+/// `given:` says when `bash`, the one tool a credential is given to, isn't
+/// enabled, so nothing gets it.
+#[test]
+fn a_credential_given_without_bash_says_bash_is_not_enabled() {
+    let scratch = Scratch::new("answer-given-unused");
+    let tree = tree(
+        &scratch,
+        &json!({ "builtin": {
+            "root": scratch.at("work"),
+            "enabled": ["read_file"],
+            "credentials": { "TOK": format!("${{{SET}}}") },
+        } }),
+    );
+    let held = held();
+
+    let summary = summarised(&checked_tree(&tree, environment(&[(SET, &held)])));
+
+    assert!(
+        summary.contains(&format!(
+            "given:     {SET} (line 1) -> bash as TOK, which isn't enabled\n"
+        )),
+        "{summary}"
+    );
+}

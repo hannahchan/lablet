@@ -942,6 +942,177 @@ fn a_whole_url_variable_that_holds_a_user_or_password_is_refused_by_its_name() {
     assert!(!own.stderr.contains(password), "{own:?}");
 }
 
+/// An endpoint whose variable gives it an `@` the URL can't read as the
+/// text wrote it, a whole-URL variable whose password holds a `/` or a
+/// password holding `@` and `/`, is refused by `check` naming the
+/// variable, and nothing of it is shown: no `telemetry:` line is printed
+/// with it.
+#[test]
+fn an_endpoint_whose_variable_gives_an_at_it_cannot_read_is_refused_by_check_unshown() {
+    let lab = Lab::new("check-url-unreadable");
+    lab.write("script.yaml", ENDS);
+    let check = |endpoint: &str, env: &[(&str, &str)]| {
+        lab.write(
+            "lablet.yaml",
+            &format!(
+                "model:\n  provider: fake\n  script: script.yaml\nprompt:\n  system: Hi.\n\
+                 telemetry:\n  otlp:\n    endpoint: '{endpoint}'\n"
+            ),
+        );
+        let mut command = lab.lablet(&["check", "--config", "lablet.yaml"]);
+        command.envs(env.iter().copied());
+        ran(command, "")
+    };
+    let whole = check(
+        "${LABLET_TEST_URL}",
+        &[(
+            "LABLET_TEST_URL",
+            "http://user-abcdefghijklmnop:pa/ss-abcdefghijklmnopq@127.0.0.1:9",
+        )],
+    );
+    refused(
+        &whole,
+        "config: telemetry.otlp.endpoint (line 8) is refused: `LABLET_TEST_URL` holds an `@`, \
+         which may be a user or password a URL can't read, and isn't shown; percent-encode it, or \
+         write an `@` in a path as %40",
+    );
+    let parts = check(
+        "http://${LABLET_TEST_USR}:${LABLET_TEST_PW}@${LABLET_TEST_H}:9",
+        &[
+            ("LABLET_TEST_USR", "user-abcdefghijklmnop"),
+            ("LABLET_TEST_PW", "xyzabcdefghijklmnopq@evil.example/"),
+            ("LABLET_TEST_H", "127.0.0.1"),
+        ],
+    );
+    refused(
+        &parts,
+        "config: telemetry.otlp.endpoint (line 8) is refused: its user or password \
+         `LABLET_TEST_PW` holds `/`, `?`, `#` or `@`, which a URL can't read, and isn't shown; \
+         percent-encode it",
+    );
+    for run in [&whole, &parts] {
+        assert!(!run.stderr.contains("telemetry:"), "{run:?}");
+        assert!(!run.stderr.contains("abcdefghijklmnop"), "{run:?}");
+    }
+}
+
+/// What `check` says of a config whose URL at `key`, the base URL or the
+/// endpoint, is `url`, with `env` set.
+fn check_url(lab: &Lab, key: &str, url: &str, env: &[(&str, &str)]) -> Ran {
+    let text = if key == "model.base_url" {
+        format!(
+            "model:\n  provider: anthropic\n  api_key: ${{{KEY}}}\n  base_url: '{url}'\n\
+             prompt:\n  system: Hi.\n"
+        )
+    } else {
+        format!(
+            "model:\n  provider: fake\n  script: script.yaml\nprompt:\n  system: Hi.\n\
+             telemetry:\n  otlp:\n    endpoint: '{url}'\n"
+        )
+    };
+    lab.write("lablet.yaml", &text);
+    let mut command = lab.lablet(&["check", "--config", "lablet.yaml"]);
+    command.env(KEY, "placeholder").envs(env.iter().copied());
+    ran(command, "")
+}
+
+/// A URL whose text holds an `@` past its authority, as a password's `/`
+/// puts it, written out, in a default or in a whole-URL default, is
+/// refused by `check` by its line, at the endpoint and at the base URL,
+/// and so is one a variable fills with one, naming each variable; nothing
+/// of it is shown, no `telemetry:` line among it. An `@` percent-encoded
+/// in a path passes.
+#[test]
+fn a_url_that_holds_an_at_past_its_authority_is_refused_by_check_unshown() {
+    let lab = Lab::new("check-url-at-past-authority");
+    lab.write("script.yaml", ENDS);
+    let check = |key: &str, url: &str, env: &[(&str, &str)]| check_url(&lab, key, url, env);
+    let fix = "percent-encode a `/`, `?`, `#` or `@` in a user or password, or write an `@` in a \
+               path as %40";
+    for (key, line) in [("model.base_url", 4), ("telemetry.otlp.endpoint", 8)] {
+        let written = format!(
+            "config: {key} (line {line}) is refused: its text holds an `@` a URL can't read as a \
+             user or password, and isn't shown; {fix}; rotate it if this was one"
+        );
+        let user = ("LABLET_TEST_U", "user-abcdefghijk");
+        let mut runs = Vec::new();
+        for (url, env) in [
+            (
+                "http://user-abcdefghijk:pa/ss-abcdefghijk@127.0.0.1:9",
+                &[][..],
+            ),
+            (
+                "http://${LABLET_TEST_U}:${LABLET_TEST_P:-pa/ss-abcdefghijk}@127.0.0.1:9",
+                &[user][..],
+            ),
+            (
+                "http://${LABLET_TEST_U}:${LABLET_TEST_P:-pa/ss-abcdefghijk}@127.0.0.1:9",
+                &[user, ("LABLET_TEST_P", "")][..],
+            ),
+            (
+                "http://${LABLET_TEST_U}:${LABLET_TEST_P:-pa/ss-abcdefghijk}@127.0.0.1:9",
+                &[user, ("LABLET_TEST_P", "plain")][..],
+            ),
+            (
+                "${LABLET_TEST_URL:-http://u:pa/ss-abcdefghijk@127.0.0.1:9}",
+                &[][..],
+            ),
+        ] {
+            let run = check(key, url, env);
+            refused(&run, &written);
+            runs.push(run);
+        }
+        let scheme = check(
+            key,
+            "${LABLET_TEST_S}://${LABLET_TEST_U}:${LABLET_TEST_P}@127.0.0.1:9",
+            &[
+                ("LABLET_TEST_S", "http://x/"),
+                user,
+                ("LABLET_TEST_P", "sekrit-abcdefghijk"),
+            ],
+        );
+        refused(
+            &scheme,
+            &format!(
+                "config: {key} (line {line}) is refused: `LABLET_TEST_S`, `LABLET_TEST_U` and \
+                 `LABLET_TEST_P` give it an `@` a URL can't read as a user or password, and what \
+                 they hold isn't shown; {fix}"
+            ),
+        );
+        let whole = check(
+            key,
+            "${LABLET_TEST_URL}",
+            &[("LABLET_TEST_URL", "http://u:pa/ss-abcdefghijk@127.0.0.1:9")],
+        );
+        assert_eq!(whole.code, Some(1), "{whole:?}");
+        assert!(
+            whole.stderr.starts_with(&format!(
+                "config: {key} (line {line}) is refused: `LABLET_TEST_URL` holds an `@`"
+            )),
+            "{whole:?}"
+        );
+        runs.extend([scheme, whole]);
+        for run in &runs {
+            assert!(!run.stderr.contains("telemetry:"), "{run:?}");
+            assert!(!run.stderr.contains("abcdefghijk"), "{run:?}");
+        }
+    }
+    let encoded = check(
+        "telemetry.otlp.endpoint",
+        "http://127.0.0.1:9/v1/a%40b",
+        &[],
+    );
+    assert_eq!(encoded.code, Some(0), "{encoded:?}");
+    assert!(
+        encoded
+            .stderr
+            .contains("telemetry: OTLP http/protobuf to http://127.0.0.1:9/v1/a%40b (line 8)\n"),
+        "{encoded:?}"
+    );
+    let encoded = check("model.base_url", "http://127.0.0.1:9/v1/a%40b", &[]);
+    assert_eq!(encoded.code, Some(0), "{encoded:?}");
+}
+
 /// R17's URL form: a password a URL's text writes out, in the file, in a
 /// `${VAR:-default}`'s default or beside a `${VAR}`, or by `--set`, is
 /// refused by `check` and by `run` by its line or as an override, and

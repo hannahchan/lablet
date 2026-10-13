@@ -54,13 +54,16 @@ impl Serialize for Secret {
     }
 }
 
+/// R55: why the marker a secret set in code is written as is refused where
+/// a config is read.
+pub(crate) const MARKER_READ: &str =
+    "it's how lablet writes a secret set in code; set it with Secret::new";
+
 impl<'de> Deserialize<'de> for Secret {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
         if text == Self::MARKER {
-            return Err(D::Error::custom(
-                "it's how lablet writes a secret set in code; set it with Secret::new",
-            ));
+            return Err(D::Error::custom(MARKER_READ));
         }
         Ok(Self(text))
     }

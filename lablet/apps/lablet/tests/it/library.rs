@@ -278,3 +278,18 @@ async fn the_run_s_own_span_and_its_wide_event_are_timed_to_the_nanosecond_from_
     );
     assert_eq!(wide.attributes[key::LABLET_RUN_DURATION_MS], json!(1));
 }
+
+/// The type of every public field of a config is named by `lablet::config`,
+/// so a host can write each without a crate of lablet's own.
+#[test]
+fn the_types_of_the_config_s_fields_are_named_by_lablet_config() {
+    use lablet::config::{Headers, Places, Propagator, Propagators, Resource, Tls};
+
+    let config = lablet::Config::default();
+    let _: &Option<Headers> = &config.telemetry.otlp.headers;
+    let _: &Tls = &config.telemetry.otlp.tls;
+    let _: &Resource = &config.telemetry.resource;
+    let _: &Option<Propagators> = &config.telemetry.propagators;
+    let _: &Places = config.places();
+    let _ = std::any::type_name::<Propagator>();
+}

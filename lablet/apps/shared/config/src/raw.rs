@@ -28,7 +28,7 @@ use super::{Config, ConfigError, Format, shown};
 /// line of what they refuse, and show a filled setting as the text wrote
 /// it. A text that holds a `${` wants the fill: a `Config` read without one
 /// is refused.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct RawConfig {
     /// A mapping of sections, always.
     tree: Value,
@@ -36,6 +36,22 @@ pub struct RawConfig {
     source: Option<PathBuf>,
     /// What the fill changed, and whether it ran.
     filled: Filled,
+}
+
+/// The tree through the mask, as a config's `Debug` form is, and every
+/// credential's value as the marker: after the fill, the tree holds what
+/// each variable held, and before it what the text wrote.
+impl fmt::Debug for RawConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawConfig")
+            .field(
+                "tree",
+                &super::shown::debug_raw_tree(&self.tree, &self.filled),
+            )
+            .field("places", &self.places)
+            .field("source", &self.source)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RawConfig {
@@ -325,6 +341,23 @@ impl RawConfig {
                 key: key.to_string(),
                 reason: "the setting has no default".to_owned(),
             },
+            // R55 where a variable, not the text, gave the marker: the fix
+            // is the variable's, and no `Secret::new` is to be called.
+            FaultKind::Refused { reason }
+                if reason == super::secret::MARKER_READ
+                    && let Some(variable) =
+                        self.filled.at(&key).and_then(|fill| fill.names().next()) =>
+            {
+                ConfigError::Invalid {
+                    value: shown(&key, key.find(&self.tree), &self.filled),
+                    key: key.to_string(),
+                    place,
+                    reason: format!(
+                        "`{variable}` holds the marker lablet writes a secret set in code as; set \
+                         it to the secret itself"
+                    ),
+                }
+            }
             FaultKind::Refused { reason } => ConfigError::Invalid {
                 value: shown(&key, key.find(&self.tree), &self.filled),
                 key: key.to_string(),

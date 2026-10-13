@@ -6,6 +6,7 @@ use lablet_prepare::ErrorClass;
 use lablet_run::telemetry::generated::GenAiClientInferenceOperationDetails;
 use lablet_run::telemetry::generated::key;
 use lablet_secrets::Credential;
+use opentelemetry::trace::noop::NoopTextMapPropagator;
 
 use super::*;
 
@@ -382,6 +383,160 @@ async fn a_url_s_password_written_out_is_refused_and_one_set_in_code_is_own() {
                 Err(BuildError::Unsupported { .. }) if key == "model.base_url" => {}
                 Err(error) => panic!("{key}{written}: {error}"),
             }
+        }
+    }
+}
+
+/// A URL as written, the variables that fill it, and the refusal expected.
+type Case<'a> = (&'a str, Vec<(&'a str, &'a str)>, String);
+
+/// A URL whose text holds an `@` past its authority, as a password's `/`
+/// puts it, written out, in a default whatever its variable holds, or in a
+/// whole-URL default, is refused by a library check and build by its line,
+/// at the base URL and at the endpoint, and so is one a variable fills
+/// with one, naming each variable; no refusal or Debug shows any of it.
+#[tokio::test]
+async fn a_url_that_holds_an_at_past_its_authority_is_refused_by_a_library_build() {
+    let scratch = lablet_test_support::Scratch::new("library-url-at-past-authority");
+    let script = scratch.write("script.yaml", ENDS);
+    let gateway = |url: &str| {
+        format!(
+            "model: {{ provider: anthropic, api_key: '${{K}}', base_url: '{url}' }}\nprompt: {{ system: Hi. }}"
+        )
+    };
+    let collector = |url: &str| {
+        format!(
+            "model: {{ provider: fake, script: '{}', api_key: '${{K}}' }}\nprompt: {{ system: Hi. }}\ntelemetry: {{ otlp: {{ endpoint: '{url}' }} }}",
+            script.display()
+        )
+    };
+    let fix = "percent-encode a `/`, `?`, `#` or `@` in a user or password, or write an `@` in a \
+               path as %40";
+    for (key, text, line) in [
+        ("model.base_url", &gateway as &dyn Fn(&str) -> String, 1),
+        ("telemetry.otlp.endpoint", &collector, 3),
+    ] {
+        let written = format!(
+            "{key} (line {line}) is refused: its text holds an `@` a URL can't read as a user or \
+             password, and isn't shown; {fix}; rotate it if this was one"
+        );
+        let user = ("U", "user-abcdefghijk");
+        let defaulted = "http://${U}:${P:-pa/ss-abcdefghijk}@127.0.0.1:9";
+        let mut cases: Vec<Case<'_>> = vec![
+            (
+                "http://user-abcdefghijk:pa/ss-abcdefghijk@127.0.0.1:9",
+                vec![],
+                written.clone(),
+            ),
+            (defaulted, vec![user], written.clone()),
+            (defaulted, vec![user, ("P", "")], written.clone()),
+            (defaulted, vec![user, ("P", "plain")], written.clone()),
+            (
+                "${URL:-http://u:pa/ss-abcdefghijk@127.0.0.1:9}",
+                vec![],
+                written.clone(),
+            ),
+        ];
+        cases.push((
+            "${S}://${U}:${P}@127.0.0.1:9",
+            vec![("S", "http://x/"), user, ("P", "sekrit-abcdefghijk")],
+            format!(
+                "{key} (line {line}) is refused: `S`, `U` and `P` give it an `@` a URL can't read \
+                 as a user or password, and what they hold isn't shown; {fix}"
+            ),
+        ));
+        for (url, mut held, expected) in cases {
+            held.push(("K", KEY));
+            let config = filled(&text(url), &held).unwrap();
+            let checked = check(config.clone()).await.unwrap_err();
+            let built = Lablet::builder(config, Otel::noop())
+                .build()
+                .await
+                .err()
+                .unwrap();
+            for refusal in [checked.to_string(), built.to_string()] {
+                assert_eq!(refusal, expected, "{url}");
+            }
+            assert!(
+                !format!("{checked:?}{built:?}").contains("abcdefghijk"),
+                "{url}"
+            );
+        }
+        let whole = filled(
+            &text("${URL}"),
+            &[
+                ("URL", "http://u:pa/ss-abcdefghijk@127.0.0.1:9"),
+                ("K", KEY),
+            ],
+        )
+        .unwrap();
+        let refusal = check(whole).await.unwrap_err();
+        assert!(
+            refusal
+                .to_string()
+                .contains("is refused: `URL` holds an `@`"),
+            "{refusal}"
+        );
+        assert!(!format!("{refusal}{refusal:?}").contains("abcdefghijk"));
+    }
+}
+
+/// A URL a host sets in code, after the text wrote none, `null` or a
+/// `${VAR}` that came out empty, that holds an `@` past its authority, as a
+/// password's `/` puts it, is refused unshown by a library check and build,
+/// at the base URL and at the endpoint, since nothing would find its user or
+/// password to cut or to leave out of the digest.
+#[tokio::test]
+async fn a_url_set_in_code_that_holds_an_at_past_its_authority_is_refused_unshown() {
+    let scratch = lablet_test_support::Scratch::new("library-url-at-in-code");
+    let script = scratch.write("script.yaml", ENDS);
+    let url = "https://gwuser:pa/ss-abcdefghijk@gw.example/v1";
+    let gateway = |written: &str| {
+        format!(
+            "model: {{ provider: anthropic, api_key: '${{K}}'{written} }}\nprompt: {{ system: Hi. }}"
+        )
+    };
+    let collector = |written: &str| {
+        format!(
+            "model: {{ provider: fake, script: '{}', api_key: '${{K}}' }}\nprompt: {{ system: Hi. }}\ntelemetry: {{ otlp: {{ protocol: grpc{written} }} }}",
+            script.display()
+        )
+    };
+    for (key, text) in [
+        ("model.base_url", &gateway as &dyn Fn(&str) -> String),
+        ("telemetry.otlp.endpoint", &collector),
+    ] {
+        let short = key.rsplit('.').next().unwrap();
+        let expected = format!(
+            "{key} is refused: it holds an `@` a URL can't read as a user or password, and isn't \
+             shown; percent-encode a `/`, `?`, `#` or `@` in a user or password, or write an `@` \
+             in a path as %40"
+        );
+        for written in [
+            String::new(),
+            format!(", {short}: null"),
+            format!(", {short}: '${{GW:-}}'"),
+            format!(", {short}: '${{GW}}'"),
+        ] {
+            let mut config = filled(&text(&written), &[("K", KEY), ("GW", "")]).unwrap();
+            if key == "model.base_url" {
+                config.model.base_url = Some(url.to_owned());
+            } else {
+                config.telemetry.otlp.endpoint = Some(url.to_owned());
+            }
+            let checked = check(config.clone()).await.unwrap_err();
+            let built = Lablet::builder(config, Otel::noop())
+                .build()
+                .await
+                .err()
+                .unwrap();
+            for refusal in [checked.to_string(), built.to_string()] {
+                assert_eq!(refusal, expected, "{key}{written}");
+            }
+            assert!(
+                !format!("{checked:?}{built:?}").contains("abcdefghijk"),
+                "{key}{written}"
+            );
         }
     }
 }

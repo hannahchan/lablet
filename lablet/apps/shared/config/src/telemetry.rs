@@ -69,7 +69,8 @@ pub struct Otlp {
 }
 
 /// The `telemetry.otlp.tls` section: PEM files, each a path a `${VAR}` may
-/// fill, read whenever an endpoint is named.
+/// fill, loaded when an endpoint is named; `client_key` is read whenever
+/// it's stated, so what it holds is cut.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Tls {
@@ -220,6 +221,16 @@ impl Propagators {
     }
 }
 
+/// Holds a config's propagators to at least one name: a list or a text of
+/// none would turn propagation off without saying so, which `none` says.
+fn named_some<'a>(mut names: impl Iterator<Item = &'a str>) -> Result<(), String> {
+    if names.any(|name| !name.trim().is_empty()) {
+        Ok(())
+    } else {
+        Err("it names no propagator; write `none` to name none".to_owned())
+    }
+}
+
 impl From<Vec<Propagator>> for Propagators {
     fn from(names: Vec<Propagator>) -> Self {
         Self::of_names(names.iter().map(|name| name.as_str())).unwrap_or_default()
@@ -247,6 +258,7 @@ impl<'de> Deserialize<'de> for Propagators {
             }
 
             fn visit_str<E: de::Error>(self, text: &str) -> Result<Propagators, E> {
+                named_some(text.split(',')).map_err(E::custom)?;
                 Propagators::parse(text).map_err(E::custom)
             }
 
@@ -255,6 +267,7 @@ impl<'de> Deserialize<'de> for Propagators {
                 while let Some(name) = items.next_element::<String>()? {
                     names.push(name);
                 }
+                named_some(names.iter().map(String::as_str)).map_err(A::Error::custom)?;
                 Propagators::of_names(names.iter().map(String::as_str)).map_err(A::Error::custom)
             }
         }

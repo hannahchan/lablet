@@ -32,7 +32,7 @@ fn filled_text(text: &str, held: &dyn Fn(&str) -> Option<OsString>) -> Result<St
     };
     match replaced(text, held, at).map_err(|(reason, _)| reason)? {
         Replaced::Unchanged => Ok(text.to_owned()),
-        Replaced::Text(filled, _) => Ok(filled),
+        Replaced::Text(filled, _, _) => Ok(filled),
         Replaced::Unset(_) => Ok(String::new()),
     }
 }

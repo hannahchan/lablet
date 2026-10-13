@@ -311,7 +311,7 @@ async fn a_ca_file_that_cannot_be_read_or_holds_none_is_refused_by_its_key_namin
         .to_string();
     assert!(
         unread.starts_with(&format!(
-            "telemetry.otlp.tls.ca_file (line 1): \"{missing}\" is refused: the file names a file \
+            "telemetry.otlp.tls.ca_file (line 1): \"{missing}\" is refused: the setting names a file \
              that can't be read: "
         )),
         "{unread}"
@@ -322,7 +322,7 @@ async fn a_ca_file_that_cannot_be_read_or_holds_none_is_refused_by_its_key_namin
     assert_eq!(
         empty,
         format!(
-            "telemetry.otlp.tls.ca_file (line 1): \"{nothing}\" is refused: the file names a file \
+            "telemetry.otlp.tls.ca_file (line 1): \"{nothing}\" is refused: the setting names a file \
              that doesn't hold PEM certificates that can be loaded"
         )
     );
@@ -374,7 +374,7 @@ async fn tls_material_whose_pem_is_whole_and_whose_body_does_not_load_is_refused
 
     assert!(
         roots.ends_with(
-            "is refused: the file names a file that doesn't hold PEM certificates that can be \
+            "is refused: the setting names a file that doesn't hold PEM certificates that can be \
              loaded"
         ),
         "{roots}"
@@ -383,7 +383,7 @@ async fn tls_material_whose_pem_is_whole_and_whose_body_does_not_load_is_refused
         assert!(
             refused.starts_with("telemetry.otlp.tls.client_cert (line 1): ")
                 && refused.ends_with(
-                    "is refused: the file and `telemetry.otlp.tls.client_key` name files that \
+                    "is refused: the setting and `telemetry.otlp.tls.client_key` name files that \
                      don't hold a PEM client certificate and its private key that can be loaded"
                 ),
             "{refused}"
@@ -463,7 +463,7 @@ async fn tls_files_for_an_endpoint_that_does_not_speak_tls_are_loaded_and_the_ke
 
     assert!(
         missing.contains("telemetry.otlp.tls.client_key (line 1)")
-            && missing.contains("the file names a file that can't be read"),
+            && missing.contains("the setting names a file that can't be read"),
         "{missing}"
     );
     assert_eq!(

@@ -49,10 +49,16 @@
 //! The [`Config`] keeps the record of what the fill changed, so its
 //! messages, its resolved form and its digest show each filled setting as
 //! the file wrote it. A config that still holds a `${VAR}` is refused when
-//! it's read, and one with a relative path is refused when it's checked
-//! unless the host called `relative_to`, since a config made in code or
-//! from text has no directory. Lablet itself reads no environment variable:
-//! the processes a run starts begin from the environment the host hands
+//! it's read through a [`RawConfig`], and one with a relative path is
+//! refused when it's checked unless the host called `relative_to`, since a
+//! config made in code or from text has no directory; `Config`'s own
+//! `Deserialize` is the in-code path, which fills nothing and counts a
+//! credential as set in code. Lablet itself reads no environment variable,
+//! though the SDK's builders do: a provider left to its default resource,
+//! sampler and limits reads `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER` and
+//! their kin itself, and a batch processor left to its builder's defaults
+//! reads `OTEL_BSP_*` or `OTEL_BLRP_*`, so a host that wants none read
+//! states them on its builders. The processes a run starts begin from the environment the host hands
 //! [`Builder::with_process_environment`], which a config that enables
 //! `bash` needs, less every variable that holds one of lablet's
 //! credentials. [`Builder::check`] checks a config as [`Builder::build`]
@@ -259,11 +265,12 @@ pub mod config {
 
     pub use lablet_config::{
         Api, Applied, Builtin, BuiltinTool, CacheScope, Completion, Config, ConfigError, Context,
-        Effort, Fill, Filled, Format, KeyPath, Masked, McpLifetime, McpNames, McpResult, McpServer,
-        Model, Otlp, OtlpProtocol, OutputCut, Place, Pricing, Prompt, Provider, RawConfig, Refusal,
-        ResolvedBuiltin, ResolvedConfig, ResolvedModel, ResolvedTools, Run, Secret, Setting,
-        SkillsMode, Telemetry, TelemetryFile, Thinking, Tools, TranscriptFormat, Variable,
-        WrittenBack, is_credential, schema, shown,
+        Effort, Fill, Filled, Format, Headers, KeyPath, Masked, McpLifetime, McpNames, McpResult,
+        McpServer, Model, Otlp, OtlpProtocol, OutputCut, Place, Places, Pricing, Prompt,
+        Propagator, Propagators, Provider, RawConfig, Refusal, ResolvedBuiltin, ResolvedConfig,
+        ResolvedModel, ResolvedTools, Resource, Run, Secret, Setting, SkillsMode, Telemetry,
+        TelemetryFile, Thinking, Tls, Tools, TranscriptFormat, Variable, WrittenBack,
+        is_credential, schema, shown,
     };
 }
 

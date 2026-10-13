@@ -55,6 +55,14 @@ pub struct Fill {
     /// config keeps as a set is told, since the set holds its items in its
     /// own order and not the file's. No form shows it.
     pub(crate) filled: String,
+    /// For each of `variables`, in order, which of `@`, `/`, `?` and `#`
+    /// what it gave the text holds, which a URL's check reads in place of
+    /// the value the record doesn't keep: empty for one that gave its
+    /// default or nothing.
+    pub(crate) delimiters: Vec<String>,
+    /// Whether the text came out unstated: one reference whole that came
+    /// out empty, or the key's variable unset.
+    pub(crate) unstated: bool,
 }
 
 impl fmt::Debug for Fill {
@@ -155,6 +163,8 @@ impl Filled {
                 written,
                 variables: Vec::new(),
                 filled: String::new(),
+                delimiters: Vec::new(),
+                unstated: false,
             });
             fill.filled = filled;
         }
@@ -222,7 +232,7 @@ fn fill_in(
                 shown,
             })? {
                 Replaced::Unchanged => {}
-                Replaced::Text(filled, variables) => {
+                Replaced::Text(filled, variables, delimiters) => {
                     let written = std::mem::replace(text, filled);
                     // The record keeps a filled text only to match a list
                     // item back to its fill, which no credential is, so a
@@ -238,17 +248,22 @@ fn fill_in(
                             written,
                             variables,
                             filled,
+                            delimiters,
+                            unstated: false,
                         },
                     );
                 }
                 Replaced::Unset(variables) => {
                     let written = std::mem::take(text);
+                    let delimiters = vec![String::new(); variables.len()];
                     fills.insert(
                         key.clone(),
                         Fill {
                             written,
                             variables,
                             filled: String::new(),
+                            delimiters,
+                            unstated: true,
                         },
                     );
                     *value = Value::Null;
@@ -274,9 +289,9 @@ fn fill_in(
 enum Replaced {
     /// The text holds no `$` the fill reads, so it stays as it is.
     Unchanged,
-    /// The text with each reference and escape replaced, and the variables
-    /// it named.
-    Text(String, Vec<Variable>),
+    /// The text with each reference and escape replaced, the variables it
+    /// named, and the delimiters each gave it.
+    Text(String, Vec<Variable>, Vec<String>),
     /// The text is one reference and nothing else, and came out empty, so
     /// the setting isn't stated.
     Unset(Vec<Variable>),
@@ -322,8 +337,10 @@ pub(crate) fn fill_of(text: &str) -> Fill {
     }
     Fill {
         written: text.to_owned(),
+        delimiters: vec![String::new(); variables.len()],
         variables,
         filled: String::new(),
+        unstated: false,
     }
 }
 
@@ -331,16 +348,37 @@ pub(crate) fn fill_of(text: &str) -> Fill {
 /// and each `${NAME:-default}` as its default, which is text the config
 /// wrote whatever the variable holds.
 pub(crate) fn written_out(text: &str, placeholder: &str) -> String {
+    placed(text, placeholder).0
+}
+
+/// [`written_out`]'s text, with where in it each reference's stand-in is,
+/// by the variable's name, in order.
+pub(crate) fn placed<'a>(
+    text: &'a str,
+    placeholder: &str,
+) -> (String, Vec<(&'a str, std::ops::Range<usize>)>) {
     let mut out = String::with_capacity(text.len());
+    let mut places = Vec::new();
     let mut done = 0;
     for reference in references(text) {
         let at = reference.start;
         out.push_str(&text[done..at]);
+        let start = out.len();
         out.push_str(reference.default.unwrap_or(placeholder));
+        places.push((reference.name, start..out.len()));
         done = at + reference.whole.len();
     }
     out.push_str(&text[done..]);
-    out
+    (out, places)
+}
+
+/// Whether the text `fill` records came out unstated, so the setting was
+/// left null: one reference whole that came out empty, its variable unset
+/// or set to nothing, or the key's variable unset. A value the setting
+/// holds then was set in code.
+#[must_use]
+pub fn came_out_unstated(fill: &Fill) -> bool {
+    fill.unstated
 }
 
 /// Every reference of `text`, in order; an escape and a `${` that begins no
@@ -398,6 +436,7 @@ fn replaced(
 ) -> Result<Replaced, (String, bool)> {
     let mut written = String::with_capacity(text.len());
     let mut variables: Vec<Variable> = Vec::new();
+    let mut delimiters: Vec<String> = Vec::new();
     let mut changed = false;
     let mut unset = false;
     let mut rest = text;
@@ -431,9 +470,10 @@ fn replaced(
                 })?),
                 None => None,
             };
+            let mut gave = String::new();
             match (value, default) {
-                (Some(value), None) => written.push_str(&value),
-                (Some(value), Some(_)) if !value.is_empty() => written.push_str(&value),
+                (Some(value), None) => gave = value,
+                (Some(value), Some(_)) if !value.is_empty() => gave = value,
                 (_, Some(default)) => written.push_str(default),
                 (None, None) if at.api_key => unset = true,
                 (None, None) if at.credential => {
@@ -454,11 +494,18 @@ fn replaced(
                     ));
                 }
             }
+            written.push_str(&gave);
             if !variables.iter().any(|variable| variable.name == name) {
                 variables.push(Variable {
                     name: name.to_owned(),
                     set,
                 });
+                delimiters.push(
+                    ['@', '/', '?', '#']
+                        .into_iter()
+                        .filter(|delimiter| gave.contains(*delimiter))
+                        .collect(),
+                );
             }
             changed = true;
             rest = beyond;
@@ -478,7 +525,7 @@ fn replaced(
     Ok(if unset || (whole && written.is_empty()) {
         Replaced::Unset(variables)
     } else if changed {
-        Replaced::Text(written, variables)
+        Replaced::Text(written, variables, delimiters)
     } else {
         Replaced::Unchanged
     })

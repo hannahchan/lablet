@@ -153,25 +153,28 @@ impl Headers {
     /// exporter read. The environment's headers are merged over the
     /// exporter's own, so an own header is written again at the exporter's
     /// value: its user agent, and on HTTP the body's type, which the
-    /// protocol decides, and the encoding `body` is compressed in.
+    /// protocol decides, and the encoding `body` is compressed in. The own
+    /// go on after the config's, so a config header of the same name
+    /// doesn't replace one.
     fn apply(&self, headers: &mut HeaderMap, body: &[u8]) {
         let mut kept = HeaderMap::new();
-        kept.insert(USER_AGENT, HeaderValue::from_static(EXPORTER_AGENT));
-        if let Some(content_type) = &self.content_type {
-            kept.insert(CONTENT_TYPE, content_type.clone());
-            if let Some(encoding) = encoding_of(body) {
-                kept.insert(CONTENT_ENCODING, HeaderValue::from_static(encoding));
-            }
-        }
-        *headers = kept;
         for (name, value) in &self.set {
             // Every value was checked when the exporter was made.
             let Ok(mut value) = HeaderValue::from_str(value.expose_secret()) else {
                 continue;
             };
             value.set_sensitive(true);
-            headers.insert(name, value);
+            kept.insert(name, value);
         }
+        kept.insert(USER_AGENT, HeaderValue::from_static(EXPORTER_AGENT));
+        if let Some(content_type) = &self.content_type {
+            kept.insert(CONTENT_TYPE, content_type.clone());
+            kept.remove(CONTENT_ENCODING);
+            if let Some(encoding) = encoding_of(body) {
+                kept.insert(CONTENT_ENCODING, HeaderValue::from_static(encoding));
+            }
+        }
+        *headers = kept;
     }
 }
 

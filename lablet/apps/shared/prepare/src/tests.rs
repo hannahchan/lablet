@@ -750,3 +750,516 @@ fn a_url_s_password_an_override_writes_is_refused_and_one_set_in_code_passes() {
         passes(&config, None);
     }
 }
+
+/// Q6: an own or given `${VAR}` fills no setting but its own field, a URL's
+/// user information or a `credentials` entry; anywhere else its value would
+/// reach the transcript, telemetry and the digest as it is. The refusal
+/// shows the text as written, and nothing the variable holds.
+#[test]
+fn a_credential_s_variable_written_outside_its_fields_is_refused() {
+    let scratch = lablet_test_support::Scratch::new("prepare-q6");
+    let held = [
+        ("K", KEY),
+        ("G", "ghp_0123456789abcdef"),
+        ("U", "gwuser"),
+        ("P", PASSWORD),
+    ];
+    let with = |model: &str, rest: &str| {
+        filled(
+            &format!(
+                "model: {{ provider: fake, script: '{}', api_key: '${{K}}'{model} }}\nprompt: {{ system: Hi. }}\ntools:\n  builtin:\n    root: '{}'\n    enabled: [bash]\n    credentials: {{ GH: '${{G}}' }}\n{rest}",
+                scratch
+                    .write(
+                        "script.yaml",
+                        "- response: { content: [{ text: Done. }], finish: end_turn }\n"
+                    )
+                    .display(),
+                scratch.at("work").display()
+            ),
+            &held,
+        )
+    };
+    scratch.create_dir("work");
+
+    let name = refused(&with(", name: 'm-${K}'", ""), base(&["PATH"]));
+    assert_eq!(
+        name,
+        "model.name (line 1): \"m-${K}\" is refused: `K` fills `model.api_key`, and a \
+         credential's variable fills no other setting; use another variable here"
+    );
+    let resource = refused(
+        &with("", "telemetry: { resource: 'service.name=svc,tok=${G}' }\n"),
+        base(&["PATH"]),
+    );
+    assert_eq!(
+        resource,
+        "telemetry.resource (line 8): \"service.name=svc,tok=${G}\" is refused: `G` is given \
+         under `credentials` (line 7), and a credential's variable fills no other setting; use \
+         another variable here"
+    );
+    let host = refused(
+        &with(
+            "",
+            "telemetry: { otlp: { endpoint: 'http://${U}:${P}@${K}.example:4318' } }\n",
+        ),
+        base(&["PATH"]),
+    );
+    assert!(
+        host.starts_with(
+            "telemetry.otlp.endpoint (line 8): its value is refused: `K` fills `model.api_key`"
+        ),
+        "{host}"
+    );
+    // A stdio server's `env` is a setting like any other, though no server
+    // starts before its adapter is built.
+    let server = refused(
+        &with(
+            "",
+            "  mcp: [{ name: s, transport: stdio, command: srv, env: { TOKEN: '${G}' } }]\n",
+        ),
+        base(&["PATH"]),
+    );
+    assert_eq!(
+        server,
+        "tools.mcp[0].env.TOKEN (line 8): \"${G}\" is refused: `G` is given under `credentials` \
+         (line 7), and a credential's variable fills no other setting; use another variable here"
+    );
+    for refusal in [&name, &resource, &host, &server] {
+        assert!(
+            !refusal.contains(KEY) && !refusal.contains("ghp_"),
+            "{refusal}"
+        );
+    }
+
+    // A URL's user information, a header and a `credentials` entry are the
+    // fields a credential's variable fills, Q5's own key given among them.
+    passes(
+        &with(
+            "",
+            "    env: { PORT: '8080' }\ntelemetry: { otlp: { endpoint: 'http://${U}:${P}@127.0.0.1:9', headers: { authorization: 'Bearer ${K}' } } }\n",
+        ),
+        base(&["PATH"]),
+    );
+}
+
+/// A URL whose written user information is `${VAR}`s, filled with a user
+/// or password holding an unencoded `/`, `?`, `#` or `@`, doesn't read as
+/// the text wrote it, so nothing would be own, cut or left out of what
+/// `check` shows: it's refused unshown, by its key, naming the variable.
+#[test]
+fn a_url_whose_filled_user_information_does_not_parse_is_refused_unshown() {
+    for (key, line) in [
+        ("model.base_url", 1),
+        ("telemetry.otlp.endpoint", 3),
+        ("tools.mcp[0].url", 3),
+    ] {
+        let expected = |variable: &str| {
+            format!(
+                "{key} (line {line}) is refused: its user or password `{variable}` holds `/`, \
+                 `?`, `#` or `@`, which a URL can't read, and isn't shown; percent-encode it"
+            )
+        };
+        for (user, password, variable) in [
+            ("gwuser", "pa/ss-gwsecretpassword", "P"),
+            ("gwuser", "pa?ss-gwsecretpassword", "P"),
+            ("gwuser", "pa#ss-gwsecretpassword", "P"),
+            ("gwuser", "pa@ss-gwsecretpassword", "P"),
+            ("gw@user/x", "gwsecretpassword1234567", "U"),
+        ] {
+            let held = [("U", user), ("P", password), ("K", KEY)];
+            let refusal = refused(
+                &filled(&url_at(key, "https://${U}:${P}@gw.example/v1"), &held),
+                None,
+            );
+            assert_eq!(refusal, expected(variable), "{user}:{password}");
+            assert!(!refusal.contains("gwsecret"), "{refusal}");
+        }
+        let encoded = [
+            ("U", "gwuser"),
+            ("P", "pa%2Fss-gwsecretpassword"),
+            ("K", KEY),
+        ];
+        match prepare(
+            &filled(&url_at(key, "https://${U}:${P}@gw.example/v1"), &encoded),
+            None,
+        ) {
+            Ok(_) | Err(BuildError::Unsupported { .. }) => {}
+            Err(error) => panic!("{key}: {error}"),
+        }
+        // Empty defaults leave `:@`, user information that parses.
+        match prepare(
+            &filled(
+                &url_at(key, "https://${U:-}:${P:-}@gw.example/v1"),
+                &[("K", KEY)],
+            ),
+            None,
+        ) {
+            Ok(_) | Err(BuildError::Unsupported { .. }) => {}
+            Err(error) => panic!("{key}: {error}"),
+        }
+    }
+}
+
+/// W66 by value: a `credentials` entry filled from another variable that
+/// holds an own credential's value gives `bash` that value as surely as
+/// the same variable would, so it's warned of and `own:` says who gets it;
+/// an `env` entry holding it reaches `bash` cut, and isn't said to be
+/// uncut.
+#[test]
+fn a_copy_of_an_own_credential_given_to_bash_is_warned_of_and_named() {
+    let scratch = lablet_test_support::Scratch::new("prepare-q5-copy");
+    scratch.create_dir("work");
+    let script = scratch.write(
+        "script.yaml",
+        "- response: { content: [{ text: Done. }], finish: end_turn }\n",
+    );
+    let config = filled(
+        &format!(
+            "model: {{ provider: fake, script: '{}', api_key: '${{K}}' }}\nprompt: {{ system: Hi. }}\ntools:\n  builtin:\n    root: '{}'\n    enabled: [bash]\n    credentials: {{ ALSO: '${{KEYCOPY}}' }}\n    env: {{ X: '${{XCOPY}}' }}\n",
+            script.display(),
+            scratch.at("work").display()
+        ),
+        &[("K", KEY), ("KEYCOPY", KEY), ("XCOPY", KEY)],
+    );
+
+    let warnings = warned(|| {
+        prepare(&config, base(&["PATH"])).map(drop).unwrap();
+    });
+    let checked = Checked::new(
+        &config,
+        Vec::new(),
+        secrets::derived(&config, None, true),
+        None,
+    );
+
+    assert_eq!(
+        warnings,
+        [
+            "tools.builtin.credentials.ALSO (line 7): it's lablet's own key, given to bash; a \
+             task that needs the key gets it only when the config says so"
+        ]
+    );
+    assert_eq!(
+        checked.own()[0].as_own(),
+        "K (line 1) -> model.api_key; given to bash by credentials (line 7) as ALSO"
+    );
+    assert_eq!(checked.env()[0].to_string(), "X (line 8) -> bash");
+}
+
+/// R62's fix is the form the header was written in: an override's is an
+/// override, and a pair's name holding a `${VAR}` suggests a variable named
+/// from the rest of it.
+#[test]
+fn a_header_s_fix_is_written_as_the_header_was() {
+    let mut raw = RawConfig::from_str(
+        "model: { provider: openai, api_key: '${K}' }\nprompt: { system: Hi. }",
+        Format::Yaml,
+    )
+    .unwrap();
+    raw.set("telemetry.otlp.headers.a=literalsecretvalue1234")
+        .unwrap();
+    let config = raw
+        .substituted(|name: &str| (name == "K").then(|| OsString::from(KEY)))
+        .unwrap()
+        .config()
+        .unwrap();
+    let refusal = refused(&config, None);
+    assert_eq!(
+        refusal,
+        "telemetry.otlp.headers.a (an override) is refused: it holds no ${VAR}, and what it holds \
+         isn't shown; write --set 'telemetry.otlp.headers.a=${A}', and rotate it if this was a \
+         token"
+    );
+
+    let text = filled(
+        "model: { provider: openai, api_key: '${K}' }\nprompt: { system: Hi. }\ntelemetry: { otlp: { headers: 'x-${USR}=literalsecretvalue1234,y=${Y}' } }",
+        &[("USR", "u"), ("Y", "y-0123456789abcdef"), ("K", KEY)],
+    );
+    let refusal = refused(&text, None);
+    assert!(
+        refusal.contains("write x-${USR}=${X}, and rotate"),
+        "{refusal}"
+    );
+    assert!(!refusal.contains("literalsecret"), "{refusal}");
+
+    // A name that's a `${VAR}` alone leaves nothing to name a variable
+    // from.
+    let named = filled(
+        "model: { provider: openai, api_key: '${K}' }\nprompt: { system: Hi. }\ntelemetry: { otlp: { headers: '${N}=literalsecretvalue1234,y=${Y}' } }",
+        &[("N", "x-n"), ("Y", "y-0123456789abcdef"), ("K", KEY)],
+    );
+    let refusal = refused(&named, None);
+    assert!(
+        refusal.contains("write ${N}=${HEADER_VALUE}, and rotate"),
+        "{refusal}"
+    );
+
+    // An override of the text replaces it whole, so its fix keeps the
+    // other pairs, each value as a `${VAR}`.
+    let mut raw = RawConfig::from_str(
+        "model: { provider: openai, api_key: '${K}' }\nprompt: { system: Hi. }",
+        Format::Yaml,
+    )
+    .unwrap();
+    raw.set("telemetry.otlp.headers=a=literalsecretvalue1234,b=Bearer ${B},c=otherliteral99,junk")
+        .unwrap();
+    let config = raw
+        .substituted(|name: &str| match name {
+            "K" => Some(OsString::from(KEY)),
+            "B" => Some(OsString::from("b-0123456789abcdef")),
+            _ => None,
+        })
+        .unwrap()
+        .config()
+        .unwrap();
+    let refusal = refused(&config, None);
+    assert_eq!(
+        refusal,
+        "telemetry.otlp.headers (an override) is refused: its pair `a` holds no ${VAR}, and what \
+         it holds isn't shown; write --set 'telemetry.otlp.headers=a=${A},b=Bearer ${B},c=${C}', \
+         and rotate it if this was a token"
+    );
+    for literal in ["literalsecret", "otherliteral", "junk", "b-0123"] {
+        assert!(!refusal.contains(literal), "{refusal}");
+    }
+}
+
+/// A URL as written, the variables that fill it, and the refusal expected.
+type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], String);
+
+/// A URL's `${VAR}` that gives it an `@` outside the user information the
+/// text wrote may be a user or password the URL can't read, or reads where
+/// the text wrote none: a whole-URL variable whose password holds `/`, a
+/// host after the written `@` and a path. Each is refused naming the
+/// variable and nothing it holds; the plain forms pass, their user and
+/// password own, and a password is no part of the digest.
+#[test]
+fn a_url_variable_that_gives_an_at_the_text_did_not_write_is_refused_unshown() {
+    const SECRET: &str = "pa/ss-abcdefghijklmnopq";
+    for (key, line) in [
+        ("model.base_url", 1),
+        ("telemetry.otlp.endpoint", 3),
+        ("tools.mcp[0].url", 3),
+    ] {
+        let at = |variable: &str| {
+            format!(
+                "{key} (line {line}) is refused: `{variable}` holds an `@`, which may be a user or \
+                 password a URL can't read, and isn't shown; percent-encode it, or write an `@` \
+                 in a path as %40"
+            )
+        };
+        let whole = format!("http://user-abcdefghijklmnop:{SECRET}@127.0.0.1:9");
+        let cases: [Case<'_>; 4] = [
+            ("${URL}", &[("URL", &whole)], at("URL")),
+            (
+                "http://${USR}:${PW}@${H}:9",
+                &[
+                    ("USR", "user-abcdefghijklmnop"),
+                    ("PW", "xyzabcdefghijklmnopq@evil.example/"),
+                    ("H", "127.0.0.1"),
+                ],
+                format!(
+                    "{key} (line {line}) is refused: its user or password `PW` holds `/`, `?`, \
+                     `#` or `@`, which a URL can't read, and isn't shown; percent-encode it"
+                ),
+            ),
+            (
+                "http://${USR}:${PW}@${H}:9",
+                &[
+                    ("USR", "user-abcdefghijklmnop"),
+                    ("PW", "xyzabcdefghijklmnopq"),
+                    ("H", "xyzabcdefghijklmnopq@127.0.0.1"),
+                ],
+                at("H"),
+            ),
+            (
+                "http://127.0.0.1:9/v1/${PATH_PART}",
+                &[("PATH_PART", "xyzabcdefghijklmnopq@x")],
+                at("PATH_PART"),
+            ),
+        ];
+        for (url, variables, expected) in cases {
+            let mut held = variables.to_vec();
+            held.push(("K", KEY));
+            let refusal = refused(&filled(&url_at(key, url), &held), None);
+            assert_eq!(refusal, expected, "{url}");
+            for (_, value) in variables {
+                assert!(!refusal.contains(value), "{refusal}");
+            }
+            assert!(!refusal.contains("abcdefghijklmnop"), "{refusal}");
+        }
+
+        for (url, held) in [
+            ("${URL}", &[("URL", "http://127.0.0.1:9/v1")][..]),
+            (
+                "http://127.0.0.1:9/v1/${PATH_PART}",
+                &[("PATH_PART", "a%40b")][..],
+            ),
+            (
+                "http://${USR}:${PW}@${H}:9",
+                &[("USR", "u"), ("PW", "p%2F%40"), ("H", "127.0.0.1")][..],
+            ),
+        ] {
+            let mut held = held.to_vec();
+            held.push(("K", KEY));
+            match prepare(&filled(&url_at(key, url), &held), None) {
+                Ok(_) | Err(BuildError::Unsupported { .. }) => {}
+                Err(error) => panic!("{key} {url}: {error}"),
+            }
+        }
+        let plain = |password: &str| {
+            filled(
+                &url_at(key, "https://${U}:${P}@gw.example/v1"),
+                &[("U", "gwuser"), ("P", password), ("K", KEY)],
+            )
+        };
+        let derived = secrets::derived(&plain(PASSWORD), None, false);
+        let own: Vec<&str> = derived
+            .own
+            .iter()
+            .filter(|credential| credential.field.to_string() == key)
+            .filter_map(|credential| credential.variable())
+            .collect();
+        assert_eq!(own, ["U", "P"], "{key}");
+        assert_eq!(
+            plain(PASSWORD).digest(),
+            plain("anothergwpassword7654321").digest(),
+            "{key}"
+        );
+    }
+}
+
+/// A variable written in a URL's user information and again in its host,
+/// path or query fills more than its own field: what it fills there is
+/// shown, so it's refused as a credential's variable outside its fields is.
+#[test]
+fn a_user_information_variable_written_again_elsewhere_in_its_url_is_refused() {
+    for (key, line) in [
+        ("model.base_url", 1),
+        ("telemetry.otlp.endpoint", 3),
+        ("tools.mcp[0].url", 3),
+    ] {
+        for url in [
+            "http://${USR}:${PW}@127.0.0.1:9/v1/${PW}",
+            "http://${USR}:${PW}@127.0.0.1:9/v1?token=${PW:-}",
+            "http://${USR}:${PW}@${PW}.example:9/v1",
+        ] {
+            let refusal = refused(
+                &filled(
+                    &url_at(key, url),
+                    &[("USR", "gwuser"), ("PW", PASSWORD), ("K", KEY)],
+                ),
+                None,
+            );
+            assert!(
+                refusal.starts_with(&format!(
+                    "{key} (line {line}): its value is refused: `PW` fills `{key}`'s user or \
+                     password, and a credential's variable fills no other setting; use another \
+                     variable here"
+                )),
+                "{url}: {refusal}"
+            );
+            assert!(!refusal.contains(PASSWORD), "{refusal}");
+        }
+    }
+}
+
+/// An `@` past a URL's authority is one no reading takes as a user or
+/// password, so nothing would see it written out or cut it: as the text
+/// writes it, out, in a default whose variable is unset, empty or set, or
+/// in a whole-URL default, it's refused unshown by its line or as an
+/// override, before every other rule of the URL; and a filled URL that
+/// holds one the rule of each variable passes, as a scheme's variable
+/// holding a `/` gives, is refused naming each of its variables in order.
+/// An `@` percent-encoded in a path passes.
+#[test]
+fn a_url_that_holds_an_at_past_its_authority_is_refused_unshown() {
+    const SECRET: &str = "pa/ss-abcdefghijk";
+    let fix = "percent-encode a `/`, `?`, `#` or `@` in a user or password, or write an `@` in a \
+               path as %40";
+    for (key, line) in [
+        ("model.base_url", 1),
+        ("telemetry.otlp.endpoint", 3),
+        ("tools.mcp[0].url", 3),
+    ] {
+        let written = |place: &str| {
+            format!(
+                "{key} ({place}) is refused: its text holds an `@` a URL can't read as a user or \
+                 password, and isn't shown; {fix}; rotate it if this was one"
+            )
+        };
+        let user = ("U", "user-abcdefghijk");
+        for url in [
+            format!("http://user-abcdefghijk:{SECRET}@127.0.0.1:9"),
+            format!("http://${{U}}:${{P:-{SECRET}}}@127.0.0.1:9"),
+            format!("${{URL:-http://u:{SECRET}@127.0.0.1:9}}"),
+        ] {
+            for held in [
+                &[user, ("K", KEY)][..],
+                &[user, ("P", ""), ("K", KEY)],
+                &[
+                    user,
+                    ("P", "plain"),
+                    ("URL", "http://127.0.0.1:9"),
+                    ("K", KEY),
+                ],
+            ] {
+                let refusal = refused(&filled(&url_at(key, &url), held), None);
+                assert_eq!(refusal, written(&format!("line {line}")), "{url}");
+                assert!(!refusal.contains("abcdefghijk"), "{refusal}");
+            }
+        }
+        let mut raw =
+            RawConfig::from_str(&url_at(key, "http://127.0.0.1:9"), Format::Yaml).unwrap();
+        let set = key.replace('[', ".").replace(']', "");
+        raw.set(&format!("{set}=http://u:{SECRET}@127.0.0.1:9"))
+            .unwrap();
+        let overridden = raw
+            .substituted(|name: &str| (name == "K").then(|| OsString::from(KEY)))
+            .unwrap()
+            .config()
+            .unwrap();
+        assert_eq!(refused(&overridden, None), written("an override"));
+
+        let scheme = refused(
+            &filled(
+                &url_at(key, "${S}://${U}:${P}@127.0.0.1:9"),
+                &[
+                    ("S", "http://x/"),
+                    user,
+                    ("P", "sekrit-abcdefghijk"),
+                    ("K", KEY),
+                ],
+            ),
+            None,
+        );
+        assert_eq!(
+            scheme,
+            format!(
+                "{key} (line {line}) is refused: `S`, `U` and `P` give it an `@` a URL can't \
+                 read as a user or password, and what they hold isn't shown; {fix}"
+            )
+        );
+        assert!(!scheme.contains("abcdefghijk"), "{scheme}");
+        let whole = refused(
+            &filled(
+                &url_at(key, "${URL}"),
+                &[
+                    ("URL", "http://u:pa/ss-abcdefghijk@127.0.0.1:9"),
+                    ("K", KEY),
+                ],
+            ),
+            None,
+        );
+        assert!(whole.contains("is refused: `URL` holds an `@`"), "{whole}");
+        assert!(!whole.contains("abcdefghijk"), "{whole}");
+
+        match prepare(
+            &filled(&url_at(key, "http://127.0.0.1:9/v1/a%40b"), &[("K", KEY)]),
+            None,
+        ) {
+            Ok(_) | Err(BuildError::Unsupported { .. }) => {}
+            Err(error) => panic!("{key}: {error}"),
+        }
+    }
+}
