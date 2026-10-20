@@ -9,6 +9,7 @@ APIs?
 ATIF
 backends?
 [Bb]ackoff
+[Bb]reakpoints?
 camelCase
 [Cc]lippy
 [Cc]odegen
@@ -26,6 +27,7 @@ DuckDB
 [Ee]nums?
 [Ee]val
 [Ff]ixpoint
+[Gg]lobals
 Grafana
 gRPC
 [Hh]umantime
@@ -59,6 +61,7 @@ OTel
 OTLP
 Parquet
 [Pp]luggable
+[Pp]refill
 [Pp]rost
 [Pp]rotobuf
 [Pp]seudocode
