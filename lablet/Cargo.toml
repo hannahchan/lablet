@@ -140,6 +140,12 @@ nix = { version = "=0.31.3", default-features = false, features = ["signal"] }
 # HTTP client for the provider adapters; rmcp and the OTLP exporter share it.
 # Default features are off so the TLS stack is chosen here: rustls, never native-tls.
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "json", "http2"] }
+# The `Authorization: Basic` header the Anthropic adapter builds once from a base URL's user
+# information, so the URL its client holds carries none; the line reqwest encodes its own with.
+base64 = "=0.23.1"
+# Decodes a base URL's user information, which `Url` keeps percent-encoded, before the Anthropic
+# adapter puts it in the `Authorization: Basic` header; the line `url` and reqwest use.
+percent-encoding = "=2.3.2"
 # MCP SDK: the client role over stdio child processes and streamable HTTP on reqwest.
 rmcp = { version = "=3.4.0", default-features = false, features = [
   "client",

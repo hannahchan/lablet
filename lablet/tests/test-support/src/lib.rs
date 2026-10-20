@@ -10,6 +10,7 @@
 //! first's. That's why `lablet-run` keeps its fakes in its `src/tests/`.
 
 use std::fmt::Display;
+use std::net::{Ipv4Addr, SocketAddr};
 
 mod clock;
 #[cfg(feature = "conformance")]
@@ -23,6 +24,18 @@ pub use run::{
     context, prompts, request, scripted,
 };
 pub use scratch::Scratch;
+
+/// An address on the loopback interface that nothing listens on, so a
+/// connection to it is refused. It's a port below the range the system
+/// hands out, one no service is assigned, which no listener a test binds
+/// at 0 can be given and no unprivileged process can bind: a port bound
+/// and let go of was taken by another test's receiver before the client
+/// connected. Outside the `conformance` feature, so an adapter's test of a
+/// refused connection or a redirect pulls in no server.
+#[must_use]
+pub fn refused_address() -> SocketAddr {
+    SocketAddr::from((Ipv4Addr::LOCALHOST, 4))
+}
 
 /// What `result` holds, or the end of the test: whatever went wrong `doing`
 /// it is a fault of the test's setting, not of what it tests.
