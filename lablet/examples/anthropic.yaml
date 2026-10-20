@@ -1,0 +1,23 @@
+# A config for a run against Anthropic's Messages API with the three built-in
+# tools. The key is read from the variable api_key names, never written here;
+# the run drops it from every command and cuts it from every result. A
+# relative path starts at this file's directory. Set the endpoint to send
+# the run's telemetry to a collector, as the README shows.
+model:
+  provider: anthropic
+  name: claude-opus-5-5 # the owner's choice; see the README's model table
+  api_key: ${ANTHROPIC_API_KEY}
+  max_tokens: 16000 # lablet doesn't stream, and Anthropic's own clients stream above ~16K; thinking counts toward it. Raise it for long writes, and expect a retry if a connection drops
+  # thinking: adaptive              # the models' default; a budget or disabled is a 400 on the current models
+  # thinking_display: summarized    # the thinking blocks' text, empty by default
+  # effort: high                    # unstated, the model's own default applies: medium on Opus 5.5 and Haiku 5.5, high on Sonnet 5.5, and not stated for the others. State it, with thinking, for a model comparison
+  # Opus 5.5, USD per million tokens, from the pricing page
+  pricing: { input: 4.0, output: 20.0, cache_read: 0.2, cache_write: 5.0 }
+prompt:
+  system: You are a careful coding agent working in the directory you were given. Say what you did, and why.
+tools:
+  builtin:
+    root: work
+    enabled: [bash, read_file, write_file]
+# telemetry:
+#   otlp: { endpoint: http://localhost:14317, protocol: grpc }

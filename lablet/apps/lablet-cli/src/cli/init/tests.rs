@@ -73,6 +73,17 @@ fn the_starters_that_need_a_key_write_its_variable_and_hold_no_key() {
     );
 }
 
+/// The anthropic starter names the owner's model, Opus 5.5, and its header
+/// says where the model table is, so a reader finds the choice and the
+/// costs in one place.
+#[test]
+fn the_anthropic_starter_names_opus_5_5_and_points_at_the_examples_readme() {
+    let text = Starter::Anthropic.files()[0].text;
+    assert!(text.contains("\n  name: claude-opus-5-5\n"), "{text}");
+    assert!(text.contains("lablet/examples/README.md"), "{text}");
+    assert_eq!(config_of(Starter::Anthropic).model.name, "claude-opus-5-5");
+}
+
 #[test]
 fn the_fake_starter_plays_the_script_it_writes_beside_its_config() {
     let config = config_of(Starter::Fake);

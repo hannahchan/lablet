@@ -20,6 +20,8 @@ mod prefix;
 #[cfg(test)]
 mod redirect;
 #[cfg(test)]
+mod replay;
+#[cfg(test)]
 mod secrets;
 #[cfg(test)]
 mod settings;
