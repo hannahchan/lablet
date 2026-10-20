@@ -28,6 +28,8 @@ mod parity;
 #[cfg(test)]
 mod prompts;
 #[cfg(test)]
+mod redteam;
+#[cfg(test)]
 mod schema;
 #[cfg(test)]
 mod summary;
