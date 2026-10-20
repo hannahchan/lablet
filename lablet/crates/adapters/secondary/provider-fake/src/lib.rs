@@ -96,8 +96,9 @@
 //! | `retry_after` | no     | The wait the server asked for before the next attempt.                 |
 //! | `latency`     | no     | How long the attempt takes before it fails. Left out, it takes none.   |
 //!
-//! A message is cut to [`lablet_run::ERROR_MESSAGE_MAX_BYTES`], as every
-//! provider's is.
+//! A message reaches the loop whole, as every provider's does, and the loop
+//! cuts the run's secrets out of it and then bounds it to
+//! [`lablet_run::ERROR_MESSAGE_MAX_BYTES`].
 //!
 //! ## The same in JSON
 //!

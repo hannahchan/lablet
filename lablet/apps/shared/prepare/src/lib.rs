@@ -444,7 +444,7 @@ pub struct Prepared {
     /// Whether content reaches telemetry.
     capture_content: bool,
     /// Lablet's credentials: what's dropped, what's given, what's cut, and
-    /// the values when the run has an executor to hand them to.
+    /// the values the loop and every executor cut.
     secrets: Derived,
     base: Base,
 }
@@ -537,13 +537,7 @@ impl Settled {
             base,
         } = self;
         let capture_content = config.telemetry.capture_content.unwrap_or(false);
-        // The values are held only for an executor to cut, and the built-in
-        // tools are the one executor a run can have.
-        let secrets = secrets::derived(
-            &config,
-            telemetry.client_key.map(Secret::expose_secret),
-            settings.builtin.is_some(),
-        );
+        let secrets = secrets::derived(&config, telemetry.client_key.map(Secret::expose_secret));
         Prepared {
             config,
             settings,
@@ -1378,7 +1372,7 @@ fn bash_has_a_base(config: &Config, settings: &Settings, handed: bool) -> Result
 /// by its variable or by another that holds its value: allowed, so a task that needs the key gets it when the config says so,
 /// and said, since `bash` then has it.
 fn warn_of_an_own_credential_given(config: &Config) {
-    let derived = secrets::derived(config, None, false);
+    let derived = secrets::derived(config, None);
     let mut warned: Vec<&KeyPath> = Vec::new();
     for credential in &derived.own {
         let Some((entry, _)) = &credential.given_by else {

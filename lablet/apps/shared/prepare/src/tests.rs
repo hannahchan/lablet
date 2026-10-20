@@ -462,7 +462,7 @@ fn checked_names_the_env_entries_and_the_copies_of_a_credential() {
     );
     let mut config = config;
     config.model.api_key = Some(Secret::new(KEY));
-    let secrets = secrets::derived(&config, None, true);
+    let secrets = secrets::derived(&config, None);
     let environment = Environment {
         inherited: vec!["HOME".to_owned()],
         by_name: BTreeSet::new(),
@@ -925,12 +925,7 @@ fn a_copy_of_an_own_credential_given_to_bash_is_warned_of_and_named() {
     let warnings = warned(|| {
         prepare(&config, base(&["PATH"])).map(drop).unwrap();
     });
-    let checked = Checked::new(
-        &config,
-        Vec::new(),
-        secrets::derived(&config, None, true),
-        None,
-    );
+    let checked = Checked::new(&config, Vec::new(), secrets::derived(&config, None), None);
 
     assert_eq!(
         warnings,
@@ -1113,7 +1108,7 @@ fn a_url_variable_that_gives_an_at_the_text_did_not_write_is_refused_unshown() {
                 &[("U", "gwuser"), ("P", password), ("K", KEY)],
             )
         };
-        let derived = secrets::derived(&plain(PASSWORD), None, false);
+        let derived = secrets::derived(&plain(PASSWORD), None);
         let own: Vec<&str> = derived
             .own
             .iter()

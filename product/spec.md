@@ -480,7 +480,7 @@ pub enum ToolErrorKind { Unknown, Timeout, Failed }                  // Unknown 
 // execute takes no longer than the shorter of call.deadline and the executor's own limit, and returns Timeout only once the work has stopped: a process it started has exited, killed if need be, and a request it sent has been cancelled
 // a dropped call stops its work: the loop drops the calls in flight when the run is cancelled, and the drop starts the stop without waiting for it
 // execute feeds a call's text to a KeptOutput made from call.keep as the text arrives, so it never holds more than the cut can use
-// a ProviderError's message is at most ERROR_MESSAGE_MAX_BYTES (2,048) long, and so is the error result the loop makes of a ToolError's, bounded only after the run's secrets are cut out of it, so a value astride the bound shows nothing of itself; neither holds credentials: no user info or query string of a URL, no header value, and a response body only when content is captured
+// a ProviderError's message, where the loop shows it, and the error result the loop makes of a ToolError's are each at most ERROR_MESSAGE_MAX_BYTES (2,048) long, and each is bounded only after the run's secrets are cut out of it, so a value astride the bound shows nothing of itself; an adapter hands either message over whole; neither holds credentials: no user info or query string of a URL, no header value, and a response body only when content is captured
 
 // Port data. These are types of this crate, not of the model: nothing in the domain reads them.
 pub struct McpCallMeta { method: String, session_id: Option<String>, protocol_version: Option<String>, jsonrpc_request_id: Option<String>, rpc_status_code: Option<String>, transport: NetworkTransport }
@@ -569,7 +569,7 @@ loop:
                   retry.next(attempt, e.kind, e.retry_after, run_id.salt(turn, attempt)): Some(wait) if stop.allows_wait(elapsed, wait) -> sleep(wait), unless cancelled first: stop cancelled; attempt += 1   # and round again, through point A
                                                Some(_) -> stop timeout
                                                None -> stop retryable and malformed as retries_exhausted, a hint past hint_max among them,
-                                                       context_exhausted, auth and fatal as themselves, with e.message
+                                                       context_exhausted, auth and fatal as themselves, with bounded(whole(e.message)), which the exception record and the span's status carry too
     match run.responded(response, began, latency):                         # the transcript's new turn; it takes the waiting input, and its record counts the attempts and fills the chat span, which ends at began + latency
         Final(f)   -> stop stop.after_final(&f.turn().record().finish, tools.completion())    # a response that called no tool always stops the run
         Pending(p) -> structured = p.completed_with(tools.completion()): the argument of a task_complete call that came alone and parsed

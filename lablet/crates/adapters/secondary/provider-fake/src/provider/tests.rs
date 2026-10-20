@@ -192,17 +192,16 @@ async fn an_error_that_states_neither_reports_no_usage_and_asks_for_no_wait() {
     assert_eq!(failure.retry_after, None);
 }
 
+/// The loop cuts the run's secrets out of a message and then bounds it, so
+/// the fake, like every provider, hands it over whole.
 #[tokio::test(start_paused = true)]
-async fn an_injected_message_reaches_the_loop_within_the_ports_bound() {
-    let provider = playing(&format!(
-        "- error: {{ kind: fatal, message: {} }}",
-        "é".repeat(ERROR_MESSAGE_MAX_BYTES)
-    ));
+async fn an_injected_message_reaches_the_loop_whole() {
+    let message = "é".repeat(ERROR_MESSAGE_MAX_BYTES);
+    let provider = playing(&format!("- error: {{ kind: fatal, message: {message} }}"));
 
     let failure = provider.complete(unhurried()).await.unwrap_err();
 
-    assert_eq!(failure.message().len(), ERROR_MESSAGE_MAX_BYTES);
-    assert_eq!(failure.message(), "é".repeat(ERROR_MESSAGE_MAX_BYTES / 2));
+    assert_eq!(failure.message(), message);
 }
 
 #[tokio::test(start_paused = true)]

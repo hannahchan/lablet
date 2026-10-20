@@ -39,9 +39,10 @@ pub struct Derived {
     /// The variables that filled an own or given field, which every process
     /// a run starts is dropped by name.
     pub dropped: BTreeSet<String>,
-    /// The values, behind a `Debug` form that shows none of them. Empty
-    /// when the run has no executor to hand them to, since nothing would
-    /// cut them and holding them would serve nothing.
+    /// The values, behind a `Debug` form that shows none of them, held for
+    /// every run: the loop cuts them out of a provider error's message, and
+    /// every executor out of its results, so a run with no tools needs them
+    /// as much as one with.
     pub values: Secrets,
     /// The values the drop by value matches, which are the same values: a
     /// variable of the environment handed in that holds one under another
@@ -289,7 +290,7 @@ impl Variables {
 /// record the fill kept.
 #[must_use]
 pub fn variables(config: &Config) -> Variables {
-    let derived = derived(config, None, false);
+    let derived = derived(config, None);
     let named = |credentials: &[Credential]| -> Vec<(String, KeyPath)> {
         credentials
             .iter()
@@ -310,14 +311,10 @@ pub fn variables(config: &Config) -> Variables {
 /// each read off the record the fill kept, and `client_key`, what the file
 /// `telemetry.otlp.tls.client_key` names holds where the root read it, cut
 /// beside them as an own credential that no variable gave.
-///
-/// The values are held, in [`Derived::values`], only `with_values`, which is
-/// when the run has an executor to hand them to.
 #[must_use]
-pub fn derived(config: &Config, client_key: Option<&str>, with_values: bool) -> Derived {
+pub fn derived(config: &Config, client_key: Option<&str>) -> Derived {
     let mut set = Set {
         config,
-        with_values,
         own: Vec::new(),
         given: Vec::new(),
         given_values: Vec::new(),
@@ -374,7 +371,6 @@ enum Side {
 /// The set as it's gathered, field by field.
 struct Set<'a> {
     config: &'a Config,
-    with_values: bool,
     own: Vec<Credential>,
     given: Vec<Credential>,
     /// The value of each given credential, in the order of `given`: empty
@@ -402,9 +398,7 @@ impl Set<'_> {
 
     /// A value that's a secret as it stands, held and classified.
     fn value(&mut self, value: &str) -> Held {
-        if self.with_values {
-            self.values.push(value.to_owned());
-        }
+        self.values.push(value.to_owned());
         Held::of(value)
     }
 
@@ -518,9 +512,7 @@ impl Set<'_> {
                 .iter()
                 .map(|(_, value)| value.expose_secret().to_owned()),
         );
-        if self.with_values {
-            self.values.extend(forms.iter().cloned());
-        }
+        self.values.extend(forms.iter().cloned());
         let matcher = Secrets::new(forms);
         let fill = self.config.filled().at(key);
         let sources: Vec<Source> = match fill {
@@ -582,9 +574,7 @@ impl Set<'_> {
         };
         let forms = information_forms(information);
         let held = Held::of(information);
-        if self.with_values {
-            self.values.extend(forms.iter().cloned());
-        }
+        self.values.extend(forms.iter().cloned());
         let matcher = Secrets::new(forms);
         let place = self.config.place_at(key);
         // A URL with no place was set in code, over whatever a fill left.
@@ -636,7 +626,6 @@ impl Set<'_> {
     fn finish(self) -> Derived {
         let Self {
             config: _,
-            with_values: _,
             mut own,
             given,
             given_values,

@@ -1854,6 +1854,72 @@ async fn an_executor_s_error_message_is_bounded_only_after_the_run_s_secrets_are
     }
 }
 
+/// A 16-byte value of the run's, the shortest a value can be and still be
+/// cut, which a provider's message carries.
+const SHORTEST: &str = "0123456789abcdef";
+
+/// A provider error's message has the run's secrets cut out of it and is
+/// then bounded, in that order and once, before the chat span's status, the
+/// exception record and the outcome see it. Bounded first, a value astride
+/// the bound would be no value to the cut, and its first bytes would reach
+/// all three.
+#[tokio::test]
+async fn a_provider_error_s_message_is_bounded_only_after_the_run_s_secrets_are_cut_out_of_it() {
+    const MARKER: &str = lablet_model::Secrets::MARKER;
+    assert_eq!(SHORTEST.len(), lablet_model::Secrets::MIN_BYTES);
+    let before = "x".repeat(ERROR_MESSAGE_MAX_BYTES - SHORTEST.len() / 2);
+    let mut harness = Harness::new(vec![Answer::failing(ProviderError::new(
+        ProviderErrorKind::Fatal,
+        format!("{before}{SHORTEST} was rejected"),
+    ))]);
+    harness.secrets = Arc::new(lablet_model::Secrets::new([SHORTEST.to_owned()]));
+
+    let run = harness.run().await;
+
+    // The marker lengthens the text past the bound, and the bound takes the
+    // marker's end rather than the value's start.
+    let expected = format!("{before}{}", &MARKER[..SHORTEST.len() / 2]);
+    assert_eq!(expected.len(), ERROR_MESSAGE_MAX_BYTES);
+    assert_eq!(run.stop_reason(), StopReason::ProviderError);
+    assert_eq!(run.error(), Some(expected.as_str()));
+    let [failed] = failures(&run).try_into().expect("one attempt failed");
+    assert_eq!(failed.message, expected, "the span's status");
+    assert_eq!(
+        record_text(&run.exceptions()[0], key::EXCEPTION_MESSAGE),
+        expected,
+        "the exception record"
+    );
+}
+
+/// A failure the loop tries again reaches no outcome, and its record and
+/// its span's status are cut all the same.
+#[tokio::test]
+async fn a_retried_failure_s_record_and_status_have_the_run_s_secrets_cut_out_of_them() {
+    const MARKER: &str = lablet_model::Secrets::MARKER;
+    let mut harness = Harness::new(vec![
+        Answer::failing(ProviderError::new(
+            ProviderErrorKind::Retryable,
+            format!("529 overloaded; {SHORTEST} is queued"),
+        )),
+        Answer::now(says("Done.", &[], FinishReason::EndTurn)),
+    ]);
+    harness.secrets = Arc::new(lablet_model::Secrets::new([SHORTEST.to_owned()]));
+
+    let run = harness.run().await;
+
+    let expected = format!("529 overloaded; {MARKER} is queued");
+    assert_eq!(run.stop_reason(), StopReason::Completed);
+    assert_eq!(run.error(), None);
+    let [failed] = failures(&run).try_into().expect("one attempt failed");
+    assert_eq!(failed.message, expected, "the span's status");
+    assert!(failed.will_retry);
+    assert_eq!(
+        record_text(&run.exceptions()[0], key::EXCEPTION_MESSAGE),
+        expected,
+        "the exception record"
+    );
+}
+
 // T13: the other two ways to cut, and an executor that keeps only what the
 // call says to.
 

@@ -7,8 +7,6 @@ use lablet_model::{
     Usage,
 };
 
-use crate::bounded;
-
 /// What one provider call asks for. Everything borrows: the messages come
 /// from [`lablet_model::Run::messages`], which borrows the run, and the loop
 /// renders them inside the attempt because a failed attempt changes it.
@@ -53,9 +51,14 @@ pub struct ProviderRequest<'a> {
 /// the outcome take. [`ToolError`](crate::ToolError) has the same shape for
 /// the same reason.
 ///
-/// The message is private because [`ProviderError::new`] cuts it to
-/// [`ERROR_MESSAGE_MAX_BYTES`](crate::ERROR_MESSAGE_MAX_BYTES), and a field
-/// anyone could write would let a message past the cut.
+/// The message is held whole, and the loop cuts the run's secrets out of it
+/// and then bounds it to
+/// [`ERROR_MESSAGE_MAX_BYTES`](crate::ERROR_MESSAGE_MAX_BYTES), in that
+/// order, once, for everything that shows it: a value the bound chopped
+/// would be no value to the cut, and every byte of it before the bound would
+/// be shown. The field is private so that [`ProviderError::message`] is its
+/// one reader, and an error is built and read one way, as a
+/// [`ToolError`](crate::ToolError) is.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct ProviderError {
@@ -73,12 +76,12 @@ pub struct ProviderError {
 
 impl ProviderError {
     /// A failure of `kind`, described by `message`, that reported no usage
-    /// and asked for no wait. The message is cut to
-    /// [`ERROR_MESSAGE_MAX_BYTES`](crate::ERROR_MESSAGE_MAX_BYTES).
+    /// and asked for no wait. The message is kept whole; the loop cuts and
+    /// bounds it.
     pub fn new(kind: ProviderErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
-            message: bounded(message.into()),
+            message: message.into(),
             usage: None,
             retry_after: None,
         }
@@ -99,8 +102,9 @@ impl ProviderError {
         self
     }
 
-    /// What the adapter says happened. Reaches the outcome's `error` when the
-    /// run ends on this failure.
+    /// What the adapter says happened, as it said it. Reaches the outcome's
+    /// `error` when the run ends on this failure, with the run's secrets cut
+    /// out of it and bounded.
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message

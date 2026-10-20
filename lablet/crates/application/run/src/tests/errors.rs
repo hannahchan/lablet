@@ -4,50 +4,50 @@ use std::time::Duration;
 
 use lablet_model::{ProviderErrorKind, TokenCounts, Usage};
 
-use crate::{ERROR_MESSAGE_MAX_BYTES, ProviderError, ToolError, ToolErrorKind};
+use crate::{ERROR_MESSAGE_MAX_BYTES, ProviderError, ToolError, ToolErrorKind, bounded};
 
-/// A provider error's message, built from `text`.
-fn provider_message(text: &str) -> String {
-    ProviderError::new(ProviderErrorKind::Fatal, text)
-        .message()
-        .to_owned()
+/// The loop bounds a provider error's message once the run's secrets are
+/// cut out of it, so the error holds it whole, as a tool error does: a bound
+/// made here would leave a value's edge at the bound for the cut to miss.
+#[test]
+fn a_provider_error_holds_its_message_whole_for_the_loop_to_cut_and_then_bound() {
+    let long = "x".repeat(ERROR_MESSAGE_MAX_BYTES * 4);
+
+    let error = ProviderError::new(ProviderErrorKind::Fatal, long.clone());
+
+    assert_eq!(error.message(), long);
+    assert_eq!(error.to_string(), long);
 }
 
 #[test]
-fn a_provider_error_s_message_up_to_the_bound_is_kept_whole() {
+fn a_message_up_to_the_bound_is_kept_whole_and_one_over_it_is_cut_to_it() {
+    assert_eq!(ERROR_MESSAGE_MAX_BYTES, 2_048);
     for text in [
         String::new(),
         "400 bad request".to_owned(),
         "x".repeat(ERROR_MESSAGE_MAX_BYTES),
     ] {
-        assert_eq!(provider_message(&text), text);
+        assert_eq!(bounded(text.clone()), text);
     }
-}
-
-#[test]
-fn a_provider_error_s_message_over_the_bound_is_cut_to_it() {
-    let long = "x".repeat(ERROR_MESSAGE_MAX_BYTES + 1);
-
-    assert_eq!(ERROR_MESSAGE_MAX_BYTES, 2_048);
-    assert_eq!(provider_message(&long), "x".repeat(ERROR_MESSAGE_MAX_BYTES));
     assert_eq!(
-        provider_message(&"x".repeat(1_000_000)).len(),
+        bounded("x".repeat(ERROR_MESSAGE_MAX_BYTES + 1)),
+        "x".repeat(ERROR_MESSAGE_MAX_BYTES)
+    );
+    assert_eq!(
+        bounded("x".repeat(1_000_000)).len(),
         ERROR_MESSAGE_MAX_BYTES
     );
 }
 
 /// The bound counts bytes, and a character that would straddle it is left
-/// out whole, so a cut message is still text.
+/// out whole, so a bounded message is still text.
 #[test]
-fn a_provider_error_s_message_is_cut_at_the_last_character_boundary_the_bound_allows() {
+fn the_bound_cuts_at_the_last_character_boundary_it_allows() {
     let straddling = format!("{}é", "x".repeat(ERROR_MESSAGE_MAX_BYTES - 1));
     let fitting = format!("{}é", "x".repeat(ERROR_MESSAGE_MAX_BYTES - 2));
 
-    assert_eq!(
-        provider_message(&straddling),
-        "x".repeat(ERROR_MESSAGE_MAX_BYTES - 1)
-    );
-    assert_eq!(provider_message(&fitting), fitting);
+    assert_eq!(bounded(straddling), "x".repeat(ERROR_MESSAGE_MAX_BYTES - 1));
+    assert_eq!(bounded(fitting.clone()), fitting);
 }
 
 /// The loop bounds a tool error's message, once the run's secrets are cut

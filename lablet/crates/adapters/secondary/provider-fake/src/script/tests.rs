@@ -436,15 +436,12 @@ fn an_error_that_states_an_empty_usage_reported_one_of_nothing() {
 }
 
 #[test]
-fn a_message_longer_than_the_ports_bound_is_cut_to_it() {
+fn a_message_longer_than_the_ports_bound_is_kept_whole() {
     let long = "x".repeat(ERROR_MESSAGE_MAX_BYTES + 1);
 
     let script = yaml(&format!("- error: {{ kind: fatal, message: {long} }}")).unwrap();
 
-    assert_eq!(
-        injected(&script).message(),
-        "x".repeat(ERROR_MESSAGE_MAX_BYTES)
-    );
+    assert_eq!(injected(&script).message(), long);
 }
 
 #[test]

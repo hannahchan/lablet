@@ -31,10 +31,10 @@ fn filled(text: &str, held: &[(&str, &str)]) -> Config {
         .unwrap()
 }
 
-/// What `derived` makes of the config `text` filled from `held`, for a run
-/// that has an executor and nothing handed in.
+/// What `derived` makes of the config `text` filled from `held`, with
+/// nothing handed in.
 fn derived_from(text: &str, held: &[(&str, &str)]) -> Derived {
-    derived(&filled(text, held), None, true)
+    derived(&filled(text, held), None)
 }
 
 fn names(names: &[&str]) -> BTreeSet<String> {
@@ -80,7 +80,7 @@ fn a_key_set_in_code_is_own_and_names_no_variable() {
     let mut config = Config::default();
     config.model.api_key = Some(Secret::new(KEY));
 
-    let derived = derived(&config, None, true);
+    let derived = derived(&config, None);
 
     assert_eq!(
         own(&derived),
@@ -307,23 +307,21 @@ tools: { builtin: { root: ., enabled: [bash], credentials: { ANTHROPIC_API_KEY: 
     assert_eq!(derived.values, secrets(&[KEY]), "one value, held once");
 }
 
+/// A run with no tools has no executor, and its provider's words can carry
+/// the key all the same, so the values are held for it as for any run.
 #[test]
-fn the_values_are_held_only_for_a_run_that_has_an_executor() {
+fn the_values_are_held_for_a_run_with_no_tools() {
     let config = filled(
         "model: { provider: fake, script: run.yaml, api_key: '${WORK_KEY}' }",
         &[("WORK_KEY", KEY)],
     );
 
-    let without = derived(&config, None, false);
+    let derived = derived(&config, None);
 
-    assert_eq!(without.values, Secrets::default());
-    assert_eq!(without.dropping, Secrets::default());
-    assert_eq!(without.dropped, names(&["WORK_KEY"]));
-    assert_eq!(
-        without.own[0].held,
-        Held::Cut,
-        "the value is still read, to say whether it would be cut"
-    );
+    assert_eq!(derived.values, secrets(&[KEY]));
+    assert_eq!(derived.dropping, secrets(&[KEY]));
+    assert_eq!(derived.dropped, names(&["WORK_KEY"]));
+    assert_eq!(derived.own[0].held, Held::Cut);
 }
 
 #[test]
@@ -368,7 +366,7 @@ async fn a_client_keys_contents_are_own_cut_and_named_and_no_variable_is_dropped
         &[("KEY_FILE", "/keys/client.key")],
     );
 
-    let derived = derived(&config, Some(key), true);
+    let derived = derived(&config, Some(key));
 
     assert_eq!(
         own(&derived),
@@ -388,19 +386,6 @@ async fn a_client_keys_contents_are_own_cut_and_named_and_no_variable_is_dropped
         );
     }
     assert!(!format!("{derived:?}").contains(line), "{derived:?}");
-
-    let without = derived_from_key(&config, Some(key), false);
-    assert_eq!(without.values, Secrets::default());
-    assert_eq!(
-        own(&without),
-        own(&derived),
-        "named without an executor too"
-    );
-}
-
-/// `derived` with a client key, as a root hands one in.
-fn derived_from_key(config: &Config, key: Option<&str>, with_values: bool) -> Derived {
-    derived(config, key, with_values)
 }
 
 /// `telemetry.otlp.headers` as OpenTelemetry's `k=v` text is one setting: the
@@ -490,7 +475,7 @@ async fn a_client_keys_armour_is_neither_cut_nor_dropped_by() {
         &[],
     );
 
-    let mut derived = derived(&config, Some(key), true);
+    let mut derived = derived(&config, Some(key));
 
     let armour: Vec<&str> = key
         .lines()
@@ -527,7 +512,7 @@ fn a_key_set_in_code_after_its_variable_came_out_unset_is_named_set_in_code() {
         );
         config.model.api_key = Some(Secret::new(KEY));
 
-        let derived = derived(&config, None, true);
+        let derived = derived(&config, None);
 
         assert_eq!(
             own(&derived),

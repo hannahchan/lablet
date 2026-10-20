@@ -4,7 +4,7 @@ use lablet::{RunId, StopReason};
 use lablet_test_support::conformance::otlp::Status;
 use serde_json::json;
 
-use crate::harness::{Lab, Traced, request};
+use crate::harness::{KEY, Lab, Traced, request, with_key};
 use crate::key;
 
 const RUN: &str = "01K5F3Z8Q4X9T2M7B6W1R0VNEC";
@@ -75,4 +75,35 @@ async fn a_rejected_key_ends_the_run_at_once_and_the_chat_span_says_auth() {
         json!("401 invalid x-api-key")
     );
     assert_eq!(wide.attributes[key::LABLET_PROVIDER_RETRIES], json!(0));
+}
+
+/// A run with no tools has no executor, and its secrets are held all the
+/// same, for the loop to cut out of a provider's words (P11): a 401 that
+/// echoes the key it refused reaches the outcome and the telemetry without
+/// it.
+#[tokio::test]
+async fn a_run_with_no_tools_whose_provider_error_carries_a_registered_secret_holds_it() {
+    let scratch = Lab::new("echoed-key");
+    let echoes_the_key = format!(
+        "- error: {{ kind: auth, message: 'HTTP 401 authentication_error: invalid x-api-key {KEY}' }}"
+    );
+    let config = with_key(scratch.config(&echoes_the_key, json!({})));
+    assert!(
+        config.tools.builtin.enabled.is_empty(),
+        "no tools, so no executor"
+    );
+    let mut lablet = scratch.build(config).await.unwrap();
+
+    let finished = lablet.run(request()).await;
+    lablet.shutdown().await;
+
+    let outcome = &finished.summary.outcome;
+    assert_eq!(outcome.stop_reason(), StopReason::ProviderError);
+    assert_eq!(
+        outcome.error(),
+        Some("HTTP 401 authentication_error: invalid x-api-key [secret withheld]")
+    );
+    let telemetry = scratch.exported_text();
+    assert!(!telemetry.contains(KEY), "the key reached the telemetry");
+    assert!(telemetry.contains("[secret withheld]"), "{telemetry}");
 }

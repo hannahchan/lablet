@@ -77,7 +77,8 @@ pub struct RunService {
     pricing: Option<Pricing>,
     calls: CallLimits,
     /// The values of lablet's own secrets, handed to every executor with
-    /// its call and cut out of every text the loop writes itself.
+    /// its call, cut out of every text the loop writes itself, and out of a
+    /// provider error's message before anything shows it.
     secrets: Arc<Secrets>,
 }
 
@@ -702,6 +703,13 @@ impl RunService {
     /// counts it, point A and the retry policy say what follows, the span
     /// and the records say how it failed and what was decided. What follows
     /// is the wait before the next attempt, or why there's none.
+    ///
+    /// The error's message is made fit to show once, here, for everything
+    /// that shows it: the exception record, the span's status and the stop
+    /// that reaches the outcome. The run's secrets are cut out of it first
+    /// and it's bounded second, as an executor's message is in
+    /// [`Self::error_result`], since a value the bound chopped would be no
+    /// value to the cut.
     fn attempt_failed(
         &self,
         running: &Running,
@@ -714,10 +722,12 @@ impl RunService {
         let mut opened = opened;
         let (turn, attempt) = (opened.turn, opened.attempt);
         run.failed_attempt(opened.began.offset, latency, error.usage);
+        let message = bounded(self.secrets.redacted(error.message()));
         let next = self.after_failure(
             run,
             running,
             error,
+            &message,
             running.run_id.salt(turn, attempt),
             attempt,
         );
@@ -738,7 +748,7 @@ impl RunService {
         .add_to(&mut opened.span, end);
         let exception = GenAiClientOperationException {
             join: running.join.clone(),
-            exception_message: error.message().to_owned(),
+            exception_message: message.clone(),
             exception_type: error.kind.into(),
             gen_ai_provider_name: running.asked.provider_name.clone(),
             gen_ai_request_model: running.asked.model.clone(),
@@ -748,13 +758,7 @@ impl RunService {
         self.logger
             .emit(exception.record(end, opened.span.span_context()));
         let exchange = conversation.as_mut().map(Conversation::unanswered);
-        self.end_chat(
-            running,
-            opened,
-            Status::error(error.message().to_owned()),
-            exchange,
-            end,
-        );
+        self.end_chat(running, opened, Status::error(message), exchange, end);
         next
     }
 
@@ -855,7 +859,8 @@ impl RunService {
     }
 
     /// What follows a failed attempt: the wait before the next one, or why
-    /// there won't be one.
+    /// there won't be one. `message` is the error's, made fit to show, and
+    /// is what a stop on this failure carries to the outcome.
     ///
     /// A failure another attempt could answer is held to point A before the
     /// retry policy is asked. The attempt may have used up the run's time or
@@ -867,6 +872,7 @@ impl RunService {
         run: &Run,
         running: &Running,
         error: &ProviderError,
+        message: &str,
         salt: u64,
         attempt: u32,
     ) -> Result<Duration, Stopped> {
@@ -886,7 +892,7 @@ impl RunService {
             Some(_) => Err(Stopped::just(StopReason::Timeout)),
             None => Err(Stopped::with(
                 stop_reason_for(error.kind),
-                error.message().to_owned(),
+                message.to_owned(),
             )),
         }
     }
@@ -1081,6 +1087,7 @@ impl RunService {
     /// left. The bound comes after the cut, since a value the bound chopped
     /// would be no value to the cut, and every byte of it before the bound
     /// would be sent; what the bound takes instead is the end of a marker.
+    /// A provider error's message gets the same in [`Self::attempt_failed`].
     fn error_result(&self, message: &str) -> KeptOutput {
         KeptOutput::whole(&bounded(self.secrets.redacted(message)))
     }
