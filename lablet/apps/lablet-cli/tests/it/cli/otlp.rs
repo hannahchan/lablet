@@ -6,8 +6,8 @@
 //! set a variable of its own process, so every case here is a process of
 //! its own. Every config here states a receiver's endpoint or none.
 
-use lablet_conformance::otlp::Exported;
-use lablet_conformance::receiver::{self, Mode, Received, Receiver};
+use lablet_test_support::conformance::otlp::Exported;
+use lablet_test_support::conformance::receiver::{self, Mode, Received, Receiver};
 use serde_json::{Value, json};
 
 use super::harness::{CONFIG, ENDS, Lab, PROMPT, Ran, ran};

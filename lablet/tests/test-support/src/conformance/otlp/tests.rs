@@ -521,7 +521,7 @@ fn a_value_that_refers_to_a_table_of_strings_is_refused() {
 
 #[test]
 fn a_file_is_read_as_its_text_is() {
-    let scratch = lablet_test_support::Scratch::new("conformance-read");
+    let scratch = crate::Scratch::new("conformance-read");
     let path = scratch.at("a-file-is-read.otlp.jsonl");
     let text = line_of_spans(&[span(&json!({}))]);
     std::fs::write(&path, &text).unwrap();
@@ -534,7 +534,7 @@ fn a_file_is_read_as_its_text_is() {
 
 #[test]
 fn a_file_that_cannot_be_read_is_an_error_that_names_it() {
-    let scratch = lablet_test_support::Scratch::new("conformance-unread");
+    let scratch = crate::Scratch::new("conformance-unread");
     let path = scratch.at("never-written.otlp.jsonl");
 
     let refused = Exported::read(&path).unwrap_err();

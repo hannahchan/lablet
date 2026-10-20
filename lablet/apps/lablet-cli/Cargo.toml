@@ -59,9 +59,8 @@ nix = { workspace = true, features = ["process"] }
 # The parity test runs the library beside the command on one config, and the
 # other tests name the config's and a run's types by the library's paths.
 lablet.workspace = true
-lablet-conformance.workspace = true
 lablet-provider-fake.workspace = true
-lablet-test-support.workspace = true
+lablet-test-support = { workspace = true, features = ["conformance"] }
 nix.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 

@@ -1,6 +1,8 @@
 use std::time::{Duration, UNIX_EPOCH};
 
-use lablet_conformance::otlp::{Exported, SpanKind as ReadKind, Status as ReadStatus};
+use lablet_test_support::conformance::otlp::{
+    Exported, SpanKind as ReadKind, Status as ReadStatus,
+};
 use opentelemetry::logs::{AnyValue, LogRecord as _, Logger as _, LoggerProvider as _, Severity};
 use opentelemetry::trace::{
     Event, SpanContext, SpanId, SpanKind, Status, TraceFlags, TraceId, TraceState,

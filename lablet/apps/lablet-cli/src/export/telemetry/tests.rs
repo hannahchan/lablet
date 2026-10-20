@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
-use lablet_conformance::otlp::Exported;
 use lablet_run::telemetry::Record;
+use lablet_test_support::conformance::otlp::Exported;
 use opentelemetry::logs::{AnyValue, Severity};
 use opentelemetry::trace::{
     Span as _, SpanContext, SpanId, TraceContextExt as _, TraceFlags, TraceId, TraceState,

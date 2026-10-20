@@ -13,8 +13,8 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::{InMemoryLogExporter, LogBatch, SdkLoggerProvider};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 
+use crate::conformance::otlp::Exported;
 use crate::must;
-use crate::otlp::Exported;
 
 /// The service a host's resource names, which no export of lablet's own
 /// names.

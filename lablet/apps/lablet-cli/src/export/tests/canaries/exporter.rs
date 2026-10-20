@@ -10,7 +10,7 @@
 use std::process::Stdio;
 use std::time::UNIX_EPOCH;
 
-use lablet_conformance::receiver::{self, Mode, Received, Receiver};
+use lablet_test_support::conformance::receiver::{self, Mode, Received, Receiver};
 use opentelemetry::InstrumentationScope;
 use opentelemetry::trace::{
     SpanContext, SpanId, SpanKind, Status, TraceFlags, TraceId, TraceState, Tracer as _,

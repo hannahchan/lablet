@@ -6,7 +6,7 @@
 //! `OTEL_PROPAGATORS` changes nothing, and what the SDK says of a sampler
 //! variable it read for itself stays out of the diagnostic log.
 
-use lablet_conformance::otlp::Exported;
+use lablet_test_support::conformance::otlp::Exported;
 use serde_json::{Value, json};
 
 use super::harness::{CONFIG, ENDS, Lab, PROMPT, Ran, ran};

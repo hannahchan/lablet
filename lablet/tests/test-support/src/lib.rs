@@ -1,7 +1,9 @@
 //! Test support: what the tests of lablet's crates share, so that each is
 //! written once. A scratch directory of a test's own, the loop's clock and
 //! cancellation on tokio's time, and the loop itself, built around a
-//! scripted provider.
+//! scripted provider. Behind the `conformance` feature, the shared
+//! `ToolExecutor` cases, the OTLP/JSON reader, a host's in-memory providers
+//! and the in-process OTLP receiver.
 //!
 //! A crate this one depends on can't take it into its own unit tests: they
 //! would compile that crate a second time, whose types don't match the
@@ -10,6 +12,8 @@
 use std::fmt::Display;
 
 mod clock;
+#[cfg(feature = "conformance")]
+pub mod conformance;
 mod run;
 mod scratch;
 

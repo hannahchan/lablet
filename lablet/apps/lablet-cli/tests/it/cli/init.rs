@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use lablet_conformance::otlp::Exported;
+use lablet_test_support::conformance::otlp::Exported;
 use serde_json::json;
 
 use super::harness::{Lab, ran};

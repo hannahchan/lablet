@@ -210,7 +210,7 @@ pub trait ToolExecutor: Send + Sync {
     /// to any other limit is cut from what was kept, and says so. The text
     /// goes through a [`lablet_model::RedactedOutput`] over
     /// [`ToolCall::secrets`] on its way, so no value of lablet's own is
-    /// kept, in a result or in an error result alike; `lablet-conformance`
+    /// kept, in a result or in an error result alike; `lablet-test-support`
     /// holds a case for it.
     ///
     /// # Errors

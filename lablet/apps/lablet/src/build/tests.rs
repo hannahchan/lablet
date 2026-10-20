@@ -88,7 +88,7 @@ telemetry: {{ capture_content: true }}
 
     for model in ["scripted-1", "scripted-2"] {
         let config = filled(&text, &[("MODEL", model)]).unwrap();
-        let host = lablet_conformance::host::Host::new();
+        let host = lablet_test_support::conformance::host::Host::new();
         let otel = Otel::new(
             &host.tracer_provider(),
             &host.logger_provider(),
@@ -100,7 +100,7 @@ telemetry: {{ capture_content: true }}
         lablet.shutdown().await;
         let run_id = finished.summary.outcome.run_id;
         let exported = host.exported();
-        let of_run = |attributes: &lablet_conformance::otlp::Attributes| {
+        let of_run = |attributes: &lablet_test_support::conformance::otlp::Attributes| {
             attributes.get(key::GEN_AI_CONVERSATION_ID)
                 == Some(&serde_json::Value::String(run_id.to_string()))
         };

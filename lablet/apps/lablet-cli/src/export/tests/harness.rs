@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use lablet_conformance::otlp::Exported;
+use lablet_test_support::conformance::otlp::Exported;
 
 use crate::export::telemetry::FlushError;
 pub(super) use crate::export::testing::{

@@ -6,8 +6,8 @@
 use std::collections::BTreeSet;
 use std::process::{Command, Stdio};
 
-use lablet_conformance::otlp::Exported;
 use lablet_test_support::Scratch;
+use lablet_test_support::conformance::otlp::Exported;
 use serde_json::json;
 
 use super::harness::{CONTENT, RUN, Records, VERSION, WIDE, run, scope};

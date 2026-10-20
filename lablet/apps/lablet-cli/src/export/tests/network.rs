@@ -11,9 +11,9 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use lablet_conformance::otlp::Exported;
-use lablet_conformance::receiver::{self, Mode, Received, Receiver};
 use lablet_test_support::Scratch;
+use lablet_test_support::conformance::otlp::Exported;
+use lablet_test_support::conformance::receiver::{self, Mode, Received, Receiver};
 
 use super::harness::{
     CONTENT, CONTENT_PER_RUN, RUN, Records, SPANS_PER_RUN, Settings, WIDE, built, emit_run,

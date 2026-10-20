@@ -40,7 +40,8 @@ fn digests(
     let ran = ran(command, "");
     assert_eq!(ran.code, Some(0), "{run}: {ran:?}");
 
-    let exported = lablet_conformance::otlp::Exported::read(&lab.at(telemetry)).unwrap();
+    let exported =
+        lablet_test_support::conformance::otlp::Exported::read(&lab.at(telemetry)).unwrap();
     let wide = &Traced::of(&exported, run).wide().attributes;
     [key::LABLET_CONFIG_DIGEST, key::LABLET_PROMPT_SYSTEM_DIGEST]
         .map(|key| wide[key].as_str().unwrap().to_owned())

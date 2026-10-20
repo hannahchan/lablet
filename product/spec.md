@@ -130,7 +130,7 @@ Aggregatability rules: the wide event has a fixed flat shape (no nested maps; te
 
 ## 2. Architecture
 
-Explicit architecture, in the shape of the UsefulBytes repository, sized down. Rings are directory prefixes inside the `lablet/` workspace; directory `foo/bar/` is package `lablet-bar`, with four exceptions: `apps/lablet` is `lablet`, `apps/lablet-cli` is `lablet-cli`, whose binary is `lablet`, `tests/conformance` is `lablet-conformance`, and `tests/mcp-server` is `lablet-test-mcp-server`.
+Explicit architecture, in the shape of the UsefulBytes repository, sized down. Rings are directory prefixes inside the `lablet/` workspace; directory `foo/bar/` is package `lablet-bar`, with three exceptions: `apps/lablet` is `lablet`, `apps/lablet-cli` is `lablet-cli`, whose binary is `lablet`, and `tests/mcp-server` is `lablet-test-mcp-server`.
 
 ```
 lablet/
@@ -151,9 +151,8 @@ lablet/
   apps/lablet                    the library root, package lablet: the config, build(), the Builder and the Lablet, on the OpenTelemetry its host provides
   apps/lablet-cli                the CLI root, package lablet-cli, binary lablet: main, the command line, the input module that reads the process's environment, the inbound context, and in its export module the OpenTelemetry SDK and what lablet adds to it, the tracer and logger providers and their exporters, OTLP network and OTLP/JSON file
   telemetry/                     Weaver registry (YAML, in folders by crate), vendored upstream registries, policies, templates
-  tests/conformance              package lablet-conformance: shared ToolExecutor cases, the OTLP/JSON reader and the in-process OTLP receiver
   tests/mcp-server               package lablet-test-mcp-server: a tiny rmcp stdio server for tests
-  tests/test-support             package lablet-test-support: the scratch directory, clock, cancellation and run builder the adapters' tests share
+  tests/test-support             package lablet-test-support: the scratch directory, clock, cancellation and run builder the adapters' tests share, and behind its conformance feature the shared ToolExecutor cases, the OTLP/JSON reader and the in-process OTLP receiver
   xtask/                         (repo root, not a member) lint-layers, gates
 ```
 
@@ -477,7 +476,7 @@ pub struct ToolCall { id: ToolCallId, name: ToolName, input: serde_json::Value, 
 pub struct ToolOutput { output: KeptOutput, is_error: bool, mcp: Option<McpCallMeta> }   // what the executor kept of the tool's text, and the size of all of it (§3); is_error is the tool's own report, as MCP's isError
 pub struct ToolError { kind: ToolErrorKind, message: String, mcp: Option<McpCallMeta> }   // every kind becomes an error result for the model
 pub enum ToolErrorKind { Unknown, Timeout, Failed }                  // Unknown is ToolCallStatus::Unknown; the other two name a ToolCallEnd, and the loop pairs it with the source the executor resolved
-// execute may be called again before an earlier call returns, for tools whose spec is ToolConcurrency::Shared; lablet-conformance holds a case for it
+// execute may be called again before an earlier call returns, for tools whose spec is ToolConcurrency::Shared; lablet-test-support's conformance module holds a case for it
 // execute takes no longer than the shorter of call.deadline and the executor's own limit, and returns Timeout only once the work has stopped: a process it started has exited, killed if need be, and a request it sent has been cancelled
 // a dropped call stops its work: the loop drops the calls in flight when the run is cancelled, and the drop starts the stop without waiting for it
 // execute feeds a call's text to a KeptOutput made from call.keep as the text arrives, so it never holds more than the cut can use
@@ -899,7 +898,7 @@ Two more digests say what the config can't, and the loop takes both from what it
 - Unit tests live beside the code in a sibling file declared `#[cfg(test)] mod tests;` (`src/foo.rs` with `src/foo/tests.rs`, or `src/tests.rs`), never as an inline `mod tests { ... }` body, so the coverage floor can exclude test code by file name instead of parsing Rust. The gate enforces this in the three floor crates (`lablet-model`, `lablet-policy`, `lablet-run`); elsewhere it's the convention. Policy and model crates are the bulk and need no runtime: `Pending::answer`, the model's one async function, is polled to completion in its tests with `std::task::Waker::noop()` and futures the test controls.
 - `lablet-run` is tested end to end with hand-written fakes for every port, including a fake clock. No mocking framework.
 - Provider adapters are tested against `wiremock` with recorded payloads, including error classification and content-block round trips.
-- `lablet-conformance` holds the `ToolExecutor` case set, pulled in as a dev-dependency by each tool adapter, and the OTLP/JSON reader and the in-process OTLP receiver the telemetry scenarios assert over: exactly one wide event per run, its numbers the sum of the spans', and an unwritable or unreachable destination leaving the outcome unchanged are held on what a collector sees.
+- `lablet-test-support`'s `conformance` module, behind a feature of that name, holds the `ToolExecutor` case set, pulled in as a dev-dependency by each tool adapter, and the OTLP/JSON reader and the in-process OTLP receiver the telemetry scenarios assert over: exactly one wide event per run, its numbers the sum of the spans', and an unwritable or unreachable destination leaving the outcome unchanged are held on what a collector sees.
 - `lablet-test-mcp-server` is an rmcp stdio binary with tools that echo, sleep for N seconds, return an image, return `structuredContent` beside its text, report the server's environment, and make the server exit after N calls, one of them annotated `readOnlyHint`, and with server instructions; cargo sets `CARGO_BIN_EXE_lablet-test-mcp-server` only for the server package's own tests, so how tests in other packages locate the binary is an open question (§10). A `--hang-startup` flag never completes initialisation.
 - One integration test target per crate (`tests/it/main.rs`). The library root has one more, `globals`, whose one test sets OpenTelemetry's global tracer provider and propagator to show that lablet reads neither, so no other test sees them.
 - A smoke test in `apps/lablet-cli` runs a full loop with `provider-fake` and the OTLP/JSON file exporter and asserts on the spans and log records read back from the file. The library's tests hand a `Lablet` providers of the SDK's own, over its in-memory exporters, as a host does. Cancellation scenarios drive the `Cancellation` port directly.

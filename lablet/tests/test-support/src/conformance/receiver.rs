@@ -50,8 +50,8 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::server::TcpIncoming;
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 
+use crate::conformance::otlp::{Exported, ReadError};
 use crate::must;
-use crate::otlp::{Exported, ReadError};
 
 /// The content type of an OTLP/HTTP protobuf request and response.
 const PROTOBUF: &str = "application/x-protobuf";

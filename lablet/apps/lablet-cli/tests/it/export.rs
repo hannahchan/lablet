@@ -9,9 +9,9 @@ use std::time::{Duration, Instant};
 
 use lablet::{BuildError, OwnFile, Place, RunId, RunRequest, StopReason};
 use lablet_cli::compose;
-use lablet_conformance::otlp::Exported;
-use lablet_conformance::receiver::{Mode, Receiver};
 use lablet_run::telemetry::generated::{LabletInvokeAgent, LabletRun};
+use lablet_test_support::conformance::otlp::Exported;
+use lablet_test_support::conformance::receiver::{Mode, Receiver};
 use serde_json::{Value, json};
 
 use crate::harness::{ENDS, Lab, read, refusal, request};

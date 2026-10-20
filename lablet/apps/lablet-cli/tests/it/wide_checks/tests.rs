@@ -5,8 +5,8 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use lablet::RunId;
-use lablet_conformance::otlp::{Scope, SpanKind, Status};
 use lablet_run::telemetry::generated::LabletRetry;
+use lablet_test_support::conformance::otlp::{Scope, SpanKind, Status};
 use serde_json::json;
 
 use super::*;

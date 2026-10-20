@@ -25,10 +25,9 @@ const XTASK_ALLOWED_LINTS: [&str; 2] = ["print_stdout", "print_stderr"];
 
 /// The members whose package is not `lablet-<directory name>`
 /// (contributing/README.md, "Architecture rules").
-const PACKAGE_NAME_EXCEPTIONS: [(&str, &str); 4] = [
+const PACKAGE_NAME_EXCEPTIONS: [(&str, &str); 3] = [
     ("apps/lablet", "lablet"),
     ("apps/lablet-cli", "lablet-cli"),
-    ("tests/conformance", "lablet-conformance"),
     ("tests/mcp-server", "lablet-test-mcp-server"),
 ];
 
@@ -454,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn a_package_is_named_after_its_directory_with_four_exceptions() {
+    fn a_package_is_named_after_its_directory_with_three_exceptions() {
         for (path, name) in [
             ("crates/domain/model", "lablet-model"),
             (
@@ -465,7 +464,6 @@ mod tests {
             ("apps/shared/tools-wiring", "lablet-tools-wiring"),
             ("apps/lablet", "lablet"),
             ("apps/lablet-cli", "lablet-cli"),
-            ("tests/conformance", "lablet-conformance"),
             ("tests/mcp-server", "lablet-test-mcp-server"),
         ] {
             assert_eq!(expected_package_name(path), name);

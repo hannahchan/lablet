@@ -1,8 +1,8 @@
 //! Where a run's telemetry goes in a file, and what a destination that
 //! can't be written reports.
 
-use lablet_conformance::otlp::Exported;
 use lablet_test_support::Scratch;
+use lablet_test_support::conformance::otlp::Exported;
 
 use super::harness::{
     CONTENT, CONTENT_PER_RUN, OTHER_RUN, RUN, RUN_KEY, Records, SPANS_PER_RUN, Settings, WIDE,

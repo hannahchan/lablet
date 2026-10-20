@@ -4,9 +4,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use lablet_conformance::otlp::{Attributes, Exported, LogRecord, Span};
 use lablet_model::RunSummary;
 use lablet_run::telemetry::generated::{LabletChat, LabletExecuteTool};
+use lablet_test_support::conformance::otlp::{Attributes, Exported, LogRecord, Span};
 use serde_json::Value;
 
 use crate::key;

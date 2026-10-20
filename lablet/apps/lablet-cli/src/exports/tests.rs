@@ -5,8 +5,8 @@
 use std::ffi::OsString;
 
 use lablet_config::{Format, RawConfig};
-use lablet_conformance::receiver::{Mode, Receiver};
 use lablet_prepare::prepare;
+use lablet_test_support::conformance::receiver::{Mode, Receiver};
 
 use super::*;
 use crate::export::Signal;

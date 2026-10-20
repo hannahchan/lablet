@@ -1,7 +1,7 @@
 //! The diagnostic log, which names a file as the config writes it, so that
 //! nothing a variable holds reaches standard error (spec §7).
 
-use lablet_conformance::receiver::{Mode, Receiver};
+use lablet_test_support::conformance::receiver::{Mode, Receiver};
 use serde_json::json;
 
 use super::harness::{CONFIG, ENDS, Lab, PROMPT, ran};

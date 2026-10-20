@@ -9,8 +9,8 @@
 use std::process::{Command, Stdio};
 
 use lablet::{FinishedRun, RunRequest, Secret, StopReason};
-use lablet_conformance::host::SERVICE;
 use lablet_model::ToolResultContent;
+use lablet_test_support::conformance::host::SERVICE;
 use opentelemetry::Context;
 use opentelemetry::trace::{
     FutureExt as _, Span as _, TraceContextExt as _, Tracer as _, TracerProvider as _,

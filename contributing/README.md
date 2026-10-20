@@ -13,7 +13,7 @@ How to work in this repository. The what and why live in [../product/](../produc
 
 ## Architecture rules
 
-Explicit architecture. Inside `lablet/`, directory `foo/bar/` is package `lablet-bar`, except `apps/lablet` (`lablet`), `apps/lablet-cli` (`lablet-cli`, whose binary is `lablet`), `tests/conformance` (`lablet-conformance`), and `tests/mcp-server` (`lablet-test-mcp-server`).
+Explicit architecture. Inside `lablet/`, directory `foo/bar/` is package `lablet-bar`, except `apps/lablet` (`lablet`), `apps/lablet-cli` (`lablet-cli`, whose binary is `lablet`), and `tests/mcp-server` (`lablet-test-mcp-server`).
 
 | Ring                  | Path                                 | May depend on                                                                 | Forbidden crates                                                                                            |
 | --------------------- | ------------------------------------ | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |

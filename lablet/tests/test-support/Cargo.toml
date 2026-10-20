@@ -1,6 +1,6 @@
 [package]
 name = "lablet-test-support"
-description = "What the tests of lablet's crates share: a scratch directory, the loop's clock, and a builder of the loop"
+description = "What the tests of lablet's crates share: a scratch directory, the loop's clock, a builder of the loop, and behind `conformance` the shared ToolExecutor cases, the OTLP/JSON reader, a host's in-memory providers and the in-process OTLP receiver"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,15 +8,47 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+# The conformance module brings the receiver's servers and TLS, which a test of
+# the loop alone has no use for, so a crate that needs them asks.
+[features]
+conformance = [
+  "dep:axum",
+  "dep:flate2",
+  "dep:opentelemetry-proto",
+  "dep:opentelemetry_sdk",
+  "dep:prost",
+  "dep:rcgen",
+  "dep:rustls",
+  "dep:serde",
+  "dep:serde_json",
+  "dep:thiserror",
+  "dep:tokio-rustls",
+  "dep:tonic",
+]
+
 [dependencies]
 async-trait.workspace = true
+axum = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
 lablet-clock-tokio.workspace = true
 lablet-model.workspace = true
 lablet-policy.workspace = true
 lablet-provider-fake.workspace = true
 lablet-run.workspace = true
 opentelemetry.workspace = true
+opentelemetry-proto = { workspace = true, optional = true, features = ["gen-tonic"] }
+# A host's providers over the SDK's in-memory exporters, which are behind `testing`, for the
+# library's tests to hand in and read back.
+opentelemetry_sdk = { workspace = true, optional = true, features = ["testing"] }
+prost = { workspace = true, optional = true }
+rcgen = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
 tokio.workspace = true
+tokio-rustls = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true, features = ["server", "router", "tls-aws-lc"] }
 
 [dev-dependencies]
 opentelemetry_sdk = { workspace = true, features = ["testing"] }

@@ -3,7 +3,7 @@
 //! `run`, and the spans and records the run left in its file.
 
 use lablet::{FinishedRun, RunId, StopReason};
-use lablet_conformance::otlp::{Exported, LogRecord, SpanKind, Status};
+use lablet_test_support::conformance::otlp::{Exported, LogRecord, SpanKind, Status};
 use serde_json::json;
 
 use crate::harness::{Lab, MODEL, Traced, request};

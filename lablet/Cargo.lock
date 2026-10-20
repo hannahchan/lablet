@@ -1108,7 +1108,6 @@ version = "0.1.0"
 dependencies = [
  "lablet-clock-tokio",
  "lablet-config",
- "lablet-conformance",
  "lablet-documents",
  "lablet-model",
  "lablet-prepare",
@@ -1138,7 +1137,6 @@ dependencies = [
  "lablet",
  "lablet-clock-tokio",
  "lablet-config",
- "lablet-conformance",
  "lablet-documents",
  "lablet-env-carrier",
  "lablet-model",
@@ -1193,29 +1191,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
-]
-
-[[package]]
-name = "lablet-conformance"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "axum",
- "flate2",
- "lablet-model",
- "lablet-run",
- "lablet-test-support",
- "opentelemetry-proto",
- "opentelemetry_sdk",
- "prost",
- "rcgen",
- "rustls",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tokio-rustls",
- "tonic",
 ]
 
 [[package]]
@@ -1349,8 +1324,8 @@ name = "lablet-secrets"
 version = "0.1.0"
 dependencies = [
  "lablet-config",
- "lablet-conformance",
  "lablet-model",
+ "lablet-test-support",
  "tokio",
 ]
 
@@ -1363,14 +1338,25 @@ name = "lablet-test-support"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
+ "flate2",
  "lablet-clock-tokio",
  "lablet-model",
  "lablet-policy",
  "lablet-provider-fake",
  "lablet-run",
  "opentelemetry",
+ "opentelemetry-proto",
  "opentelemetry_sdk",
+ "prost",
+ "rcgen",
+ "rustls",
+ "serde",
+ "serde_json",
+ "thiserror",
  "tokio",
+ "tokio-rustls",
+ "tonic",
 ]
 
 [[package]]
@@ -1378,7 +1364,6 @@ name = "lablet-tools-builtin"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "lablet-conformance",
  "lablet-env-carrier",
  "lablet-model",
  "lablet-run",

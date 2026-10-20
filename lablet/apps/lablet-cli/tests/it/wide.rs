@@ -9,7 +9,7 @@
 //! adds up, and a loaded runner changes both alike.
 
 use lablet::{FinishedRun, RunId, StopReason};
-use lablet_conformance::otlp::{Exported, Span};
+use lablet_test_support::conformance::otlp::{Exported, Span};
 use serde_json::json;
 
 use crate::harness::{Lab, PROMPT, SYSTEM, Traced, request};

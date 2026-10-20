@@ -61,7 +61,7 @@ const NO_SUCH_TOOL: &str = "no_such_tool";
 
 /// The shapes a secret leaks in, which every executor is held to cutting:
 /// one object each, with the value, what a tool writes and what's kept.
-const LEAKS: &str = include_str!("../fixtures/leaks.json");
+const LEAKS: &str = include_str!("../../fixtures/leaks.json");
 
 /// A text that holds nothing to cut, which the closing line is learnt from.
 const NOTHING_TO_CUT: &str = "nothing to cut\n";

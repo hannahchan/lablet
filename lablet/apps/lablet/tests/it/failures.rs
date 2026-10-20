@@ -1,7 +1,7 @@
 //! A provider that fails, as a run built from a config reports it.
 
 use lablet::{RunId, StopReason};
-use lablet_conformance::otlp::Status;
+use lablet_test_support::conformance::otlp::Status;
 use serde_json::json;
 
 use crate::harness::{Lab, Traced, request};

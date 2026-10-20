@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use lablet_conformance::otlp::{Exported, ReadError};
 use lablet_test_support::Scratch;
+use lablet_test_support::conformance::otlp::{Exported, ReadError};
 use opentelemetry::trace::{Span as _, Tracer as _};
 use opentelemetry::{Context, KeyValue};
 use serde_json::json;

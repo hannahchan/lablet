@@ -6,7 +6,7 @@
 //! destination gives.
 
 use lablet::{FinishedRun, OutcomeDocument, RunId, StopReason};
-use lablet_conformance::receiver::{Mode, Receiver};
+use lablet_test_support::conformance::receiver::{Mode, Receiver};
 use serde_json::{Value, json};
 
 use crate::harness::{Diagnostics, Lab, Traced, request};

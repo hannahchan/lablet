@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use lablet_conformance::receiver::Receiver;
+use lablet_test_support::conformance::receiver::Receiver;
 use serde_json::json;
 
 use crate::harness::{ENDS, Lab};

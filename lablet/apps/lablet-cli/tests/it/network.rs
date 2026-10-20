@@ -6,7 +6,7 @@
 use std::ffi::OsString;
 
 use lablet::{BuildError, Config, ConfigError, Format, Place, RawConfig, StopReason};
-use lablet_conformance::receiver::{self, Mode, Receiver};
+use lablet_test_support::conformance::receiver::{self, Mode, Receiver};
 use serde_json::{Value, json};
 
 use crate::harness::{ENDS, Lab, refusal, request};

@@ -8,9 +8,9 @@
 use std::collections::HashMap;
 
 use lablet::{Config, FinishedRun, Format, Lablet, Otel, RunRequest};
-use lablet_conformance::host::Host;
 use lablet_model::ToolResultContent;
 use lablet_test_support::Scratch;
+use lablet_test_support::conformance::host::Host;
 use opentelemetry::logs::NoopLoggerProvider;
 use opentelemetry::propagation::text_map_propagator::FieldIter;
 use opentelemetry::propagation::{Extractor, Injector, TextMapPropagator};

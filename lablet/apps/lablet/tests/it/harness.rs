@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use lablet::{BuildError, Builder, Config, Format, Lablet, Otel, RunRequest, Unsupported};
-use lablet_conformance::host::Host;
-use lablet_conformance::otlp::{Exported, LogRecord, Span};
 use lablet_test_support::Scratch;
+use lablet_test_support::conformance::host::Host;
+use lablet_test_support::conformance::otlp::{Exported, LogRecord, Span};
 use opentelemetry::trace::noop::NoopTextMapPropagator;
 use serde_json::{Value, json};
 
@@ -230,7 +230,7 @@ impl<'a> Traced<'a> {
     /// The spans and records of the run `run_id`, which each names as its
     /// conversation.
     pub fn of(exported: &'a Exported, run_id: &str) -> Self {
-        let of_run = |attributes: &lablet_conformance::otlp::Attributes| {
+        let of_run = |attributes: &lablet_test_support::conformance::otlp::Attributes| {
             attributes.get(crate::key::GEN_AI_CONVERSATION_ID) == Some(&json!(run_id))
         };
         Self {

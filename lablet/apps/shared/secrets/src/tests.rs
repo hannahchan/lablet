@@ -3,7 +3,7 @@
 
 use std::ffi::OsString;
 
-use lablet_conformance::receiver::{Mode, Receiver};
+use lablet_test_support::conformance::receiver::{Mode, Receiver};
 
 use super::*;
 use lablet_config::{Format, RawConfig};

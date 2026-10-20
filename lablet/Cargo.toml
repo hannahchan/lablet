@@ -22,7 +22,6 @@ members = [
   "crates/adapters/secondary/transcript-json",
   "crates/adapters/secondary/shared/documents",
   "crates/adapters/secondary/shared/env-carrier",
-  "tests/conformance",
   "tests/mcp-server",
   "tests/test-support",
 ]
@@ -85,9 +84,9 @@ lablet-run-request = { path = "apps/shared/run-request", version = "0.1.0" }
 lablet-secrets = { path = "apps/shared/secrets", version = "0.1.0" }
 # Root kernel: the tools a checked config gives a run, built
 lablet-tools-wiring = { path = "apps/shared/tools-wiring", version = "0.1.0" }
-# Test support: the shared ToolExecutor case set, the reader of OTLP/JSON lines and the in-process OTLP receiver
-lablet-conformance = { path = "tests/conformance", version = "0.1.0" }
-# Test support: one scratch directory, the loop's clock and cancellation on tokio, and a builder of the loop
+# Test support: one scratch directory, the loop's clock and cancellation on tokio, a builder of the
+# loop, and behind its `conformance` feature the shared ToolExecutor case set, the reader of OTLP/JSON
+# lines and the in-process OTLP receiver
 lablet-test-support = { path = "tests/test-support", version = "0.1.0" }
 
 # Ports and errors
@@ -209,11 +208,11 @@ secrecy = "=0.10.3"
 # Protobuf bodies in the in-process OTLP HTTP receiver; the line opentelemetry-proto requires.
 prost = "=0.14.4"
 # The request and status types of the OTLP gRPC exporter's interceptor, its channel and its TLS
-# in the CLI root, and the in-process gRPC receiver in lablet-conformance, which adds the
+# in the CLI root, and the in-process gRPC receiver in lablet-test-support, which adds the
 # server and TLS features; the line opentelemetry-otlp requires. `gzip` lets the receiver take
 # the compressed requests the exporter sends.
 tonic = { version = "=0.14.6", default-features = false, features = ["gzip"] }
-# In-process OTLP HTTP receiver in lablet-conformance; the line tonic's router uses, so one copy.
+# In-process OTLP HTTP receiver in lablet-test-support; the line tonic's router uses, so one copy.
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
 # The gzip bodies the in-process OTLP HTTP receiver takes; the line opentelemetry-otlp's
 # `gzip-http` compresses with, so one copy.

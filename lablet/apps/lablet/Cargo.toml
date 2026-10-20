@@ -27,8 +27,7 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-lablet-conformance.workspace = true
-lablet-test-support.workspace = true
+lablet-test-support = { workspace = true, features = ["conformance"] }
 # The OTLP exporters the `traced_run` example's host sends its runs through.
 opentelemetry-otlp.workspace = true
 # A host's own providers in the tests and the examples, the tests' over the SDK's in-memory

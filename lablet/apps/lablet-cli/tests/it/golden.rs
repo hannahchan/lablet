@@ -62,11 +62,13 @@ use std::time::Duration;
 use crate::key;
 use lablet::config::{OtlpProtocol, Provider};
 use lablet::{CancelHandle, Config, FinishedRun, Format, RunId, RunRequest, StopReason};
-use lablet_conformance::otlp::{Attributes, Exported, LogRecord, Span, SpanKind, Status};
-use lablet_conformance::receiver::{self, Mode, Receiver};
 use lablet_env_carrier::CONTEXT_VARIABLES;
 use lablet_run::telemetry::generated::GenAiClientOperationException;
 use lablet_test_support::Scratch;
+use lablet_test_support::conformance::otlp::{
+    Attributes, Exported, LogRecord, Span, SpanKind, Status,
+};
+use lablet_test_support::conformance::receiver::{self, Mode, Receiver};
 use serde_json::{Value, json};
 
 /// Set, the test writes each fixture in place of comparing with it.
@@ -933,7 +935,7 @@ fn status(status: &Status) -> Value {
     }
 }
 
-fn scope(scope: &lablet_conformance::otlp::Scope) -> Value {
+fn scope(scope: &lablet_test_support::conformance::otlp::Scope) -> Value {
     json!({
         "name": scope.name,
         "version": scope.version,

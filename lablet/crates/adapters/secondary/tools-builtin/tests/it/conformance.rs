@@ -4,13 +4,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use lablet_conformance::executor::{
+use lablet_run::ToolExecutor;
+use lablet_test_support::conformance::executor::{
     Asked, Outlasting, Subject, Work, a_call_past_its_deadline_has_stopped_when_execute_returns,
     a_name_the_executor_does_not_offer_is_unknown, an_executor_cuts_the_secrets_it_is_handed,
     an_executor_keeps_no_more_output_than_its_limit,
     calls_made_at_once_to_a_shared_tool_each_get_their_own_answer,
 };
-use lablet_run::ToolExecutor;
 use lablet_tools_builtin::BuiltinTools;
 use serde_json::json;
 

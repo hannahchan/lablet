@@ -1,7 +1,7 @@
 //! The line a run ends with on standard error (C11), and a standard error
 //! that holds nothing but OTLP lines when the telemetry goes there (C15).
 
-use lablet_conformance::otlp::Exported;
+use lablet_test_support::conformance::otlp::Exported;
 use serde_json::json;
 
 use super::harness::{CONFIG, ENDS, Lab, ran};

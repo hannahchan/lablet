@@ -23,8 +23,7 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
-lablet-conformance.workspace = true
-lablet-test-support.workspace = true
+lablet-test-support = { workspace = true, features = ["conformance"] }
 # The W3C propagators a command's context is injected through in the tests.
 opentelemetry_sdk.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
