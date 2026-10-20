@@ -7,7 +7,9 @@ use lablet::{
 };
 use serde_json::{Value, json};
 
-use crate::harness::{ENDS, Lab, filled, quietly, read, read_filled, refusal, request, with_key};
+use crate::harness::{
+    ENDS, KEY, Lab, filled, quietly, read, read_filled, refusal, request, with_key,
+};
 
 /// A variable nothing sets.
 const UNSET: &str = "LABLET_TEST_A_VARIABLE_NOTHING_SETS";
@@ -398,6 +400,40 @@ async fn bash_with_no_process_environment_handed_in_is_refused() {
         .check()
         .await
         .unwrap();
+}
+
+/// An `env` entry whose filled value holds a credential's value is refused
+/// by the check and the build alike, by the field whose value it holds, and
+/// the value is nowhere in the error.
+#[tokio::test]
+async fn an_env_entry_whose_value_holds_a_credential_s_value_is_refused_by_the_check() {
+    let scratch = Lab::new("check-env-value");
+    let other = "LABLET_TEST_OTHER_HOLDS_THE_KEY";
+    let mut tree = scratch.tree(
+        ENDS,
+        json!({ "tools": { "builtin": scratch.builtin(&["bash"]) } }),
+    );
+    tree["model"]["api_key"] = json!("${LABLET_TEST_KEY}");
+    tree["tools"]["builtin"]["env"] = json!({ "COPY": format!("${{{other}}}") });
+    let config = read_filled(&tree, &[("LABLET_TEST_KEY", KEY), (other, KEY)]);
+
+    let error = refusal(config).await;
+
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "tools.builtin.env.COPY (line 1): \"${{{other}}}\" is refused: its value holds the \
+             one `model.api_key` has, and no process inherits an own credential; to give bash the \
+             key knowingly, list COPY under `tools.builtin.credentials`"
+        )
+    );
+    assert!(
+        matches!(error, BuildError::Config(ConfigError::Invalid { .. })),
+        "{error:?}"
+    );
+    for shown in [error.to_string(), format!("{error:?}")] {
+        assert!(!shown.contains(KEY), "{shown}");
+    }
 }
 
 /// The file a task prompt is read from is lablet's own, as the system

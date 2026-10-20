@@ -14,7 +14,7 @@ mod settings;
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::path::{Path, PathBuf};
 
 use lablet_config::{
@@ -471,21 +471,23 @@ enum Ready {
 /// out, or with a default that isn't empty, a header value among them, or a
 /// URL's user information written out, or that a variable gave it whole; a
 /// key the provider needs that isn't set; a `tools.builtin.env` entry that
-/// names a credential's variable, or one `bash` inherits already; a
-/// `credentials` entry `env` sets too; `bash` with no environment handed
-/// in; what this lablet has no adapter for; a relative path in a config
-/// that no directory was given for; and a file the config names that can't
-/// be read.
+/// names a credential's variable, one whose value holds a credential's, or
+/// one `bash` inherits already; a `credentials` entry `env` sets too; `bash`
+/// with no environment handed in; what this lablet has no adapter for; a
+/// relative path in a config that no directory was given for; and a file
+/// the config names that can't be read.
 pub fn prepare(config: &Config, base: Base) -> Result<Settled, BuildError> {
     let refused = |refusal| BuildError::Config(config.refused(refusal));
     let settings = Settings::of(config).map_err(refused)?;
     let variables = secrets::variables(config);
+    let derived = secrets::derived(config, None);
     credentials_are_variables(config)?;
     key_is_set(config)?;
     env_is_no_credential(config, &variables, base.as_deref())?;
+    env_holds_no_credential(config, &derived)?;
     credential_variables_fill_their_fields(config, &variables)?;
     bash_has_a_base(config, &settings, base.is_some())?;
-    warn_of_an_own_credential_given(config);
+    warn_of_an_own_credential_given(config, &derived);
     supported(config)?;
     paths_are_placed(config)?;
 
@@ -1294,6 +1296,64 @@ fn env_is_no_credential(
     Ok(())
 }
 
+/// Holds `tools.builtin.env` apart from the credentials' values: an entry
+/// whose filled value holds an own or given value, as the drop by value and
+/// the cut match one, is refused, since the drop took that value out of
+/// what a command starts from and the entry would put it back under another
+/// name. The refusal names the field whose value it holds and never the
+/// value, so an entry written out is refused with nothing of it shown, and
+/// one whose `${VAR}` has a default is shown only when the written text
+/// holds no credential, by the same test, so a default that holds one
+/// percent-encoded isn't shown either.
+fn env_holds_no_credential(config: &Config, derived: &Derived) -> Result<(), BuildError> {
+    let env = KeyPath::of("tools.builtin.env");
+    for (name, value) in &config.tools.builtin.env {
+        let key = env.key(name);
+        let fill = config.filled().at(&key);
+        let credentials = || derived.own.iter().chain(&derived.given);
+        let shown = fill
+            .map(|fill| &fill.written)
+            .filter(|written| !credentials().any(|credential| credential.holds(written)))
+            .map(|written| format!("{written:?}"));
+        let variable = fill.and_then(|fill| fill.names().next());
+        let holds = |credential: &&Credential| credential.holds(value);
+        if let Some(own) = derived.own.iter().find(holds) {
+            let field = &own.field;
+            let what = if *field == KeyPath::of("model.api_key") {
+                "the key"
+            } else {
+                "the value"
+            };
+            let reason = format!(
+                "its value holds the one `{field}` has, and no process inherits an own \
+                 credential; to give bash {what} knowingly, list {name} under \
+                 `tools.builtin.credentials`"
+            );
+            return Err(match shown {
+                Some(shown) => refusal(config, &key, Some(shown), reason),
+                None => refusal_unshown(config, &key, reason),
+            });
+        }
+        if let Some(given) = derived.given.iter().find(holds) {
+            let mut reason = format!(
+                "its value holds the one `{}` has{}; list {name} there instead",
+                given.field,
+                at(given.place)
+            );
+            // A value the written text holds came from no variable, so none
+            // is the fix.
+            if let Some(variable) = variable.filter(|_| shown.is_some()) {
+                let _ = write!(reason, ", as {name}: ${{{variable}}}");
+            }
+            return Err(match shown {
+                Some(shown) => refusal(config, &key, Some(shown), reason),
+                None => refusal_unshown(config, &key, reason),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Q6: an own or given `${VAR}` fills no setting but its own field, a URL's
 /// user information or a `credentials` entry, since what it fills anywhere
 /// else reaches the transcript, telemetry and the digest as it is.
@@ -1371,8 +1431,7 @@ fn bash_has_a_base(config: &Config, settings: &Settings, handed: bool) -> Result
 /// Warns of an own credential listed under `tools.builtin.credentials` too,
 /// by its variable or by another that holds its value: allowed, so a task that needs the key gets it when the config says so,
 /// and said, since `bash` then has it.
-fn warn_of_an_own_credential_given(config: &Config) {
-    let derived = secrets::derived(config, None);
+fn warn_of_an_own_credential_given(config: &Config, derived: &Derived) {
     let mut warned: Vec<&KeyPath> = Vec::new();
     for credential in &derived.own {
         let Some((entry, _)) = &credential.given_by else {

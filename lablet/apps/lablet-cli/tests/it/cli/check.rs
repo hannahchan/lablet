@@ -1310,6 +1310,127 @@ fn an_env_entry_that_names_a_credential_is_refused_by_check_and_by_run() {
     assert!(!given.stderr.contains("0123456789abcdef"), "{given:?}");
 }
 
+/// The script of a run whose one command prints `COPY` as `bash` sees it.
+const PRINTS_COPY: &str = "
+- response:
+    content:
+      - tool_use:
+          id: call_1
+          name: bash
+          input: { json: { command: \"echo COPY=$COPY\" } }
+    finish: tool_use
+- response:
+    content:
+      - text: The variable is printed.
+    finish: end_turn
+";
+
+/// An `env` entry whose filled value holds a credential's value is refused
+/// by `check` and by `run` alike, naming the field whose value it holds and
+/// nothing of the value, whether another variable gave it, whole or within
+/// a text, or the file wrote it out; one whose value no credential holds
+/// reaches `bash`, and a value under the cut's floor isn't matched.
+#[test]
+fn an_env_entry_whose_value_holds_a_credential_s_value_is_refused_by_check_and_by_run() {
+    let lab = Lab::new("check-env-value");
+    lab.write("script.yaml", PRINTS_COPY);
+    lab.write("work/notes.md", "Nothing yet.");
+    let key = "sk-test-0123456789abcdef";
+    let token = "ghp-0123456789abcdef";
+    let other = "LABLET_TEST_OTHER";
+    let github = "LABLET_TEST_GH";
+    let gh_copy = "LABLET_TEST_GH_COPY";
+    let benign = "LABLET_TEST_BENIGN";
+    let short = "LABLET_TEST_SHORT";
+    let short_copy = "LABLET_TEST_SHORT_COPY";
+    let config = |key_variable: &str, entry: &str, more: &str| {
+        format!(
+            "model:\n  provider: fake\n  script: script.yaml\n  api_key: ${{{key_variable}}}\nprompt:\n  \
+             system: Hi.\nrun:\n  transcript_path: transcript.json\ntools:\n  builtin:\n    root: \
+             work\n    enabled: [bash]\n    env:\n      COPY: {entry}\n{more}"
+        )
+    };
+    let with = |subcommand: &[&str], text: &str| {
+        lab.write("lablet.yaml", text);
+        let mut command = lab.lablet(&[subcommand, &["--config", "lablet.yaml"][..]].concat());
+        command
+            .env(KEY, key)
+            .env(other, key)
+            .env(github, token)
+            .env(gh_copy, token)
+            .env(benign, "benign-0123456789abcdef")
+            .env(short, "sk-short-012")
+            .env(short_copy, "sk-short-012");
+        ran(command, "")
+    };
+    let check: &[&str] = &["check"];
+    let run: &[&str] = &["run", "--prompt", "Hi."];
+    let own = |shown: &str| {
+        format!(
+            "config: tools.builtin.env.COPY (line 14){shown} is refused: its value holds the one \
+             `model.api_key` has, and no process inherits an own credential; to give bash the key \
+             knowingly, list COPY under `tools.builtin.credentials`"
+        )
+    };
+
+    for (entry, shown) in [
+        (format!("${{{other}}}"), format!(": \"${{{other}}}\"")),
+        (format!("x${{{other}}}y"), format!(": \"x${{{other}}}y\"")),
+        (key.to_owned(), String::new()),
+    ] {
+        let text = config(KEY, &entry, "");
+        refused(&with(check, &text), &own(&shown));
+        refused(&with(run, &text), &own(&shown));
+    }
+    let credentials = format!("    credentials:\n      GH: ${{{github}}}\n");
+    let given = format!(
+        "config: tools.builtin.env.COPY (line 14): \"${{{gh_copy}}}\" is refused: its value holds \
+         the one `tools.builtin.credentials.GH` has (line 16); list COPY there instead, as COPY: \
+         ${{{gh_copy}}}"
+    );
+    let text = config(KEY, &format!("${{{gh_copy}}}"), &credentials);
+    refused(&with(check, &text), &given);
+    refused(&with(run, &text), &given);
+    refused(
+        &with(check, &config(KEY, token, &credentials)),
+        "config: tools.builtin.env.COPY (line 14) is refused: its value holds the one \
+         `tools.builtin.credentials.GH` has (line 16); list COPY there instead",
+    );
+    assert!(!lab.at("transcript.json").exists(), "a run started");
+
+    let text = config(KEY, &format!("${{{benign}}}"), "");
+    passed(
+        &with(check, &text),
+        &format!(
+            "own:       {KEY} (line 4) -> model.api_key, or {other}, which holds it; no process \
+             inherits it\n\
+             given:     none\n\
+             env:       COPY (line 14) reaches bash uncut; if it's a credential, move it under \
+             tools.builtin.credentials\n\
+             inherited: <inherited>, as set; BAGGAGE, TRACEPARENT, TRACESTATE, its tool span's\n\
+             {NOTHING_NAMED}"
+        ),
+        "1 tool",
+    );
+    let printed = with(run, &text);
+    assert_eq!(printed.code, Some(0), "{printed:?}");
+    let transcript = json_of(&lab.at("transcript.json"));
+    let shown: String = transcript["turns"][0]["tool_calls"][0]["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(shown, "COPY=benign-0123456789abcdef\nexit code: 0");
+
+    let short_key = with(check, &config(short, &format!("${{{short_copy}}}"), ""));
+    assert_eq!(short_key.code, Some(0), "{short_key:?}");
+    assert!(
+        line_of(&short_key, "env:").starts_with("env:       COPY (line 14) reaches bash uncut"),
+        "{short_key:?}"
+    );
+}
+
 /// W66: lablet's own key listed under `credentials` passes, with a warning
 /// that `bash` has it, and `own:` says who gets it.
 #[test]

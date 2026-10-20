@@ -363,6 +363,193 @@ fn an_env_entry_that_names_a_credential_or_its_own_variable_is_refused() {
     passes(&renamed, base(&["PATH", "GITHUB_TOKEN"]));
 }
 
+/// A key as long as a key is, with one `-` percent-encoded.
+const ESCAPED_KEY: &str = "sk%2Dant-0123456789abcdef0123456789";
+
+/// A token as long as a token is, given to `bash` in the tests below.
+const TOKEN: &str = "ghp_0123456789abcdef";
+
+/// A password as long as one is, in a URL's user information below.
+const GW_PASSWORD: &str = "pw-0123456789abcdef";
+
+/// A header's token, in the tests below.
+const OTLP_TOKEN: &str = "otlp-0123456789abcdef";
+
+/// A config of the fake provider with `bash`, its key filled from `key`, one
+/// `env` entry `COPY` written as `env`, and `more` after it, each
+/// `${VAR}` filled from a table that holds the key, the token, the password
+/// and the header's token each under two names, a value no credential
+/// holds, and a value under the cut's floor under two names.
+fn with_env_value(
+    scratch: &lablet_test_support::Scratch,
+    key: &str,
+    env: &str,
+    more: &str,
+) -> Config {
+    let script = scratch.write(
+        "script.yaml",
+        "- response: { content: [{ text: Done. }], finish: end_turn }\n",
+    );
+    scratch.create_dir("work");
+    filled(
+        &format!(
+            "model: {{ provider: fake, script: '{}', api_key: '${{{key}}}' }}\nprompt: {{ system: Hi. }}\ntools:\n  builtin:\n    root: '{}'\n    enabled: [bash]\n    env: {{ COPY: {env} }}\n{more}",
+            script.display(),
+            scratch.at("work").display()
+        ),
+        &[
+            ("ANTHROPIC_API_KEY", KEY),
+            ("OTHER", KEY),
+            ("ESCAPED", ESCAPED_KEY),
+            ("GITHUB_TOKEN", TOKEN),
+            ("GH_COPY", TOKEN),
+            ("OTLP_TOKEN", OTLP_TOKEN),
+            ("HEADER_COPY", OTLP_TOKEN),
+            ("GW_USER", "gw-user"),
+            ("GW_PASS", GW_PASSWORD),
+            ("PASS_COPY", GW_PASSWORD),
+            ("SOMETHING_ELSE", "benign-0123456789abcdef"),
+            ("SHORT", "sk-short-012"),
+            ("SHORT_COPY", "sk-short-012"),
+        ],
+    )
+}
+
+/// An `env` entry whose filled value holds an own value is refused by the
+/// field whose value it holds, with nothing of the value shown: whether
+/// another variable gave it, whole, within a text, percent-encoded or as a
+/// default, or the file wrote it out, and for the key, a header's value and
+/// a URL's user information alike.
+#[test]
+fn an_env_entry_whose_value_holds_an_own_value_is_refused_by_the_field() {
+    let scratch = lablet_test_support::Scratch::new("prepare-env-own-value");
+    let with = |env: &str, more: &str| with_env_value(&scratch, "ANTHROPIC_API_KEY", env, more);
+    let own = |shown: &str| {
+        format!(
+            "tools.builtin.env.COPY (line 7){shown} is refused: its value holds the one \
+             `model.api_key` has, and no process inherits an own credential; to give bash the \
+             key knowingly, list COPY under `tools.builtin.credentials`"
+        )
+    };
+
+    assert_eq!(
+        refused(&with("'${OTHER}'", ""), base(&["PATH"])),
+        own(": \"${OTHER}\"")
+    );
+    assert_eq!(
+        refused(&with("'x${OTHER}y'", ""), base(&["PATH"])),
+        own(": \"x${OTHER}y\"")
+    );
+    assert_eq!(
+        refused(&with("'${ESCAPED}'", ""), base(&["PATH"])),
+        own(": \"${ESCAPED}\"")
+    );
+    let literal = refused(&with(&format!("'{KEY}'"), ""), base(&["PATH"]));
+    assert_eq!(literal, own(""));
+    assert!(!literal.contains(KEY));
+    // A default that holds the key is written text, and isn't shown either.
+    let default = refused(
+        &with(&format!("'${{NOT_SET:-{KEY}}}'"), ""),
+        base(&["PATH"]),
+    );
+    assert_eq!(default, own(""));
+    assert!(!default.contains(KEY));
+    // A default that holds the key percent-encoded holds it as surely, and
+    // the written text shows it as it does the key.
+    let encoded_default = refused(
+        &with(&format!("'${{NOT_SET:-{ESCAPED_KEY}}}'"), ""),
+        base(&["PATH"]),
+    );
+    assert_eq!(encoded_default, own(""));
+    assert!(!encoded_default.contains(ESCAPED_KEY));
+
+    let header = refused(
+        &with(
+            "'Bearer ${HEADER_COPY}'",
+            "telemetry: { otlp: { headers: { Authorization: 'Bearer ${OTLP_TOKEN}' } } }\n",
+        ),
+        base(&["PATH"]),
+    );
+    assert_eq!(
+        header,
+        "tools.builtin.env.COPY (line 7): \"Bearer ${HEADER_COPY}\" is refused: its value holds \
+         the one `telemetry.otlp.headers.Authorization` has, and no process inherits an own \
+         credential; to give bash the value knowingly, list COPY under `tools.builtin.credentials`"
+    );
+    assert!(!header.contains(OTLP_TOKEN));
+    let url = refused(
+        &with(
+            "'${PASS_COPY}'",
+            "telemetry: { otlp: { endpoint: 'https://${GW_USER}:${GW_PASS}@gw/v1' } }\n",
+        ),
+        base(&["PATH"]),
+    );
+    assert_eq!(
+        url,
+        "tools.builtin.env.COPY (line 7): \"${PASS_COPY}\" is refused: its value holds the one \
+         `telemetry.otlp.endpoint` has, and no process inherits an own credential; to give bash \
+         the value knowingly, list COPY under `tools.builtin.credentials`"
+    );
+    assert!(!url.contains(GW_PASSWORD));
+}
+
+/// An `env` entry whose filled value holds a given value is refused by the
+/// `credentials` entry whose value it holds and its line, with the fix
+/// where a variable gave it and nothing shown where the file wrote it out.
+/// A value no credential holds passes, and one under the cut's floor isn't
+/// matched.
+#[test]
+fn an_env_entry_whose_value_holds_a_given_value_is_refused_and_one_holding_none_passes() {
+    let scratch = lablet_test_support::Scratch::new("prepare-env-given-value");
+    let credentials = "    credentials: { GH: '${GITHUB_TOKEN}' }\n";
+
+    let given = refused(
+        &with_env_value(&scratch, "ANTHROPIC_API_KEY", "'${GH_COPY}'", credentials),
+        base(&["PATH"]),
+    );
+    assert_eq!(
+        given,
+        "tools.builtin.env.COPY (line 7): \"${GH_COPY}\" is refused: its value holds the one \
+         `tools.builtin.credentials.GH` has (line 8); list COPY there instead, as COPY: ${GH_COPY}"
+    );
+    let literal = refused(
+        &with_env_value(
+            &scratch,
+            "ANTHROPIC_API_KEY",
+            &format!("'{TOKEN}'"),
+            credentials,
+        ),
+        base(&["PATH"]),
+    );
+    assert_eq!(
+        literal,
+        "tools.builtin.env.COPY (line 7) is refused: its value holds the one \
+         `tools.builtin.credentials.GH` has (line 8); list COPY there instead"
+    );
+    assert!(!literal.contains(TOKEN));
+    // A default that holds the token came from no variable, so the fix
+    // names none.
+    let default = refused(
+        &with_env_value(
+            &scratch,
+            "ANTHROPIC_API_KEY",
+            &format!("'${{NOT_SET:-{TOKEN}}}'"),
+            credentials,
+        ),
+        base(&["PATH"]),
+    );
+    assert_eq!(default, literal);
+
+    passes(
+        &with_env_value(&scratch, "ANTHROPIC_API_KEY", "'${SOMETHING_ELSE}'", ""),
+        base(&["PATH"]),
+    );
+    passes(
+        &with_env_value(&scratch, "SHORT", "'${SHORT_COPY}'", ""),
+        base(&["PATH"]),
+    );
+}
+
 /// R50: `bash` needs an environment handed in, and the file tools don't.
 #[test]
 fn bash_is_refused_without_an_environment_handed_in_and_the_file_tools_are_not() {
@@ -902,9 +1089,7 @@ fn a_url_whose_filled_user_information_does_not_parse_is_refused_unshown() {
 
 /// W66 by value: a `credentials` entry filled from another variable that
 /// holds an own credential's value gives `bash` that value as surely as
-/// the same variable would, so it's warned of and `own:` says who gets it;
-/// an `env` entry holding it reaches `bash` cut, and isn't said to be
-/// uncut.
+/// the same variable would, so it's warned of and `own:` says who gets it.
 #[test]
 fn a_copy_of_an_own_credential_given_to_bash_is_warned_of_and_named() {
     let scratch = lablet_test_support::Scratch::new("prepare-q5-copy");
@@ -915,11 +1100,11 @@ fn a_copy_of_an_own_credential_given_to_bash_is_warned_of_and_named() {
     );
     let config = filled(
         &format!(
-            "model: {{ provider: fake, script: '{}', api_key: '${{K}}' }}\nprompt: {{ system: Hi. }}\ntools:\n  builtin:\n    root: '{}'\n    enabled: [bash]\n    credentials: {{ ALSO: '${{KEYCOPY}}' }}\n    env: {{ X: '${{XCOPY}}' }}\n",
+            "model: {{ provider: fake, script: '{}', api_key: '${{K}}' }}\nprompt: {{ system: Hi. }}\ntools:\n  builtin:\n    root: '{}'\n    enabled: [bash]\n    credentials: {{ ALSO: '${{KEYCOPY}}' }}\n",
             script.display(),
             scratch.at("work").display()
         ),
-        &[("K", KEY), ("KEYCOPY", KEY), ("XCOPY", KEY)],
+        &[("K", KEY), ("KEYCOPY", KEY)],
     );
 
     let warnings = warned(|| {
@@ -938,7 +1123,6 @@ fn a_copy_of_an_own_credential_given_to_bash_is_warned_of_and_named() {
         checked.own()[0].as_own(),
         "K (line 1) -> model.api_key; given to bash by credentials (line 7) as ALSO"
     );
-    assert_eq!(checked.env()[0].to_string(), "X (line 8) -> bash");
 }
 
 /// R62's fix is the form the header was written in: an override's is an
