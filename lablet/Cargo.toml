@@ -220,7 +220,7 @@ axum = { version = "=0.8.9", default-features = false, features = ["http1", "tok
 flate2 = "=1.1.10"
 # The in-process OTLP HTTP receiver's TLS listeners, the plain one and the one that asks for a
 # client certificate, on the rustls and the provider tonic's TLS already has, so one copy.
-rustls = { version = "=0.23.45", default-features = false, features = ["aws_lc_rs", "std"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["aws_lc_rs", "std"] }
 # Accepts the TLS connections of the in-process OTLP HTTP receiver; the line tonic uses.
 tokio-rustls = { version = "=0.26.6", default-features = false, features = ["aws_lc_rs"] }
 
