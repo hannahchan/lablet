@@ -695,8 +695,10 @@ fn a_command_reads_nothing_of_lablets_environment_through_the_process_table() {
     // refused apart from the flag.
     let listed = body("ps");
     let shown = result_of(&transcript, 1);
+    // Everything ps wrote went to the sink, so the model's result is the
+    // exit line alone.
     assert!(
-        shown.ends_with("\nexit code: 0"),
+        shown.ends_with("exit code: 0"),
         "the ps row failed: {shown}"
     );
     assert!(
