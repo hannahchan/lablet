@@ -639,7 +639,10 @@ fn a_command_reads_nothing_of_lablets_environment_through_the_process_table() {
     let lab = Lab::new("redteam-proc");
     let sink = Sink::start();
     let environ = sink.send("environ", "cat /proc/$PPID/environ | tr '\\0' '\\n'", "");
-    let ps = sink.send("ps", "ps eww $PPID", "");
+    // ps's own exit goes to the sink with its output, so the shell's exit
+    // stays 0 and a ps that isn't there or can't read the process says so
+    // in the body rather than failing the row.
+    let ps = sink.send("ps", "ps eww $PPID 2>&1; echo \"ps-exit:$?\"", "");
     let script = json!([
         calls(&[call("c1", "bash", &json!({ "command": environ }))]),
         calls(&[call("c2", "bash", &json!({ "command": ps }))]),
@@ -686,15 +689,26 @@ fn a_command_reads_nothing_of_lablets_environment_through_the_process_table() {
     );
 
     // ps reads the same file, so the line holds the command and no
-    // NAME=value text of lablet's; the command line is there, so a missing
-    // ps isn't mistaken for the flag.
+    // NAME=value text of lablet's. The row's point is what the line holds,
+    // not that ps ran: where ps lists the process, lablet's command line
+    // is there, and the exit it reports tells a ps that isn't there or
+    // refused apart from the flag.
     let listed = body("ps");
     let shown = result_of(&transcript, 1);
-    assert!(shown.ends_with("\nexit code: 0"), "ps failed");
     assert!(
-        listed.contains(CONFIG),
-        "ps didn't list lablet's command line"
+        shown.ends_with("\nexit code: 0"),
+        "the ps row failed: {shown}"
     );
+    assert!(
+        listed.contains("ps-exit:"),
+        "ps's exit didn't reach the sink: {listed}"
+    );
+    if listed.contains("ps-exit:0") {
+        assert!(
+            listed.contains(CONFIG),
+            "ps listed the process without lablet's command line: {listed}"
+        );
+    }
     for (name, text) in [("the sink", &listed), ("the model", &shown)] {
         assert!(
             !text.contains("ANTHROPIC_API_KEY="),
