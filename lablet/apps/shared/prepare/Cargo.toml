@@ -15,6 +15,7 @@ humantime.workspace = true
 lablet-config.workspace = true
 lablet-model.workspace = true
 lablet-policy.workspace = true
+lablet-provider-anthropic.workspace = true
 lablet-provider-fake.workspace = true
 lablet-run.workspace = true
 lablet-secrets.workspace = true

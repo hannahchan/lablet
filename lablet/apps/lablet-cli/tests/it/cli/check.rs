@@ -1673,3 +1673,107 @@ fn the_telemetry_line_names_the_file_the_endpoint_and_a_compression_variable_the
     );
     assert!(!lab.at("out.jsonl").exists(), "a check writes no telemetry");
 }
+
+/// What a base URL is, as the Anthropic target's refusal says it.
+const BASE_URL_SHAPE: &str = "a base URL names a scheme, a host, an optional port and a path, as \
+                              https://gateway.example/anthropic does, and has no query or fragment";
+
+/// The check builds the Anthropic target, so `check` and `run` alike refuse
+/// a key a header can't carry under `model.api_key` with nothing of it
+/// shown, a base URL with a query with nothing of it shown, since a query
+/// may hold a credential, and a base URL a variable gives with a query
+/// naming the variable and nothing it holds.
+#[test]
+fn a_key_a_header_cannot_carry_and_a_base_url_with_a_query_are_refused_by_check_and_run_unshown() {
+    let lab = Lab::new("check-anthropic-target");
+    let gateway = "LABLET_TEST_GW";
+    let anthropic =
+        |more: &str| format!("model:\n  api_key: ${{{KEY}}}\n{more}prompt:\n  system: Hi.\n");
+    let with = |args: &[&str], text: &str, env: &[(&str, &str)]| {
+        lab.write("lablet.yaml", text);
+        let mut command = lab.lablet(&[args, &["--config", "lablet.yaml"][..]].concat());
+        command
+            .env(KEY, "placeholder")
+            .env_remove(gateway)
+            .envs(env.iter().copied());
+        ran(command, "")
+    };
+
+    for args in [&["check"][..], &["run", "--prompt", PROMPT][..]] {
+        let broken = with(
+            args,
+            &anthropic(""),
+            &[(KEY, "sk-ant-0123456789abcdef\n0123456789")],
+        );
+        refused(
+            &broken,
+            "config: model.api_key (line 2) is refused: the key holds a character a header can't \
+             carry",
+        );
+        assert!(!broken.stderr.contains("0123456789"), "{broken:?}");
+
+        let query = with(
+            args,
+            &anthropic("  base_url: 'https://gw.example/anthropic?k=v'\n"),
+            &[],
+        );
+        refused(
+            &query,
+            &format!("config: model.base_url (line 3): its value is refused: {BASE_URL_SHAPE}"),
+        );
+        assert!(!query.stderr.contains("k=v"), "{query:?}");
+
+        let variable = with(
+            args,
+            &anthropic(&format!("  base_url: ${{{gateway}}}\n")),
+            &[(gateway, "https://gw.example/anthropic?k=v")],
+        );
+        refused(
+            &variable,
+            &format!(
+                "config: model.base_url (line 3): \"${{{gateway}}}\" is refused: {BASE_URL_SHAPE}"
+            ),
+        );
+        assert!(!variable.stderr.contains("gw.example"), "{variable:?}");
+    }
+}
+
+/// The anthropic starter passes `check` with its key variable set, which
+/// builds the target and its HTTP client and calls nothing, is refused for
+/// the key when the variable is unset (R16), and is refused when the
+/// variable holds what a header can't carry, with nothing of it shown, so
+/// the check reaches the target.
+#[test]
+fn the_anthropic_starter_passes_check_with_its_key_set_and_is_refused_without_one_or_with_a_broken_one()
+ {
+    let lab = Lab::new("check-anthropic-starter");
+    let init = lab.run(&["init", "--provider", "anthropic"]);
+    assert_eq!(init.code, Some(0), "{init:?}");
+    let check = |key: Option<&str>| {
+        let mut command = lab.lablet(&["check", "--config", "lablet.yaml"]);
+        if let Some(key) = key {
+            command.env("ANTHROPIC_API_KEY", key);
+        }
+        ran(command, "")
+    };
+
+    passed(
+        &check(Some("sk-ant-made-up-for-the-check-0123456789")),
+        &format!(
+            "own:       ANTHROPIC_API_KEY (line 8) -> model.api_key; no process inherits \
+             it\ngiven:     none\nenv:       none\n{NOTHING_NAMED}"
+        ),
+        "0 tools",
+    );
+    refused(
+        &check(None),
+        "config: model.api_key (line 8): \"${ANTHROPIC_API_KEY}\" is refused: \
+         `ANTHROPIC_API_KEY` isn't set, and the provider `anthropic` needs a key; set it",
+    );
+    let broken = check(Some("sk-ant-made-up-for-the-check-0123456789\n"));
+    refused(
+        &broken,
+        "config: model.api_key (line 8) is refused: the key holds a character a header can't carry",
+    );
+    assert!(!broken.stderr.contains("made-up"), "{broken:?}");
+}

@@ -25,6 +25,6 @@ mod testing;
 mod tests;
 
 pub use file::FileTarget;
-pub use network::{OtelBuildError, OtlpSettings, Signal, Transport, validate};
+pub use network::{Exporters, OtelBuildError, OtlpSettings, Signal, Transport, exporters};
 pub use resource::resource;
 pub use telemetry::Telemetry;

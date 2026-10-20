@@ -205,14 +205,14 @@ pub async fn quiet(config: Config) -> Result<Lablet, BuildError> {
 
 /// What `build` refuses `config` with, which `check` refuses it with too,
 /// but for a provider this lablet has no adapter for yet, which the check
-/// passes since it stops before the provider is selected.
+/// passes since it builds only the targets of the adapters that exist.
 pub async fn refusal(config: Config) -> BuildError {
     let builder = quietly(config);
     let checked = builder.check().await.map(drop);
     let built = builder.build().await.map(drop).unwrap_err();
     match &built {
         BuildError::Unsupported {
-            kind: Unsupported::Anthropic | Unsupported::Openai,
+            kind: Unsupported::Openai,
             ..
         } => assert_eq!(checked, Ok(()), "the check passes a provider: {built:?}"),
         _ => assert_eq!(checked, Err(built.clone()), "check and build refuse alike"),

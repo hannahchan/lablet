@@ -19,6 +19,7 @@ use lablet_tools_wiring::Built;
 use lablet_transcript_json::JsonTranscripts;
 use opentelemetry::Context;
 use opentelemetry::global::{BoxedSpan, BoxedTracer};
+use opentelemetry::propagation::TextMapPropagator;
 use opentelemetry::trace::{SpanBuilder, Tracer};
 
 use crate::lablet::Lablet;
@@ -100,10 +101,12 @@ impl Builder {
         self
     }
 
-    /// Checks the config whole, as [`Builder::build`] does, and stops
-    /// before the provider is selected, so the answer is the same for
-    /// every provider: one this lablet has no adapter for yet passes, and
-    /// no call reaches a provider.
+    /// Checks the config whole, as [`Builder::build`] does, and calls no
+    /// provider: it builds the target of each adapter that exists, the
+    /// Anthropic adapter's with its HTTP client, which loads the platform's
+    /// trust roots and opens no connection, so it refuses what building
+    /// the adapter refuses, and a provider this lablet has no adapter for
+    /// yet passes it.
     ///
     /// It checks every setting, that `model.api_key` is set when the
     /// provider needs a key and that every credential is a `${VAR}` or a
@@ -150,9 +153,10 @@ impl Builder {
             propagator,
         } = otel;
         let prepared = prepared(&config, environment)?;
-        let Built { tools, .. } = lablet_tools_wiring::tools(&prepared, propagator).await?;
+        let Built { tools, .. } =
+            lablet_tools_wiring::tools(&prepared, Arc::clone(&propagator)).await?;
         let wiring = prepared.wiring()?;
-        Ok(wire(wiring, tools, tracer, logger))
+        wire(wiring, tools, tracer, logger, propagator)
     }
 }
 
@@ -188,9 +192,11 @@ fn prepared(config: &Config, environment: Base) -> Result<Prepared, BuildError> 
 /// `Secret`, a key the provider needs that isn't set, a relative path in a
 /// config [`Config::relative_to`] wasn't called on, or a file the config
 /// names that can't be read, a script that's refused, or a root that isn't
-/// a directory, and for `bash` enabled with no process environment handed
-/// in. The config is checked whole before the provider is selected, so the
-/// answer doesn't depend on which adapters exist.
+/// a directory, for `bash` enabled with no process environment handed in,
+/// and for what building the provider's target refuses, a key a header
+/// can't carry, a base URL with a query or an HTTP client that can't be
+/// made. The config is checked whole before the provider's target is
+/// built, so every other refusal doesn't depend on which adapters exist.
 ///
 /// Returns [`BuildError::Unsupported`] for a config that selects an
 /// adapter this lablet doesn't have yet, or that states a setting only a
@@ -209,24 +215,36 @@ pub async fn build(config: Config, otel: Otel) -> Result<Lablet, BuildError> {
     Lablet::builder(config, otel).build().await
 }
 
-/// The `Lablet` a checked config comes to, which offers `tools` and whose
+/// The `Lablet` a checked config comes to, which offers `tools`, whose
 /// runs open their spans through `tracer` and emit their records through
-/// `logger`.
+/// `logger`, and whose provider injects each attempt's context through
+/// `propagator`, the host's.
+///
+/// # Errors
+///
+/// Returns [`BuildError::Unsupported`] for a provider there's no adapter
+/// for yet, which [`Prepared::wiring`] refused already.
 pub(crate) fn wire(
     wiring: Wiring,
     tools: Arc<ToolSet>,
     tracer: Arc<BoxedTracer>,
     logger: Arc<dyn Logger>,
-) -> Lablet {
+    propagator: Arc<dyn TextMapPropagator + Send + Sync>,
+) -> Result<Lablet, BuildError> {
     let Wiring {
         config,
         settings,
-        script,
+        provider,
         system,
         capture_content,
         secrets,
     } = wiring;
-    let (provider, played) = lablet_provider_wiring::fake(config.model.name.clone(), script);
+    let (provider, played) = lablet_provider_wiring::build(
+        provider,
+        config.model.name.clone(),
+        propagator,
+        capture_content,
+    )?;
     let clock: Arc<dyn Clock> = Arc::new(TokioClock);
     let tracer = SharedTracer(tracer);
 
@@ -269,7 +287,7 @@ pub(crate) fn wire(
             agent_version: crate::VERSION.to_owned(),
         },
     );
-    Lablet::new(runner, played, tools, config_digest)
+    Ok(Lablet::new(runner, played, tools, config_digest))
 }
 
 /// The one tracer a `Lablet` was built with, which the loop and the runner

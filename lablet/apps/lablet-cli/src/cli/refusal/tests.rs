@@ -28,8 +28,8 @@ fn a_build_that_failed_is_a_config_message_whatever_failed() {
             reason: "it holds no ${VAR}".to_owned(),
         }),
         BuildError::Unsupported {
-            kind: Unsupported::Anthropic,
-            phase: "7",
+            kind: Unsupported::Openai,
+            phase: "9",
         },
         BuildError::Tools {
             reason: "two tools are named bash".to_owned(),

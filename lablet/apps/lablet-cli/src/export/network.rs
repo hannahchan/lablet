@@ -332,14 +332,13 @@ pub(crate) fn accepted(transport: Transport, endpoint: &str) -> bool {
 
 /// Holds `settings` to what the exporters take, making none: each
 /// endpoint, parsed as its protocol's exporter parses it, and each header's
-/// name and value. What can only be made is left to the build: the HTTP
+/// name and value. What can only be made is left to [`exporters`]: the HTTP
 /// client, and the trust roots of a gRPC exporter that speaks TLS.
 ///
 /// # Errors
 ///
-/// Returns what [`TelemetryBuilder::build`](super::telemetry::TelemetryBuilder::build)
-/// returns for the same settings, so a check refuses what a build refuses,
-/// but for what only making the exporters finds: [`OtelBuildError::Tls`],
+/// Returns what [`exporters`] returns for the same settings but for what
+/// only making the exporters finds: [`OtelBuildError::Tls`],
 /// [`OtelBuildError::HttpClient`] and [`OtelBuildError::Exporter`].
 pub fn validate(settings: &OtlpSettings) -> Result<(), OtelBuildError> {
     for (signal, destination) in settings.destinations() {
@@ -376,8 +375,30 @@ fn headers_of(destination: &Destination) -> Result<Headers, OtelBuildError> {
     Ok(Headers { set, content_type })
 }
 
+/// The network exporters of one config, made: of spans and of log records,
+/// each when its signal is exported. Made once, by the check, and handed
+/// to the build, so a run makes them once and a check refuses what making
+/// them refuses.
+pub struct Exporters {
+    pub(super) spans: Option<SpanExporter>,
+    pub(super) records: Option<LogExporter>,
+}
+
+/// Which exporters were made, and nothing of them: an exporter's own `Debug`
+/// writes its endpoint.
+impl fmt::Debug for Exporters {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Exporters")
+            .field("spans", &self.spans.is_some())
+            .field("records", &self.records.is_some())
+            .finish()
+    }
+}
+
 /// The exporters `settings` describe, of spans and of log records, each
-/// when its signal is exported. They need a tokio runtime to be made in,
+/// when its signal is exported. Making them loads the trust roots and opens
+/// no connection: a gRPC channel connects at the first export, and an HTTP
+/// client at the first request. They need a tokio runtime to be made in,
 /// for a gRPC channel's worker.
 ///
 /// # Errors
@@ -385,13 +406,11 @@ fn headers_of(destination: &Destination) -> Result<Headers, OtelBuildError> {
 /// Returns an [`OtelBuildError`] when an endpoint or a header is refused,
 /// TLS to a collector can't be set up, or an exporter or its client can't
 /// be made.
-pub(crate) fn exporters(
-    settings: &OtlpSettings,
-) -> Result<(Option<SpanExporter>, Option<LogExporter>), OtelBuildError> {
+pub fn exporters(settings: &OtlpSettings) -> Result<Exporters, OtelBuildError> {
     validate(settings)?;
     let spans = settings.traces.as_ref().map(span_exporter).transpose()?;
     let records = settings.logs.as_ref().map(log_exporter).transpose()?;
-    Ok((spans, records))
+    Ok(Exporters { spans, records })
 }
 
 /// The protocol the HTTP exporter is told, which is always told: with

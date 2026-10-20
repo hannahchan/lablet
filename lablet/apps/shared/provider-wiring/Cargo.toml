@@ -11,5 +11,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+lablet-prepare.workspace = true
+lablet-provider-anthropic.workspace = true
 lablet-provider-fake.workspace = true
 lablet-run.workspace = true
+opentelemetry.workspace = true

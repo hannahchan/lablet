@@ -62,9 +62,9 @@
 //! [`Builder::with_process_environment`], which a config that enables
 //! `bash` needs, less every variable that holds one of lablet's
 //! credentials. [`Builder::check`] checks a config as [`Builder::build`]
-//! does, stops before the provider is selected, and reports the credentials
-//! and what `bash` inherits. A run stops early when the [`CancelHandle`]
-//! its request was given is fired.
+//! does, builds each adapter's target that exists and calls no provider,
+//! and reports the credentials and what `bash` inherits. A run stops early
+//! when the [`CancelHandle`] its request was given is fired.
 //!
 //! A `Lablet` runs on the OpenTelemetry its host provides, and configures
 //! no SDK of its own. The host hands in one [`Otel`] of three pieces: the

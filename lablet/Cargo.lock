@@ -1176,6 +1176,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]
@@ -1296,6 +1297,7 @@ dependencies = [
  "lablet-config",
  "lablet-model",
  "lablet-policy",
+ "lablet-provider-anthropic",
  "lablet-provider-fake",
  "lablet-run",
  "lablet-secrets",
@@ -1355,8 +1357,11 @@ version = "0.1.0"
 name = "lablet-provider-wiring"
 version = "0.1.0"
 dependencies = [
+ "lablet-prepare",
+ "lablet-provider-anthropic",
  "lablet-provider-fake",
  "lablet-run",
+ "opentelemetry",
 ]
 
 [[package]]

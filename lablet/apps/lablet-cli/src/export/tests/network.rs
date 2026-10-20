@@ -20,7 +20,8 @@ use super::harness::{
     otlp_of, providers, run, scope,
 };
 use crate::export::network::EXPORTER_AGENT;
-use crate::export::{FileTarget, OtelBuildError, OtlpSettings, Signal, Telemetry, validate};
+use crate::export::network::validate;
+use crate::export::{FileTarget, OtelBuildError, OtlpSettings, Signal, Telemetry, exporters};
 
 /// The endpoint of `receiver` that `protocol` speaks to, as a config
 /// states it.
@@ -823,10 +824,12 @@ async fn the_grpc_exporter_trusts_the_roots_its_environment_names_with_a_scheme_
 }
 
 /// The child's side of the second test below, which does nothing unless
-/// that test started it: with no roots to trust, the check of each
-/// endpoint takes it, since it loads none, and the build makes the
-/// exporters of one that's spoken to without TLS and refuses the rest for
-/// TLS, without the endpoint in the message.
+/// that test started it: with no roots to trust, validating each endpoint
+/// takes it, since validating loads none, while making its exporters, which
+/// the check does as the build does, makes those of one that's spoken to
+/// without TLS and refuses the rest for TLS, without the endpoint in the
+/// message; and the command line's check of a config at each endpoint
+/// refuses what the build refuses, under the endpoint as the file wrote it.
 #[test]
 fn a_child_process_with_no_roots_to_trust_makes_no_exporter_that_speaks_tls() {
     #[expect(
@@ -837,40 +840,65 @@ fn a_child_process_with_no_roots_to_trust_makes_no_exporter_that_speaks_tls() {
         return;
     };
     let cases = cases.to_str().unwrap().to_owned();
+    let scratch = Scratch::new("network-no-roots-child");
+    let script = scratch.write(
+        "script.yaml",
+        "- response:\n    content:\n      - text: Done.\n    finish: end_turn\n",
+    );
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
         for case in cases.split(',') {
             let (becomes, endpoint) = case.split_once(' ').unwrap();
             let settings = otlp_of(&to("grpc", endpoint, None));
             assert_eq!(validate(&settings), Ok(()), "{case}");
+            let config = lablet_config::Config::from_str(
+                &format!(
+                    "model: {{ provider: fake, script: '{}' }}\nprompt: {{ system: Hi. }}\n{}",
+                    script.display(),
+                    to("grpc", endpoint, None)
+                ),
+                lablet_config::Format::Yaml,
+            )
+            .unwrap();
 
+            let made = exporters(&settings);
             let built = Telemetry::builder(scope()).otlp(settings).build();
+            let checked = crate::compose::check(&config, Vec::new()).await.map(drop);
 
             if becomes == "made" {
+                made.unwrap();
                 built.unwrap().shutdown().await.unwrap();
+                checked.unwrap();
                 continue;
             }
-            let refused = built.err().unwrap();
+            let tls = OtelBuildError::Tls {
+                signal: Signal::Traces,
+                reason: "transport error: no native certs found".to_owned(),
+            };
+            assert_eq!(made.err().unwrap(), tls, "{case}");
+            assert_eq!(built.err().unwrap(), tls, "{case}");
+            assert!(!tls.to_string().contains("127.0.0.1"), "{tls}");
             assert_eq!(
-                refused,
-                OtelBuildError::Tls {
-                    signal: Signal::Traces,
-                    reason: "transport error: no native certs found".to_owned(),
-                },
+                checked.unwrap_err().to_string(),
+                format!(
+                    "telemetry.otlp.endpoint (line 3): \"{endpoint}\" is refused: TLS to the \
+                     collector couldn't be set up: transport error: no native certs found"
+                ),
                 "{case}"
             );
-            assert!(!refused.to_string().contains("127.0.0.1"), "{refused}");
         }
     });
 }
 
-/// Trust roots that can't be loaded fail the build, as TLS rather than as
-/// the endpoint, and a check, which makes no exporter, takes the endpoint.
-/// An endpoint without a scheme is `https://`, so it's refused too, and one
+/// Trust roots that can't be loaded fail the check as they fail the build,
+/// as TLS rather than as the endpoint, since the check makes the exporters
+/// too, and making one loads the roots and opens no connection. An
+/// endpoint without a scheme is `https://`, so it's refused too, and one
 /// written `http://` is spoken to without TLS, so no roots are loaded for
-/// it.
+/// it and both take it.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_grpc_endpoint_over_tls_with_no_roots_to_trust_is_refused_for_tls_by_the_build_alone() {
+async fn a_grpc_endpoint_over_tls_with_no_roots_to_trust_is_refused_for_tls_by_check_and_build_alike()
+ {
     let scratch = Scratch::new("network-no-roots");
     let roots = scratch.at("roots.pem");
     std::fs::write(&roots, "").unwrap();

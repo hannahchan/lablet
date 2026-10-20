@@ -654,7 +654,9 @@ fn a_builder_prints_what_it_was_given() {
         "{shown}"
     );
     assert!(
-        shown.contains("file: Some(Stderr), otlp: None, sdk: Sdk { sampling: Sampling {"),
+        shown.contains(
+            "file: Some(Stderr), otlp: None, network: None, sdk: Sdk { sampling: Sampling {"
+        ),
         "{shown}"
     );
     assert!(shown.ends_with(" .. }"), "{shown}");

@@ -6,8 +6,10 @@
 //! the environment a run's processes start from is handed in, and in
 //! between the command line's root settles what it reads of the telemetry
 //! and hands in what the rest of the check needs of it. It constructs no
-//! adapter: each root builds its tools and its provider through the wiring
-//! kernels, and connects what they return itself.
+//! adapter: it builds the target of the provider the config selects, where
+//! there's an adapter, so a check refuses what the target's construction
+//! refuses, and each root builds its tools and its provider through the
+//! wiring kernels and connects what they return itself.
 
 mod root;
 mod settings;
@@ -24,6 +26,7 @@ use lablet_config::{
     writes_an_unread_at, written_information,
 };
 use lablet_model::{RunOutcome, StopReason, ToolSpec};
+use lablet_provider_anthropic::{Key, Target, TargetError};
 use lablet_provider_fake::{Script, ScriptFormat, ScriptSource};
 use lablet_run::FilterList;
 use lablet_secrets::{self as secrets, Credential, Derived, Variables};
@@ -38,8 +41,6 @@ const TARGET: &str = "lablet::lablet";
 /// What a config may state that this lablet has no adapter for yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Unsupported {
-    /// `model.provider` is `anthropic`.
-    Anthropic,
     /// `model.provider` is `openai`.
     Openai,
     /// `tools.mcp` lists a server.
@@ -62,7 +63,6 @@ impl Unsupported {
     /// The phase of the build plan that delivers it.
     const fn phase(self) -> &'static str {
         match self {
-            Self::Anthropic => "7",
             Self::ContextMask => "7a",
             Self::McpServers | Self::MaxDescriptionChars => "8",
             Self::Openai => "9",
@@ -74,7 +74,6 @@ impl Unsupported {
 impl fmt::Display for Unsupported {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Anthropic => "`model.provider: anthropic`",
             Self::Openai => "`model.provider: openai`",
             Self::McpServers => "a server in `tools.mcp`",
             Self::Skills => "a skill in `prompt.skills`",
@@ -449,10 +448,13 @@ pub struct Prepared {
     base: Base,
 }
 
-/// The provider a checked config selects, with what was read for it, so a
-/// build reads no file its check didn't.
-enum Ready {
-    Anthropic,
+/// The provider a checked config selects, with what was read or built for
+/// it, so a build reads no file and makes no client its check didn't.
+pub enum Ready {
+    /// The Anthropic adapter's target: where it sends, with the key and the
+    /// HTTP client, made here so the check refuses what making them refuses.
+    Anthropic(Target),
+    /// The OpenAI provider, which has no adapter yet.
     Openai,
     /// The fake provider, and the script it plays.
     Fake(Script),
@@ -472,17 +474,19 @@ enum Ready {
 /// URL's user information written out, or that a variable gave it whole; a
 /// key the provider needs that isn't set; a `tools.builtin.env` entry that
 /// names a credential's variable, one whose value holds a credential's, or
-/// one `bash` inherits already; a `credentials` entry `env` sets too; `bash`
-/// with no environment handed in; what this lablet has no adapter for; a
-/// relative path in a config that no directory was given for; and a file
-/// the config names that can't be read.
+/// one `bash` inherits already; a `credentials` entry `env` sets too;
+/// `bash` with no environment handed in; what this lablet has no adapter
+/// for; a relative path in a config that no directory was given for; a file
+/// the config names that can't be read; and what building the provider's
+/// target refuses, a key a header can't carry, a base URL with a query or
+/// an HTTP client that can't be made.
 pub fn prepare(config: &Config, base: Base) -> Result<Settled, BuildError> {
     let refused = |refusal| BuildError::Config(config.refused(refusal));
     let settings = Settings::of(config).map_err(refused)?;
     let variables = secrets::variables(config);
     let derived = secrets::derived(config, None);
     credentials_are_variables(config)?;
-    key_is_set(config)?;
+    let key = key_is_set(config)?;
     env_is_no_credential(config, &variables, base.as_deref())?;
     env_holds_no_credential(config, &derived)?;
     credential_variables_fill_their_fields(config, &variables)?;
@@ -497,7 +501,19 @@ pub fn prepare(config: &Config, base: Base) -> Result<Settled, BuildError> {
             .map_err(|error| refused(Refusal::invalid("prompt.system_file", error.to_string())))?,
     };
     let provider = match &settings.provider {
-        Selected::Anthropic => Ready::Anthropic,
+        // The target is made here, its HTTP client with it, so a check
+        // refuses what making them refuses; making the client loads the
+        // platform's trust roots and opens no connection. The key is the one
+        // `key_is_set` held to being set.
+        Selected::Anthropic => Ready::Anthropic(
+            Target::new(
+                &config.model.name,
+                Key(key.map_or("", Secret::expose_secret)),
+                config.model.base_url.as_deref(),
+                config.model.cache.unwrap_or(true),
+            )
+            .map_err(|error| target_refused(config, error))?,
+        ),
         Selected::Openai => Ready::Openai,
         Selected::Fake { script } => {
             // The script is read where it is and named as the config writes
@@ -606,8 +622,9 @@ pub struct Wiring {
     pub config: Config,
     /// What the loop and its adapters are built from.
     pub settings: Settings,
-    /// The fake provider's script, the one provider there's an adapter for.
-    pub script: Script,
+    /// The provider the config selects, with what the check read or built
+    /// for it, which `lablet-provider-wiring` builds the adapter from.
+    pub provider: Ready,
     /// The system prompt.
     pub system: String,
     /// Whether content reaches telemetry.
@@ -634,15 +651,13 @@ impl Prepared {
             secrets,
             base: _,
         } = self;
-        let script = match provider {
-            Ready::Fake(script) => script,
-            Ready::Anthropic => return Err(Unsupported::Anthropic.into()),
-            Ready::Openai => return Err(Unsupported::Openai.into()),
-        };
+        if let Ready::Openai = provider {
+            return Err(Unsupported::Openai.into());
+        }
         Ok(Wiring {
             config,
             settings,
-            script,
+            provider,
             system,
             capture_content,
             secrets,
@@ -659,6 +674,26 @@ fn refusal(config: &Config, key: &KeyPath, shown: Option<String>, reason: String
         value: shown,
         reason,
     })
+}
+
+/// The refusal of what the Anthropic target couldn't be made from, each
+/// under the setting it's of: the base URL as the config writes it, which
+/// is the `${VAR}` and never what it holds, and nothing of one holding a
+/// query; the key with nothing of its value; and the client under the
+/// provider, with the client's own reason, which holds no URL.
+fn target_refused(config: &Config, error: TargetError) -> BuildError {
+    match error {
+        TargetError::BaseUrl { reason } => {
+            BuildError::Config(config.refused(Refusal::invalid("model.base_url", reason)))
+        }
+        TargetError::Key { reason } => {
+            refusal_unshown(config, &KeyPath::of("model.api_key"), reason)
+        }
+        TargetError::Client { reason } => BuildError::Config(config.refused(Refusal::invalid(
+            "model.provider",
+            format!("the HTTP client for anthropic couldn't be made: {reason}"),
+        ))),
+    }
 }
 
 /// The refusal of the setting at `key` that shows nothing of its value.
@@ -1159,17 +1194,18 @@ fn suggested_variable(entry: &str) -> String {
 }
 
 /// Holds `model.api_key` to a key that's set, for a provider that needs
-/// one. Nothing of what it holds is kept, and the refusal names the
+/// one, and hands that key on for its target; `None` for a provider that
+/// needs none. Nothing of what it holds is kept, and the refusal names the
 /// variable as the config writes it.
-fn key_is_set(config: &Config) -> Result<(), BuildError> {
+fn key_is_set(config: &Config) -> Result<Option<&Secret>, BuildError> {
     if config.model.provider != Provider::Anthropic {
-        return Ok(());
+        return Ok(None);
     }
     let key = KeyPath::of("model.api_key");
     let fill = config.filled().at(&key);
     let needs = "the provider `anthropic` needs a key";
     match &config.model.api_key {
-        Some(secret) if !secret.expose_secret().trim().is_empty() => Ok(()),
+        Some(secret) if !secret.expose_secret().trim().is_empty() => Ok(Some(secret)),
         Some(_) => match fill.and_then(|fill| fill.names().next()) {
             Some(variable) => Err(refusal(
                 config,

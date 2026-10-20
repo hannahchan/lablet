@@ -14,7 +14,9 @@ use opentelemetry::InstrumentationScope;
 use opentelemetry_sdk::Resource;
 use secrecy::{ExposeSecret as _, SecretString};
 
-use crate::export::{self, FileTarget, OtelBuildError, OtlpSettings, Telemetry, Transport};
+use crate::export::{
+    self, Exporters, FileTarget, OtelBuildError, OtlpSettings, Telemetry, Transport,
+};
 use crate::otel_env::Sdk;
 use crate::otlp;
 
@@ -36,29 +38,35 @@ pub const COMPRESSION_VARIABLES: [&str; 3] = [
 pub struct Exports {
     /// Where the file exporter writes, when the run has one.
     pub target: Option<FileTarget>,
-    /// What the network exporter is built from, when the run has one.
+    /// What the network exporters were built from, when the run has them,
+    /// which `check`'s `telemetry:` line reads.
     pub otlp: Option<OtlpSettings>,
+    /// The network exporters, made, when the run has them.
+    network: Option<Exporters>,
     /// What every export describes itself with.
     pub resource: Resource,
 }
 
 /// The check gone on from `settled`, with the telemetry's settings read
-/// from the config, once, here, so a check and a build agree on what they
-/// come to: the check's end and what the telemetry is built from. What a
-/// client key's file holds is handed on to be cut from what a tool returns
-/// whenever the config states the key, endpoint or none.
+/// from the config, once, here, and the network exporters made from them,
+/// so a check and a build agree on what they come to: the check's end and
+/// what the telemetry is built from. What a client key's file holds is
+/// handed on to be cut from what a tool returns whenever the config states
+/// the key, endpoint or none. With a gRPC endpoint named it runs inside a
+/// tokio runtime, which the channel's worker needs.
 ///
 /// # Errors
 ///
 /// Returns the refusal of a client key's file that can't be read, whether
 /// or not an endpoint is named, of a TLS file that can't be loaded, and of
-/// what the network exporter would refuse but for what only making it
-/// finds (see `export::validate`).
+/// what making the network exporters refuses: an endpoint or a header the
+/// exporter doesn't accept, the platform's trust roots that can't be
+/// loaded and an HTTP client that can't be made.
 pub fn settle(settled: Settled) -> Result<(Prepared, Exports), BuildError> {
     let config = settled.config();
     let resource = export::resource(VERSION, config.telemetry.resource.pairs());
     let key = otlp::client_key(config)?;
-    let otlp = network(config, key.as_ref())?;
+    let (otlp, network) = network(config, key.as_ref())?;
     let target = file_target(config);
     let client_key = key.map(|key| Secret::new(key.expose_secret()));
     let prepared = settled.finish(lablet_prepare::Telemetry {
@@ -74,6 +82,7 @@ pub fn settle(settled: Settled) -> Result<(Prepared, Exports), BuildError> {
         Exports {
             target,
             otlp,
+            network,
             resource,
         },
     ))
@@ -84,17 +93,18 @@ impl Exports {
     /// with the specification's defaults stated on every builder: the
     /// sampler, parent-based always on, the span limits and the batch
     /// processors' settings, which the crates would otherwise read from the
-    /// environment.
+    /// environment. The network exporters are the ones [`settle`] made.
     ///
     /// # Errors
     ///
-    /// Returns what only making the network exporter finds: trust roots
-    /// that can't be loaded, or other TLS to the collector that can't be
-    /// set up, and an HTTP client that can't be made.
+    /// Returns what making the network exporters refuses, which the builder
+    /// may return and [`settle`] already refused for these, since it made
+    /// them: a build refuses nothing its check passed.
     pub fn telemetry(self) -> Result<Telemetry, OtelBuildError> {
         let Self {
             target,
-            otlp,
+            otlp: _,
+            network,
             resource,
         } = self;
         let scope = InstrumentationScope::builder(SCOPE)
@@ -107,8 +117,8 @@ impl Exports {
         if let Some(target) = target {
             telemetry = telemetry.file(target);
         }
-        if let Some(settings) = otlp {
-            telemetry = telemetry.otlp(settings);
+        if let Some(exporters) = network {
+            telemetry = telemetry.network(exporters);
         }
         telemetry.build()
     }
@@ -275,21 +285,24 @@ pub fn otlp_refused(config: &Config, error: OtelBuildError) -> BuildError {
     })
 }
 
-/// What the network exporters of `config` are built from, with each refusal
-/// shown as the file wrote it. What an exporter would refuse is refused
-/// here, so a check refuses what a build refuses but for what only making
-/// the exporter finds, trust roots that can't be loaded or other TLS that
-/// can't be set up, and the HTTP client (see `validate`); a check installs
-/// no exporter.
+/// What the network exporters of `config` are built from, and the exporters
+/// made from it, with each refusal shown as the file wrote it. The
+/// exporters are made here, by the check, so a check refuses what a build
+/// refuses, the platform's trust roots that can't be loaded and an HTTP
+/// client that can't be made among it: making an exporter loads the roots
+/// and opens no connection, since a gRPC channel connects at the first
+/// export and an HTTP client at the first request. A check installs them
+/// nowhere, and drops them.
 fn network(
     config: &Config,
     key: Option<&SecretString>,
-) -> Result<Option<OtlpSettings>, BuildError> {
+) -> Result<(Option<OtlpSettings>, Option<Exporters>), BuildError> {
     let otlp = otlp::settings(config, key)?;
-    if let Some(settings) = &otlp {
-        export::validate(settings).map_err(|error| otlp_refused(config, error))?;
-    }
-    Ok(otlp)
+    let exporters = otlp
+        .as_ref()
+        .map(|settings| export::exporters(settings).map_err(|error| otlp_refused(config, error)))
+        .transpose()?;
+    Ok((otlp, exporters))
 }
 
 #[cfg(test)]

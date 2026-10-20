@@ -5,7 +5,7 @@ use std::os::unix::fs::symlink;
 use lablet::{BuildError, Config, ConfigError, FilterList, Format, OwnFile, Place, Unsupported};
 use serde_json::{Value, json};
 
-use crate::harness::{ENDS, KEY, Lab, filled, read, read_filled, refusal, request};
+use crate::harness::{ENDS, KEY, Lab, filled, quietly, read, read_filled, refusal, request};
 
 /// The variable the key is filled from in the configs below that need one.
 const KEY_VARIABLE: &str = "LABLET_TEST_KEY";
@@ -297,17 +297,9 @@ async fn a_variable_no_command_can_start_with_is_refused_by_its_name() {
 /// What each later phase adds, as a config states it.
 fn later(scratch: &Lab) -> Vec<(Value, Unsupported, &'static str, &'static str)> {
     let fake = |more: Value| scratch.tree(ENDS, more);
-    let mut anthropic = fake(json!({}));
-    anthropic["model"] = json!({ "api_key": format!("${{{KEY_VARIABLE}}}") });
     let mut openai = fake(json!({}));
     openai["model"] = json!({ "provider": "openai", "name": "gpt-5" });
     vec![
-        (
-            anthropic,
-            Unsupported::Anthropic,
-            "7",
-            "`model.provider: anthropic`",
-        ),
         (openai, Unsupported::Openai, "9", "`model.provider: openai`"),
         (
             fake(json!({ "tools": { "mcp": [
@@ -457,8 +449,8 @@ async fn a_config_is_checked_whole_before_any_adapter_is_selected() {
 }
 
 /// R16: a provider that needs a key needs its variable set, and the
-/// refusal names the variable; set, the key passes the check before the
-/// adapter is selected.
+/// refusal names the variable; set, the key passes the check and the build,
+/// which call no provider.
 #[tokio::test]
 async fn a_provider_that_needs_a_key_needs_the_variable_that_holds_it_to_be_set() {
     let anthropic = |variable: &str, held: &[(&str, &str)]| {
@@ -490,11 +482,10 @@ async fn a_provider_that_needs_a_key_needs_the_variable_that_holds_it_to_be_set(
              empty, and the provider `anthropic` needs a key; set it"
         )
     );
-    assert_eq!(
-        refusal(anthropic(KEY_VARIABLE, &HELD)).await,
-        BuildError::from(Unsupported::Anthropic),
-        "the key is checked before the adapter is selected"
-    );
+    let set = anthropic(KEY_VARIABLE, &HELD);
+    let builder = quietly(set);
+    builder.check().await.unwrap();
+    builder.build().await.unwrap();
 }
 
 /// R17 and R37: a key or a credential written out is refused by the check

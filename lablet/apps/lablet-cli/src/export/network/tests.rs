@@ -266,7 +266,7 @@ async fn the_exporters_of_every_protocol_are_made_from_an_endpoint_nothing_liste
             logs: Some(destination(transport, "http://127.0.0.1:1", &[])),
         };
 
-        let (spans, records) = exporters(&settings).unwrap();
+        let Exporters { spans, records } = exporters(&settings).unwrap();
 
         assert!(spans.is_some() && records.is_some(), "{transport:?}");
     }
@@ -274,7 +274,7 @@ async fn the_exporters_of_every_protocol_are_made_from_an_endpoint_nothing_liste
 
 #[tokio::test]
 async fn a_signal_with_no_destination_has_no_exporter() {
-    let (spans, records) = exporters(&spans_to(destination(
+    let Exporters { spans, records } = exporters(&spans_to(destination(
         Transport::Grpc,
         "http://127.0.0.1:1",
         &[],

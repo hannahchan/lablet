@@ -122,10 +122,9 @@ pub fn request() -> RunRequest {
 }
 
 /// What the command line's composition refuses `config` with, which its
-/// check refuses it with too. Two refusals are a build's alone: a provider
+/// check refuses it with too. One refusal is a build's alone: a provider
 /// this lablet has no adapter for yet, which the check passes since it
-/// stops before the provider is selected, and what only making the network
-/// exporter finds, which no config given here reaches.
+/// builds only the targets of the adapters that exist.
 pub async fn refusal(config: Config) -> BuildError {
     let checked = compose::check(&config, lablet_cli::input::process_environment())
         .await
@@ -136,7 +135,7 @@ pub async fn refusal(config: Config) -> BuildError {
         .unwrap_err();
     match &built {
         BuildError::Unsupported {
-            kind: Unsupported::Anthropic | Unsupported::Openai,
+            kind: Unsupported::Openai,
             ..
         } => assert_eq!(checked, Ok(()), "the check passes a provider: {built:?}"),
         _ => assert_eq!(checked, Err(built.clone()), "check and build refuse alike"),

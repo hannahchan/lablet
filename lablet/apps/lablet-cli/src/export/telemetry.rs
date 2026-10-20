@@ -15,7 +15,7 @@ use opentelemetry_sdk::logs::{BatchLogProcessor, LogExporter, SdkLoggerProvider}
 use opentelemetry_sdk::trace::{BatchSpanProcessor, SdkTracerProvider, SpanExporter};
 
 use super::file::{FileLogExporter, FileSpanExporter, FileTarget, Sink};
-use super::network::{OtelBuildError, OtlpSettings, exporters};
+use super::network::{Exporters, OtelBuildError, OtlpSettings, exporters};
 use crate::otel_env::Sdk;
 
 /// What a flush or a shutdown couldn't export, as the SDK said it. Nothing
@@ -49,6 +49,7 @@ pub struct TelemetryBuilder {
     resource: Resource,
     file: Option<FileTarget>,
     otlp: Option<OtlpSettings>,
+    network: Option<Exporters>,
     sdk: Sdk,
     #[cfg(test)]
     hooked: Vec<Hooked>,
@@ -61,6 +62,7 @@ impl std::fmt::Debug for TelemetryBuilder {
             .field("resource", &self.resource)
             .field("file", &self.file)
             .field("otlp", &self.otlp)
+            .field("network", &self.network)
             .field("sdk", &self.sdk)
             .finish_non_exhaustive()
     }
@@ -88,6 +90,14 @@ impl TelemetryBuilder {
     #[must_use]
     pub fn otlp(mut self, settings: OtlpSettings) -> Self {
         self.otlp = Some(settings);
+        self
+    }
+
+    /// Exports through `exporters`, network exporters made already, by the
+    /// check that the build goes on from, so the build makes none again.
+    #[must_use]
+    pub fn network(mut self, exporters: Exporters) -> Self {
+        self.network = Some(exporters);
         self
     }
 
@@ -122,16 +132,18 @@ impl TelemetryBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an [`OtelBuildError`] when the network exporters can't be
-    /// made: an endpoint isn't one the exporter accepts, a header isn't one
-    /// a header may have, TLS to an endpoint can't be set up, or a client
-    /// can't be made.
+    /// Returns an [`OtelBuildError`] when the network exporters of the
+    /// settings handed in can't be made: an endpoint isn't one the exporter
+    /// accepts, a header isn't one a header may have, TLS to an endpoint
+    /// can't be set up, or a client can't be made. Exporters handed in made
+    /// refuse nothing here.
     pub fn build(self) -> Result<Telemetry, OtelBuildError> {
         let Self {
             scope,
             resource,
             file,
             otlp,
+            network,
             sdk,
             #[cfg(test)]
             hooked,
@@ -147,8 +159,8 @@ impl TelemetryBuilder {
             span_processors.push(span_processor(&sdk, FileSpanExporter::new(sink.clone())));
             log_processors.push(log_processor(&sdk, FileLogExporter::new(sink.clone())));
         }
-        if let Some(settings) = otlp {
-            let (spans, records) = exporters(&settings)?;
+        let made = otlp.map(|settings| exporters(&settings)).transpose()?;
+        for Exporters { spans, records } in made.into_iter().chain(network) {
             span_processors.extend(spans.map(|spans| span_processor(&sdk, spans)));
             log_processors.extend(records.map(|records| log_processor(&sdk, records)));
         }
@@ -242,6 +254,7 @@ impl Telemetry {
             resource: Resource::builder_empty().build(),
             file: None,
             otlp: None,
+            network: None,
             sdk: Sdk::default(),
             #[cfg(test)]
             hooked: Vec::new(),

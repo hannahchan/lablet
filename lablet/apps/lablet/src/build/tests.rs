@@ -289,9 +289,8 @@ async fn a_config_that_states_only_what_it_must_resolves_to_every_default_of_the
 /// `telemetry.otlp.endpoint` is refused unshown, by line or as an
 /// override; one set in code, after the text wrote none, `null` or a
 /// `${VAR}` that came out empty, is own, and cut, since a host has no
-/// other way to give it. A build of the
-/// gateway's config goes on to the refusal of the provider this lablet has
-/// no adapter for yet, past every rule of the URL.
+/// other way to give it. A build of the gateway's config goes on past every
+/// rule of the URL and makes its target.
 #[tokio::test]
 async fn a_url_s_password_written_out_is_refused_and_one_set_in_code_is_own() {
     let scratch = lablet_test_support::Scratch::new("library-url-password");
@@ -378,11 +377,10 @@ async fn a_url_s_password_written_out_is_refused_and_one_set_in_code_is_own() {
                 "{written}"
             );
             assert!(!format!("{checked:?}").contains(password));
-            match Lablet::builder(config, Otel::noop()).build().await {
-                Ok(_) => {}
-                Err(BuildError::Unsupported { .. }) if key == "model.base_url" => {}
-                Err(error) => panic!("{key}{written}: {error}"),
-            }
+            Lablet::builder(config, Otel::noop())
+                .build()
+                .await
+                .unwrap_or_else(|error| panic!("{key}{written}: {error}"));
         }
     }
 }

@@ -8,8 +8,9 @@ use lablet::{
 use serde_json::{Value, json};
 
 use crate::harness::{
-    ENDS, KEY, Lab, filled, quietly, read, read_filled, refusal, request, with_key,
+    ENDS, KEY, Lab, Traced, filled, quietly, read, read_filled, refusal, request, with_key,
 };
+use crate::key;
 
 /// A variable nothing sets.
 const UNSET: &str = "LABLET_TEST_A_VARIABLE_NOTHING_SETS";
@@ -28,25 +29,163 @@ async fn check(config: &Config) -> Result<lablet::Checked, BuildError> {
     quietly(config.clone()).check().await
 }
 
-/// The check stops before a provider is selected, so a config whose
-/// provider has no adapter yet passes it.
+/// The check builds the target of each adapter that exists and no more, so
+/// a config whose provider has no adapter yet passes it and fails the
+/// build.
 #[tokio::test]
 async fn a_config_whose_provider_has_no_adapter_yet_passes_the_check_and_fails_the_build() {
-    for config in [
-        with_key(yaml("prompt: { system: Hi. }")),
-        yaml("model: { provider: openai, name: gpt-5 }\nprompt: { system: Hi. }"),
-    ] {
-        let checked = check(&config).await.unwrap();
+    let config = yaml("model: { provider: openai, name: gpt-5 }\nprompt: { system: Hi. }");
 
-        assert_eq!(checked.resolved(), &config.resolved());
-        assert!(matches!(
-            crate::harness::quiet(config).await,
-            Err(BuildError::Unsupported {
-                kind: Unsupported::Anthropic | Unsupported::Openai,
-                ..
-            })
-        ));
-    }
+    let checked = check(&config).await.unwrap();
+
+    assert_eq!(checked.resolved(), &config.resolved());
+    assert!(matches!(
+        crate::harness::quiet(config).await,
+        Err(BuildError::Unsupported {
+            kind: Unsupported::Openai,
+            ..
+        })
+    ));
+}
+
+/// What a base URL is, as the Anthropic target's refusal says it.
+const BASE_URL_SHAPE: &str = "a base URL names a scheme, a host, an optional port and a path, as \
+                              https://gateway.example/anthropic does, and has no query or fragment";
+
+/// The check builds the Anthropic target, so a key a header can't carry is
+/// refused by `check` and `build` alike under `model.api_key`, set in code
+/// or filled from a variable, and nothing of the key is shown.
+#[tokio::test]
+async fn a_key_a_header_cannot_carry_is_refused_by_check_and_build_and_never_shown() {
+    const BROKEN: &str = "sk-ant-0123456789abcdef\n0123456789";
+    let mut in_code = yaml("prompt: { system: Hi. }");
+    in_code.model.api_key = Some(Secret::new(BROKEN));
+
+    let refused = refusal(in_code).await;
+
+    assert_eq!(
+        refused.to_string(),
+        "model.api_key is refused: the key holds a character a header can't carry"
+    );
+    assert_eq!(refused.class(), ErrorClass::Config);
+    assert!(
+        !format!("{refused}{refused:?}").contains("0123456789"),
+        "{refused:?}"
+    );
+
+    let from_variable = filled(
+        "model: { api_key: '${K}' }\nprompt: { system: Hi. }",
+        Format::Yaml,
+        &[("K", BROKEN)],
+    )
+    .unwrap();
+    let refused = refusal(from_variable).await;
+    assert_eq!(
+        refused.to_string(),
+        "model.api_key (line 1) is refused: the key holds a character a header can't carry"
+    );
+    assert!(
+        !format!("{refused}{refused:?}").contains("0123456789"),
+        "{refused:?}"
+    );
+}
+
+/// The check parses the base URL as the target does: one with a query is
+/// refused by `check` and `build` alike, since a query is a credential
+/// nowhere registered, and a URL holding `?` is never shown; one a variable
+/// gives is refused naming the variable and nothing it holds.
+#[tokio::test]
+async fn a_base_url_with_a_query_is_refused_by_check_and_build_without_the_query() {
+    let written = with_key(yaml(
+        "model: { base_url: 'https://gw.example/anthropic?k=v' }\nprompt: { system: Hi. }",
+    ));
+
+    let refused = refusal(written).await;
+
+    assert_eq!(
+        refused.to_string(),
+        format!("model.base_url (line 1): its value is refused: {BASE_URL_SHAPE}")
+    );
+    assert!(
+        !format!("{refused}{refused:?}").contains("k=v"),
+        "{refused:?}"
+    );
+
+    let from_variable = with_key(
+        filled(
+            "model: { base_url: '${GW}' }\nprompt: { system: Hi. }",
+            Format::Yaml,
+            &[("GW", "https://gw.example/anthropic?k=v")],
+        )
+        .unwrap(),
+    );
+    let refused = refusal(from_variable).await;
+    assert_eq!(
+        refused.to_string(),
+        format!("model.base_url (line 1): \"${{GW}}\" is refused: {BASE_URL_SHAPE}")
+    );
+    assert!(
+        !format!("{refused}{refused:?}").contains("gw.example"),
+        "{refused:?}"
+    );
+}
+
+/// An anthropic config passes the check, which makes the HTTP client and
+/// calls nothing, and builds to a `Lablet` whose run, against a stand-in
+/// for the API at the config's base URL, reports that URL's address and
+/// port, the provider and the API on its wide event.
+#[tokio::test]
+async fn an_anthropic_config_passes_the_check_and_its_run_reports_the_base_url_s_endpoint() {
+    let lab = Lab::new("anthropic-endpoint");
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/messages"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+            "usage": { "input_tokens": 12, "output_tokens": 5 },
+            "content": [{ "type": "text", "text": "Nothing to fix." }]
+        })))
+        .mount(&server)
+        .await;
+    let config = with_key(yaml(&format!(
+        "model: {{ name: claude-sonnet-5-5, base_url: '{}' }}\nprompt: {{ system: Hi. }}",
+        server.uri()
+    )));
+
+    let checked = lab.builder(config.clone()).check().await.unwrap();
+    assert_eq!(checked.resolved(), &config.resolved());
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "the check calls no provider"
+    );
+    let mut lablet = lab.build(config).await.unwrap();
+    let finished = lablet.run(request()).await;
+    lablet.shutdown().await;
+
+    assert_eq!(
+        finished.summary.outcome.stop_reason(),
+        lablet::StopReason::Completed
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    let exported = lab.exported();
+    let traced = Traced::of(&exported, finished.summary.outcome.run_id.as_str());
+    let wide = traced.wide();
+    let address = server.address();
+    assert_eq!(
+        wide.attributes[key::SERVER_ADDRESS],
+        json!(address.ip().to_string())
+    );
+    assert_eq!(wide.attributes[key::SERVER_PORT], json!(address.port()));
+    assert_eq!(
+        wide.attributes[key::GEN_AI_PROVIDER_NAME],
+        json!("anthropic")
+    );
+    assert_eq!(wide.attributes[key::LABLET_REQUEST_API], json!("messages"));
 }
 
 /// The display goes inside the thinking object a request sends, which

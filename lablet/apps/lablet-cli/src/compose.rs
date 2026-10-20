@@ -71,17 +71,19 @@ impl Report {
     }
 }
 
-/// Checks `config` whole, as [`build`] does, and stops before the provider
-/// is selected, so the answer is the same for every provider: one this
-/// lablet has no adapter for yet passes, and no call reaches a provider.
-/// `environment` is the base every process a run starts begins from, the
-/// command's own as the input module read it.
+/// Checks `config` whole, as [`build`] does, and calls no provider: it
+/// builds the target of each adapter that exists, the Anthropic adapter's
+/// with its HTTP client, and the network exporters the `telemetry` section
+/// names, each of which loads the platform's trust roots and opens no
+/// connection, so it refuses what building them refuses, and a provider
+/// this lablet has no adapter for yet passes it. `environment` is the base
+/// every process a run starts begins from, the command's own as the input
+/// module read it.
 ///
 /// # Errors
 ///
 /// Returns what [`build`] returns, but for [`BuildError::Unsupported`] of
-/// the provider, and for what only making the network exporter finds, which
-/// a check passes.
+/// the provider.
 pub async fn check(
     config: &Config,
     environment: Vec<(OsString, OsString)>,
@@ -141,8 +143,7 @@ pub async fn check_in(
 /// # Errors
 ///
 /// Returns the [`BuildError`] of the first thing the config's check
-/// refuses, a provider this lablet has no adapter for yet, or what only
-/// making the network exporter finds.
+/// refuses, or a provider this lablet has no adapter for yet.
 pub async fn build(
     config: Config,
     environment: Vec<(OsString, OsString)>,
@@ -155,26 +156,37 @@ pub async fn build(
     let telemetry = exports
         .telemetry()
         .map_err(|error| otlp_refused(&config, error))?;
-    Ok(wire(wiring, tools, telemetry, inbound))
+    wire(wiring, tools, telemetry, inbound)
 }
 
 /// What a checked config comes to, which offers `tools`, whose run goes
-/// through `telemetry`, and whose root span is opened in `inbound`.
+/// through `telemetry`, whose root span is opened in `inbound` and whose
+/// provider injects each attempt's context through `inbound`'s propagator.
+///
+/// # Errors
+///
+/// Returns [`BuildError::Unsupported`] for a provider there's no adapter
+/// for yet, which [`lablet_prepare::Prepared::wiring`] refused already.
 pub(crate) fn wire(
     wiring: Wiring,
     tools: Arc<ToolSet>,
     telemetry: Telemetry,
     inbound: Inbound,
-) -> Composed {
+) -> Result<Composed, BuildError> {
     let Wiring {
         config,
         settings,
-        script,
+        provider,
         system,
         capture_content,
         secrets,
     } = wiring;
-    let (provider, played) = lablet_provider_wiring::fake(config.model.name.clone(), script);
+    let (provider, played) = lablet_provider_wiring::build(
+        provider,
+        config.model.name.clone(),
+        Arc::clone(&inbound.propagator),
+        capture_content,
+    )?;
     let clock: Arc<dyn Clock> = Arc::new(TokioClock);
 
     let cancellation = Arc::new(RunCancellation::default());
@@ -216,14 +228,14 @@ pub(crate) fn wire(
             agent_version: VERSION.to_owned(),
         },
     );
-    Composed {
+    Ok(Composed {
         runner,
         provider: played,
         tools,
         telemetry,
         inbound,
         config_digest,
-    }
+    })
 }
 
 /// The loop and its adapters as the command line composes them, for the
