@@ -116,6 +116,7 @@ fn request() -> RequestParams {
         max_tokens: 4096,
         temperature: None,
         thinking: Thinking::ProviderDefault,
+        thinking_display: None,
         effort: None,
         seed: None,
         cache_scope: CacheScope::Shared,
@@ -2597,10 +2598,10 @@ async fn a_truncated_response_that_called_task_complete_does_not_complete_the_ru
     assert!(run.tools().is_empty(), "and has no span");
 }
 
-// L9: both spellings of a refusal, and the turn that records it.
+// L9: a refusal that carries tool calls, and the turn that records it.
 
 #[tokio::test]
-async fn a_content_filter_refuses_the_run_and_its_tool_calls_do_not_run() {
+async fn a_refusal_that_carries_tool_calls_stops_the_run_and_the_calls_do_not_run() {
     let refusal = ProviderResponse::new(
         vec![ContentBlock::ToolUse(ToolUse {
             id: ToolCallId::new("call_0").expect("a valid call id"),
@@ -2608,7 +2609,7 @@ async fn a_content_filter_refuses_the_run_and_its_tool_calls_do_not_run() {
             input: ToolInput::Json(serde_json::json!({})),
         })],
         Usage::default(),
-        FinishReason::from("content_filter".to_owned()),
+        FinishReason::Refusal,
         None,
         None,
     )

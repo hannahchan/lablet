@@ -61,6 +61,7 @@ fn an_anthropic_model_resolves_with_the_defaults_that_are_its_own() {
             "max_tokens": 32_000,
             "temperature": null,
             "thinking": "provider_default",
+            "thinking_display": null,
             "effort": null,
             "cache": true,
             "cache_scope": "shared",
@@ -121,6 +122,7 @@ fn a_resolved_config_holds_what_was_stated_in_place_of_a_default() {
 model:
   api_key: ${WORK_KEY}
   thinking: { budget: 2048 }
+  thinking_display: summarized
   effort: high
   cache: false
   cache_scope: run
@@ -142,6 +144,7 @@ model:
         "the resolved config writes the key back as written"
     );
     assert_eq!(model["thinking"], json!({ "budget": 2048 }));
+    assert_eq!(model["thinking_display"], json!("summarized"));
     assert_eq!(model["effort"], json!("high"));
     assert_eq!(model["cache"], json!(false));
     assert_eq!(model["cache_scope"], json!("run"));
@@ -152,14 +155,40 @@ model:
     );
 }
 
+/// The display is `anthropic`'s, so its resolved model holds it, stated or
+/// not, and no other provider's does.
+#[test]
+fn how_the_reasoning_is_shown_is_resolved_for_anthropic_alone() {
+    assert_eq!(
+        resolved_model("model: { thinking: adaptive, thinking_display: omitted }")["thinking_display"],
+        json!("omitted")
+    );
+    assert_eq!(
+        resolved_model("model: { thinking: adaptive }")["thinking_display"],
+        json!(null)
+    );
+    for other in [
+        "model: { provider: openai, name: gpt-5 }",
+        "model: { provider: fake, script: run.yaml, name: scripted-1 }",
+    ] {
+        assert_eq!(
+            resolved_model(other).get("thinking_display"),
+            None,
+            "{other}"
+        );
+    }
+}
+
 #[test]
 fn a_setting_the_provider_cannot_apply_is_left_out_even_when_it_was_stated() {
     let model = resolved_model(
-        "model: { provider: fake, script: run.yaml, thinking: adaptive, seed: 7, cache: true }",
+        "model: { provider: fake, script: run.yaml, thinking: adaptive, thinking_display: omitted, \
+         seed: 7, cache: true }",
     );
 
     for key in [
         "thinking",
+        "thinking_display",
         "seed",
         "cache",
         "effort",
@@ -377,6 +406,7 @@ fn a_setting_that_says_what_a_run_does_changes_the_digest() {
         "model: { provider: fake, script: scripts/run.yaml, name: scripted-1, cache_scope: run }",
         "model: { provider: anthropic, name: scripted-1 }",
         "model: { provider: anthropic, name: scripted-1, thinking: adaptive }",
+        "model: { provider: anthropic, name: scripted-1, thinking: adaptive, thinking_display: omitted }",
         "model: { provider: anthropic, name: scripted-1, cache: false }",
         "model: { provider: openai, name: scripted-1 }",
         "model: { provider: openai, name: scripted-1, api: chat_completions }",

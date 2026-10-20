@@ -38,30 +38,51 @@ fn a_finish_reason_prints_as_it_is_written_down_and_reads_back_as_itself() {
     }
 }
 
-/// Every spelling lablet reads as a known reason, with the reason it reads.
-fn provider_spellings() -> [(&'static str, FinishReason); 11] {
+/// Every spelling lablet reads as a known reason, with the reason it reads:
+/// its own, and no provider's.
+fn lablet_spellings() -> [(&'static str, FinishReason); 5] {
     [
         ("end_turn", FinishReason::EndTurn),
-        ("stop", FinishReason::EndTurn),
-        ("stop_sequence", FinishReason::EndTurn),
         ("tool_use", FinishReason::ToolUse),
-        ("tool_calls", FinishReason::ToolUse),
         ("max_tokens", FinishReason::MaxTokens),
-        ("length", FinishReason::MaxTokens),
         ("context_window", FinishReason::ContextWindow),
-        ("model_context_window_exceeded", FinishReason::ContextWindow),
         ("refusal", FinishReason::Refusal),
-        ("content_filter", FinishReason::Refusal),
     ]
 }
 
+/// The spellings the provider APIs use for a known reason where lablet's
+/// differ, which an adapter maps before it calls `from`.
+const VENDOR_SPELLINGS: [&str; 6] = [
+    "stop",
+    "stop_sequence",
+    "tool_calls",
+    "length",
+    "model_context_window_exceeded",
+    "content_filter",
+];
+
 #[test]
-fn every_provider_spelling_of_a_known_reason_gives_that_reason() {
-    for (spelling, reason) in provider_spellings() {
+fn each_of_lablets_own_spellings_gives_its_reason() {
+    for (spelling, reason) in lablet_spellings() {
         assert_eq!(
             FinishReason::from(spelling.to_owned()),
             reason,
             "{spelling}"
+        );
+    }
+}
+
+/// The domain holds no vendor's table: an adapter maps its provider's
+/// spellings to lablet's before it calls `from`, so a vendor's own spelling
+/// that reaches `from` is kept as it is.
+#[test]
+fn a_providers_own_spelling_of_a_known_reason_is_kept_as_other() {
+    for spelling in VENDOR_SPELLINGS {
+        let reason = FinishReason::from(spelling.to_owned());
+
+        assert!(
+            matches!(&reason, FinishReason::Other(kept) if kept.as_str() == spelling),
+            "{reason:?}"
         );
     }
 }
@@ -85,6 +106,22 @@ fn only_a_string_that_spells_no_known_reason_is_kept_as_other() {
             ),
             "{spelling}"
         );
+    }
+}
+
+const fn thinking_display_spelling(display: ThinkingDisplay) -> &'static str {
+    match display {
+        ThinkingDisplay::Summarized => "summarized",
+        ThinkingDisplay::Omitted => "omitted",
+    }
+}
+
+#[test]
+fn a_thinking_display_prints_its_spelling() {
+    for display in ThinkingDisplay::ALL {
+        let spelling = thinking_display_spelling(display);
+        assert_eq!(display.as_str(), spelling);
+        assert_eq!(display.to_string(), spelling);
     }
 }
 
@@ -239,9 +276,10 @@ fn a_completion_whose_tool_calls_have_distinct_ids_holds_its_content_in_order() 
 fn any_reason() -> impl proptest::strategy::Strategy<Value = String> {
     use proptest::strategy::Strategy;
 
-    let spellings: Vec<&'static str> = provider_spellings()
+    let spellings: Vec<&'static str> = lablet_spellings()
         .iter()
         .map(|(spelling, _)| *spelling)
+        .chain(VENDOR_SPELLINGS)
         .collect();
     proptest::prop_oneof![
         proptest::sample::select(spellings).prop_map(str::to_owned),

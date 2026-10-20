@@ -75,6 +75,10 @@ fn the_schema_lists_the_values_a_setting_takes() {
         [json!("bash"), json!("read_file"), json!("write_file")]
     );
     assert_eq!(
+        values("ThinkingDisplay"),
+        [json!("summarized"), json!("omitted")]
+    );
+    assert_eq!(
         schema["$defs"]["Run"]["properties"]["timeout"]["default"],
         json!("10m")
     );

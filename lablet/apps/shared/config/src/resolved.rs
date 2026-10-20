@@ -13,7 +13,7 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 use super::key::KeyPath;
-use super::model::{Api, CacheScope, Effort, Pricing, Provider, Thinking};
+use super::model::{Api, CacheScope, Effort, Pricing, Provider, Thinking, ThinkingDisplay};
 use super::secret::Secret;
 use super::shown::{Masked, WrittenBack, debug_tree};
 use super::substitute::Filled;
@@ -198,6 +198,9 @@ pub struct ResolvedModel {
     /// How the model is asked to reason.
     #[serde(skip_serializing_if = "Applied::is_no")]
     pub thinking: Applied<Thinking>,
+    /// How the model's reasoning is shown.
+    #[serde(skip_serializing_if = "Applied::is_no")]
+    pub thinking_display: Applied<Option<ThinkingDisplay>>,
     /// The reasoning effort.
     #[serde(skip_serializing_if = "Applied::is_no")]
     pub effort: Applied<Option<Effort>>,

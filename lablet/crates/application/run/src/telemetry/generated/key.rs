@@ -180,7 +180,7 @@ pub const LABLET_REQUEST_CACHE_SCOPE: &str = "lablet.request.cache_scope";
 /// Whether the reasoning of earlier responses was sent back on later calls.
 pub const LABLET_REQUEST_REASONING_REPLAYED: &str = "lablet.request.reasoning_replayed";
 
-/// How the model was asked to reason, as the config spells it.
+/// How the model was asked to reason, as the wide event spells it.
 pub const LABLET_REQUEST_THINKING: &str = "lablet.request.thinking";
 
 /// Whether the run produced a structured result, the `task_complete` argument.

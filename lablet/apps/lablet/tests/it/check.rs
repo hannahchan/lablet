@@ -7,7 +7,7 @@ use lablet::{
 };
 use serde_json::{Value, json};
 
-use crate::harness::{ENDS, Lab, filled, quietly, read, read_filled, request, with_key};
+use crate::harness::{ENDS, Lab, filled, quietly, read, read_filled, refusal, request, with_key};
 
 /// A variable nothing sets.
 const UNSET: &str = "LABLET_TEST_A_VARIABLE_NOTHING_SETS";
@@ -45,6 +45,47 @@ async fn a_config_whose_provider_has_no_adapter_yet_passes_the_check_and_fails_t
             })
         ));
     }
+}
+
+/// The display goes inside the thinking object a request sends, which
+/// `provider_default` leaves out and `disabled` takes no display on, so
+/// `check` and `build` alike refuse a display stated with either, by its
+/// line and with its fix; and a budget under the API's floor the same way.
+#[tokio::test]
+async fn a_thinking_display_without_adaptive_thinking_or_a_budget_is_refused_by_check_and_build() {
+    for thinking in ["provider_default", "disabled"] {
+        let config = with_key(yaml(&format!(
+            "model:\n  thinking: {thinking}\n  thinking_display: omitted\nprompt: {{ system: Hi. }}"
+        )));
+
+        let refused = refusal(config).await;
+
+        assert_eq!(
+            refused.to_string(),
+            format!(
+                "model.thinking_display (line 3): \"omitted\" is refused: a display goes with \
+                 `adaptive` or a budget, and `model.thinking` is `{thinking}`; set \
+                 `model.thinking` to `adaptive` or a budget"
+            )
+        );
+    }
+    let low = with_key(yaml(
+        "model:\n  thinking: { budget: 512 }\n  thinking_display: summarized\nprompt: { system: Hi. }",
+    ));
+    assert_eq!(
+        refusal(low).await.to_string(),
+        "model.thinking (line 2): {\"budget\":512} is refused: a budget is at least 1,024 \
+         tokens; raise it, or set `model.thinking` to `adaptive`"
+    );
+
+    let taken = with_key(yaml(
+        "model:\n  thinking: adaptive\n  thinking_display: summarized\nprompt: { system: Hi. }",
+    ));
+    let checked = check(&taken).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(checked.resolved()).unwrap()["model"]["thinking_display"],
+        json!("summarized")
+    );
 }
 
 /// C4: a key the provider needs that's left unset by its variable is

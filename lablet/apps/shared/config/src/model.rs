@@ -45,6 +45,10 @@ pub struct Model {
     /// `anthropic` only: how the model is asked to reason; `None` is the
     /// provider's default.
     pub thinking: Option<Thinking>,
+    /// `anthropic` only, with `adaptive` or a budget: how the model's
+    /// reasoning is shown in its responses; `None` sends nothing, so the
+    /// provider's default applies.
+    pub thinking_display: Option<ThinkingDisplay>,
     /// `anthropic`, and `openai` with the Responses API: the reasoning
     /// effort.
     pub effort: Option<Effort>,
@@ -74,6 +78,7 @@ impl Default for Model {
             max_tokens: 32_000,
             temperature: None,
             thinking: None,
+            thinking_display: None,
             effort: None,
             seed: None,
             reasoning_replay: None,
@@ -95,6 +100,8 @@ pub enum Setting {
     BaseUrl,
     /// `model.thinking`.
     Thinking,
+    /// `model.thinking_display`.
+    ThinkingDisplay,
     /// `model.effort`.
     Effort,
     /// `model.seed`.
@@ -111,6 +118,7 @@ lablet_model::every_variant!(
         Script,
         BaseUrl,
         Thinking,
+        ThinkingDisplay,
         Effort,
         Seed,
         ReasoningReplay,
@@ -127,6 +135,7 @@ impl Setting {
             Self::Script => "model.script",
             Self::BaseUrl => "model.base_url",
             Self::Thinking => "model.thinking",
+            Self::ThinkingDisplay => "model.thinking_display",
             Self::Effort => "model.effort",
             Self::Seed => "model.seed",
             Self::ReasoningReplay => "model.reasoning_replay",
@@ -159,7 +168,9 @@ impl Model {
             Setting::Script => self.provider == Provider::Fake,
             // A script is played where lablet runs, so nothing is served.
             Setting::BaseUrl => self.provider != Provider::Fake,
-            Setting::Thinking | Setting::Cache => self.provider == Provider::Anthropic,
+            Setting::Thinking | Setting::ThinkingDisplay | Setting::Cache => {
+                self.provider == Provider::Anthropic
+            }
             Setting::Effort => self.provider == Provider::Anthropic || api == Some(Api::Responses),
             Setting::ReasoningReplay => api == Some(Api::ChatCompletions),
         }
@@ -177,6 +188,7 @@ impl Model {
                 .map(|script| script.display().to_string()),
             Setting::BaseUrl => self.base_url.clone(),
             Setting::Thinking => self.thinking.map(|thinking| thinking.to_string()),
+            Setting::ThinkingDisplay => self.thinking_display.map(|display| display.to_string()),
             Setting::Effort => self.effort.map(|effort| effort.to_string()),
             Setting::Seed => self.seed.map(|seed| seed.to_string()),
             Setting::ReasoningReplay => self.reasoning_replay.map(|replay| replay.to_string()),
@@ -269,6 +281,36 @@ impl From<Thinking> for lablet_model::Thinking {
     }
 }
 
+/// How the model's reasoning is shown in its responses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingDisplay {
+    /// A summary of the reasoning is sent back.
+    Summarized,
+    /// The reasoning is left out of the response.
+    Omitted,
+}
+
+impl ThinkingDisplay {
+    /// How a config spells it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Summarized => "summarized",
+            Self::Omitted => "omitted",
+        }
+    }
+}
+
+impl From<ThinkingDisplay> for lablet_model::ThinkingDisplay {
+    fn from(display: ThinkingDisplay) -> Self {
+        match display {
+            ThinkingDisplay::Summarized => Self::Summarized,
+            ThinkingDisplay::Omitted => Self::Omitted,
+        }
+    }
+}
+
 /// A reasoning effort level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -323,7 +365,7 @@ macro_rules! display_as_str {
     )+};
 }
 
-display_as_str!(Provider, Api, Effort);
+display_as_str!(Provider, Api, ThinkingDisplay, Effort);
 
 /// Which runs share what a provider caches of a run's requests.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]

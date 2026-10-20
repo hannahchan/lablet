@@ -56,6 +56,7 @@ fn handed(run: &str, system: &str) -> RunTranscript {
             max_tokens: 4_096,
             temperature: None,
             thinking: Thinking::default(),
+            thinking_display: None,
             effort: None,
             seed: None,
             cache_scope: CacheScope::default(),

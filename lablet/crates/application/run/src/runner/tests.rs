@@ -212,6 +212,7 @@ fn loop_of(
             max_tokens: 4_096,
             temperature: None,
             thinking: Thinking::ProviderDefault,
+            thinking_display: None,
             effort: None,
             seed: None,
             cache_scope: CacheScope::Shared,

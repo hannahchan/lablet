@@ -119,10 +119,12 @@ impl ProviderErrorKind {
 
 /// Why the model stopped generating, normalised across providers.
 ///
-/// [`FinishReason::from`] is how a provider's string becomes a reason, and
-/// the only way one does: every spelling either provider API uses for a known
-/// reason gives that reason, and only a string that spells none of them is
-/// kept as [`FinishReason::Other`]. A reason is written down as its
+/// [`FinishReason::from`] is how a string becomes a reason, and the only way
+/// one does: it reads lablet's own spellings, `end_turn`, `tool_use`,
+/// `max_tokens`, `context_window` and `refusal`, and keeps any other string
+/// as [`FinishReason::Other`], a provider's own spelling among them. Each
+/// adapter maps its provider's spellings to lablet's before it calls `from`,
+/// so the domain holds no vendor's table. A reason is written down as its
 /// [`FinishReason::as_str`], which reads back as the same reason.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FinishReason {
@@ -175,14 +177,14 @@ impl FinishReason {
 }
 
 impl From<String> for FinishReason {
-    /// Reads lablet's spellings and those of the Anthropic and OpenAI APIs.
+    /// Reads lablet's own spellings, and keeps any other string as it is.
     fn from(reason: String) -> Self {
         match reason.as_str() {
-            "end_turn" | "stop" | "stop_sequence" => Self::EndTurn,
-            "tool_use" | "tool_calls" => Self::ToolUse,
-            "max_tokens" | "length" => Self::MaxTokens,
-            "context_window" | "model_context_window_exceeded" => Self::ContextWindow,
-            "refusal" | "content_filter" => Self::Refusal,
+            "end_turn" => Self::EndTurn,
+            "tool_use" => Self::ToolUse,
+            "max_tokens" => Self::MaxTokens,
+            "context_window" => Self::ContextWindow,
+            "refusal" => Self::Refusal,
             _ => Self::Other(UnknownReason(reason)),
         }
     }
@@ -274,6 +276,9 @@ pub struct RequestParams {
     pub temperature: Option<f64>,
     /// How the model is asked to reason.
     pub thinking: Thinking,
+    /// How the model's reasoning is shown, for providers that take a
+    /// choice; `None` leaves the provider's default.
+    pub thinking_display: Option<ThinkingDisplay>,
     /// The reasoning effort, for providers that take a level.
     pub effort: Option<Effort>,
     /// The sampling seed, for providers that take one. An `i64` because
@@ -324,6 +329,27 @@ pub enum Thinking {
     Disabled,
 }
 
+/// How the model's reasoning is shown in its responses, where the provider
+/// offers a choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ThinkingDisplay {
+    /// A summary of the reasoning is sent back.
+    Summarized,
+    /// The reasoning is left out of the response.
+    Omitted,
+}
+
+impl ThinkingDisplay {
+    /// How a run's record spells it: the suffix of `lablet.request.thinking`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Summarized => "summarized",
+            Self::Omitted => "omitted",
+        }
+    }
+}
+
 /// A reasoning effort level, reported as `gen_ai.request.reasoning.level`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Effort {
@@ -358,6 +384,7 @@ display_as_str!(
     ProviderErrorKind,
     FinishReason,
     CacheScope,
+    ThinkingDisplay,
     Effort
 );
 
@@ -373,6 +400,8 @@ every_variant!(
 );
 
 every_variant!(CacheScope::ALL = [Shared, Run]);
+
+every_variant!(ThinkingDisplay::ALL = [Summarized, Omitted]);
 
 every_variant!(Effort::ALL = [Low, Medium, High, XHigh, Max]);
 

@@ -258,9 +258,10 @@ pub struct Rates { pub input: f64, pub output: f64, pub cache_read: f64, pub cac
 pub struct RateError { pub name: &'static str, pub value: f64 }
 pub struct Cost(f64);                     // USD; Cost::new(usd) -> Result<Cost, CostError>, usd()
 pub struct CostError(f64);                // the amount wasn't a finite number of at least 0
-pub struct RequestParams { pub max_tokens: u32, pub temperature: Option<f64>, pub thinking: Thinking, pub effort: Option<Effort>, pub seed: Option<i64>, pub cache_scope: CacheScope }
+pub struct RequestParams { pub max_tokens: u32, pub temperature: Option<f64>, pub thinking: Thinking, pub thinking_display: Option<ThinkingDisplay>, pub effort: Option<Effort>, pub seed: Option<i64>, pub cache_scope: CacheScope }
 pub enum CacheScope { Shared, Run }   // Default is Shared; Run has the loop hand each request the run id as its cache key (§5)
 pub enum Thinking { ProviderDefault, Adaptive, Budget(NonZeroU32), Disabled }   // Default is ProviderDefault
+pub enum ThinkingDisplay { Summarized, Omitted }   // how the reasoning is shown in the responses; the suffix of lablet.request.thinking
 pub enum Effort { Low, Medium, High, XHigh, Max }
 
 // Tools
@@ -412,7 +413,7 @@ An executor doesn't hold a whole output to have it cut. It feeds the text to a `
 
 **Cost.** `Cost::new` takes a finite `f64` of at least 0 and refuses anything else, on both the code and the serde path. JSON has no infinity or NaN, so serde writes either as `null`, which is also how a run with no pricing configured writes the field: a cost that overflowed would be indistinguishable from one never asked for. `Pricing::cost` (§4) is the only producer in a run and answers `Option<Cost>`, `None` when the rates and counts multiply out past an `f64`, which takes rates no real price list has.
 
-**Finish reasons.** `FinishReason::from(String)` is how a provider's string becomes a reason, and serde reads through it. Every spelling either provider API uses for a known reason gives that reason (the table is in §6), so `Other("end_turn")` or `Other("stop")` can't come out of the conversion, and a fake script may use whichever spelling its author knows. A reason is written as its `as_str`: `end_turn`, `tool_use`, `max_tokens`, `context_window`, `refusal`, or the provider's own string for `Other`. `Other` carries an `UnknownReason`, whose string is private, so `From<String>` is the only way to build one and `Other("refusal")` isn't expressible: a refusal that skipped the conversion would read at point R as an ordinary end and complete the run.
+**Finish reasons.** `FinishReason::from(String)` is how a string becomes a reason, and serde reads through it. It reads lablet's own spellings, `end_turn`, `tool_use`, `max_tokens`, `context_window` and `refusal`, and keeps any other string as `Other`, a provider's own spelling among them: each adapter maps its provider's spellings to lablet's before it calls `from` (the table is in §6), so the domain holds no vendor's table and `Other("end_turn")` can't come out of the conversion, and the fake provider maps either vendor's spelling the same way, so a script may use whichever its author knows. A reason is written as its `as_str`: `end_turn`, `tool_use`, `max_tokens`, `context_window`, `refusal`, or the provider's own string for `Other`. `Other` carries an `UnknownReason`, whose string is private, so `From<String>` is the only way to build one and `Other("refusal")` isn't expressible: a refusal that skipped the conversion would read at point R as an ordinary end and complete the run.
 
 **Serde form.** The forms below are those of `lablet-documents`, which the transcript, the outcome and the fake provider's script share, and of the model's own `Serialize` where the loop measures with it. Derives and serde attributes only, and a document that's read is built through the domain's checked constructor (`ProviderResponse::new`, `RunOutcome::closing`). A `UserContent` is `{"text": "..."}`. Enums are externally tagged with `snake_case` names: a `ContentBlock` is `{"text": "..."}` or `{"tool_use": {"id": "...", "name": "...", "input": {}}}`, and the other variants follow the same pattern; a `ToolSource` is `"builtin"` or `{"mcp": {"server": "docs"}}`; a `ToolCallStatus` is `"unknown"`, `"malformed_input"`, `"rejected"`, `"not_run"`, or `{"ran": {"source": "builtin", "ended": "ok"}}`; a `ToolInput` is `{"json": {...}}` or `{"unparsed": "..."}`, the two levels the type holds rather than the flattening `as_str` does for telemetry; a `Thinking` is `"provider_default"`, `"adaptive"`, `{"budget": 2048}`, or `"disabled"`, and a budget of 0 is refused. `Effort::XHigh` is `xhigh`. `Cost` is a bare number. An `Option` that's `None` is written as `null`, never left out; read, it may be left out, which is how a block of thinking without a signature is written by hand. A `Message` only serialises, as `{"user": {"tool_results": [{"call_id": "...", "content": [{"text": "..."}], "is_error": false}], "input": [{"text": "..."}]}}` or `{"assistant": [...]}`; that form is what the loop measures request bytes from (§5), and nothing reads it back. The forms a fake-provider script holds are strict where a slip would otherwise pass in silence: a script's entries and everything they nest refuse a key they don't know and a key written twice, so `input_token: 12` is an error, not a zero, and each refusal names the entry and the block it's in. What may be left out reads as nothing: a `Usage` count of input or output as zero, any of its other three as not reported, and a completion's `usage` as two zeros and nothing reported. The outcome document, the labels it nests, and a `ToolCallOutcome` refuse an unknown field for the same reason. `StopReason`, `CompletionMode`, `ToolSource` (the variant only), `ToolCallStatus`, `ToolCallEnd`, `FinishReason`, `ProviderKind`, and `Effort` each have an `as_str` that gives the serde spelling and a `Display` that prints it, except that a `ToolSource` prints an MCP tool's server too, as `mcp:docs`. A unit test in the model pins the wire spellings, and a test in `lablet-test-support`'s conformance module, which may depend on both crates, compares `StopReason`, `CompletionMode`, `ToolSource`, and `ToolCallStatus` with the generated registry enums through exhaustive matches, so a variant added on either side doesn't compile until the other has it.
 
@@ -465,7 +466,7 @@ impl Pricing {
     fn endpoint(&self) -> Option<Endpoint>;                     // server.address and server.port; None for fake
     async fn complete(&self, req: ProviderRequest<'_>) -> Result<ProviderResponse, ProviderError>;
 }
-pub struct ProviderRequest<'a> { system: &'a str, messages: &'a [Message<'a>], tools: &'a [ToolSpec], max_tokens: u32, temperature: Option<f64>, thinking: Thinking, effort: Option<Effort>, seed: Option<i64>, cache_key: Option<&'a str>, deadline: Duration }   // messages is Run::messages(); Thinking and Effort are model types (§3), because RequestParams holds them; cache_key is the run id when the cache scope is Run, for the adapter to use as its API allows
+pub struct ProviderRequest<'a> { system: &'a str, messages: &'a [Message<'a>], tools: &'a [ToolSpec], max_tokens: u32, temperature: Option<f64>, thinking: Thinking, thinking_display: Option<ThinkingDisplay>, effort: Option<Effort>, seed: Option<i64>, cache_key: Option<&'a str>, deadline: Duration }   // messages is Run::messages(); Thinking, ThinkingDisplay and Effort are model types (§3), because RequestParams holds them; cache_key is the run id when the cache scope is Run, for the adapter to use as its API allows
 pub struct ProviderError { kind: ProviderErrorKind, message: String, usage: Option<Usage>, retry_after: Option<Duration> }   // the policy reads the kind and the server's hint, the run counts the usage a failed attempt reported, the outcome and telemetry read the message
 
 #[async_trait] pub trait ToolExecutor: Send + Sync {
@@ -618,7 +619,7 @@ A turn's tool calls run in the groups §1 describes: consecutive calls whose too
 
 ### Finish reasons
 
-Both provider adapters hand the provider's own string to `FinishReason::from` (§3), which holds this mapping, so neither adapter keeps a table of its own and a fake script may use either spelling:
+Each provider adapter holds its provider's column of this table in a closed match and maps it to lablet's spelling before it calls `FinishReason::from` (§3), which reads lablet's spellings alone and keeps anything else as `Other`; the fake provider holds both columns, so a script may use either spelling:
 
 | `FinishReason`  | Anthropic `stop_reason`         | OpenAI-compatible `finish_reason` | Stop policy at point R    |
 | --------------- | ------------------------------- | --------------------------------- | ------------------------- |
@@ -815,7 +816,8 @@ model:
   base_url: null # override for gateways, Ollama, vLLM; its user information is a secret, cut everywhere and out of the digest
   max_tokens: 32000
   temperature: null # sent only when set; rejected by current Anthropic models
-  thinking: provider_default # provider_default | adaptive | disabled | { budget: 2048 } (tokens, at least 1 and below max_tokens); anthropic only
+  thinking: provider_default # provider_default | adaptive | disabled | { budget: 2048 } (tokens, at least 1,024 and below max_tokens); anthropic only
+  thinking_display: null # summarized | omitted; anthropic only, with adaptive or a budget; null sends nothing
   effort: null # low | medium | high | xhigh | max; anthropic, and openai with the responses API
   seed: null # openai only
   reasoning_replay: false # chat_completions only: send reasoning back as reasoning_content

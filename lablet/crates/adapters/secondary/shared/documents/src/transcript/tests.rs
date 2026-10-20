@@ -68,21 +68,23 @@ fn a_turn_s_record_is_written_as_these_exact_bytes() {
     );
 }
 
-/// A reason is written as the word that reads back as the same reason, so
-/// a provider's own spelling of a reason lablet knows is never published.
+/// A reason is written as the word that reads back as the same reason:
+/// lablet's name for one it knows, and the provider's own string for one it
+/// doesn't, which the adapter kept as the provider spelled it.
 #[test]
 fn a_finish_reason_is_written_as_lablet_s_name_for_it_or_the_provider_s_own_string() {
-    for (said, written) in [
-        ("stop", "end_turn"),
-        ("length", "max_tokens"),
-        ("content_filter", "refusal"),
-        ("pause_turn", "pause_turn"),
-    ] {
-        let record = TurnRecord::from(record(FinishReason::from(said.to_owned())));
+    let kept = FinishReason::from("pause_turn".to_owned());
+    for (reason, written) in FinishReason::KNOWN
+        .iter()
+        .map(|reason| (reason.clone(), reason.as_str()))
+        .chain([(kept, "pause_turn")])
+    {
+        let record = TurnRecord::from(record(reason.clone()));
 
         assert_eq!(
             serde_json::to_value(record).unwrap()["finish"],
-            json!(written)
+            json!(written),
+            "{reason:?}"
         );
     }
 }

@@ -13,7 +13,8 @@ use lablet_model::{
     CacheScope, CompletionMode, ConfigDigest, Cost, Endpoint, FinishReason, Latency, McpLifetime,
     McpServer, McpServers, ModelRef, OutcomeParts, PromptSizes, Prompts, ProviderApi,
     ProviderResponse, ProviderTotals, Rates, RequestParams, Responded, Run, RunContext, RunId,
-    RunLabels, RunOutcome, RunSetup, StopReason, TaskResult, ToolCallTotals, Usage,
+    RunLabels, RunOutcome, RunSetup, StopReason, TaskResult, ThinkingDisplay, ToolCallTotals,
+    Usage,
 };
 use opentelemetry::trace::{SpanContext, SpanId, TraceFlags, TraceId, TraceState};
 use serde_json::json;
@@ -79,6 +80,7 @@ fn request() -> RequestParams {
         max_tokens: 4_096,
         temperature: None,
         thinking: Thinking::ProviderDefault,
+        thinking_display: None,
         effort: None,
         seed: None,
         cache_scope: CacheScope::Shared,
@@ -89,6 +91,7 @@ fn request() -> RequestParams {
 fn every_parameter() -> RequestParams {
     RequestParams {
         temperature: Some(0.7),
+        thinking_display: Some(ThinkingDisplay::Summarized),
         effort: Some(lablet_model::Effort::High),
         seed: Some(-42),
         ..request()
@@ -341,7 +344,7 @@ fn held_of_the_setup() -> Vec<(&'static str, Value)> {
         (key::GEN_AI_REQUEST_SEED, Value::Int(-42)),
         (key::GEN_AI_REQUEST_REASONING_LEVEL, text("high")),
         (key::GEN_AI_REQUEST_TEMPERATURE, Value::Float(0.7)),
-        (key::LABLET_REQUEST_THINKING, text("adaptive")),
+        (key::LABLET_REQUEST_THINKING, text("adaptive:summarized")),
         (key::LABLET_REQUEST_API, text("messages")),
         (key::LABLET_REQUEST_REASONING_REPLAYED, Value::Flag(true)),
         (key::LABLET_REQUEST_CACHE_SCOPE, text("run")),
@@ -661,11 +664,62 @@ fn thinking_is_spelled_as_its_mode_and_the_tokens_of_a_budget() {
         Thinking::Budget(NonZeroU32::new(2_048).unwrap()),
         Thinking::Disabled,
     ]
-    .map(thinking);
+    .map(|thinking| super::thinking(thinking, None));
 
     assert_eq!(
         spelled,
         ["provider_default", "adaptive", "budget:2048", "disabled"]
+    );
+}
+
+/// The display is a suffix of the mode, and nothing is written for a run
+/// that leaves it to the provider.
+#[test]
+fn how_the_reasoning_is_shown_follows_the_mode_after_a_colon_when_the_run_says() {
+    let budget = Thinking::Budget(NonZeroU32::new(2_048).unwrap());
+    let spelled = [
+        (Thinking::Adaptive, Some(ThinkingDisplay::Summarized)),
+        (Thinking::Adaptive, Some(ThinkingDisplay::Omitted)),
+        (budget, Some(ThinkingDisplay::Summarized)),
+        (budget, Some(ThinkingDisplay::Omitted)),
+        (Thinking::Adaptive, None),
+        (budget, None),
+    ]
+    .map(|(thinking, display)| super::thinking(thinking, display));
+
+    assert_eq!(
+        spelled,
+        [
+            "adaptive:summarized",
+            "adaptive:omitted",
+            "budget:2048:summarized",
+            "budget:2048:omitted",
+            "adaptive",
+            "budget:2048",
+        ]
+    );
+}
+
+/// A run on a budget that leaves the reasoning out writes both after the
+/// mode; `every_key_holds_what_the_runs_context_and_its_summary_hold_for_it`
+/// holds the `adaptive:summarized` run.
+#[test]
+fn the_wide_event_of_a_run_that_leaves_its_reasoning_out_says_so_after_its_budget() {
+    let context = context();
+    let summary = RunSummary {
+        request: RequestParams {
+            thinking: Thinking::Budget(NonZeroU32::new(2_048).unwrap()),
+            thinking_display: Some(ThinkingDisplay::Omitted),
+            ..request()
+        },
+        ..completed(&context, two_counts())
+    };
+
+    let attributes = wide(&context, &summary);
+
+    assert_eq!(
+        attributes.get(key::LABLET_REQUEST_THINKING),
+        Some(&text("budget:2048:omitted"))
     );
 }
 

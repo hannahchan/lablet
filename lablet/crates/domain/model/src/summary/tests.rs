@@ -28,6 +28,7 @@ fn summary() -> RunSummary {
             max_tokens: 4096,
             temperature: None,
             thinking: Thinking::default(),
+            thinking_display: None,
             effort: Some(Effort::Low),
             seed: None,
             cache_scope: CacheScope::Run,

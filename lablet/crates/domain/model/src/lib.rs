@@ -96,7 +96,7 @@ pub use output::{KeptOutput, OutputCap, OutputCapError, OutputCut, OutputKeep};
 pub use price::{Cost, CostError, RateError, Rates};
 pub use provider::{
     CacheScope, Effort, Endpoint, FinishReason, ModelRef, ProviderApi, ProviderErrorKind,
-    ProviderResponse, RequestParams, ResponseError, Thinking, UnknownReason,
+    ProviderResponse, RequestParams, ResponseError, Thinking, ThinkingDisplay, UnknownReason,
 };
 pub use provider_kind::ProviderKind;
 pub use run::{

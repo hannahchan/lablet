@@ -24,7 +24,8 @@ model:
   base_url: null # override for gateways, Ollama, vLLM
   max_tokens: 32000
   temperature: null # sent only when set; rejected by current Anthropic models
-  thinking: provider_default # provider_default | adaptive | disabled | { budget: 2048 } (tokens, at least 1 and below max_tokens); anthropic only
+  thinking: provider_default # provider_default | adaptive | disabled | { budget: 2048 } (tokens, at least 1,024 and below max_tokens); anthropic only
+  thinking_display: null # summarized | omitted; anthropic only, with adaptive or a budget; null sends nothing
   effort: null # low | medium | high | xhigh | max; anthropic, and openai with the responses API
   seed: null # openai only
   reasoning_replay: false # chat_completions only: send reasoning back as reasoning_content

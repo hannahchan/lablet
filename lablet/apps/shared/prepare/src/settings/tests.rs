@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 
-use lablet_model::{CacheScope, Effort, Thinking};
+use lablet_model::{CacheScope, Effort, Thinking, ThinkingDisplay};
 
 use super::*;
 use lablet_config::{ConfigError, Format};
@@ -89,6 +89,7 @@ fn a_config_that_states_what_it_must_comes_to_the_defaults() {
                 max_tokens: 32_000,
                 temperature: None,
                 thinking: Thinking::ProviderDefault,
+                thinking_display: None,
                 effort: None,
                 seed: None,
                 cache_scope: CacheScope::Shared,
@@ -204,7 +205,7 @@ fn each_way_to_cut_an_output_is_the_loops_own_and_no_cap_is_none() {
 #[test]
 fn the_request_parameters_are_the_resolved_models() {
     let anthropic = of("
-model: { thinking: { budget: 2048 }, effort: max, temperature: 0.2, cache_scope: run, max_tokens: 8000 }
+model: { thinking: { budget: 2048 }, thinking_display: omitted, effort: max, temperature: 0.2, cache_scope: run, max_tokens: 8000 }
 prompt: { system: Hi. }
 ")
     .unwrap();
@@ -215,6 +216,7 @@ prompt: { system: Hi. }
             max_tokens: 8_000,
             temperature: Some(0.2),
             thinking: Thinking::Budget(NonZeroU32::new(2_048).unwrap()),
+            thinking_display: Some(ThinkingDisplay::Omitted),
             effort: Some(Effort::Max),
             seed: None,
             cache_scope: CacheScope::Run,
@@ -340,113 +342,124 @@ fn not_applied(key: &'static str, value: &str, reached: &str) -> ConfigError {
     }
 }
 
+/// How a refusal names each provider, with its API where it has two.
+const BY_ANTHROPIC: &str = "the provider `anthropic`";
+const BY_FAKE: &str = "the provider `fake`";
+const BY_RESPONSES: &str = "the provider `openai` over its API `responses`";
+const BY_CHAT: &str = "the provider `openai` over its API `chat_completions`";
+
 /// Each setting a provider can't apply, as a config states it, with the
 /// provider and the API that can't.
-fn not_applied_by_each_provider() -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
-    const ANTHROPIC: &str = "the provider `anthropic`";
-    const FAKE: &str = "the provider `fake`";
-    const RESPONSES: &str = "the provider `openai` over its API `responses`";
-    const CHAT: &str = "the provider `openai` over its API `chat_completions`";
-
-    vec![
-        ("seed: 7", "model.seed", "7", ANTHROPIC),
-        ("api: responses", "model.api", "\"responses\"", ANTHROPIC),
-        (
-            "script: run.yaml",
-            "model.script",
-            "\"run.yaml\"",
-            ANTHROPIC,
-        ),
-        (
-            "reasoning_replay: false",
-            "model.reasoning_replay",
-            "false",
-            ANTHROPIC,
-        ),
-        (
-            "provider: openai, thinking: adaptive",
-            "model.thinking",
-            "\"adaptive\"",
-            RESPONSES,
-        ),
-        (
-            "provider: openai, thinking: { budget: 2048 }",
-            "model.thinking",
-            "{\"budget\":2048}",
-            RESPONSES,
-        ),
-        (
-            "provider: openai, cache: true",
-            "model.cache",
-            "true",
-            RESPONSES,
-        ),
-        (
-            "provider: openai, script: run.yaml",
-            "model.script",
-            "\"run.yaml\"",
-            RESPONSES,
-        ),
-        (
-            "provider: openai, reasoning_replay: true",
-            "model.reasoning_replay",
-            "true",
-            RESPONSES,
-        ),
-        (
-            "provider: openai, api: chat_completions, effort: high",
-            "model.effort",
-            "\"high\"",
-            CHAT,
-        ),
-        (
-            "provider: openai, base_url: 'http://localhost:11434/v1', effort: low",
-            "model.effort",
-            "\"low\"",
-            CHAT,
-        ),
-        (
-            "provider: fake, script: run.yaml, cache: false",
-            "model.cache",
-            "false",
-            FAKE,
-        ),
-        (
-            "provider: fake, script: run.yaml, seed: 7",
-            "model.seed",
-            "7",
-            FAKE,
-        ),
-        (
-            "provider: fake, script: run.yaml, thinking: provider_default",
-            "model.thinking",
-            "\"provider_default\"",
-            FAKE,
-        ),
-        (
-            "provider: fake, script: run.yaml, effort: max",
-            "model.effort",
-            "\"max\"",
-            FAKE,
-        ),
-        (
-            "provider: fake, script: run.yaml, api: chat_completions",
-            "model.api",
-            "\"chat_completions\"",
-            FAKE,
-        ),
-        (
-            "provider: fake, script: run.yaml, base_url: 'http://localhost:4000'",
-            "model.base_url",
-            "\"http://localhost:4000\"",
-            FAKE,
-        ),
-    ]
-}
+const NOT_APPLIED_BY_EACH_PROVIDER: &[(&str, &str, &str, &str)] = &[
+    ("seed: 7", "model.seed", "7", BY_ANTHROPIC),
+    ("api: responses", "model.api", "\"responses\"", BY_ANTHROPIC),
+    (
+        "script: run.yaml",
+        "model.script",
+        "\"run.yaml\"",
+        BY_ANTHROPIC,
+    ),
+    (
+        "reasoning_replay: false",
+        "model.reasoning_replay",
+        "false",
+        BY_ANTHROPIC,
+    ),
+    (
+        "provider: openai, thinking: adaptive",
+        "model.thinking",
+        "\"adaptive\"",
+        BY_RESPONSES,
+    ),
+    (
+        "provider: openai, thinking: { budget: 2048 }",
+        "model.thinking",
+        "{\"budget\":2048}",
+        BY_RESPONSES,
+    ),
+    (
+        "provider: openai, thinking_display: summarized",
+        "model.thinking_display",
+        "\"summarized\"",
+        BY_RESPONSES,
+    ),
+    (
+        "provider: openai, cache: true",
+        "model.cache",
+        "true",
+        BY_RESPONSES,
+    ),
+    (
+        "provider: openai, script: run.yaml",
+        "model.script",
+        "\"run.yaml\"",
+        BY_RESPONSES,
+    ),
+    (
+        "provider: openai, reasoning_replay: true",
+        "model.reasoning_replay",
+        "true",
+        BY_RESPONSES,
+    ),
+    (
+        "provider: openai, api: chat_completions, effort: high",
+        "model.effort",
+        "\"high\"",
+        BY_CHAT,
+    ),
+    (
+        "provider: openai, base_url: 'http://localhost:11434/v1', effort: low",
+        "model.effort",
+        "\"low\"",
+        BY_CHAT,
+    ),
+    (
+        "provider: fake, script: run.yaml, cache: false",
+        "model.cache",
+        "false",
+        BY_FAKE,
+    ),
+    (
+        "provider: fake, script: run.yaml, seed: 7",
+        "model.seed",
+        "7",
+        BY_FAKE,
+    ),
+    (
+        "provider: fake, script: run.yaml, thinking: provider_default",
+        "model.thinking",
+        "\"provider_default\"",
+        BY_FAKE,
+    ),
+    (
+        "provider: fake, script: run.yaml, thinking_display: omitted",
+        "model.thinking_display",
+        "\"omitted\"",
+        BY_FAKE,
+    ),
+    (
+        "provider: fake, script: run.yaml, effort: max",
+        "model.effort",
+        "\"max\"",
+        BY_FAKE,
+    ),
+    (
+        "provider: fake, script: run.yaml, api: chat_completions",
+        "model.api",
+        "\"chat_completions\"",
+        BY_FAKE,
+    ),
+    (
+        "provider: fake, script: run.yaml, base_url: 'http://localhost:4000'",
+        "model.base_url",
+        "\"http://localhost:4000\"",
+        BY_FAKE,
+    ),
+];
 
 #[test]
 fn a_setting_the_config_states_and_the_provider_cannot_apply_is_refused_by_name() {
-    for (model, key, value, reached) in not_applied_by_each_provider() {
+    for &(model, key, value, reached) in NOT_APPLIED_BY_EACH_PROVIDER {
         assert_eq!(
             of(&format!("model: {{ {model} }}\nprompt: {{ system: Hi. }}")),
             Err(not_applied(key, value, reached)),
@@ -459,6 +472,8 @@ fn a_setting_the_config_states_and_the_provider_cannot_apply_is_refused_by_name(
 fn a_setting_the_provider_applies_is_taken_stated_or_not() {
     for model in [
         "thinking: adaptive, effort: high, cache: false",
+        "thinking: adaptive, thinking_display: omitted",
+        "thinking: { budget: 1024 }, thinking_display: summarized",
         "base_url: 'https://gateway.example', temperature: 0",
         "provider: openai, api: responses, seed: 7, effort: high",
         "provider: openai, api: chat_completions, seed: 7, reasoning_replay: true",
@@ -508,6 +523,73 @@ fn a_temperature_is_a_number_and_a_thinking_budget_is_below_the_cap_on_output() 
         ))
     );
     of("model: { thinking: { budget: 4095 }, max_tokens: 4096 }\nprompt: { system: Hi. }").unwrap();
+}
+
+/// The floor is the API's for every model, so it's refused where the
+/// ceiling is, and a budget at the floor is taken.
+#[test]
+fn a_thinking_budget_is_at_least_the_apis_floor() {
+    assert_eq!(
+        of("model: { thinking: { budget: 1023 } }\nprompt: { system: Hi. }"),
+        Err(refused(
+            "model.thinking",
+            "{\"budget\":1023}",
+            "a budget is at least 1,024 tokens; raise it, or set `model.thinking` to `adaptive`"
+        ))
+    );
+    of("model: { thinking: { budget: 1024 } }\nprompt: { system: Hi. }").unwrap();
+    assert_eq!(
+        of("model: { thinking: { budget: 1024 }, max_tokens: 1024 }\nprompt: { system: Hi. }"),
+        Err(refused(
+            "model.thinking",
+            "{\"budget\":1024}",
+            "a budget is fewer tokens than `model.max_tokens`, which is 1024"
+        )),
+        "a budget at the floor is still held to the ceiling"
+    );
+}
+
+/// The display goes inside the thinking object a request sends, which
+/// `provider_default` leaves out and `disabled` takes no display on, so a
+/// display stated with either is refused with its fix, whether the
+/// `provider_default` is stated or the default.
+#[test]
+fn a_thinking_display_is_refused_unless_thinking_is_adaptive_or_a_budget() {
+    for (thinking, shown) in [
+        ("", "provider_default"),
+        ("thinking: provider_default, ", "provider_default"),
+        ("thinking: disabled, ", "disabled"),
+    ] {
+        for display in ["summarized", "omitted"] {
+            assert_eq!(
+                of(&format!(
+                    "model: {{ {thinking}thinking_display: {display} }}\nprompt: {{ system: Hi. }}"
+                )),
+                Err(refused(
+                    "model.thinking_display",
+                    &format!("\"{display}\""),
+                    &format!(
+                        "a display goes with `adaptive` or a budget, and `model.thinking` is \
+                         `{shown}`; set `model.thinking` to `adaptive` or a budget"
+                    )
+                )),
+                "{thinking}{display}"
+            );
+        }
+    }
+    for thinking in ["adaptive", "{ budget: 2048 }"] {
+        let settings =
+            of(&format!("model: {{ thinking: {thinking}, thinking_display: summarized }}\nprompt: {{ system: Hi. }}"))
+                .unwrap();
+
+        assert_eq!(
+            settings.request.thinking_display,
+            Some(ThinkingDisplay::Summarized),
+            "{thinking}"
+        );
+    }
+    let unstated = of("model: { thinking: adaptive }\nprompt: { system: Hi. }").unwrap();
+    assert_eq!(unstated.request.thinking_display, None);
 }
 
 #[test]

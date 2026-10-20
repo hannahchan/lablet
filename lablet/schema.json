@@ -475,6 +475,18 @@
           ],
           "default": null,
           "description": "`anthropic` only: how the model is asked to reason; `None` is the\nprovider's default."
+        },
+        "thinking_display": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThinkingDisplay"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "`anthropic` only, with `adaptive` or a budget: how the model's\nreasoning is shown in its responses; `None` sends nothing, so the\nprovider's default applies."
         }
       },
       "type": "object"
@@ -937,6 +949,21 @@
         }
       ]
     },
+    "ThinkingDisplay": {
+      "description": "How the model's reasoning is shown in its responses.",
+      "oneOf": [
+        {
+          "const": "summarized",
+          "description": "A summary of the reasoning is sent back.",
+          "type": "string"
+        },
+        {
+          "const": "omitted",
+          "description": "The reasoning is left out of the response.",
+          "type": "string"
+        }
+      ]
+    },
     "Tls": {
       "additionalProperties": false,
       "description": "The `telemetry.otlp.tls` section: PEM files, each a path a `${VAR}` may\nfill, loaded when an endpoint is named; `client_key` is read whenever\nit's stated, so what it holds is cut.",
@@ -1099,7 +1126,8 @@
         "script": null,
         "seed": null,
         "temperature": null,
-        "thinking": null
+        "thinking": null,
+        "thinking_display": null
       },
       "description": "The provider, the model, and the request settings."
     },

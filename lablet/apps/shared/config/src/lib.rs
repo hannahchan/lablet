@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 
 pub use key::{KeyPath, Place, Places};
 pub use model::Setting;
-pub use model::{Api, CacheScope, Effort, Model, Pricing, Provider, Thinking};
+pub use model::{Api, CacheScope, Effort, Model, Pricing, Provider, Thinking, ThinkingDisplay};
 pub use prompt::{Prompt, SkillsMode};
 pub use raw::RawConfig;
 pub use resolved::{
@@ -515,6 +515,7 @@ impl Config {
                     applied(Setting::Thinking),
                     model.thinking.unwrap_or_default(),
                 ),
+                thinking_display: when(applied(Setting::ThinkingDisplay), model.thinking_display),
                 effort: when(applied(Setting::Effort), model.effort),
                 seed: when(applied(Setting::Seed), model.seed),
                 reasoning_replay: when(

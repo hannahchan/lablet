@@ -54,7 +54,7 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 | <a id="lablet-request-bytes">`lablet.request.bytes`</a> | ![Development](https://img.shields.io/badge/-development-blue) | int | Size in bytes of the system prompt, messages, and tool specs sent in a provider call. [24] | `48211` |
 | <a id="lablet-request-cache-scope">`lablet.request.cache_scope`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | Which runs share what the provider caches of the run's requests. [25] | `shared`; `run` |
 | <a id="lablet-request-reasoning-replayed">`lablet.request.reasoning_replayed`</a> | ![Development](https://img.shields.io/badge/-development-blue) | boolean | Whether the reasoning of earlier responses was sent back on later calls. [26] | `true` |
-| <a id="lablet-request-thinking">`lablet.request.thinking`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | How the model was asked to reason, as the config spells it. [27] | `adaptive:summarized`; `budget:2048` |
+| <a id="lablet-request-thinking">`lablet.request.thinking`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | How the model was asked to reason, as the wide event spells it. [27] | `adaptive:summarized`; `budget:2048` |
 | <a id="lablet-result-has-structured">`lablet.result.has_structured`</a> | ![Development](https://img.shields.io/badge/-development-blue) | boolean | Whether the run produced a structured result, the `task_complete` argument. [28] | `true` |
 | <a id="lablet-result-structured">`lablet.result.structured`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | The structured result, the `task_complete` argument, as a JSON string. [29] | `{"answer": 42}` |
 | <a id="lablet-result-text">`lablet.result.text`</a> | ![Development](https://img.shields.io/badge/-development-blue) | string | The final assistant text. [30] | `The function returns early when the list is empty.` |
@@ -147,7 +147,7 @@ Attributes defined in the `lablet` namespace. Application developers are encoura
 
 **[26] `lablet.request.reasoning_replayed`:** Justification: no convention says what a client sends back of a model's reasoning. A model that isn't sent its reasoning reasons again on every turn, so two runs that differ in it differ in tokens and in behaviour under one model name.
 
-**[27] `lablet.request.thinking`:** Justification: `gen_ai.request.reasoning.level` carries the effort level and nothing carries the thinking mode or its token budget, which is the setting a run is most often varied by. Written `provider_default`, `adaptive`, `adaptive:summarized`, `budget:2048`, `budget:2048:summarized`, or `disabled`.
+**[27] `lablet.request.thinking`:** Justification: `gen_ai.request.reasoning.level` carries the effort level and nothing carries the thinking mode or its token budget, which is the setting a run is most often varied by. Written `provider_default`, `adaptive`, `budget:2048`, or `disabled`, with `:summarized` or `:omitted` after `adaptive` or a budget when the config says how the reasoning is shown, as `adaptive:summarized`, `adaptive:omitted`, `budget:2048:summarized` or `budget:2048:omitted`.
 
 **[28] `lablet.result.has_structured`:** Justification: the structured result is a product of lablet's explicit completion mode, which the conventions don't describe.
 

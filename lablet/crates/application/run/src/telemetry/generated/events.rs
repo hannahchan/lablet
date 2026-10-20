@@ -218,7 +218,7 @@ pub struct LabletRun {
     pub lablet_request_cache_scope: LabletRequestCacheScope,
     /// Whether the reasoning of earlier responses was sent back on later calls.
     pub lablet_request_reasoning_replayed: bool,
-    /// How the model was asked to reason, as the config spells it.
+    /// How the model was asked to reason, as the wide event spells it.
     pub lablet_request_thinking: String,
     /// Whether the run produced a structured result, the `task_complete` argument.
     pub lablet_result_has_structured: bool,

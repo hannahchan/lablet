@@ -239,6 +239,54 @@ fn an_override_is_named_where_the_refusal_is_of_the_section_it_set_a_key_in() {
     assert_eq!(run.stderr_lines().len(), 1, "{run:?}");
 }
 
+/// The display goes inside the thinking object a request sends, so a
+/// config that sends none is refused with its fix, by the display's line;
+/// a budget under the API's floor is refused by the budget's.
+#[test]
+fn a_thinking_display_needs_adaptive_thinking_or_a_budget_and_a_budget_is_at_least_the_floor() {
+    let lab = Lab::new("check-thinking-display");
+    let anthropic = format!("model:\n  api_key: ${{{KEY}}}\nprompt:\n  system: Hi.\n");
+
+    refused(
+        &check(
+            &lab,
+            &anthropic.replace(
+                "prompt:",
+                "  thinking: disabled\n  thinking_display: summarized\nprompt:",
+            ),
+            &[],
+        ),
+        "config: model.thinking_display (line 4): \"summarized\" is refused: a display goes \
+         with `adaptive` or a budget, and `model.thinking` is `disabled`; set `model.thinking` \
+         to `adaptive` or a budget",
+    );
+    refused(
+        &check(
+            &lab,
+            &anthropic.replace("prompt:", "  thinking: { budget: 1000 }\nprompt:"),
+            &[],
+        ),
+        "config: model.thinking (line 3): {\"budget\":1000} is refused: a budget is at least \
+         1,024 tokens; raise it, or set `model.thinking` to `adaptive`",
+    );
+
+    let run = check(
+        &lab,
+        &anthropic.replace(
+            "prompt:",
+            "  thinking: adaptive\n  thinking_display: omitted\nprompt:",
+        ),
+        &["--resolved"],
+    );
+    assert_eq!(run.code, Some(0), "{run:?}");
+    let printed: Value = serde_saphyr::from_str(&run.stdout).unwrap();
+    assert_eq!(
+        printed["model"]["thinking_display"],
+        json!("omitted"),
+        "{run:?}"
+    );
+}
+
 #[test]
 fn an_unset_key_variable_is_named_where_the_provider_needs_a_key_and_fake_needs_none() {
     // C4, as the caller owning the config rewords it: the key is a `${VAR}`

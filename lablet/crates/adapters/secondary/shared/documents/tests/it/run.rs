@@ -114,6 +114,7 @@ fn setup() -> RunSetup {
             max_tokens: 4_096,
             temperature: None,
             thinking: Thinking::default(),
+            thinking_display: None,
             effort: None,
             seed: None,
             cache_scope: CacheScope::default(),
@@ -223,7 +224,7 @@ pub(crate) fn of_two_turns() -> Transcript {
             cache_read: Some(100),
             cache_write: None,
         }),
-        FinishReason::from("stop".to_owned()),
+        FinishReason::EndTurn,
         None,
         None,
     )

@@ -326,14 +326,22 @@ fn a_count_a_usage_leaves_out_was_not_reported_and_a_zero_was() {
     );
 }
 
+/// The domain reads lablet's spellings alone, so each vendor's spelling of
+/// a known reason is the fake's own table's to map; a script written in
+/// either keeps its meaning.
 #[test]
 fn a_finish_reason_is_read_in_whichever_providers_spelling_it_is_written() {
     for (written, reason) in [
         ("end_turn", FinishReason::EndTurn),
         ("stop", FinishReason::EndTurn),
+        ("stop_sequence", FinishReason::EndTurn),
+        ("tool_use", FinishReason::ToolUse),
         ("tool_calls", FinishReason::ToolUse),
+        ("max_tokens", FinishReason::MaxTokens),
         ("length", FinishReason::MaxTokens),
+        ("context_window", FinishReason::ContextWindow),
         ("model_context_window_exceeded", FinishReason::ContextWindow),
+        ("refusal", FinishReason::Refusal),
         ("content_filter", FinishReason::Refusal),
     ] {
         let script = yaml(&format!("- response: {{ content: [], finish: {written} }}")).unwrap();

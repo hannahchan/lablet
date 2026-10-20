@@ -650,6 +650,7 @@ impl RunService {
                                 max_tokens: self.request.max_tokens,
                                 temperature: self.request.temperature,
                                 thinking: self.request.thinking,
+                                thinking_display: self.request.thinking_display,
                                 effort: self.request.effort,
                                 seed: self.request.seed,
                                 cache_key: self.cache_key(&running.run_id),

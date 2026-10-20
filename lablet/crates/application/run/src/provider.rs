@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use lablet_model::{
-    Effort, Endpoint, Message, ModelRef, ProviderErrorKind, ProviderResponse, Thinking, ToolSpec,
-    Usage,
+    Effort, Endpoint, Message, ModelRef, ProviderErrorKind, ProviderResponse, Thinking,
+    ThinkingDisplay, ToolSpec, Usage,
 };
 
 /// What one provider call asks for. Everything borrows: the messages come
@@ -24,6 +24,9 @@ pub struct ProviderRequest<'a> {
     pub temperature: Option<f64>,
     /// How the model is asked to reason.
     pub thinking: Thinking,
+    /// How the model's reasoning is shown, for providers that take a
+    /// choice; `None` leaves the provider's default.
+    pub thinking_display: Option<ThinkingDisplay>,
     /// The reasoning effort, for providers that take a level.
     pub effort: Option<Effort>,
     /// The sampling seed, for providers that take one.

@@ -36,6 +36,10 @@ pub struct BuiltinSettings {
 /// What a backoff grows by after each attempt.
 const BACKOFF_FACTOR: f64 = 2.0;
 
+/// The fewest tokens a thinking budget may hold, which the Messages API
+/// sets for every model.
+const BUDGET_FLOOR: u32 = 1_024;
+
 /// Where a run's system prompt comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum System {
@@ -195,7 +199,18 @@ fn request(model: &config::Model, resolved: &ResolvedModel) -> Result<RequestPar
             "a temperature is a finite number",
         ));
     }
-    if let Some(config::Thinking::Budget(tokens)) = model.thinking
+    let thinking = model.thinking.unwrap_or_default();
+    // The floor is the API's, the same for every model, so it's refused
+    // here and a budget a model turns down is the provider's 400.
+    if let config::Thinking::Budget(tokens) = thinking
+        && tokens.get() < BUDGET_FLOOR
+    {
+        return Err(Refusal::invalid(
+            "model.thinking",
+            "a budget is at least 1,024 tokens; raise it, or set `model.thinking` to `adaptive`",
+        ));
+    }
+    if let config::Thinking::Budget(tokens) = thinking
         && tokens.get() >= model.max_tokens
     {
         return Err(Refusal::invalid(
@@ -203,6 +218,20 @@ fn request(model: &config::Model, resolved: &ResolvedModel) -> Result<RequestPar
             format!(
                 "a budget is fewer tokens than `model.max_tokens`, which is {}",
                 model.max_tokens
+            ),
+        ));
+    }
+    if model.thinking_display.is_some()
+        && matches!(
+            thinking,
+            config::Thinking::ProviderDefault | config::Thinking::Disabled
+        )
+    {
+        return Err(Refusal::invalid(
+            "model.thinking_display",
+            format!(
+                "a display goes with `adaptive` or a budget, and `model.thinking` is `{thinking}`; \
+                 set `model.thinking` to `adaptive` or a budget"
             ),
         ));
     }
@@ -214,6 +243,7 @@ fn request(model: &config::Model, resolved: &ResolvedModel) -> Result<RequestPar
             .value()
             .map(Into::into)
             .unwrap_or_default(),
+        thinking_display: resolved.thinking_display.value().flatten().map(Into::into),
         effort: resolved.effort.value().flatten().map(Into::into),
         seed: resolved.seed.value().flatten(),
         cache_scope: resolved.cache_scope.into(),

@@ -643,12 +643,13 @@ attributes:
   - key: lablet.request.thinking
     type: string
     stability: development
-    brief: How the model was asked to reason, as the config spells it.
+    brief: How the model was asked to reason, as the wide event spells it.
     note: >
       Justification: `gen_ai.request.reasoning.level` carries the effort level and nothing carries
       the thinking mode or its token budget, which is the setting a run is most often varied by.
-      Written `provider_default`, `adaptive`, `adaptive:summarized`, `budget:2048`,
-      `budget:2048:summarized`, or `disabled`.
+      Written `provider_default`, `adaptive`, `budget:2048`, or `disabled`, with `:summarized` or
+      `:omitted` after `adaptive` or a budget when the config says how the reasoning is shown, as
+      `adaptive:summarized`, `adaptive:omitted`, `budget:2048:summarized` or `budget:2048:omitted`.
     examples: ["adaptive:summarized", "budget:2048"]
   - key: lablet.request.api
     type:

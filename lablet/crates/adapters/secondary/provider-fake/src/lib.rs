@@ -42,9 +42,11 @@
 //! | `latency`        | no     | How long the attempt takes, in real time. Left out, it takes none.     |
 //!
 //! `finish` is `end_turn`, `tool_use`, `max_tokens`, `context_window` or
-//! `refusal`, or either provider API's own spelling of one of them, as
-//! `stop`, `tool_calls` and `length` are. Any other text is a reason lablet
-//! has no name for, and is kept as it's written.
+//! `refusal`, or either provider API's own spelling of one of them:
+//! `stop_sequence` and `model_context_window_exceeded` as the Messages API
+//! spells them, and `stop`, `tool_calls`, `length` and `content_filter` as
+//! the OpenAI-compatible APIs do, each read as lablet's reason. Any other
+//! text is a reason lablet has no name for, and is kept as it's written.
 //!
 //! `usage` holds `input_tokens`, `output_tokens`,
 //! `reasoning_output_tokens`, `cache_read_tokens` and `cache_write_tokens`.

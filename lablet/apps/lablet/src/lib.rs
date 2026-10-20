@@ -265,8 +265,8 @@ pub mod config {
         McpServer, Model, Otlp, OtlpProtocol, OutputCut, Place, Places, Pricing, Prompt,
         Propagator, Propagators, Provider, RawConfig, Refusal, ResolvedBuiltin, ResolvedConfig,
         ResolvedModel, ResolvedTools, Resource, Run, Secret, Setting, SkillsMode, Telemetry,
-        TelemetryFile, Thinking, Tls, Tools, TranscriptFormat, Variable, WrittenBack,
-        is_credential, schema, shown,
+        TelemetryFile, Thinking, ThinkingDisplay, Tls, Tools, TranscriptFormat, Variable,
+        WrittenBack, is_credential, schema, shown,
     };
 }
 

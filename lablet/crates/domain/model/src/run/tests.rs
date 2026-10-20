@@ -75,6 +75,7 @@ fn setup() -> RunSetup {
             max_tokens: 4096,
             temperature: None,
             thinking: Thinking::Adaptive,
+            thinking_display: None,
             effort: Some(Effort::High),
             seed: Some(7),
             cache_scope: CacheScope::Run,

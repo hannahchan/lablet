@@ -82,6 +82,7 @@ fn defaults() -> Config {
             max_tokens: 32_000,
             temperature: None,
             thinking: None,
+            thinking_display: None,
             effort: None,
             seed: None,
             reasoning_replay: None,

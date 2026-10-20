@@ -7,7 +7,9 @@
 
 use std::collections::BTreeMap;
 
-use lablet_model::{FinishReason, RunContext, RunSummary, Thinking, ToolName, ToolStats};
+use lablet_model::{
+    FinishReason, RunContext, RunSummary, Thinking, ThinkingDisplay, ToolName, ToolStats,
+};
 
 use super::count_of;
 use super::generated::{Join, LabletRun};
@@ -62,7 +64,7 @@ pub(crate) fn wide_event(context: &RunContext, summary: &RunSummary) -> LabletRu
         lablet_request_api: model.api.into(),
         lablet_request_cache_scope: request.cache_scope.into(),
         lablet_request_reasoning_replayed: model.replays_reasoning,
-        lablet_request_thinking: thinking(request.thinking),
+        lablet_request_thinking: thinking(request.thinking, request.thinking_display),
         lablet_result_has_structured: result.structured.is_some(),
         lablet_result_text_bytes: size(result.text.len()),
         lablet_run_completion_mode: summary.completion.into(),
@@ -123,13 +125,18 @@ pub(crate) fn wide_event(context: &RunContext, summary: &RunSummary) -> LabletRu
 }
 
 /// How the record spells the way the model was asked to reason: the mode,
-/// and for a budget its tokens after a colon.
-fn thinking(thinking: Thinking) -> String {
-    match thinking {
+/// for a budget its tokens after a colon, and after another colon how its
+/// reasoning is shown, when the run says.
+fn thinking(thinking: Thinking, display: Option<ThinkingDisplay>) -> String {
+    let mode = match thinking {
         Thinking::ProviderDefault => "provider_default".to_owned(),
         Thinking::Adaptive => "adaptive".to_owned(),
         Thinking::Budget(tokens) => format!("budget:{tokens}"),
         Thinking::Disabled => "disabled".to_owned(),
+    };
+    match display {
+        Some(display) => format!("{mode}:{display}"),
+        None => mode,
     }
 }
 

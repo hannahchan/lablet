@@ -301,6 +301,21 @@ impl Visitor<'_> for AsText {
     }
 }
 
+/// A finish reason in lablet's spelling: the Messages API's and the
+/// OpenAI-compatible APIs' spellings of a known reason become lablet's, and
+/// any other text is kept as it is. The domain reads lablet's spellings
+/// alone, and a script may use either vendor's, so the table is the fake's.
+fn lablet_spelling(finish: String) -> String {
+    match finish.as_str() {
+        "stop" | "stop_sequence" => "end_turn".to_owned(),
+        "tool_calls" => "tool_use".to_owned(),
+        "length" => "max_tokens".to_owned(),
+        "model_context_window_exceeded" => "context_window".to_owned(),
+        "content_filter" => "refusal".to_owned(),
+        _ => finish,
+    }
+}
+
 impl Entry {
     /// Entry `number` of the script `script`, read from `written` into the
     /// domain's own values, through the constructors that check them.
@@ -336,7 +351,7 @@ impl Entry {
                 let response = ProviderResponse::new(
                     content,
                     usage.into(),
-                    FinishReason::from(finish),
+                    FinishReason::from(lablet_spelling(finish)),
                     response_id,
                     response_model,
                 )
