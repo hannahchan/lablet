@@ -9,6 +9,7 @@
     reason = "a developer tool reads its environment: CI's, cargo's, the gates' own switches and what it strips from the tests"
 )]
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 mod changelog;
@@ -64,7 +65,10 @@ Quality gates:
 Analysis:
   coverage [--branch]        Line and region coverage floors (--branch: branches, on nightly)
   mutants [--changed]        The exact mutation floor (--changed: only what changed)
-  weaver live-check          What fake-provider runs emit, checked by weaver over OTLP
+  weaver live-check [--config <file> --prompt <text>]
+                             What fake-provider runs emit, checked by weaver over OTLP;
+                             with both flags, one run of that config against its real
+                             provider, under the key its api_key names
 
 Project:
   setup                      Install the pinned toolchain, tools, and git hooks
@@ -79,8 +83,11 @@ off one (a hook, a pipe) it says it's running, and a green gate then prints one
 line and any warning. XTASK_VERBOSE=1 or CI=true lists the steps anyway.
 ";
 
-const WEAVER_USAGE: &str =
-    "`weaver` takes `check`, `generate [--check]`, `live-check`, or `vendor [--check]`";
+const WEAVER_USAGE: &str = "`weaver` takes `check`, `generate [--check]`, `live-check [--config \
+                            <file> --prompt <text>]`, or `vendor [--check]`";
+
+const LIVE_CHECK_USAGE: &str =
+    "`weaver live-check` takes `--config <file> --prompt <text>`, both or neither";
 
 /// Why the arguments name no task to run.
 #[derive(Debug, thiserror::Error)]
@@ -93,6 +100,8 @@ enum Usage {
     OnlyFlag { task: String, flag: String },
     #[error("{WEAVER_USAGE}")]
     Weaver,
+    #[error("{LIVE_CHECK_USAGE}")]
+    LiveCheck,
     #[error("`run` takes the binary's arguments after `--`")]
     Run,
 }
@@ -158,6 +167,10 @@ fn plan(task: &str, args: &[String]) -> Result<Plan, Usage> {
         ("weaver", [subtask]) if subtask == "live-check" => {
             command(gates::weaver_live_check_steps())
         }
+        ("weaver", [subtask, rest @ ..]) if subtask == "live-check" => {
+            let (config, prompt) = live_check_against(rest)?;
+            command(gates::weaver_live_check_against_steps(config, prompt))
+        }
         // Project.
         ("setup", []) => command(gates::setup_steps()),
         ("weaver", [subtask, rest @ ..]) if subtask == "vendor" => {
@@ -173,6 +186,24 @@ fn plan(task: &str, args: &[String]) -> Result<Plan, Usage> {
             got: got.clone(),
         }),
         _ => Err(Usage::UnknownTask(task.to_owned())),
+    }
+}
+
+/// The config and the prompt of `weaver live-check --config <file> --prompt
+/// <text>`, in either order, or why `args` isn't that.
+fn live_check_against(args: &[String]) -> Result<(PathBuf, String), Usage> {
+    match args {
+        [config_flag, config, prompt_flag, prompt]
+            if config_flag == "--config" && prompt_flag == "--prompt" =>
+        {
+            Ok((PathBuf::from(config), prompt.clone()))
+        }
+        [prompt_flag, prompt, config_flag, config]
+            if config_flag == "--config" && prompt_flag == "--prompt" =>
+        {
+            Ok((PathBuf::from(config), prompt.clone()))
+        }
+        _ => Err(Usage::LiveCheck),
     }
 }
 
@@ -322,15 +353,30 @@ mod tests {
             error("mutants", &["--changed", "--branch"]).as_deref(),
             Some("`mutants` takes only `--changed`")
         );
-        for args in [
-            vec![],
-            vec!["emit"],
-            vec!["check", "--v2"],
-            vec!["live-check", "--v2"],
-        ] {
+        for args in [vec![], vec!["emit"], vec!["check", "--v2"]] {
             assert_eq!(
                 error("weaver", &args).as_deref(),
                 Some(WEAVER_USAGE),
+                "{args:?}"
+            );
+        }
+        for args in [
+            vec!["live-check", "--v2"],
+            vec!["live-check", "--config", "lablet.yaml"],
+            vec!["live-check", "--prompt", "Say hello."],
+            vec!["live-check", "--config", "lablet.yaml", "--prompt"],
+            vec![
+                "live-check",
+                "--config",
+                "lablet.yaml",
+                "--prompt",
+                "Say hello.",
+                "--v2",
+            ],
+        ] {
+            assert_eq!(
+                error("weaver", &args).as_deref(),
+                Some(LIVE_CHECK_USAGE),
                 "{args:?}"
             );
         }
@@ -357,9 +403,59 @@ mod tests {
             ("weaver", vec!["vendor"]),
             ("weaver", vec!["vendor", "--check"]),
             ("weaver", vec!["live-check"]),
+            (
+                "weaver",
+                vec![
+                    "live-check",
+                    "--config",
+                    "lablet.yaml",
+                    "--prompt",
+                    "Say hello.",
+                ],
+            ),
+            (
+                "weaver",
+                vec![
+                    "live-check",
+                    "--prompt",
+                    "Say hello.",
+                    "--config",
+                    "lablet.yaml",
+                ],
+            ),
         ] {
             assert_eq!(error(task, &args), None, "{task}");
         }
+    }
+
+    /// The flags name one config and one prompt in either order, and the
+    /// task runs the one live-check step on them rather than CI's three
+    /// runs, which take no flags.
+    #[test]
+    fn live_check_with_a_config_and_a_prompt_plans_one_run_against_that_config() {
+        let words = |line: &str| -> Vec<String> { line.split(' ').map(str::to_owned).collect() };
+        for line in [
+            "live-check --config examples/a.yaml --prompt Hello",
+            "live-check --prompt Hello --config examples/a.yaml",
+        ] {
+            let args = words(line);
+            assert_eq!(
+                live_check_against(&args[1..]).unwrap(),
+                (PathBuf::from("examples/a.yaml"), "Hello".to_owned()),
+                "{line}"
+            );
+            let Plan::Steps(Mode::Command, steps) = plan("weaver", &args).unwrap() else {
+                panic!("`{line}` plans no command");
+            };
+            assert_eq!(steps.len(), 1);
+            assert_eq!(steps[0].label, "weaver live-check");
+        }
+        assert_eq!(
+            live_check_against(&words("--config a.yaml"))
+                .unwrap_err()
+                .to_string(),
+            LIVE_CHECK_USAGE
+        );
     }
 
     #[test]

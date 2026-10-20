@@ -15,6 +15,17 @@ cargo run --locked --manifest-path ../../Cargo.toml --bin lablet -- run --config
 
 The config names no file and no collector, so the run sends and writes no telemetry, and its end waits for nothing. To keep it in a file, add `--set telemetry.file.path=lablet-run.otlp.jsonl`; git ignores a file named `lablet-*.otlp.jsonl`. `cargo xtask weaver live-check` runs this config too, against the registry's live checker, naming its endpoint.
 
+## A retried call with pricing (`retry/`)
+
+A fake-provider config whose script answers the first provider call with a retryable failure, `529 overloaded`, and the second with text and cache counts, under a price list, so a run has one failed attempt, one retry after a short wait, and a cost. It needs no key.
+
+```bash
+cd lablet/examples/retry
+cargo run --locked --manifest-path ../../Cargo.toml --bin lablet -- run --config lablet.yaml --prompt "Say hello." --set telemetry.otlp.endpoint=http://localhost:14317 --set telemetry.otlp.protocol=grpc
+```
+
+With the collector and Jaeger below running, the trace has two `chat scripted` spans, one for each attempt, and the first carries the span event `lablet.retry` with `lablet.retry.will_retry=true` and the wait in `lablet.retry.backoff_ms`. The failed attempt's record, `gen_ai.client.operation.exception` with `exception.type=retryable`, and the wide event `lablet.run` are in the collector's output, since Jaeger stores no logs: the wide event carries `lablet.run.cost_usd`, the price list as `lablet.pricing.*`, `lablet.provider.retries=1`, and what the failed attempt used as `lablet.provider.failed.input_tokens`. `cargo xtask weaver live-check` runs this config too, named `--task retry --experiment live-check --trial 1`, and asks its report for the failed attempt's record and the span event.
+
 ## A collector and Jaeger (`docker-compose.yaml`)
 
 An OpenTelemetry Collector and Jaeger, for looking at a run. The collector takes OTLP on the host at `localhost:14317` over gRPC and `localhost:14318` over HTTP, prints everything it receives with its debug exporter, and sends the traces on to Jaeger, whose UI is at <http://localhost:16686>. Jaeger stores no logs, so the wide event and the content records are in the collector's output only: `docker compose logs collector`.

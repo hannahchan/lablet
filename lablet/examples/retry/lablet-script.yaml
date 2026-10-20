@@ -1,0 +1,21 @@
+# What the scripted model answers: each entry answers one provider call, in
+# order, whatever it was asked. The first is a failure the loop retries,
+# which reports what the attempt used so the run counts it; the second
+# answers with text and the cache counts the price list prices.
+- error:
+    kind: retryable
+    message: 529 overloaded
+    retry_after: 100ms
+    latency: 20ms
+    usage: { input_tokens: 400, output_tokens: 0 }
+- response:
+    content:
+      - text: The call was retried once after the provider was overloaded, and this answer is the second attempt's.
+    finish: end_turn
+    latency: 150ms
+    usage: {
+      input_tokens: 400,
+      output_tokens: 30,
+      cache_read_tokens: 1200,
+      cache_write_tokens: 300,
+    }

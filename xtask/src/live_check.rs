@@ -1,10 +1,12 @@
 //! `cargo xtask weaver live-check`: what lablet emits, checked against the
 //! registry by `weaver registry live-check` over the wire. Weaver listens on
-//! two free ports, lablet runs the `init` starter and the two-turn example
-//! against it with content captured, weaver is stopped through its admin
-//! endpoint, and its report is read back. A violation fails the step, and so
-//! does a report that saw less than the runs emit: an idle listener reports
-//! nothing wrong.
+//! two free ports, lablet runs the `init` starter, the two-turn example and
+//! the retry example against it with content captured, weaver is stopped
+//! through its admin endpoint, and its report is read back. A violation
+//! fails the step, and so does a report that saw less than the runs emit: an
+//! idle listener reports nothing wrong. With `--config <file> --prompt
+//! <text>`, one run of that config against its real provider is checked the
+//! same way, under the key its `api_key` names, which must be set.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -42,11 +44,36 @@ const REPORT: &str = "live_check.json";
 /// record are checked beside what the starter emits.
 const TWO_TURNS: &str = "lablet/examples/two-turns";
 
+/// The example whose script fails the first provider call and answers the
+/// second with cache counts, under a price list, so the retry's span event,
+/// the failed attempt's record and the cost are checked too.
+const RETRY: &str = "lablet/examples/retry";
+
 /// Where `lablet init` writes the starter, under the run directory.
 const STARTER: &str = "starter";
 
+/// The config's name in the starter and in each example.
+const CONFIG_FILE: &str = "lablet.yaml";
+
 /// The wide event, one per run; the report counts the events it saw by name.
 const WIDE_EVENT: &str = "lablet.run";
+
+/// The failed attempt's record, a log record the report counts by name.
+const EXCEPTION_EVENT: &str = "gen_ai.client.operation.exception";
+
+/// Weaver's name for a span event among the entities it counts by type.
+const SPAN_EVENT: &str = "span_event";
+
+/// What the runs emitted at the least, which the report must have seen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Emitted {
+    /// How many runs, each with its root span, a chat span and its wide
+    /// event.
+    runs: usize,
+    /// Whether a run's provider call failed and was retried, which leaves
+    /// a failed attempt's record and a retry's span event.
+    retried: bool,
+}
 
 /// Weaver stops on its own after this long without a sample: a backstop for
 /// a listener that outlives this process. The runs take seconds, and lablet
@@ -113,9 +140,123 @@ pub fn check() -> CheckResult {
     check_with(&repo_root(), &mut Real)
 }
 
+/// Runs the check for one run of `config` with `prompt`: a real provider,
+/// reached with the key the config's `api_key` names, so the mode refuses
+/// before anything is built when the config names no variable or the
+/// variable isn't set. The run is made in the config's own directory, where
+/// its relative paths start, with the same overrides as the fake runs, and
+/// its report is judged as one run's.
+pub fn check_against(config: &Path, prompt: &str) -> CheckResult {
+    check_against_with(&repo_root(), &mut Real, config, prompt)
+}
+
 /// [`check`] for the repository at `root`, running programs through
 /// `programs`.
 fn check_with(root: &Path, programs: &mut dyn Programs) -> CheckResult {
+    judged(root, programs, |programs, scratch, grpc| {
+        run_configs(root, programs, scratch, grpc)
+    })
+}
+
+/// [`check_against`] for the repository at `root`, running programs through
+/// `programs`.
+fn check_against_with(
+    root: &Path,
+    programs: &mut dyn Programs,
+    config: &Path,
+    prompt: &str,
+) -> CheckResult {
+    // Against the directory xtask runs in: the alias is in both roots.
+    let config = std::fs::canonicalize(config).map_err(Error::file(Verb::Read, config))?;
+    let text = std::fs::read_to_string(&config).map_err(Error::file(Verb::Read, &config))?;
+    let variable = key_variable(&text)?;
+    is_set(&variable)?;
+    let (Some(directory), Some(file)) = (config.parent(), config.file_name()) else {
+        return Err(Error::Missing {
+            what: format!("{} is not a file in a directory", config.display()),
+            remedy: "Name the config file".to_owned(),
+        }
+        .into());
+    };
+    let file = file.to_string_lossy();
+    let manifest = root.join("lablet/Cargo.toml");
+    judged(root, programs, |programs, _, grpc| {
+        let endpoint = format!("http://127.0.0.1:{grpc}");
+        let args = run_args(&file, prompt, &endpoint);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        lablet(programs, &manifest, directory, &args)?;
+        Ok(Emitted {
+            runs: 1,
+            retried: false,
+        })
+    })
+}
+
+/// Matches the one line of a config's text that fills `api_key` from a
+/// variable, `api_key: ${NAME}` or `api_key: ${NAME:-default}`, quoted or
+/// not, and captures the name. A comment is cut first, so the line is one
+/// the config reads.
+fn key_fill() -> regex::Regex {
+    const PATTERN: &str =
+        r#"(?:^|[\s{,])["']?api_key["']?\s*:\s*["']?\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}"#;
+    #[expect(
+        clippy::unwrap_used,
+        reason = "the pattern is a literal, and the tests compile it"
+    )]
+    regex::Regex::new(PATTERN).unwrap()
+}
+
+/// The name of the variable `text`, a config's, fills `api_key` from, or
+/// the refusal when it names none: a key written as a literal, or no key at
+/// all, is no key this mode may run with, since it runs a real provider.
+fn key_variable(text: &str) -> Result<String, Failure> {
+    let fill = key_fill();
+    let read: String = text
+        .lines()
+        // A `#` after a space, or at a line's start, begins a comment.
+        .map(|line| {
+            line.split_once(" #")
+                .map_or(line, |(read, _)| read)
+                .trim_start()
+        })
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .fold(String::new(), |mut read, line| {
+            read.push_str(line);
+            read.push('\n');
+            read
+        });
+    let name = fill
+        .captures(&read)
+        .and_then(|captures| captures.get(1))
+        .map(|name| name.as_str().to_owned());
+    name.ok_or_else(|| {
+        Failure::Verdict(
+            "the config's api_key names no variable; this mode runs a real provider and needs \
+             api_key: ${VAR}"
+                .to_owned(),
+        )
+    })
+}
+
+/// Whether the variable `name` is set in this process's environment, which
+/// the run inherits, read as presence alone: the value is never read.
+fn is_set(name: &str) -> Result<(), Failure> {
+    if std::env::var_os(name).is_some() {
+        Ok(())
+    } else {
+        Err(Failure::Verdict(format!(
+            "{name} is not set in this shell; export it and run again"
+        )))
+    }
+}
+
+/// Builds lablet, starts weaver, makes the runs `runs` makes against it
+/// under the run directory, stops weaver and judges its report.
+fn judged(
+    root: &Path,
+    programs: &mut dyn Programs,
+    runs: impl FnOnce(&mut dyn Programs, &Scratch, u16) -> Result<Emitted, Failure>,
+) -> CheckResult {
     let output = root.join(OUTPUT);
     let report = output.join(REPORT);
     // A report from an earlier run must not stand in for one weaver never
@@ -128,7 +269,7 @@ fn check_with(root: &Path, programs: &mut dyn Programs) -> CheckResult {
     let scratch = Scratch::new(&output)?;
     build_lablet(root, programs)?;
     let mut listener = Listener::start(root, programs)?;
-    let runs = run_configs(root, programs, &scratch, listener.ports.grpc)?;
+    let runs = runs(programs, &scratch, listener.ports.grpc)?;
     listener.stop(programs.stop_within())?;
     if !report.is_file() {
         return Err(Error::Missing {
@@ -164,20 +305,36 @@ fn build_lablet(root: &Path, programs: &mut dyn Programs) -> Result<(), Error> {
     }
 }
 
-/// The two fake-provider runs against the listener on `grpc`, both with
-/// content captured: the starter `init` writes, and the two-turn example,
-/// copied so that its run writes nothing into the tree. Returns how many ran.
+/// The three fake-provider runs against the listener on `grpc`, each with
+/// content captured: the starter `init` writes, and the two-turn and retry
+/// examples, copied so that their runs write nothing into the tree. The
+/// retry run alone is named, so the starter's and the two-turns run's
+/// attributes stay what they were. Returns what the runs emitted.
 fn run_configs(
     root: &Path,
     programs: &mut dyn Programs,
     scratch: &Scratch,
     grpc: u16,
-) -> Result<usize, Failure> {
+) -> Result<Emitted, Failure> {
     let endpoint = format!("http://127.0.0.1:{grpc}");
     let manifest = root.join("lablet/Cargo.toml");
     let starter = scratch.dir.join(STARTER);
     let two_turns = scratch.dir.join("two-turns");
+    let retry = scratch.dir.join("retry");
     copy_dir(&root.join(TWO_TURNS), &two_turns)?;
+    copy_dir(&root.join(RETRY), &retry)?;
+    let mut retry_args = run_args(CONFIG_FILE, "Say hello.", &endpoint);
+    retry_args.extend(
+        [
+            "--task",
+            "retry",
+            "--experiment",
+            "live-check",
+            "--trial",
+            "1",
+        ]
+        .map(str::to_owned),
+    );
     let runs = [
         (
             scratch.dir.clone(),
@@ -185,27 +342,35 @@ fn run_configs(
                 .map(str::to_owned)
                 .to_vec(),
         ),
-        (starter, run_args("Say hello.", &endpoint)),
+        (starter, run_args(CONFIG_FILE, "Say hello.", &endpoint)),
         (
             two_turns,
-            run_args("Read notes.md and say what it holds.", &endpoint),
+            run_args(
+                CONFIG_FILE,
+                "Read notes.md and say what it holds.",
+                &endpoint,
+            ),
         ),
+        (retry, retry_args),
     ];
     for (directory, args) in &runs {
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         lablet(programs, &manifest, directory, &args)?;
     }
-    Ok(runs.len() - 1)
+    Ok(Emitted {
+        runs: runs.len() - 1,
+        retried: true,
+    })
 }
 
-/// The arguments of one run against `endpoint`, over gRPC, which is what
-/// weaver listens for, with no file written since `telemetry.file.path`
-/// stays null.
-fn run_args(prompt: &str, endpoint: &str) -> Vec<String> {
+/// The arguments of one run of `config` against `endpoint`, over gRPC,
+/// which is what weaver listens for, with no file written since
+/// `telemetry.file.path` stays null.
+fn run_args(config: &str, prompt: &str, endpoint: &str) -> Vec<String> {
     [
         "run",
         "--config",
-        "lablet.yaml",
+        config,
         "--prompt",
         prompt,
         "--quiet",
@@ -648,10 +813,11 @@ fn findings(report: &Report) -> Result<Vec<Finding>, serde_json::Error> {
     Ok(found)
 }
 
-/// The step's judgement of a report for `runs` runs: a violation fails it,
-/// with every finding listed; so does a report that saw less than the runs
-/// emit, which is what an export that went elsewhere or nowhere leaves.
-fn verdict(report: &Report, found: &[Finding], runs: usize, path: &Path) -> CheckResult {
+/// The step's judgement of a report for what the runs `emitted`: a
+/// violation fails it, with every finding listed; so does a report that saw
+/// less than the runs emit, which is what an export that went elsewhere or
+/// nowhere leaves.
+fn verdict(report: &Report, found: &[Finding], emitted: Emitted, path: &Path) -> CheckResult {
     let statistics = &report.statistics;
     let count = |counts: &BTreeMap<String, u64>, key: &str| counts.get(key).copied().unwrap_or(0);
     let summary = summary(statistics);
@@ -667,7 +833,7 @@ fn verdict(report: &Report, found: &[Finding], runs: usize, path: &Path) -> Chec
     }
     let spans = count(&statistics.total_entities_by_type, "span");
     let wide = count(&statistics.seen_registry_events, WIDE_EVENT);
-    let runs = u64::try_from(runs).unwrap_or(u64::MAX);
+    let runs = u64::try_from(emitted.runs).unwrap_or(u64::MAX);
     // A run emits its root span, a chat span and its wide event at the least.
     let least = runs.saturating_mul(2);
     if wide < runs || spans < least {
@@ -675,6 +841,22 @@ fn verdict(report: &Report, found: &[Finding], runs: usize, path: &Path) -> Chec
             "the checker saw {spans} span(s) and {wide} `{WIDE_EVENT}` event(s), where {runs} \
              run(s) emit at least {least} span(s) and {runs} event(s): a run never reached it, or \
              exported less than it emits\n{summary}\nthe report is at {}",
+            path.display()
+        )));
+    }
+    // The failed attempt's record is matched to its event by name; its span
+    // event isn't, so what's counted is every span event in the report. The
+    // count reads as `lablet.retry` only because `lablet.retry` is the
+    // registry's one `emit: span_event`, so the next span event added makes
+    // someone read it (lablet/telemetry/registry/application/run/events.yaml).
+    let exceptions = count(&statistics.seen_registry_events, EXCEPTION_EVENT);
+    let span_events = count(&statistics.total_entities_by_type, SPAN_EVENT);
+    if emitted.retried && (exceptions == 0 || span_events == 0) {
+        return Err(Failure::Verdict(format!(
+            "the checker saw {exceptions} `{EXCEPTION_EVENT}` record(s) and {span_events} span \
+             event(s), where the retried run emits one of each: the failed attempt never reached \
+             it, or its record or its `lablet.retry` event was exported under another name\n\
+             {summary}\nthe report is at {}",
             path.display()
         )));
     }
@@ -689,6 +871,7 @@ fn summary(statistics: &Statistics) -> String {
         &statistics.total_entities_by_type,
         &[
             "span",
+            SPAN_EVENT,
             "log",
             "resource",
             "instrumentation_scope",
@@ -738,16 +921,37 @@ mod tests {
     /// members and required attributes missing.
     const VIOLATIONS: &str = include_str!("../tests/fixtures/live-check/violations.json");
 
+    /// What weaver wrote for the three runs the check makes, the retry
+    /// example's among them: a `gen_ai.client.operation.exception` record
+    /// matched by name, and the `lablet.retry` span event counted as an
+    /// entity and not by name.
+    const RETRIED: &str = include_str!("../tests/fixtures/live-check/retried.json");
+
+    /// The three runs' report, as the step says it.
+    const RETRIED_SUMMARY: &str = "entities span 9, span_event 1, log 13, resource 6, \
+                                   instrumentation_scope 6, attribute 391; registry coverage 78%; \
+                                   findings violation 0, information 163";
+
+    /// A variable no shell sets, for the presence check's refusal.
+    const MADE_UP: &str = "LABLET_LIVE_CHECK_TEST_MADE_UP_KEY";
+
+    const fn runs(runs: usize) -> Emitted {
+        Emitted {
+            runs,
+            retried: false,
+        }
+    }
+
     const REPORT_PATH: &str = "lablet/target/weaver-live-check/live_check.json";
 
     fn report(text: &str) -> Report {
         serde_json::from_str(text).unwrap()
     }
 
-    fn judged(text: &str, runs: usize) -> CheckResult {
+    fn judged(text: &str, emitted: Emitted) -> CheckResult {
         let parsed = report(text);
         let found = findings(&parsed).unwrap();
-        verdict(&parsed, &found, runs, Path::new(REPORT_PATH))
+        verdict(&parsed, &found, emitted, Path::new(REPORT_PATH))
     }
 
     #[test]
@@ -776,7 +980,9 @@ mod tests {
         let root = repo_root();
         assert!(root.join(REGISTRY).join("manifest.yaml").is_file());
         assert!(root.join(CONFIG).is_file());
-        assert!(root.join(TWO_TURNS).join("lablet.yaml").is_file());
+        assert!(root.join(TWO_TURNS).join(CONFIG_FILE).is_file());
+        assert!(root.join(RETRY).join(CONFIG_FILE).is_file());
+        assert!(root.join(RETRY).join("lablet-script.yaml").is_file());
 
         // The config must not switch weaver to v2 either, and it must fail
         // on violations, which is what the verdict counts.
@@ -877,7 +1083,7 @@ mod tests {
 
     #[test]
     fn a_report_with_violations_fails_listing_every_finding_violations_first() {
-        let verdict = judged(VIOLATIONS, 1).unwrap_err().into_verdict();
+        let verdict = judged(VIOLATIONS, runs(1)).unwrap_err().into_verdict();
         assert!(
             verdict.starts_with(
                 "weaver live-check found 40 violation(s); every finding:\n  [span chat scripted] \
@@ -919,7 +1125,7 @@ mod tests {
     #[test]
     fn a_report_with_no_violation_passes_with_what_it_saw_as_the_note() {
         assert_eq!(
-            judged(PASSING, 2).unwrap(),
+            judged(PASSING, runs(2)).unwrap(),
             Some(Note::Info(
                 "entities span 4, log 2, attribute 136; registry coverage 41%; findings violation \
                  0, information 68"
@@ -946,7 +1152,7 @@ mod tests {
 
     #[test]
     fn a_report_that_saw_less_than_the_runs_emit_fails() {
-        let verdict = judged(PASSING, 3).unwrap_err().into_verdict();
+        let verdict = judged(PASSING, runs(3)).unwrap_err().into_verdict();
         assert!(
             verdict.starts_with(
                 "the checker saw 4 span(s) and 2 `lablet.run` event(s), where 3 run(s) emit at \
@@ -962,7 +1168,7 @@ mod tests {
         // What an idle listener writes at its inactivity timeout.
         let idle = r#"{"samples": [], "statistics": {"total_entities": 0, "total_entities_by_type": {},
             "advice_level_counts": {}, "registry_coverage": 0.0, "seen_registry_events": {}}}"#;
-        let verdict = judged(idle, 1).unwrap_err().into_verdict();
+        let verdict = judged(idle, runs(1)).unwrap_err().into_verdict();
         assert!(
             verdict.starts_with(
                 "the checker saw 0 span(s) and 0 `lablet.run` event(s), where 1 run(s)"
@@ -981,12 +1187,160 @@ mod tests {
             "advice_level_counts": {"improvement": 2, "information": 5}, "registry_coverage": 0.5,
             "seen_registry_events": {"lablet.run": 1}}}"#;
         assert_eq!(
-            judged(advised, 1).unwrap(),
+            judged(advised, runs(1)).unwrap(),
             Some(Note::Info(
                 "entities span 2, log 1; registry coverage 50%; findings violation 0, improvement \
                  2, information 5"
                     .to_owned()
             ))
+        );
+    }
+
+    /// The key weaver counts span events under was read off the report of
+    /// the first run with the retry example, and the premise of counting
+    /// them by type is in the same report: the event isn't matched by name.
+    #[test]
+    fn a_report_of_the_three_runs_passes_with_the_failed_attempt_and_the_retry_seen() {
+        let parsed = report(RETRIED);
+        let statistics = &parsed.statistics;
+        assert_eq!(statistics.total_entities_by_type.get(SPAN_EVENT), Some(&1));
+        assert_eq!(
+            statistics.seen_registry_events.get(EXCEPTION_EVENT),
+            Some(&1)
+        );
+        assert_eq!(
+            statistics.seen_registry_events.get("lablet.retry"),
+            Some(&0)
+        );
+        assert_eq!(statistics.seen_registry_events.get(WIDE_EVENT), Some(&3));
+        assert_eq!(
+            judged(
+                RETRIED,
+                Emitted {
+                    runs: 3,
+                    retried: true
+                }
+            )
+            .unwrap(),
+            Some(Note::Info(RETRIED_SUMMARY.to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_report_without_the_failed_attempt_or_its_span_event_fails_a_retried_run() {
+        let retried = Emitted {
+            runs: 2,
+            retried: true,
+        };
+        let verdict = judged(PASSING, retried).unwrap_err().into_verdict();
+        assert!(
+            verdict.starts_with(
+                "the checker saw 0 `gen_ai.client.operation.exception` record(s) and 0 span \
+                 event(s), where the retried run emits one of each: the failed attempt never \
+                 reached it, or its record or its `lablet.retry` event was exported under another \
+                 name\nentities span 4, log 2"
+            ),
+            "{verdict}"
+        );
+        assert!(
+            verdict.ends_with("\nthe report is at lablet/target/weaver-live-check/live_check.json")
+        );
+
+        // Each alone is not enough, and neither is asked of runs that
+        // didn't retry.
+        let saw = |entities: &str, events: &str| {
+            format!(
+                r#"{{"samples": [], "statistics": {{"total_entities_by_type": {{"span": 4, {entities}}},
+                "advice_level_counts": {{}}, "registry_coverage": 0.5,
+                "seen_registry_events": {{"lablet.run": 2, {events}}}}}}}"#
+            )
+        };
+        let record_alone = saw("\"log\": 3", "\"gen_ai.client.operation.exception\": 1");
+        let event_alone = saw("\"span_event\": 1", "\"lablet.retry\": 1");
+        for (text, saw) in [
+            (
+                &record_alone,
+                "1 `gen_ai.client.operation.exception` record(s) and 0 span event(s)",
+            ),
+            (
+                &event_alone,
+                "0 `gen_ai.client.operation.exception` record(s) and 1 span event(s)",
+            ),
+        ] {
+            let verdict = judged(text, retried).unwrap_err().into_verdict();
+            assert!(
+                verdict.starts_with(&format!("the checker saw {saw}, where")),
+                "{verdict}"
+            );
+            judged(text, runs(2)).unwrap();
+        }
+        let both = saw(
+            "\"span_event\": 1, \"log\": 3",
+            "\"gen_ai.client.operation.exception\": 1",
+        );
+        assert_eq!(
+            judged(&both, retried).unwrap(),
+            Some(Note::Info(
+                "entities span 4, span_event 1, log 3; registry coverage 50%; findings violation 0"
+                    .to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn the_key_variable_is_read_off_the_one_api_key_line_of_the_text() {
+        let named = |text: &str| key_variable(text).map_err(Failure::into_verdict);
+        let refused = Err(
+            "the config's api_key names no variable; this mode runs a real provider \
+                           and needs api_key: ${VAR}"
+                .to_owned(),
+        );
+        let key = Ok("ANTHROPIC_API_KEY".to_owned());
+        // The starter as `init` writes it, comments and all.
+        let starter = std::fs::read_to_string(
+            repo_root().join("lablet/apps/lablet-cli/src/cli/init/anthropic.yaml"),
+        )
+        .unwrap();
+        assert_eq!(named(&starter), key);
+        for (text, expected) in [
+            ("model:\n  api_key: ${ANTHROPIC_API_KEY}\n", &key),
+            ("model:\n  api_key: '${ANTHROPIC_API_KEY}'\n", &key),
+            (
+                "model:\n  api_key: \"${ANTHROPIC_API_KEY:-}\" # the key\n",
+                &key,
+            ),
+            (
+                "model: { name: m, api_key: '${ANTHROPIC_API_KEY:-default}' }\n",
+                &key,
+            ),
+            (
+                "{\"model\": {\"api_key\": \"${ANTHROPIC_API_KEY}\"}}\n",
+                &key,
+            ),
+            ("model:\n  api_key: ${_K1}\n", &Ok("_K1".to_owned())),
+            ("model:\n  name: m\n", &refused),
+            ("model:\n  api_key: sk-ant-literal\n", &refused),
+            ("model:\n  api_key: 'prefix${KEY}'\n", &refused),
+            ("model:\n  api_key: ${1KEY}\n", &refused),
+            ("model:\n  api_key: $${KEY}\n", &refused),
+            ("model:\n  # api_key: ${KEY}\n", &refused),
+            ("#api_key: ${KEY}\nmodel:\n  name: m\n", &refused),
+            ("# api_key: ${KEY}\nmodel:\n  name: m\n", &refused),
+            ("model:\n  name: m # api_key: ${KEY}\n", &refused),
+            ("model:\n  other_api_key: ${KEY}\n", &refused),
+            ("", &refused),
+        ] {
+            assert_eq!(named(text), *expected, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn the_presence_check_reads_whether_the_variable_is_set_and_never_its_value() {
+        // Set in every process cargo starts a test in.
+        is_set("PATH").unwrap();
+        assert_eq!(
+            is_set(MADE_UP).unwrap_err().into_verdict(),
+            format!("{MADE_UP} is not set in this shell; export it and run again")
         );
     }
 
@@ -1004,6 +1358,7 @@ mod tests {
             "OTEL",
             "HOME",
             "NOT_OTEL_X",
+            MADE_UP,
         ]
         .map(OsString::from);
         without_the_opentelemetry_environment(&mut command, names);
@@ -1027,6 +1382,14 @@ mod tests {
             .into()
         );
         assert_eq!(command.get_envs().count(), 7);
+
+        // The key's variable passes through to the run as it is: the mode
+        // asks only that it's there.
+        assert!(command.get_envs().all(|(name, _)| name != MADE_UP));
+        assert_eq!(
+            is_set(MADE_UP).unwrap_err().into_verdict(),
+            format!("{MADE_UP} is not set in this shell; export it and run again")
+        );
     }
 
     const FAKE_WEAVER: &str = "XTASK_TEST_FAKE_WEAVER";
@@ -1078,9 +1441,10 @@ mod tests {
         }
     }
 
-    /// The programs as a test runs them: weaver is the fake above, and cargo
-    /// records where it ran and whether a config was there, writes the
-    /// starter for `init`, and exits as told for `run`.
+    /// The programs as a test runs them: weaver is the fake above, writing
+    /// `fixture` as its report, and cargo records where it ran and whether
+    /// a config was there, writes the starter for `init`, and exits as told
+    /// for `run`.
     struct Fake {
         root: PathBuf,
         weaver: &'static str,
@@ -1099,11 +1463,18 @@ mod tests {
             );
             root.write("lablet/examples/two-turns/lablet-script.yaml", "[]\n");
             root.write("lablet/examples/two-turns/work/notes.md", "notes\n");
+            root.write(
+                "lablet/examples/retry/lablet.yaml",
+                "model: { provider: fake, pricing: { input: 3, output: 15, cache_read: 0.3, \
+                 cache_write: 3.75 } }\n",
+            );
+            root.write("lablet/examples/retry/lablet-script.yaml", "[]\n");
             root.write("passing.json", PASSING);
+            root.write("retried.json", RETRIED);
             Self {
                 root: root.path().to_path_buf(),
                 weaver,
-                fixture: root.path().join("passing.json"),
+                fixture: root.path().join("retried.json"),
                 run_exits,
                 spawned: Vec::new(),
                 grpc: None,
@@ -1178,7 +1549,7 @@ mod tests {
     }
 
     #[test]
-    fn the_check_runs_the_starter_and_the_example_against_weaver_and_judges_its_report() {
+    fn the_check_runs_the_starter_and_the_examples_against_weaver_and_judges_its_report() {
         let root = TempDir::new("live-check");
         let mut fake = Fake::new(&root, "serves", 0);
 
@@ -1186,11 +1557,7 @@ mod tests {
 
         assert_eq!(
             result.unwrap(),
-            Some(Note::Info(
-                "entities span 4, log 2, attribute 136; registry coverage 41%; findings violation \
-                 0, information 68"
-                    .to_owned()
-            ))
+            Some(Note::Info(RETRIED_SUMMARY.to_owned()))
         );
         // The report is kept where a person finds it; the run directory is
         // gone, and so is weaver.
@@ -1237,6 +1604,19 @@ mod tests {
                 .map(str::to_owned)
                 .collect()
         };
+        // The retry run alone is named, so the other two emit what they did.
+        let mut retry = run("Say hello.");
+        retry.extend(
+            [
+                "--task",
+                "retry",
+                "--experiment",
+                "live-check",
+                "--trial",
+                "1",
+            ]
+            .map(str::to_owned),
+        );
         let init = [&cargo_run[..], &["init", "--provider", "fake", "starter"]]
             .concat()
             .into_iter()
@@ -1259,7 +1639,134 @@ mod tests {
                     run("Read notes.md and say what it holds."),
                     true
                 ),
+                (scratch.join("retry"), retry, true),
             ]
+        );
+    }
+
+    /// A config as a person writes one for a real provider, in a directory
+    /// of its own with a comment, a quoted fill and a default, named by a
+    /// relative path. `PATH` stands in for the key's variable: the mode reads
+    /// that it's set and nothing else.
+    fn real_config(root: &TempDir) -> PathBuf {
+        root.write(
+            "examples/real/lablet.yaml",
+            "# The key is read from the variable api_key names.\nmodel:\n  provider: anthropic\n  \
+             api_key: '${PATH:-}' # never written here\n",
+        );
+        root.write("examples/real/work/notes.md", "notes\n");
+        root.path().join("examples/real/lablet.yaml")
+    }
+
+    #[test]
+    fn the_real_key_mode_runs_the_config_in_its_directory_and_judges_one_run() {
+        let root = TempDir::new("live-check-real");
+        let config = real_config(&root);
+        let mut fake = Fake::new(&root, "serves", 0);
+        fake.fixture = root.path().join("passing.json");
+
+        let result = check_against_with(root.path(), &mut fake, &config, "Say hello.");
+
+        assert_eq!(
+            result.unwrap(),
+            Some(Note::Info(
+                "entities span 4, log 2, attribute 136; registry coverage 41%; findings violation \
+                 0, information 68"
+                    .to_owned()
+            ))
+        );
+        assert!(root.path().join(OUTPUT).join(REPORT).is_file());
+        assert_eq!(fake.spawned.len(), 1);
+        assert!(!alive(fake.spawned[0]));
+
+        // One run, in the config's own directory, named by its file name,
+        // with the fake runs' overrides and no name of its own.
+        let manifest = root.path().join("lablet/Cargo.toml").display().to_string();
+        let run: Vec<String> = [
+            "run",
+            "--locked",
+            "--manifest-path",
+            &manifest,
+            "--bin",
+            "lablet",
+            "--",
+            "run",
+            "--config",
+            "lablet.yaml",
+            "--prompt",
+            "Say hello.",
+            "--quiet",
+            "--set",
+            &format!(
+                "telemetry.otlp.endpoint=http://127.0.0.1:{}",
+                fake.grpc.unwrap()
+            ),
+            "--set",
+            "telemetry.otlp.protocol=grpc",
+            "--set",
+            "telemetry.capture_content=true",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let directory = std::fs::canonicalize(root.path().join("examples/real")).unwrap();
+        assert_eq!(
+            fake.ran,
+            [
+                (
+                    root.path().join("lablet"),
+                    ["build", "--locked", "--bin", "lablet"]
+                        .map(str::to_owned)
+                        .to_vec(),
+                    false
+                ),
+                (directory, run, true),
+            ]
+        );
+    }
+
+    /// Both refusals come before anything is built or started, so a person
+    /// reads them at once, and name the config's fault as the mode's rule.
+    #[test]
+    fn the_real_key_mode_refuses_before_it_builds_when_the_key_is_no_variable_or_is_unset() {
+        let root = TempDir::new("live-check-real-refused");
+        root.write(
+            "examples/literal/lablet.yaml",
+            "model:\n  provider: anthropic\n  api_key: sk-ant-literal\n",
+        );
+        root.write(
+            "examples/unset/lablet.yaml",
+            &format!("model:\n  provider: anthropic\n  api_key: ${{{MADE_UP}}}\n"),
+        );
+        let mut fake = Fake::new(&root, "serves", 0);
+        for (config, refusal) in [
+            (
+                "examples/literal/lablet.yaml",
+                "the config's api_key names no variable; this mode runs a real provider and \
+                 needs api_key: ${VAR}"
+                    .to_owned(),
+            ),
+            (
+                "examples/unset/lablet.yaml",
+                format!("{MADE_UP} is not set in this shell; export it and run again"),
+            ),
+        ] {
+            let config = root.path().join(config);
+            let verdict = check_against_with(root.path(), &mut fake, &config, "Say hello.")
+                .unwrap_err()
+                .into_verdict();
+            assert_eq!(verdict, refusal);
+        }
+        assert!(fake.ran.is_empty(), "{:?}", fake.ran);
+        assert!(fake.spawned.is_empty());
+
+        // A config that isn't there is told as such, not as keyless.
+        let missing = root.path().join("examples/missing/lablet.yaml");
+        let error = check_against_with(root.path(), &mut fake, &missing, "Say hello.")
+            .unwrap_err()
+            .into_error();
+        assert!(
+            matches!(&error, Error::File { verb: Verb::Read, path, .. } if *path == missing),
+            "{error:?}"
         );
     }
 
@@ -1334,7 +1841,7 @@ mod tests {
         };
         assert_eq!(expected, "exit after POST /stop within 2s");
         assert!(output.contains("fake weaver listening on "), "{output}");
-        assert_eq!(fake.ran.len(), 4, "every run was made before the stop");
+        assert_eq!(fake.ran.len(), 5, "every run was made before the stop");
         assert!(!alive(fake.spawned[0]), "weaver was left running");
     }
 

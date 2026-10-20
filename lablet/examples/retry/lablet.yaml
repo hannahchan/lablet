@@ -1,0 +1,17 @@
+# A fake-provider config with a retried call and a price list: the script
+# answers the first provider call with a retryable failure and the second
+# with text, so a run has one failed attempt, one retry and a cost. It needs
+# no key. The two backoff settings make the one wait short. A relative path
+# starts at this file's directory, wherever lablet runs.
+model:
+  provider: fake
+  script: lablet-script.yaml
+  name: scripted
+  pricing: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 }
+run:
+  retry_backoff_base: 100ms
+  retry_backoff_max: 100ms
+prompt:
+  system: |
+    You are a careful coding agent. Say what you did, and why.
+    Answer in one sentence.

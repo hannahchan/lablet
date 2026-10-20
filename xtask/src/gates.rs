@@ -6,7 +6,7 @@
 
 use std::fmt::Write as _;
 use std::io::{IsTerminal, Read as _, Write as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Instant;
 
@@ -52,6 +52,8 @@ enum Action {
         without: &'static [&'static str],
     },
     Check(fn() -> CheckResult),
+    /// A check given what it judges, which a `fn` can't carry.
+    CheckWith(Box<dyn Fn() -> CheckResult>),
 }
 
 impl Step {
@@ -85,6 +87,14 @@ impl Step {
         Self {
             label,
             action: Action::Check(check),
+            hint: None,
+        }
+    }
+
+    fn check_with(label: &'static str, check: impl Fn() -> CheckResult + 'static) -> Self {
+        Self {
+            label,
+            action: Action::CheckWith(Box::new(check)),
             hint: None,
         }
     }
@@ -447,6 +457,16 @@ pub fn weaver_live_check_steps() -> Vec<Step> {
     vec![Step::check("weaver live-check", live_check::check)]
 }
 
+/// [`weaver_live_check_steps`] for one run of `config` with `prompt`
+/// against a real provider, under the key the config's `api_key` names:
+/// the same step, judging one run's report. Never a CI job's, since no key
+/// is there.
+pub fn weaver_live_check_against_steps(config: PathBuf, prompt: String) -> Vec<Step> {
+    vec![Step::check_with("weaver live-check", move || {
+        live_check::check_against(&config, &prompt)
+    })]
+}
+
 /// cargo-deny under `lablet/deny.toml`, over the workspace and over xtask,
 /// which has its own lockfile. `cargo tree -d` recovers the suppressed graphs.
 pub fn deny_steps() -> Vec<Step> {
@@ -614,6 +634,7 @@ pub fn run(mode: Mode, steps: &[Step]) -> bool {
                 run_command(program, &args, env, without, capture)
             }
             Action::Check(check) => check(),
+            Action::CheckWith(check) => check(),
         };
         let elapsed = start.elapsed().as_secs_f64();
         if capture && on_terminal() {
@@ -831,7 +852,7 @@ mod tests {
     fn command_line(step: &Step) -> Option<String> {
         match &step.action {
             Action::Command { program, args, .. } => Some(format!("{program} {}", args.join(" "))),
-            Action::Check(_) => None,
+            Action::Check(_) | Action::CheckWith(_) => None,
         }
     }
 
@@ -839,7 +860,7 @@ mod tests {
     fn kept_from(step: &Step) -> Vec<&'static str> {
         match &step.action {
             Action::Command { without, .. } => without.to_vec(),
-            Action::Check(_) => Vec::new(),
+            Action::Check(_) | Action::CheckWith(_) => Vec::new(),
         }
     }
 
@@ -1103,7 +1124,7 @@ mod tests {
     fn weaver_vendor_runs_the_script_that_holds_the_pins() {
         let args = |check: bool| match &weaver_vendor_steps(check)[0].action {
             Action::Command { program, args, .. } => format!("{program} {}", args.join(" ")),
-            Action::Check(_) => String::new(),
+            Action::Check(_) | Action::CheckWith(_) => String::new(),
         };
         assert_eq!(args(false), "bash lablet/telemetry/vendor.sh");
         assert_eq!(args(true), "bash lablet/telemetry/vendor.sh --check");
@@ -1135,7 +1156,7 @@ mod tests {
                 .iter()
                 .map(|step| match &step.action {
                     Action::Command { args, .. } => args.join(" "),
-                    Action::Check(_) => String::new(),
+                    Action::Check(_) | Action::CheckWith(_) => String::new(),
                 })
                 .collect()
         };
@@ -1220,7 +1241,9 @@ mod tests {
         let check = |steps: Vec<Step>| match steps.as_slice() {
             [step] => match step.action {
                 Action::Check(check) => (step.label, check),
-                Action::Command { .. } => panic!("{} is not a check", step.label),
+                Action::Command { .. } | Action::CheckWith(_) => {
+                    panic!("{} is not a check", step.label)
+                }
             },
             _ => panic!("a floor task is one step"),
         };
