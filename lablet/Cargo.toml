@@ -114,7 +114,7 @@ futures-util = { version = "=0.3.34", default-features = false, features = ["all
 # Runtime for the loop, child-process MCP servers, the bash tool, the fake provider's
 # latencies, the blocking tasks a flush of telemetry and a transcript's write wait on, Ctrl-C,
 # and test receivers.
-tokio = { version = "=1.53.1", features = [
+tokio = { version = "=1.53.3", features = [
   "rt-multi-thread",
   "macros",
   "time",
