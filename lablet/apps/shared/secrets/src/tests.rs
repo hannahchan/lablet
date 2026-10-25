@@ -375,6 +375,8 @@ fn a_percent_escape_is_decoded_and_what_is_no_escape_is_kept() {
     assert_eq!(percent_decoded("Bearer%20tok"), "Bearer tok");
     assert_eq!(percent_decoded("100%"), "100%");
     assert_eq!(percent_decoded("%zz%4"), "%zz%4");
+    assert_eq!(percent_decoded("pw%+5"), "pw%+5");
+    assert_eq!(percent_decoded("%-5x"), "%-5x");
     assert_eq!(percent_decoded("caf%C3%A9"), "café");
     assert_eq!(percent_decoded("%ff"), "\u{FFFD}");
     assert_eq!(percent_decoded("plain"), "plain");

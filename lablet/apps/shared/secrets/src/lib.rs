@@ -684,8 +684,9 @@ impl Set<'_> {
 /// each half, raw and percent-decoded, and the `Authorization: Basic`
 /// credentials an HTTP client makes of it, the Anthropic adapter's and
 /// reqwest's alike, with and without the scheme's word. The `Basic` forms
-/// join only when the information itself is long enough to be cut, so what
-/// `check` says of it, cut or under 16 bytes, holds for every form.
+/// join only when the whole user information is long enough to be cut, since
+/// `check`'s note speaks of the whole; a half or a decoded form under 16
+/// bytes is dropped by `Secrets::new`, as every registered form is.
 fn information_forms(information: &str) -> Vec<String> {
     let (user, password) = information
         .split_once(':')
@@ -716,7 +717,8 @@ fn information_forms(information: &str) -> Vec<String> {
 }
 
 /// `text` with each `%XX` read as the byte it encodes, and a `%` that
-/// begins no such pair kept as it is, read as a command's output is read.
+/// begins no such pair, two hex digits, kept as it is, read as a command's
+/// output is read and as the adapter and reqwest read a URL.
 #[must_use]
 pub fn percent_decoded(text: &str) -> String {
     let mut bytes = Vec::with_capacity(text.len());
@@ -726,6 +728,8 @@ pub fn percent_decoded(text: &str) -> String {
         let encoded = rest
             .get(at + 1..at + 3)
             .and_then(|hex| std::str::from_utf8(hex).ok())
+            // `from_str_radix` would read a sign, which no URL reader does.
+            .filter(|hex| hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
             .and_then(|hex| u8::from_str_radix(hex, 16).ok());
         if let Some(byte) = encoded {
             bytes.push(byte);

@@ -35,30 +35,31 @@ def without_metadata(text, path):
     """`text` with the top-level `metadata` dropped from the JSON document,
     or from each line of a `.jsonl`, and the number of keys dropped."""
     dropped = 0
+    # Only a line or a document that held the key is written out again, so
+    # the rest keeps its bytes; the split is on newlines alone, since JSON
+    # strings may hold the other line separators raw.
     if path.endswith(".jsonl"):
-        lines = []
-        for line in text.splitlines():
+        lines = text.split("\n")
+        for index, line in enumerate(lines):
             if not line.strip():
-                lines.append(line)
                 continue
             try:
                 document = json.loads(line)
             except ValueError:
-                lines.append(line)
                 continue
             if isinstance(document, dict) and "metadata" in document:
                 del document["metadata"]
                 dropped += 1
-            lines.append(json.dumps(document, ensure_ascii=False))
-        return "\n".join(lines) + ("\n" if text.endswith("\n") else ""), dropped
+                lines[index] = json.dumps(document, ensure_ascii=False)
+        return "\n".join(lines), dropped
     try:
         document = json.loads(text)
     except ValueError:
         return text, 0
     if isinstance(document, dict) and "metadata" in document:
         del document["metadata"]
-        dropped = 1
-    return json.dumps(document, ensure_ascii=False, indent=2) + "\n", dropped
+        return json.dumps(document, ensure_ascii=False, indent=2) + "\n", 1
+    return text, 0
 
 
 def main(argv):

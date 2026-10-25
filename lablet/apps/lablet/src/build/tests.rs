@@ -164,7 +164,7 @@ async fn a_value_a_variable_gave_is_refused_as_it_is_written() {
             place: Some(Place::Line(1)),
             value: Some("\"${GATEWAY}\"".to_owned()),
             reason: "a URL begins `http://` or `https://` and names a host, as \
-                     `http://localhost:11434/v1` does"
+                     `https://gateway.example` does"
                 .to_owned(),
         })
     );

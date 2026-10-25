@@ -92,12 +92,12 @@ LABLET_REPLAY_CAPTURE=/private/tmp/lab-capture/bodies/R2/claude-opus-5-5 \
   cargo test --locked --manifest-path <repo>/lablet/Cargo.toml -p lablet-provider-anthropic --test it -- --ignored replay
 ```
 
-Then the skeletons, both sides, and a diff on the rows of the design's table:
+Then the skeletons, both sides, and a diff on the rows of the design's table. `skeleton.py` names a skeleton after its input, so the two sides pair by conversation order, the reference's by its `index.jsonl` and lablet's by number, and `diff -r` pairs none of them: diff each pair. The reference's directory also holds the session-title side request, so run the reference's side over a copy that holds the main conversation alone:
 
 ```bash
 python3 -I <repo>/product/research/parity/capture/skeleton.py /private/tmp/lab-capture/bodies/R2/claude-opus-5-5 --out /private/tmp/lab-capture/skeletons/reference
 python3 -I <repo>/product/research/parity/capture/skeleton.py /private/tmp/lab-capture/bodies/R2/claude-opus-5-5/lablet-replay --out /private/tmp/lab-capture/skeletons/lablet
-diff -r /private/tmp/lab-capture/skeletons/reference /private/tmp/lab-capture/skeletons/lablet
+# then diff the n-th skeleton of each side, in conversation order
 ```
 
 For E1 and the key order of a replayed `tool_use.input`, the skill's `prefix_diff.py` (`claude-api/shared/preserved-thinking-migration/`) diffs adjacent reference requests as the API does, `cache_control` stripped.

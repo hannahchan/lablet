@@ -117,7 +117,7 @@ CI runs on every pushed branch as three jobs side by side: `cargo xtask ci` (the
 
 ## Shell scripts
 
-`cargo xtask lint-shell` runs shellcheck over every tracked shell script: `.sh` files and the git hooks, which have no extension and are found by their shebang. `product/research/` is left out, as Vale leaves it out, because it's a frozen record, and so is the vendored `lablet/telemetry/deps/`.
+`cargo xtask lint-shell` runs shellcheck over every tracked shell script: `.sh` files and the git hooks, which have no extension and are found by their shebang. `product/research/` is left out, as Vale leaves it out, because it's a frozen record, except the capture's driver `run-capture.sh`, which is run again at each capture, and so is the vendored `lablet/telemetry/deps/`.
 
 ## Editor and agent setup
 

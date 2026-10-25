@@ -1,9 +1,8 @@
 //! P8: the fields and markers lablet sends, as the capture of the primary
-//! reference compared them, held in CI. The comparison was made by hand at
-//! the capture of 2026-10-25, Claude Code 2.1.281 through the Python SDK
-//! 0.2.159, against what `replay.rs` wrote of lablet's side. The recorded
-//! bodies stay out of the repository, so the conversation here is lablet's
-//! own, made to the shape of the capture's ten-step run: a turn of thinking
+//! reference compared them, held in CI. The comparison itself is made by
+//! hand at a capture, against what `replay.rs` writes of lablet's side; the
+//! recorded bodies stay out of the repository, so the conversation here is
+//! lablet's own, made to the shape of the capture's task: a turn of thinking
 //! with its signature, text and one call; a turn of two calls whose results
 //! come back in one message; and a closing text.
 //!
@@ -13,9 +12,8 @@
 //! `output_config`, `diagnostics` and `stream`; one system block where the
 //! reference sends an identity line ahead of the prompt; and a marker on the
 //! last tool where the reference marks that line and no tool, as
-//! `decisions.md` records on 2026-10-25. `max_tokens` is the config's default
-//! of 32,000, which the config's own tests hold; here it's what the adapter
-//! sends unchanged.
+//! `decisions.md` records. `max_tokens` is the config's default, which the
+//! config's own tests hold; here it's what the adapter sends unchanged.
 //!
 //! What other tests hold isn't repeated: each request repeating the previous
 //! one byte for byte, markers aside, with each `tool_use` input in its sorted,
@@ -31,7 +29,7 @@ use wiremock::MockServer;
 use crate::harness::{self, MODEL, Tools};
 use lablet_test_support::{PROMPT, SYSTEM};
 
-/// The config's default `max_tokens`.
+/// The config's default `max_tokens`, as `lablet-config`'s tests pin it.
 const MAX_TOKENS: u32 = 32_000;
 
 /// The tools lablet offers, in the order it offers them.

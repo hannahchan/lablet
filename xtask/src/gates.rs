@@ -257,8 +257,10 @@ const PROSE: [&str; 8] = [
     "lablet/examples",
 ];
 
-/// A frozen record of what was run, kept out of the linters.
+/// A frozen record of what was run, kept out of the linters, but for the
+/// capture's driver, which is run again at each capture.
 const RESEARCH: &str = "product/research/";
+const CAPTURE_DRIVER: &str = "product/research/parity/capture/run-capture.sh";
 
 /// Upstream's files, which stay as upstream wrote them.
 const VENDORED: &str = "lablet/telemetry/deps/";
@@ -294,7 +296,9 @@ fn shell_scripts(root: &Path) -> Result<Vec<String>, Error> {
     Ok(listed
         .split('\0')
         .filter(|path| !path.is_empty())
-        .filter(|path| !path.starts_with(RESEARCH) && !path.starts_with(VENDORED))
+        .filter(|path| {
+            (!path.starts_with(RESEARCH) || *path == CAPTURE_DRIVER) && !path.starts_with(VENDORED)
+        })
         .filter(|path| match Path::new(path).extension() {
             Some(extension) => extension.eq_ignore_ascii_case("sh"),
             None => std::fs::read_to_string(root.join(path))
@@ -840,7 +844,12 @@ mod tests {
         ] {
             assert!(scripts.iter().any(|path| path == expected), "{expected}");
         }
-        assert!(scripts.iter().all(|path| !path.starts_with(RESEARCH)));
+        assert!(scripts.iter().any(|path| path == CAPTURE_DRIVER));
+        assert!(
+            scripts
+                .iter()
+                .all(|path| !path.starts_with(RESEARCH) || path == CAPTURE_DRIVER)
+        );
         assert!(scripts.iter().all(|path| !path.starts_with(VENDORED)));
         assert!(is_shell_shebang("#!/usr/bin/env bash"));
         assert!(is_shell_shebang("#!/bin/sh"));

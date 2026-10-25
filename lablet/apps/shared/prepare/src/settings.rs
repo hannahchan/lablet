@@ -267,7 +267,7 @@ fn base_url(model: &config::Model) -> Result<(), Refusal> {
         Err(Refusal::invalid(
             "model.base_url",
             "a URL begins `http://` or `https://` and names a host, as \
-             `http://localhost:11434/v1` does",
+             `https://gateway.example` does",
         ))
     }
 }

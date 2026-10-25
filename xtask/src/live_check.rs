@@ -7,9 +7,11 @@
 //! idle listener reports nothing wrong. With `--config <file> --prompt
 //! <text>`, one run of that config against its real provider is checked the
 //! same way, under the key its `api_key` names, which must be set: the
-//! binary is built without the key and run with the few variables a process
-//! needs beside it, so the shell's other tokens reach neither a build script
-//! nor the model's commands.
+//! binary is built with the key's variable taken off cargo's environment, so
+//! no build script runs with the key, and run under an allowlist of the
+//! variables a process needs beside it, so none of the shell's other tokens
+//! reaches the run or the model's commands. The build itself runs under the
+//! rest of the shell.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -1543,8 +1545,9 @@ mod tests {
         );
         assert_eq!(command.get_envs().count(), 7);
 
-        // The key's variable passes through to the run as it is: the mode
-        // asks only that it's there.
+        // The helper leaves the key's variable in place: the mode asks only
+        // that it's set, and the run gets it under `env_clear` from
+        // `handed_to_a_real_run`, not from here.
         assert!(command.get_envs().all(|(name, _)| name != MADE_UP));
         assert_eq!(
             is_set(MADE_UP).unwrap_err().into_verdict(),

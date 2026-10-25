@@ -421,7 +421,7 @@ fn a_value_a_variable_gives_is_shown_as_the_config_writes_it() {
     refused(
         &run,
         "config: model.base_url (line 3): \"${LABLET_TEST_BASE_URL}\" is refused: a URL begins \
-         `http://` or `https://` and names a host, as `http://localhost:11434/v1` does",
+         `http://` or `https://` and names a host, as `https://gateway.example` does",
     );
     assert!(!run.stderr.contains(held), "{run:?}");
 }

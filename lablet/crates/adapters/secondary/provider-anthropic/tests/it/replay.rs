@@ -257,6 +257,8 @@ async fn the_recorded_conversation_replayed_through_lablet_is_written_beside_the
     );
 
     let out = directory.join("lablet-replay");
+    // An earlier replay's higher-numbered requests would pass for this one's.
+    let _ = fs::remove_dir_all(&out);
     fs::create_dir_all(&out).unwrap();
     let received = harness::received(&server).await;
     for (index, request) in received.iter().enumerate() {

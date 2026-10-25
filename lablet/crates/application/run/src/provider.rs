@@ -143,8 +143,10 @@ pub trait ModelProvider: Send + Sync {
     ///
     /// Its message holds no credentials: no user info or query string of a
     /// URL, no header value, and a response body only when the run captures
-    /// content. The type holds the message's length and nothing can hold
-    /// this, so it's the adapter's obligation.
+    /// content. The loop cuts the run's secrets out of the message and bounds
+    /// it before anything records it, so the type holds it whole; what the
+    /// message must not carry is the adapter's obligation, since nothing can
+    /// hold it to that.
     async fn complete(
         &self,
         request: ProviderRequest<'_>,

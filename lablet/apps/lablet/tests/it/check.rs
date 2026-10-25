@@ -409,7 +409,7 @@ async fn a_base_url_a_variable_gives_is_refused_without_the_variable_s_value() {
     assert_eq!(
         error.to_string(),
         "model.base_url (line 1): \"${GATEWAY}\" is refused: a URL begins `http://` or \
-         `https://` and names a host, as `http://localhost:11434/v1` does"
+         `https://` and names a host, as `https://gateway.example` does"
     );
     assert!(!format!("{error}{error:?}").contains(HELD), "{error:?}");
 }

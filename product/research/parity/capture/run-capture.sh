@@ -342,10 +342,14 @@ r0() {
   elif [ -e "$dir" ]; then
     echo "error: $dir is there from an R0 that didn't pass its checks; remove it, then run again" >&2
     exit 1
-  elif ! capture R0 "$STARTER"; then
-    echo "error: R0 failed, so nothing more runs; its messages are in $dir/messages.txt." >&2
-    echo "Remove $dir before you run it again." >&2
-    exit 1
+  else
+    # An earlier pass's marker would vouch for this attempt before its checks run.
+    rm -f "$passed"
+    if ! capture R0 "$STARTER"; then
+      echo "error: R0 failed, so nothing more runs; its messages are in $dir/messages.txt." >&2
+      echo "Remove $dir before you run it again." >&2
+      exit 1
+    fi
   fi
   if ! compgen -G "$BODIES/R0/*/*.request.json" >/dev/null; then
     echo "error: R0 left no request body under $BODIES/R0, so the body log is off; nothing more runs" >&2
@@ -456,8 +460,23 @@ r4() {
 # with another leading step: <status>[x<count>][-retry-after-<s>][-x-should-retry-<true|false>][-prompt-too-long],
 # joined by -then-.
 known_sequence() {
-  local step rest
-  for step in ${1//-then-/ }; do
+  # Read step by step on the text itself, so an empty step, a space or a glob
+  # character is refused rather than split away or expanded.
+  local sequence="$1" step rest count
+  case "$sequence" in
+    '' | *-then-) return 1 ;;
+  esac
+  while :; do
+    case "$sequence" in
+      *-then-*)
+        step="${sequence%%-then-*}"
+        sequence="${sequence#*-then-}"
+        ;;
+      *)
+        step="$sequence"
+        sequence=""
+        ;;
+    esac
     case "$step" in
       [0-9][0-9][0-9]*) ;;
       *) return 1 ;;
@@ -466,7 +485,13 @@ known_sequence() {
     case "$rest" in
       x[0-9]*)
         rest="${rest#x}"
-        rest="${rest#"${rest%%[!0-9]*}"}"
+        count="${rest%%[!0-9]*}"
+        rest="${rest#"$count"}"
+        # A count of zero leaves the mock with no step to play.
+        case "$count" in
+          *[1-9]*) ;;
+          *) return 1 ;;
+        esac
         ;;
     esac
     while [ -n "$rest" ]; do
@@ -481,6 +506,7 @@ known_sequence() {
         *) return 1 ;;
       esac
     done
+    [ -n "$sequence" ] || break
   done
   return 0
 }
