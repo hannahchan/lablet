@@ -37,8 +37,11 @@ CLI_VERSION=2.1.281
 STARTER=claude-opus-5-5
 PREVIOUS=claude-sonnet-5
 R1_MODELS=(claude-sonnet-5 claude-sonnet-5-5 claude-opus-5-5 claude-haiku-5-5 claude-fable-5-1)
-SEQUENCES=(529x12 500x3-then-200 429-retry-after-7-then-200 429-retry-after-61
-  500-x-should-retry-false 400-prompt-too-long-then-200)
+# Each starts with a 200 for the session-title request the reference sends
+# first, on the mock's model too, so the main request is the one that meets
+# the sequence's error; without it the title request took the first step.
+SEQUENCES=(200-then-529x12 200-then-500x3-then-200 200-then-429-retry-after-7-then-200
+  200-then-429-retry-after-61 200-then-500-x-should-retry-false 200-then-400-prompt-too-long-then-200)
 
 # The processes this script started. Cleanup stops these and nothing else.
 SINK_PID=""
@@ -178,7 +181,7 @@ expected_for() {
     "R1 claude-fable-5-1")
       echo "expected on an organisation whose retention is under 30 days"
       ;;
-    "R5 "*" 529x12" | "R5 "*" 429-retry-after-61" | "R5 "*" 500-x-should-retry-false")
+    "R5 "*"529x12" | "R5 "*"429-retry-after-61" | "R5 "*"500-x-should-retry-false")
       echo "expected: the sequence never reaches a 200"
       ;;
     "R4 "*)
@@ -449,14 +452,37 @@ r4() {
   fi
 }
 
+# The mock's grammar, so a sequence other than the six can be played, as one
+# with another leading step: <status>[x<count>][-retry-after-<s>][-x-should-retry-<true|false>][-prompt-too-long],
+# joined by -then-.
 known_sequence() {
-  local known
-  for known in "${SEQUENCES[@]}"; do
-    if [ "$known" = "$1" ]; then
-      return 0
-    fi
+  local step rest
+  for step in ${1//-then-/ }; do
+    case "$step" in
+      [0-9][0-9][0-9]*) ;;
+      *) return 1 ;;
+    esac
+    rest="${step#[0-9][0-9][0-9]}"
+    case "$rest" in
+      x[0-9]*)
+        rest="${rest#x}"
+        rest="${rest#"${rest%%[!0-9]*}"}"
+        ;;
+    esac
+    while [ -n "$rest" ]; do
+      case "$rest" in
+        -retry-after-[0-9]*)
+          rest="${rest#-retry-after-}"
+          rest="${rest#"${rest%%[!0-9]*}"}"
+          ;;
+        -x-should-retry-true*) rest="${rest#-x-should-retry-true}" ;;
+        -x-should-retry-false*) rest="${rest#-x-should-retry-false}" ;;
+        -prompt-too-long*) rest="${rest#-prompt-too-long}" ;;
+        *) return 1 ;;
+      esac
+    done
   done
-  return 1
+  return 0
 }
 
 known_model() {
@@ -505,11 +531,11 @@ r5_pair() {
   # waits between retries; a new line in it means the reference still retries.
   echo "[..] the mock plays $sequence; watch its requests with: tail -f \"$staging/mock.log\""
   case "$sequence" in
-    529x12)
-      echo "[..] 529x12 may take a few minutes: the reference backs off between its ten retries, and those waits are the evidence"
+    *529x12)
+      echo "[..] $sequence may take a few minutes: the reference backs off between its retries, and those waits are the evidence"
       ;;
-    429-retry-after-61)
-      echo "[..] 429-retry-after-61 may take about ten minutes: the reference honours each retry-after of 61s, and those waits are the evidence"
+    *429-retry-after-61)
+      echo "[..] $sequence may take up to ten minutes if the reference honours each retry-after of 61s; those waits are the evidence"
       ;;
   esac
   NOTE="$sequence"
@@ -531,9 +557,9 @@ r5() {
   fi
   for sequence in "${sequences[@]}"; do
     r5_pair "$sequence" "$STARTER"
-    if [ "$sequence" = 529x12 ]; then
-      r5_pair "$sequence" "$PREVIOUS"
-    fi
+    case "$sequence" in
+      *529x12) r5_pair "$sequence" "$PREVIOUS" ;;
+    esac
   done
 }
 
@@ -607,7 +633,7 @@ main() {
       local sequence
       for sequence in "$@"; do
         if ! known_sequence "$sequence"; then
-          echo "error: there's no sequence $sequence" >&2
+          echo "error: $sequence isn't a sequence the mock plays" >&2
           usage >&2
           exit 2
         fi
