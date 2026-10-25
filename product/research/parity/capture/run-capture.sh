@@ -181,6 +181,9 @@ expected_for() {
     "R5 "*" 529x12" | "R5 "*" 429-retry-after-61" | "R5 "*" 500-x-should-retry-false")
       echo "expected: the sequence never reaches a 200"
       ;;
+    "R4 "*)
+      echo "expected: the 300-token cap ends each part as an error, and the bodies are the evidence"
+      ;;
     "R7 "*)
       echo "possibly expected: R7 asks for an empty reply"
       ;;
