@@ -51,11 +51,14 @@ FAILURES=()
 # r5 change them around their own calls.
 OUT="$BODIES"
 NOTE=""
+# The directory whose presence refuses a capture, when it isn't the run's own.
+CHECK_DIR=""
 
 usage() {
   cat <<EOF
 usage: run-capture.sh <step>
        run-capture.sh r1 [model...]
+       run-capture.sh r4 [text|write]
        run-capture.sh r5 [sequence...]
 
 Export ANTHROPIC_API_KEY in this shell first. Everything lands under
@@ -68,7 +71,7 @@ steps:
   r1 [model...]     one request on each of the five models, or on those named
   r2r3              R2 from an empty cwd, then R3 at once
   r2-sonnet         R2 on $PREVIOUS, from an empty cwd
-  r4                the output cap, CLAUDE_CODE_MAX_OUTPUT_TOKENS=300
+  r4 [text|write]   the output cap, CLAUDE_CODE_MAX_OUTPUT_TOKENS=300; both parts, or one
   r5 [sequence...]  the mock upstream, every sequence or those named; no key needed
   r6                forty-odd reads of about 20 KB, compaction off
   r7                "Reply with nothing."
@@ -251,9 +254,10 @@ capture() {
   # capture.py adds to a run's directory, so a second attempt would mix with
   # the first in the bodies the replay and the skeletons read. R5 has a rule
   # of its own, in r5_pair.
-  if [ "$run" != R5 ] && [ -e "$OUT/$run/$model" ]; then
-    echo "[FAIL] $label: $OUT/$run/$model exists; remove it to rerun"
-    failed "$label" "not run: $OUT/$run/$model exists"
+  local kept="${CHECK_DIR:-$OUT/$run/$model}"
+  if [ "$run" != R5 ] && [ -e "$kept" ]; then
+    echo "[FAIL] $label: $kept exists; remove it to rerun"
+    failed "$label" "not run: $kept exists"
     return 1
   fi
   need_sink
@@ -426,9 +430,20 @@ r2_sonnet() {
 }
 
 # The cap is in the environment of this one call: the SDK merges capture.py's
-# env over the shell's, so it reaches the CLI.
+# env over the shell's, so it reaches the CLI. capture.py runs R4's two parts
+# in order and goes on past the first's error, which the capped text ends in;
+# a part named here runs alone, into its own directory, after the other failed.
 r4() {
-  CLAUDE_CODE_MAX_OUTPUT_TOKENS=300 capture R4 "$STARTER" || true
+  local part="${1:-}"
+  if [ -n "$part" ]; then
+    CHECK_DIR="$BODIES/R4/$STARTER/$part"
+    NOTE="$part"
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS=300 capture R4 "$STARTER" --part "$part" || true
+    CHECK_DIR=""
+    NOTE=""
+  else
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS=300 capture R4 "$STARTER" || true
+  fi
 }
 
 known_sequence() {
@@ -595,7 +610,21 @@ main() {
         fi
       done
       ;;
-    all | setup | r0 | r2r3 | r2-sonnet | r4 | r6 | r7 | handover | r1-attribution)
+    r4)
+      case "${1:-}" in
+        '' | text | write) ;;
+        *)
+          echo "error: R4 has the parts text and write, not $1" >&2
+          usage >&2
+          exit 2
+          ;;
+      esac
+      if [ "$#" -gt 1 ]; then
+        usage >&2
+        exit 2
+      fi
+      ;;
+    all | setup | r0 | r2r3 | r2-sonnet | r6 | r7 | handover | r1-attribution)
       if [ "$#" -gt 0 ]; then
         usage >&2
         exit 2
@@ -634,7 +663,7 @@ main() {
     r1) r1 "$@" ;;
     r2r3) r2r3 ;;
     r2-sonnet) r2_sonnet ;;
-    r4) r4 ;;
+    r4) r4 "$@" ;;
     r5) r5 "$@" ;;
     r6) r6 ;;
     r7) r7 ;;

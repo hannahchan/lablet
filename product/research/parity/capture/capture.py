@@ -328,11 +328,23 @@ async def main_async(args):
     base = os.path.join(os.path.abspath(args.out), args.run, args.model)
     parts = [None]
     if isinstance(PROMPTS.get(args.run), dict):
-        parts = sorted(PROMPTS[args.run].keys())
+        parts = [args.part] if args.part else sorted(PROMPTS[args.run].keys())
+    failed = []
     for part in parts:
         bodies_dir = base if part is None else os.path.join(base, part)
         print("capture: %s %s -> %s" % (args.run, args.model, bodies_dir), flush=True)
-        await one_query(args, bodies_dir, prompt_for(args.run, part))
+        # The SDK raises once the CLI has ended a run in an error, as the capped
+        # R4 text ends, and the next part is still wanted; the exit code says so.
+        try:
+            await one_query(args, bodies_dir, prompt_for(args.run, part))
+        except Exception as error:  # noqa: BLE001 - whatever the SDK raised is reported, and the next part runs
+            print(
+                "capture: %s %s%s failed: %s: %s"
+                % (args.run, args.model, " " + part if part else "", type(error).__name__, error),
+                flush=True,
+            )
+            failed.append(part or args.run)
+    return 1 if failed else 0
 
 
 def main(argv):
@@ -346,9 +358,11 @@ def main(argv):
     parser.add_argument("--sink", default="http://127.0.0.1:4318", help="the OTLP listener")
     parser.add_argument("--effort", default=None, choices=["low", "medium", "high", "xhigh", "max"])
     parser.add_argument("--with-attribution", action="store_true", help="R1: leave CLAUDE_CODE_ATTRIBUTION_HEADER unset")
+    parser.add_argument("--part", default=None, choices=["text", "write"], help="R4: one of its two parts alone")
     args = parser.parse_args(argv)
-    asyncio.run(main_async(args))
-    return 0
+    if args.part and not isinstance(PROMPTS.get(args.run), dict):
+        parser.error("--part is for R4 alone")
+    return asyncio.run(main_async(args))
 
 
 if __name__ == "__main__":
