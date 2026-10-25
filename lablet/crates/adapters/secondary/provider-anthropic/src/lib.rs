@@ -22,8 +22,9 @@
 //! whether a body that isn't the API's error envelope is quoted in a
 //! failure's message.
 //!
-//! A failure is classified by status first and the envelope's `error.type`
-//! and `error.message` second, into the five kinds the port names. Its
+//! A failure is classified by status first and the envelope's
+//! `error.message` and `error.details.error_code` second, into the five
+//! kinds the port names. Its
 //! message is built from the provider's type, message and request id, or
 //! from the kind of transport failure, and from nothing else: never the
 //! URL, a header value or the text of a transport error, whose source chain

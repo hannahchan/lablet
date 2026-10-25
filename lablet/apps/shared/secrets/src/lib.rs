@@ -21,6 +21,8 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
+use base64::Engine as _;
+
 use lablet_model::Secrets;
 
 use lablet_config::{
@@ -180,8 +182,8 @@ impl Credential {
                 at(self.place),
                 self.held.note()
             ),
-            // A file's contents reach no process either way, and the line
-            // says what's cut rather than who doesn't get it.
+            // A file's contents reach no process unless a `credentials` entry
+            // gives them, so the line says what's cut, and who gets it then.
             Source::Contents => {
                 let mut line = format!(
                     "{}{} -> its file's contents{}",
@@ -194,6 +196,14 @@ impl Credential {
                 }
                 if self.held == Held::Cut {
                     line.push_str("; cut");
+                }
+                if let Some((key, place)) = &self.given_by {
+                    let entry = key.last_key().unwrap_or_default();
+                    let _ = write!(
+                        line,
+                        "; given to bash by credentials{} as {entry}",
+                        at(*place)
+                    );
                 }
                 return line;
             }
@@ -563,7 +573,8 @@ impl Set<'_> {
     }
 
     /// The user information of the URL at `key`: the whole `user:password`,
-    /// each half, raw and percent-decoded. A variable filled into the
+    /// each half, raw and percent-decoded, and the `Basic` credentials a
+    /// client makes of it. A variable filled into the
     /// written user information is own, and so is one that gave the URL its
     /// user information from outside the written text, as a variable
     /// holding the whole URL does. A host or a path a variable gave is no
@@ -669,8 +680,12 @@ impl Set<'_> {
 }
 
 /// The user information of a URL, `user:password` or a user alone, in each
-/// form a command could print it: the whole, each half, raw and
-/// percent-decoded.
+/// form a command could print it or a server could repeat it: the whole,
+/// each half, raw and percent-decoded, and the `Authorization: Basic`
+/// credentials an HTTP client makes of it, the Anthropic adapter's and
+/// reqwest's alike, with and without the scheme's word. The `Basic` forms
+/// join only when the information itself is long enough to be cut, so what
+/// `check` says of it, cut or under 16 bytes, holds for every form.
 fn information_forms(information: &str) -> Vec<String> {
     let (user, password) = information
         .split_once(':')
@@ -685,6 +700,18 @@ fn information_forms(information: &str) -> Vec<String> {
         forms.push(part.to_owned());
         forms.push(percent_decoded(part));
     }
+    if Held::of(information) != Held::Cut {
+        return forms;
+    }
+    // The halves decoded and joined by one `:`, a user alone with an empty
+    // password, as the client encodes them before it sends.
+    let basic = base64::engine::general_purpose::STANDARD.encode(format!(
+        "{}:{}",
+        percent_decoded(user),
+        percent_decoded(password.unwrap_or_default())
+    ));
+    forms.push(format!("Basic {basic}"));
+    forms.push(basic);
     forms
 }
 

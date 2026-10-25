@@ -54,8 +54,8 @@ impl core::fmt::Debug for Builder {
 impl Lablet {
     /// A builder of a `Lablet` that runs as `config` says on the host's
     /// OpenTelemetry, `otel`: its spans go to `otel`'s tracer provider, its
-    /// records to its logger provider, and a command's context is injected
-    /// through its propagator.
+    /// records to its logger provider, and a command's context, and each
+    /// provider request's, is injected through its propagator.
     ///
     /// A `Lablet` can't be built without the host's OpenTelemetry:
     ///
@@ -164,7 +164,7 @@ impl Builder {
 /// library run reads of the telemetry: nothing, since the host's SDK
 /// decides, and no file of lablet's own.
 fn prepared(config: &Config, environment: Base) -> Result<Prepared, BuildError> {
-    Ok(prepare(config, environment)?.finish(Telemetry::default()))
+    prepare(config, environment)?.finish(Telemetry::default())
 }
 
 /// A `Lablet` that runs as `config` says on the host's OpenTelemetry,

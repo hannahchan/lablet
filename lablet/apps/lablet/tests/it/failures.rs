@@ -107,3 +107,82 @@ async fn a_run_with_no_tools_whose_provider_error_carries_a_registered_secret_ho
     assert!(!telemetry.contains(KEY), "the key reached the telemetry");
     assert!(telemetry.contains("[secret withheld]"), "{telemetry}");
 }
+
+/// Answers 401 with an envelope whose message repeats the `Authorization`
+/// header the request carried, as a gateway that quotes what it refused
+/// does.
+struct RepeatsTheAuthorization;
+
+impl wiremock::Respond for RepeatsTheAuthorization {
+    fn respond(&self, request: &wiremock::Request) -> wiremock::ResponseTemplate {
+        let sent = request
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        wiremock::ResponseTemplate::new(401).set_body_json(json!({
+            "type": "error",
+            "error": {
+                "type": "authentication_error",
+                "message": format!("rejected Authorization: {sent}")
+            },
+            "request_id": "req_01"
+        }))
+    }
+}
+
+/// P11 for a gateway's credentials: the adapter sends a base URL's user
+/// information as `Authorization: Basic`, an encoding of its own, and a 401
+/// that repeats that header reaches the outcome and the telemetry with the
+/// encoding cut, since the run's secrets derived from the config hold it.
+#[tokio::test]
+async fn a_401_that_repeats_a_gateway_s_basic_credentials_reaches_the_outcome_with_them_cut() {
+    let lab = Lab::new("echoed-basic");
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(RepeatsTheAuthorization)
+        .mount(&server)
+        .await;
+    let config = with_key(
+        crate::harness::filled(
+            &format!(
+                "model: {{ name: claude-sonnet-5-5, base_url: \
+                 'http://${{GW_USER}}:${{GW_PASS}}@127.0.0.1:{}/anthropic' }}\nprompt: {{ system: \
+                 Hi. }}",
+                server.address().port()
+            ),
+            lablet::Format::Yaml,
+            &[
+                ("GW_USER", "gw-user"),
+                ("GW_PASS", "p%40ss%3Aw%2Frd-0123456789abcdef"),
+            ],
+        )
+        .unwrap(),
+    );
+    let mut lablet = lab.build(config).await.unwrap();
+
+    let finished = lablet.run(request()).await;
+    lablet.shutdown().await;
+
+    let received = server.received_requests().await.unwrap();
+    let sent = received[0].headers["authorization"].to_str().unwrap();
+    let encoded = sent.strip_prefix("Basic ").unwrap();
+    assert_eq!(
+        encoded, "Z3ctdXNlcjpwQHNzOncvcmQtMDEyMzQ1Njc4OWFiY2RlZg==",
+        "the halves decoded, as the gateway reads them"
+    );
+    let outcome = &finished.summary.outcome;
+    assert_eq!(outcome.stop_reason(), StopReason::ProviderError);
+    let shown = outcome.error().unwrap();
+    assert_eq!(
+        shown,
+        "HTTP 401 authentication_error: rejected Authorization: [secret withheld] (request-id \
+         req_01)"
+    );
+    let telemetry = lab.exported_text();
+    assert!(
+        !telemetry.contains(encoded),
+        "the encoding reached the telemetry"
+    );
+    assert!(telemetry.contains("[secret withheld]"), "{telemetry}");
+}

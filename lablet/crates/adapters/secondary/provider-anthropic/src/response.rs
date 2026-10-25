@@ -2,8 +2,8 @@
 //! finish reason.
 
 use lablet_model::{
-    ContentBlock, FinishReason, ProviderErrorKind, ProviderKind, ProviderResponse, TokenCounts,
-    ToolCallId, ToolInput, ToolName, ToolUse, Usage,
+    ContentBlock, FinishReason, ProviderErrorKind, ProviderKind, ProviderResponse, ResponseError,
+    TokenCounts, ToolCallId, ToolInput, ToolName, ToolUse, Usage,
 };
 use lablet_run::ProviderError;
 
@@ -51,6 +51,8 @@ pub(crate) fn parse(body: &[u8]) -> Result<ProviderResponse, ProviderError> {
         cache_read: message.usage.cache_read_input_tokens,
         cache_write: message.usage.cache_creation_input_tokens,
     });
+    // The domain's reason quotes the repeated id, the server's text of any
+    // length, so the message says what's wrong instead.
     ProviderResponse::new(
         content,
         usage,
@@ -58,7 +60,9 @@ pub(crate) fn parse(body: &[u8]) -> Result<ProviderResponse, ProviderError> {
         message.id,
         message.model,
     )
-    .map_err(|error| malformed(error.to_string()))
+    .map_err(|ResponseError::DuplicateToolUse { .. }| {
+        malformed("the response has two tool_use blocks with one id")
+    })
 }
 
 /// The Messages API's column of the finish-reason table, in a closed match;

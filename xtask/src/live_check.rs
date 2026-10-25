@@ -6,7 +6,10 @@
 //! fails the step, and so does a report that saw less than the runs emit: an
 //! idle listener reports nothing wrong. With `--config <file> --prompt
 //! <text>`, one run of that config against its real provider is checked the
-//! same way, under the key its `api_key` names, which must be set.
+//! same way, under the key its `api_key` names, which must be set: the
+//! binary is built without the key and run with the few variables a process
+//! needs beside it, so the shell's other tokens reach neither a build script
+//! nor the model's commands.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -87,6 +90,41 @@ const POLL: Duration = Duration::from_millis(250);
 /// For one request to the admin endpoint, which answers at once.
 const ADMIN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// What the real-key run is handed beside the key's variable, each when
+/// it's set here: what a process needs to find programs, its home and a
+/// temporary directory, and to read text. The config's `bash` inherits the
+/// run's environment less lablet's own key, so a token of the shell's
+/// handed on would reach the model's commands; here xtask is the framework
+/// that hands in less.
+const HANDED_TO_A_REAL_RUN: &[&str] = &[
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "LANG",
+    // The owner's say over what lablet logs.
+    "RUST_LOG",
+    // The proxy a laptop's network needs, in the names reqwest reads, and
+    // the trust roots a Linux host names; each is the owner's own network
+    // setting rather than a credential, and an unset one passes nothing.
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+];
+
+/// What `cargo build` is asked to print, so the binary it built is read off
+/// its output wherever the target directory is: one JSON message a line,
+/// with the diagnostics still rendered on standard error.
+const MESSAGE_FORMAT: &str = "--message-format=json-render-diagnostics";
+
 /// What the check runs outside this process, so the tests run neither
 /// weaver nor cargo.
 trait Programs {
@@ -94,9 +132,25 @@ trait Programs {
     /// `output`.
     fn spawn_weaver(&mut self, args: &[&str], output: PipeWriter) -> Result<Child, Error>;
 
-    /// Runs cargo with `args` in `directory` to its end: a build, or lablet
+    /// Runs cargo with `args` in `directory` to its end, with each variable
+    /// `withheld` names taken off its environment: a build, or lablet
     /// through `cargo run`.
-    fn cargo(&mut self, directory: &Path, args: &[&str]) -> Result<Output, Error>;
+    fn cargo(
+        &mut self,
+        directory: &Path,
+        args: &[&str],
+        withheld: &[&str],
+    ) -> Result<Output, Error>;
+
+    /// Runs the built `binary` with `args` in `directory` to its end, with
+    /// `environment` and nothing else as its environment.
+    fn built(
+        &mut self,
+        directory: &Path,
+        binary: &Path,
+        args: &[&str],
+        environment: &[(OsString, OsString)],
+    ) -> Result<Output, Error>;
 
     /// How long weaver may take to serve `/health`.
     fn ready_within(&self) -> Duration {
@@ -123,15 +177,39 @@ impl Programs for Real {
         command.spawn().map_err(not_started)
     }
 
-    fn cargo(&mut self, directory: &Path, args: &[&str]) -> Result<Output, Error> {
+    fn cargo(
+        &mut self,
+        directory: &Path,
+        args: &[&str],
+        withheld: &[&str],
+    ) -> Result<Output, Error> {
         let mut command = process::command_in(directory, "cargo", args)?;
         without_the_opentelemetry_environment(
             &mut command,
             std::env::vars_os().map(|(name, _)| name),
         );
+        for name in withheld {
+            command.env_remove(name);
+        }
         command
             .output()
             .map_err(Invocation::new(directory, "cargo", args).not_started())
+    }
+
+    fn built(
+        &mut self,
+        directory: &Path,
+        binary: &Path,
+        args: &[&str],
+        environment: &[(OsString, OsString)],
+    ) -> Result<Output, Error> {
+        Command::new(binary)
+            .args(args)
+            .current_dir(directory)
+            .env_clear()
+            .envs(environment.iter().map(|(name, value)| (name, value)))
+            .output()
+            .map_err(Invocation::new(directory, &binary.display().to_string(), args).not_started())
     }
 }
 
@@ -153,9 +231,12 @@ pub fn check_against(config: &Path, prompt: &str) -> CheckResult {
 /// [`check`] for the repository at `root`, running programs through
 /// `programs`.
 fn check_with(root: &Path, programs: &mut dyn Programs) -> CheckResult {
-    judged(root, programs, |programs, scratch, grpc| {
-        run_configs(root, programs, scratch, grpc)
-    })
+    judged(
+        root,
+        programs,
+        |programs| build_lablet(root, programs),
+        |programs, scratch, grpc, ()| run_configs(root, programs, scratch, grpc),
+    )
 }
 
 /// [`check_against`] for the repository at `root`, running programs through
@@ -179,17 +260,40 @@ fn check_against_with(
         .into());
     };
     let file = file.to_string_lossy();
-    let manifest = root.join("lablet/Cargo.toml");
-    judged(root, programs, |programs, _, grpc| {
-        let endpoint = format!("http://127.0.0.1:{grpc}");
-        let args = run_args(&file, prompt, &endpoint);
-        let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        lablet(programs, &manifest, directory, &args)?;
-        Ok(Emitted {
-            runs: 1,
-            retried: false,
-        })
-    })
+    let environment = handed_to_a_real_run(&variable);
+    judged(
+        root,
+        programs,
+        |programs| built_without(root, programs, &variable),
+        |programs, _, grpc, binary| {
+            let endpoint = format!("http://127.0.0.1:{grpc}");
+            let args = run_args(&file, prompt, &endpoint);
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            let output = programs.built(directory, &binary, &args, &environment)?;
+            told(
+                &output,
+                &Invocation::new(directory, &binary.display().to_string(), &args),
+            )?;
+            Ok(Emitted {
+                runs: 1,
+                retried: false,
+            })
+        },
+    )
+}
+
+/// The environment of the real-key run: each variable of
+/// [`HANDED_TO_A_REAL_RUN`] that's set here, and the key's, `variable`,
+/// whose value is passed on and never looked at.
+fn handed_to_a_real_run(variable: &str) -> Vec<(OsString, OsString)> {
+    let mut names: Vec<&str> = HANDED_TO_A_REAL_RUN.to_vec();
+    if !names.contains(&variable) {
+        names.push(variable);
+    }
+    names
+        .into_iter()
+        .filter_map(|name| std::env::var_os(name).map(|value| (OsString::from(name), value)))
+        .collect()
 }
 
 /// Matches the one line of a config's text that fills `api_key` from a
@@ -250,12 +354,14 @@ fn is_set(name: &str) -> Result<(), Failure> {
     }
 }
 
-/// Builds lablet, starts weaver, makes the runs `runs` makes against it
-/// under the run directory, stops weaver and judges its report.
-fn judged(
+/// Builds lablet as `build` does, starts weaver, makes the runs `runs`
+/// makes against it with what the build handed back, under the run
+/// directory, stops weaver and judges its report.
+fn judged<Built>(
     root: &Path,
     programs: &mut dyn Programs,
-    runs: impl FnOnce(&mut dyn Programs, &Scratch, u16) -> Result<Emitted, Failure>,
+    build: impl FnOnce(&mut dyn Programs) -> Result<Built, Error>,
+    runs: impl FnOnce(&mut dyn Programs, &Scratch, u16, Built) -> Result<Emitted, Failure>,
 ) -> CheckResult {
     let output = root.join(OUTPUT);
     let report = output.join(REPORT);
@@ -267,9 +373,9 @@ fn judged(
         return Err(Error::file(Verb::Remove, &report)(error).into());
     }
     let scratch = Scratch::new(&output)?;
-    build_lablet(root, programs)?;
+    let made = build(programs)?;
     let mut listener = Listener::start(root, programs)?;
-    let runs = runs(programs, &scratch, listener.ports.grpc)?;
+    let runs = runs(programs, &scratch, listener.ports.grpc, made)?;
     listener.stop(programs.stop_within())?;
     if !report.is_file() {
         return Err(Error::Missing {
@@ -290,19 +396,71 @@ fn judged(
 /// `cargo build` of the binary first, so each run starts at once and
 /// weaver's inactivity timeout stays a backstop rather than a build budget.
 fn build_lablet(root: &Path, programs: &mut dyn Programs) -> Result<(), Error> {
-    let args = ["build", LOCKED, "--bin", "lablet"];
+    built_with(root, programs, &["build", LOCKED, "--bin", "lablet"], &[]).map(drop)
+}
+
+/// [`build_lablet`] with the variable `withheld` taken off cargo's
+/// environment, so no build script runs with the key, and the path of the
+/// binary it built, read off cargo's messages.
+fn built_without(
+    root: &Path,
+    programs: &mut dyn Programs,
+    withheld: &str,
+) -> Result<PathBuf, Error> {
+    let args = ["build", LOCKED, "--bin", "lablet", MESSAGE_FORMAT];
+    let output = built_with(root, programs, &args, &[withheld])?;
+    executable(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| Error::Missing {
+        what: "cargo's messages name no lablet binary it built".to_owned(),
+        remedy: "Run `cargo build --bin lablet` in lablet/ and read its output".to_owned(),
+    })
+}
+
+/// `cargo` with `args` in the workspace, `withheld` taken off its
+/// environment, which must exit 0.
+fn built_with(
+    root: &Path,
+    programs: &mut dyn Programs,
+    args: &[&str],
+    withheld: &[&str],
+) -> Result<Output, Error> {
     let workspace = root.join("lablet");
-    let output = programs.cargo(&workspace, &args)?;
+    let output = programs.cargo(&workspace, args, withheld)?;
     if output.status.success() {
-        Ok(())
+        Ok(output)
     } else {
         Err(Error::Failed {
-            command: Invocation::new(&workspace, "cargo", &args),
+            command: Invocation::new(&workspace, "cargo", args),
             stderr: String::from_utf8_lossy(&output.stderr)
                 .trim_end()
                 .to_owned(),
         })
     }
+}
+
+/// The executable of the `lablet` binary target that cargo's JSON messages,
+/// `messages`, say it built.
+fn executable(messages: &str) -> Option<PathBuf> {
+    #[derive(Deserialize)]
+    struct Message {
+        reason: String,
+        target: Option<Target>,
+        executable: Option<PathBuf>,
+    }
+    #[derive(Deserialize)]
+    struct Target {
+        name: String,
+    }
+    messages
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Message>(line).ok())
+        .filter(|message| message.reason == "compiler-artifact")
+        .filter(|message| {
+            message
+                .target
+                .as_ref()
+                .is_some_and(|target| target.name == "lablet")
+        })
+        .find_map(|message| message.executable)
 }
 
 /// The three fake-provider runs against the listener on `grpc`, each with
@@ -408,7 +566,13 @@ fn lablet(
         args,
     ]
     .concat();
-    let output = programs.cargo(directory, &cargo)?;
+    let output = programs.cargo(directory, &cargo, &[])?;
+    told(&output, &Invocation::new(directory, "cargo", &cargo))
+}
+
+/// A run of lablet that `command` made and that ended with `output`, which
+/// must exit 0: otherwise its verdict, told with what lablet printed.
+fn told(output: &Output, command: &Invocation) -> Result<(), Failure> {
     if output.status.success() {
         return Ok(());
     }
@@ -420,12 +584,7 @@ fn lablet(
             let _ = writeln!(verdict, "{text}");
         }
     }
-    let _ = write!(
-        verdict,
-        "error: {} ({})",
-        Invocation::new(directory, "cargo", &cargo).failed(),
-        output.status
-    );
+    let _ = write!(verdict, "error: {} ({})", command.failed(), output.status);
     Err(Failure::Verdict(verdict))
 }
 
@@ -910,6 +1069,7 @@ mod tests {
     use super::*;
     use crate::error::chain;
     use crate::workspace::fixture::TempDir;
+    use serde_json::json;
     use std::collections::BTreeSet;
     use std::os::unix::process::ExitStatusExt as _;
 
@@ -1453,6 +1613,11 @@ mod tests {
         spawned: Vec<u32>,
         grpc: Option<String>,
         ran: Vec<(PathBuf, Vec<String>, bool)>,
+        /// What each cargo command was run without, in the order of `ran`.
+        withheld: Vec<Vec<String>>,
+        /// Each built binary run: its directory, the binary, its arguments
+        /// and the names of its whole environment.
+        built: Vec<(PathBuf, PathBuf, Vec<String>, Vec<String>)>,
     }
 
     impl Fake {
@@ -1479,6 +1644,8 @@ mod tests {
                 spawned: Vec::new(),
                 grpc: None,
                 ran: Vec::new(),
+                withheld: Vec::new(),
+                built: Vec::new(),
             }
         }
     }
@@ -1508,9 +1675,31 @@ mod tests {
             Ok(child)
         }
 
-        fn cargo(&mut self, directory: &Path, args: &[&str]) -> Result<Output, Error> {
+        fn cargo(
+            &mut self,
+            directory: &Path,
+            args: &[&str],
+            withheld: &[&str],
+        ) -> Result<Output, Error> {
             let config_there = directory.join("lablet.yaml").is_file();
             let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+            self.withheld
+                .push(withheld.iter().map(|name| (*name).to_owned()).collect());
+            if args.iter().any(|arg| arg == MESSAGE_FORMAT) {
+                let binary = self.root.join("lablet/target/debug/lablet");
+                let messages = format!(
+                    "{}\n{}\n{}\n",
+                    json!({ "reason": "compiler-artifact", "target": { "name": "lablet" }, "executable": null }),
+                    json!({ "reason": "compiler-artifact", "target": { "name": "lablet" }, "executable": binary }),
+                    json!({ "reason": "build-finished", "success": true }),
+                );
+                self.ran.push((directory.to_path_buf(), args, config_there));
+                return Ok(Output {
+                    status: ExitStatus::from_raw(0),
+                    stdout: messages.into_bytes(),
+                    stderr: Vec::new(),
+                });
+            }
             let subcommand = args.get(7).map(String::as_str);
             if subcommand == Some("init") {
                 let starter = directory.join(args.last().unwrap());
@@ -1525,6 +1714,29 @@ mod tests {
             self.ran.push((directory.to_path_buf(), args, config_there));
             Ok(Output {
                 status: ExitStatus::from_raw(code << 8),
+                stdout: b"{\"stop_reason\":\"max_turns\"}\n".to_vec(),
+                stderr: b"lablet: the run stopped\n".to_vec(),
+            })
+        }
+
+        fn built(
+            &mut self,
+            directory: &Path,
+            binary: &Path,
+            args: &[&str],
+            environment: &[(OsString, OsString)],
+        ) -> Result<Output, Error> {
+            self.built.push((
+                directory.to_path_buf(),
+                binary.to_path_buf(),
+                args.iter().map(|arg| (*arg).to_owned()).collect(),
+                environment
+                    .iter()
+                    .map(|(name, _)| name.to_string_lossy().into_owned())
+                    .collect(),
+            ));
+            Ok(Output {
+                status: ExitStatus::from_raw(self.run_exits << 8),
                 stdout: b"{\"stop_reason\":\"max_turns\"}\n".to_vec(),
                 stderr: b"lablet: the run stopped\n".to_vec(),
             })
@@ -1679,17 +1891,10 @@ mod tests {
         assert_eq!(fake.spawned.len(), 1);
         assert!(!alive(fake.spawned[0]));
 
-        // One run, in the config's own directory, named by its file name,
-        // with the fake runs' overrides and no name of its own.
-        let manifest = root.path().join("lablet/Cargo.toml").display().to_string();
+        // One run of the binary the build named, in the config's own
+        // directory, named by its file name, with the fake runs' overrides
+        // and no name of its own.
         let run: Vec<String> = [
-            "run",
-            "--locked",
-            "--manifest-path",
-            &manifest,
-            "--bin",
-            "lablet",
-            "--",
             "run",
             "--config",
             "lablet.yaml",
@@ -1711,16 +1916,110 @@ mod tests {
         let directory = std::fs::canonicalize(root.path().join("examples/real")).unwrap();
         assert_eq!(
             fake.ran,
+            [(
+                root.path().join("lablet"),
+                [
+                    "build",
+                    "--locked",
+                    "--bin",
+                    "lablet",
+                    "--message-format=json-render-diagnostics"
+                ]
+                .map(str::to_owned)
+                .to_vec(),
+                false
+            )]
+        );
+        assert_eq!(
+            fake.withheld,
+            [["PATH".to_owned()]],
+            "built without the key"
+        );
+        // The run's environment is the few variables a process needs that
+        // are set here, the key's among them, and nothing else of the shell.
+        let handed: Vec<String> = HANDED_TO_A_REAL_RUN
+            .iter()
+            .filter(|name| std::env::var_os(name).is_some())
+            .map(|name| (*name).to_owned())
+            .collect();
+        assert!(handed.contains(&"PATH".to_owned()), "{handed:?}");
+        assert_eq!(
+            fake.built,
+            [(
+                directory,
+                root.path().join("lablet/target/debug/lablet"),
+                run,
+                handed
+            )]
+        );
+    }
+
+    #[test]
+    fn the_real_key_run_is_handed_the_key_and_the_few_variables_a_process_needs() {
+        let handed = |variable: &str| -> Vec<String> {
+            handed_to_a_real_run(variable)
+                .into_iter()
+                .map(|(name, _)| name.to_string_lossy().into_owned())
+                .collect()
+        };
+        let set: Vec<String> = HANDED_TO_A_REAL_RUN
+            .iter()
+            .filter(|name| std::env::var_os(name).is_some())
+            .map(|name| (*name).to_owned())
+            .collect();
+
+        assert_eq!(
+            handed("PATH"),
+            set,
+            "a key named in the list isn't handed twice"
+        );
+        assert_eq!(
+            handed(MADE_UP),
+            set,
+            "an unset key's variable is handed nothing"
+        );
+        assert_eq!(
+            HANDED_TO_A_REAL_RUN,
             [
-                (
-                    root.path().join("lablet"),
-                    ["build", "--locked", "--bin", "lablet"]
-                        .map(str::to_owned)
-                        .to_vec(),
-                    false
-                ),
-                (directory, run, true),
+                "PATH",
+                "HOME",
+                "TMPDIR",
+                "CARGO_HOME",
+                "RUSTUP_HOME",
+                "LANG",
+                "RUST_LOG",
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "NO_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+                "no_proxy",
+                "SSL_CERT_FILE",
+                "SSL_CERT_DIR"
             ]
+        );
+    }
+
+    #[test]
+    fn the_binary_is_read_off_the_artifact_that_names_an_executable() {
+        let messages = [
+            r#"{"reason":"compiler-artifact","target":{"name":"lablet"},"executable":null}"#,
+            r#"{"reason":"compiler-artifact","target":{"name":"other"},"executable":"/t/other"}"#,
+            "not json",
+            r#"{"reason":"compiler-artifact","target":{"name":"lablet"},"executable":"/t/debug/lablet"}"#,
+            r#"{"reason":"build-finished","success":true}"#,
+        ]
+        .join("\n");
+
+        assert_eq!(
+            executable(&messages),
+            Some(PathBuf::from("/t/debug/lablet"))
+        );
+        assert_eq!(
+            executable(r#"{"reason":"build-finished","success":true}"#),
+            None
         );
     }
 

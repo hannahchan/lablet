@@ -875,7 +875,7 @@
             }
           ],
           "default": null,
-          "description": "The propagators the inbound context is read through and a command's\ncontext is injected through: a list of names, or OpenTelemetry's\ncomma text, of `tracecontext`, `baggage`, `b3` and `b3multi`, or\n`none` alone. `None` is `tracecontext,baggage`."
+          "description": "The propagators the inbound context is read through and a command's\ncontext, and each provider request's, is injected through: a list of\nnames, or OpenTelemetry's comma text, of `tracecontext`, `baggage`, `b3`\nand `b3multi`, or `none` alone. `None` is `tracecontext,baggage`."
         },
         "resource": {
           "anyOf": [
@@ -934,7 +934,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Reasoning is asked for with this many tokens to spend on it, which\nis fewer than `max_tokens`.",
+          "description": "Reasoning is asked for with this many tokens to spend on it, which\nis at least 1,024 and fewer than `max_tokens`.",
           "properties": {
             "budget": {
               "format": "uint32",

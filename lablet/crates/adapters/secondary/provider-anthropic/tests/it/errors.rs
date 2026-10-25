@@ -407,12 +407,16 @@ async fn a_tool_use_with_a_refused_id_or_name_or_a_repeated_id_is_malformed() {
 
     let error = classified(harness::ok(harness::message(
         json!([
-            { "type": "tool_use", "id": "toolu_01", "name": "read_file", "input": { "path": "a" } },
-            { "type": "tool_use", "id": "toolu_01", "name": "read_file", "input": { "path": "b" } }
+            { "type": "tool_use", "id": "toolu_01 LEAK-0123456789", "name": "read_file", "input": { "path": "a" } },
+            { "type": "tool_use", "id": "toolu_01 LEAK-0123456789", "name": "read_file", "input": { "path": "b" } }
         ]),
         "tool_use",
     )))
     .await;
     assert_eq!(error.kind, ProviderErrorKind::Malformed);
-    assert!(error.message().contains("toolu_01"), "{}", error.message());
+    assert_eq!(
+        error.message(),
+        "the response has two tool_use blocks with one id",
+        "the id is the server's text of any length, so it isn't echoed"
+    );
 }

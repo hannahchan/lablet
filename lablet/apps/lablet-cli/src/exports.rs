@@ -61,7 +61,8 @@ pub struct Exports {
 /// or not an endpoint is named, of a TLS file that can't be loaded, and of
 /// what making the network exporters refuses: an endpoint or a header the
 /// exporter doesn't accept, the platform's trust roots that can't be
-/// loaded and an HTTP client that can't be made.
+/// loaded and an HTTP client that can't be made; and of a
+/// `tools.builtin.env` entry whose value holds what the key's file holds.
 pub fn settle(settled: Settled) -> Result<(Prepared, Exports), BuildError> {
     let config = settled.config();
     let resource = export::resource(VERSION, config.telemetry.resource.pairs());
@@ -75,7 +76,7 @@ pub fn settle(settled: Settled) -> Result<(Prepared, Exports), BuildError> {
             Some(FileTarget::Stderr) | None => None,
         },
         client_key: client_key.as_ref(),
-    });
+    })?;
     drop(client_key);
     Ok((
         prepared,

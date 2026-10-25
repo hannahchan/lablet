@@ -13,9 +13,10 @@ use opentelemetry::trace::{Tracer, TracerProvider};
 
 /// The OpenTelemetry a host runs lablet on: the tracer provider a run's
 /// spans go to, the logger provider its records go to, and the propagator a
-/// command's context is injected through. A host hands all three in, and
-/// lablet reads none of OpenTelemetry's globals, so what a `Lablet` emits
-/// and injects depends only on what its host handed it.
+/// command's context, and each provider request's, is injected through. A
+/// host hands all three in, and lablet reads none of OpenTelemetry's
+/// globals, so what a `Lablet` emits and injects depends only on what its
+/// host handed it.
 ///
 /// [`Otel::new`] borrows the providers and takes one tracer and one logger
 /// of lablet's instrumentation scope from them, so the host keeps its
@@ -64,7 +65,8 @@ impl Otel {
     /// The host's OpenTelemetry: the spans of every run go to
     /// `tracer_provider`, its records to `logger_provider`, and a `bash`
     /// command's environment is given the context of its tool span through
-    /// `propagator`, as the command starts.
+    /// `propagator`, as the command starts, as each provider request's
+    /// headers are given the context of its attempt's chat span.
     ///
     /// None of the three can be left out:
     ///

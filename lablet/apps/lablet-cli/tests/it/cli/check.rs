@@ -1431,6 +1431,58 @@ fn an_env_entry_whose_value_holds_a_credential_s_value_is_refused_by_check_and_b
     );
 }
 
+/// What the file `telemetry.otlp.tls.client_key` names holds is an own
+/// credential that only the command line reads, after the rest of the
+/// check: an `env` entry whose value holds a line of it is refused by
+/// `check` and by `run` alike, and a `credentials` entry that holds it passes
+/// with the warning an own credential given to `bash` has.
+#[test]
+fn an_env_entry_whose_value_holds_a_line_of_the_client_key_s_file_is_refused() {
+    const LINE: &str = "MC4CAQAwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhC";
+    let lab = Lab::new("check-env-client-key");
+    lab.write("script.yaml", PRINTS_COPY);
+    lab.write("work/notes.md", "Nothing yet.");
+    lab.write(
+        "client.key",
+        &format!("-----BEGIN PRIVATE KEY-----\n{LINE}\n-----END PRIVATE KEY-----\n"),
+    );
+    let pem = "LABLET_TEST_PEM";
+    let config = |table: &str| {
+        format!(
+            "model:\n  provider: fake\n  script: script.yaml\nprompt:\n  system: Hi.\nrun:\n  \
+             transcript_path: transcript.json\ntelemetry:\n  otlp:\n    tls:\n      client_key: \
+             client.key\ntools:\n  builtin:\n    root: work\n    enabled: [bash]\n    {table}:\n      \
+             COPY: ${{{pem}}}\n"
+        )
+    };
+    let with = |subcommand: &[&str], text: &str| {
+        lab.write("lablet.yaml", text);
+        let mut command = lab.lablet(&[subcommand, &["--config", "lablet.yaml"][..]].concat());
+        command.env(pem, LINE);
+        ran(command, "")
+    };
+    let refusal = format!(
+        "config: tools.builtin.env.COPY (line 17): \"${{{pem}}}\" is refused: its value holds the \
+         one `telemetry.otlp.tls.client_key` has, and no process inherits an own credential; to \
+         give bash the value knowingly, list COPY under `tools.builtin.credentials`"
+    );
+
+    refused(&with(&["check"], &config("env")), &refusal);
+    refused(&with(&["run", "--prompt", "Hi."], &config("env")), &refusal);
+    assert!(!lab.at("transcript.json").exists(), "a run started");
+
+    let given = with(&["check"], &config("credentials"));
+    assert_eq!(given.code, Some(0), "{given:?}");
+    assert!(
+        given.stderr.contains(
+            "tools.builtin.credentials.COPY (line 17): it's lablet's own \
+             `telemetry.otlp.tls.client_key`, given to bash; a task that needs the key gets it \
+             only when the config says so"
+        ),
+        "{given:?}"
+    );
+}
+
 /// W66: lablet's own key listed under `credentials` passes, with a warning
 /// that `bash` has it, and `own:` says who gets it.
 #[test]

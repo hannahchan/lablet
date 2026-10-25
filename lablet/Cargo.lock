@@ -1395,6 +1395,7 @@ dependencies = [
 name = "lablet-secrets"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "lablet-config",
  "lablet-model",
  "lablet-test-support",

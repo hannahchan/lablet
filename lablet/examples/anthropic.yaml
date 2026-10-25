@@ -5,7 +5,7 @@
 # the run's telemetry to a collector, as the README shows.
 model:
   provider: anthropic
-  name: claude-opus-5-5 # the owner's choice; see the README's model table
+  name: claude-opus-5-5 # the current Opus; see the README's model table
   api_key: ${ANTHROPIC_API_KEY}
   max_tokens: 16000 # lablet doesn't stream, and Anthropic's own clients stream above ~16K; thinking counts toward it. Raise it for long writes, and expect a retry if a connection drops
   # thinking: adaptive              # the models' default; a budget or disabled is a 400 on the current models

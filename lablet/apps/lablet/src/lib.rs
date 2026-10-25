@@ -69,13 +69,14 @@
 //! A `Lablet` runs on the OpenTelemetry its host provides, and configures
 //! no SDK of its own. The host hands in one [`Otel`] of three pieces: the
 //! tracer provider its spans go to, the logger provider its records go to,
-//! and the propagator a `bash` command's context is injected through. Each
-//! is required, and lablet reads none of OpenTelemetry's globals: a host
-//! that wants none of a piece hands in the API's no-op for it, and
-//! [`Otel::noop`] is the no-op for all three. A host on the global tracer
-//! provider hands in `opentelemetry::global::tracer_provider()`, called
-//! once it has set its global tracer provider, since the `Otel` takes its
-//! tracer when it's made. Each run's root span is the
+//! and the propagator a `bash` command's context, and each provider
+//! request's, is injected through. Each is required, and lablet reads none
+//! of OpenTelemetry's globals: a host that wants none of a piece hands in
+//! the API's no-op for it, and [`Otel::noop`] is the no-op for all three. A
+//! host on the global tracer provider hands in
+//! `opentelemetry::global::tracer_provider()`, called once it has set its
+//! global tracer provider, since the `Otel` takes its tracer when it's
+//! made. Each run's root span is the
 //! child of the context that's current where the run is awaited, so a run
 //! under a span the host has open is in the host's trace, and a command's
 //! environment holds its tool span's context and none it would inherit.

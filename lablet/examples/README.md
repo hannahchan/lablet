@@ -33,24 +33,24 @@ A config whose model is reached through Anthropic's Messages API, with the three
 ```bash
 export ANTHROPIC_API_KEY=...   # in your shell; lablet never writes it anywhere
 cd lablet/examples
-cargo run --locked --manifest-path ../Cargo.toml --bin lablet -- run --config anthropic.yaml --prompt "Read work/notes.md and work/todo.md in one go, then write work/summary.md with one line about each, and say what you wrote."
+cargo run --locked --manifest-path ../Cargo.toml --bin lablet -- run --config anthropic.yaml --prompt "Read notes.md and todo.md in one go, then write summary.md with one line about each, and say what you wrote."
 ```
 
-The run leaves `work/summary.md` behind; delete it before the next run, or keep it. `lablet check --config anthropic.yaml` says what the run would do without calling the provider, and is refused when the variable is unset. `cargo xtask weaver live-check --config lablet/examples/anthropic.yaml --prompt "..."` runs the config against the registry's live checker with the same prompt.
+The run leaves `work/summary.md` behind; delete it before the next run, or keep it. `lablet check --config anthropic.yaml` says what the run would do without calling the provider, and is refused when the variable is unset. `cargo xtask weaver live-check --config lablet/examples/anthropic.yaml --prompt "Read notes.md and todo.md in one go, then write summary.md with one line about each, and say what you wrote."`, from the repository's root, runs the config against the registry's live checker with the same prompt.
 
-Two things to expect in its telemetry. The cache prefix is rendered as tools, then system, then messages, and lablet puts a breakpoint on the system prompt and on the last tool, so what a conversation shares is written once and read after, once the prefix is over the model's minimum, 512 tokens on the 5.5 models; the first real run shows what that comes to for this example. And `max_tokens` is 16,000 where lablet's default is 32,000: lablet reads each response whole, Anthropic's own clients stream above about 16,000 output tokens, and thinking counts toward the cap, so the example asks for a response a connection holds comfortably. Raise it for long writes, and expect a retry if a connection drops.
+Two things to expect in its telemetry. The cache prefix is rendered as tools, then system, then messages, and lablet puts a breakpoint on the system prompt, on the last tool and on the latest message, so what a conversation shares is written once and read after, once the prefix is over the model's minimum, 512 tokens on the 5.5 models; in the example's first real run, each turn after the first read the turns before it from the cache. And `max_tokens` is 16,000 where lablet's default is 32,000: lablet reads each response whole, Anthropic's own clients stream above about 16,000 output tokens, and thinking counts toward the cap, so the example asks for a response a connection holds comfortably. Raise it for long writes, and expect a retry if a connection drops.
 
 ### Which model
 
 The example and the `init --provider anthropic` starter name `claude-opus-5-5`, the current Opus. Any of these works in `model.name`, US dollars per million tokens, standard tier:
 
-| Model id            | Input                    | Output                   | Cache read | Cache write (5 min) | Notes                                                                               |
-| ------------------- | ------------------------ | ------------------------ | ---------- | ------------------- | ----------------------------------------------------------------------------------- |
-| `claude-opus-5-5`   | 4                        | 20                       | 0.20       | 5                   | the default here and the API's; effort default `medium`; thinking can't be disabled |
-| `claude-sonnet-5-5` | 2                        | 10                       | 0.20       | 2.50                | effort default `high`; `disabled` thinking is a 400                                 |
-| `claude-sonnet-5`   | 2                        | 10                       | 0.20       | 2.50                | the previous Sonnet; 1,024-token cache minimum                                      |
-| `claude-haiku-5-5`  | 0.10, or 0.50 above 100K | 0.50, or 2.50 above 100K | not listed | not listed          | effort default `medium`; counts about 30% more tokens for the same text             |
-| `claude-fable-5-1`  | 10                       | 50                       | 0.25       | 12.50               | needs 30-day retention; shares the Fable rate-limit pool                            |
+| Model id            | Input                    | Output                   | Cache read | Cache write (5 min) | Notes                                                                                                                                          |
+| ------------------- | ------------------------ | ------------------------ | ---------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `claude-opus-5-5`   | 4                        | 20                       | 0.20       | 5                   | the example's and the starter's model; lablet's default `model.name` is `claude-sonnet-5`; effort default `medium`; thinking can't be disabled |
+| `claude-sonnet-5-5` | 2                        | 10                       | 0.20       | 2.50                | effort default `high`; `disabled` thinking is a 400                                                                                            |
+| `claude-sonnet-5`   | 2                        | 10                       | 0.20       | 2.50                | the previous Sonnet; 1,024-token cache minimum                                                                                                 |
+| `claude-haiku-5-5`  | 0.10, or 0.50 above 100K | 0.50, or 2.50 above 100K | not listed | not listed          | effort default `medium`; counts about 30% more tokens for the same text                                                                        |
+| `claude-fable-5-1`  | 10                       | 50                       | 0.25       | 12.50               | needs 30-day retention; shares the Fable rate-limit pool                                                                                       |
 
 A model comparison states `effort` and `thinking: adaptive`, both accepted by every model in the table, so that changing `name` changes one thing: left unstated, the effort default moves with the model, and the trace can't show it, since `gen_ai.request.reasoning.level` is set only when `effort` is.
 

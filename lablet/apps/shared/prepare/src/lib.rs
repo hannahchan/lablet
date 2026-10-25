@@ -29,7 +29,7 @@ use lablet_model::{RunOutcome, StopReason, ToolSpec};
 use lablet_provider_anthropic::{Key, Target, TargetError};
 use lablet_provider_fake::{Script, ScriptFormat, ScriptSource};
 use lablet_run::FilterList;
-use lablet_secrets::{self as secrets, Credential, Derived, Variables};
+use lablet_secrets::{self as secrets, Credential, Derived, Source, Variables};
 
 pub use root::{OwnFile, held};
 pub use settings::{BuiltinSettings, Selected, Settings, System};
@@ -478,8 +478,8 @@ pub enum Ready {
 /// `bash` with no environment handed in; what this lablet has no adapter
 /// for; a relative path in a config that no directory was given for; a file
 /// the config names that can't be read; and what building the provider's
-/// target refuses, a key a header can't carry, a base URL with a query or
-/// an HTTP client that can't be made.
+/// target refuses, a key a header can't carry, a base URL with a query or a
+/// fragment, or an HTTP client that can't be made.
 pub fn prepare(config: &Config, base: Base) -> Result<Settled, BuildError> {
     let refused = |refusal| BuildError::Config(config.refused(refusal));
     let settings = Settings::of(config).map_err(refused)?;
@@ -491,7 +491,7 @@ pub fn prepare(config: &Config, base: Base) -> Result<Settled, BuildError> {
     env_holds_no_credential(config, &derived)?;
     credential_variables_fill_their_fields(config, &variables)?;
     bash_has_a_base(config, &settings, base.is_some())?;
-    warn_of_an_own_credential_given(config, &derived);
+    warn_of_an_own_credential_given(config, &derived.own);
     supported(config)?;
     paths_are_placed(config)?;
 
@@ -545,8 +545,13 @@ impl Settled {
     /// The check gone on with what the root read of the telemetry: lablet's
     /// credentials derived, with the values the root hands in cut beside
     /// them.
-    #[must_use]
-    pub fn finish(self, telemetry: Telemetry<'_>) -> Prepared {
+    ///
+    /// # Errors
+    ///
+    /// Returns the refusal of a `tools.builtin.env` entry whose value holds
+    /// what the client key's file holds, which [`prepare`] couldn't see,
+    /// since only the root that read the file hands it in.
+    pub fn finish(self, telemetry: Telemetry<'_>) -> Result<Prepared, BuildError> {
         let Self {
             config,
             settings,
@@ -556,7 +561,19 @@ impl Settled {
         } = self;
         let capture_content = config.telemetry.capture_content.unwrap_or(false);
         let secrets = secrets::derived(&config, telemetry.client_key.map(Secret::expose_secret));
-        Prepared {
+        // Every other credential was held to `env` by `prepare`; checking
+        // them again would warn of each a second time.
+        if telemetry.client_key.is_some() {
+            env_holds_no_credential(&config, &secrets)?;
+            warn_of_an_own_credential_given(
+                &config,
+                secrets
+                    .own
+                    .iter()
+                    .filter(|credential| credential.source == Source::Contents),
+            );
+        }
+        Ok(Prepared {
             config,
             settings,
             provider,
@@ -565,7 +582,7 @@ impl Settled {
             capture_content,
             secrets,
             base,
-        }
+        })
     }
 }
 
@@ -1467,9 +1484,12 @@ fn bash_has_a_base(config: &Config, settings: &Settings, handed: bool) -> Result
 /// Warns of an own credential listed under `tools.builtin.credentials` too,
 /// by its variable or by another that holds its value: allowed, so a task that needs the key gets it when the config says so,
 /// and said, since `bash` then has it.
-fn warn_of_an_own_credential_given(config: &Config, derived: &Derived) {
+fn warn_of_an_own_credential_given<'a>(
+    config: &Config,
+    own: impl IntoIterator<Item = &'a Credential>,
+) {
     let mut warned: Vec<&KeyPath> = Vec::new();
-    for credential in &derived.own {
+    for credential in own {
         let Some((entry, _)) = &credential.given_by else {
             continue;
         };

@@ -214,6 +214,31 @@ tools:
             "user-0123456789ab",
             "pw%40-0123456789abc",
             "pw@-0123456789abc",
+            // The `Basic` credentials a client makes of each, of the halves
+            // decoded, as a server that repeats its request's header shows.
+            "Basic aGFubmFoOnBhc3MtMDEyMzQ1Njc4OWFiY2RlZg==",
+            "aGFubmFoOnBhc3MtMDEyMzQ1Njc4OWFiY2RlZg==",
+            "Basic dXNlci0wMTIzNDU2Nzg5YWI6cHdALTAxMjM0NTY3ODlhYmM=",
+            "dXNlci0wMTIzNDU2Nzg5YWI6cHdALTAxMjM0NTY3ODlhYmM=",
+        ])
+    );
+}
+
+/// A user with no password is encoded with an empty one, `user:`, as the
+/// Anthropic adapter and reqwest both send it.
+#[test]
+fn a_user_alone_is_cut_as_the_basic_credentials_of_the_user_and_an_empty_password() {
+    let derived = derived_from(
+        "model: { provider: anthropic, base_url: 'https://user-only-0123456789@gw.example' }",
+        &[],
+    );
+
+    assert_eq!(
+        derived.values,
+        secrets(&[
+            "user-only-0123456789",
+            "Basic dXNlci1vbmx5LTAxMjM0NTY3ODk6",
+            "dXNlci1vbmx5LTAxMjM0NTY3ODk6",
         ])
     );
 }
@@ -235,6 +260,8 @@ fn a_variable_that_gives_a_url_its_user_information_from_outside_the_written_tex
             "u-0123456789abcdef:p-0123456789abcdef",
             "u-0123456789abcdef",
             "p-0123456789abcdef",
+            "Basic dS0wMTIzNDU2Nzg5YWJjZGVmOnAtMDEyMzQ1Njc4OWFiY2RlZg==",
+            "dS0wMTIzNDU2Nzg5YWJjZGVmOnAtMDEyMzQ1Njc4OWFiY2RlZg==",
         ])
     );
 

@@ -255,7 +255,7 @@ pub enum Thinking {
     /// Reasoning is refused.
     Disabled,
     /// Reasoning is asked for with this many tokens to spend on it, which
-    /// is fewer than `max_tokens`.
+    /// is at least 1,024 and fewer than `max_tokens`.
     Budget(NonZeroU32),
 }
 

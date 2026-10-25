@@ -31,9 +31,9 @@ pub struct Telemetry {
     /// captures nothing, as `false` does.
     pub capture_content: Option<bool>,
     /// The propagators the inbound context is read through and a command's
-    /// context is injected through: a list of names, or OpenTelemetry's
-    /// comma text, of `tracecontext`, `baggage`, `b3` and `b3multi`, or
-    /// `none` alone. `None` is `tracecontext,baggage`.
+    /// context, and each provider request's, is injected through: a list of
+    /// names, or OpenTelemetry's comma text, of `tracecontext`, `baggage`, `b3`
+    /// and `b3multi`, or `none` alone. `None` is `tracecontext,baggage`.
     pub propagators: Option<Propagators>,
     /// The OTLP network exporter.
     pub otlp: Otlp,
