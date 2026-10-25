@@ -16,6 +16,8 @@ mod happy;
 #[cfg(test)]
 mod harness;
 #[cfg(test)]
+mod parity;
+#[cfg(test)]
 mod prefix;
 #[cfg(test)]
 mod redirect;

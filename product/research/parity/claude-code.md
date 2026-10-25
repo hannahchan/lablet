@@ -33,7 +33,7 @@ Claude Code changes quickly, and server-side feature flags change its behaviour 
     - the attribution block added to the start of the system prompt (`CLAUDE_CODE_ATTRIBUTION_HEADER=0`) [gw];
     - auto memory, which `settingSources` doesn't control (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`) [features];
     - the git status snapshot (`CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1`) [env].
-  - Whether other per-turn reminders still appear under a custom prompt: unverified.
+  - Other per-turn context still appears under a custom prompt: an environment and date message after the task, and a token count after each turn's tool results, both `role: system` messages (capture 2026-10-25; A1 below).
 - **Tools and MCP servers:** `--tools ""` or `tools: []` removes the built-in tools. `--strict-mcp-config` or `strictMcpConfig` keeps only the MCP servers you pass [cli][ts].
 - **Subagents:** leave `Agent` out of the tools and set `CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS=1` [env][tools].
 - **Hooks:** `--bare`, or `settingSources: []` [features].
@@ -41,6 +41,7 @@ Claude Code changes quickly, and server-side feature flags change its behaviour 
 - **Base URL:**
   - `ANTHROPIC_BASE_URL` works, but pointing it at a non-Anthropic host (such as a recording proxy) turns off three defaults: tool search, fine-grained tool streaming, and splitting the system prompt into cached blocks [env][gw][sysprompt].
   - Pin `ENABLE_TOOL_SEARCH=false` so tool schemas are sent upfront in both cases.
+  - Under the capture's mock base URL the system prompt still went as two blocks with a breakpoint each. What changed: no `fallbacks` or `diagnostics`, `thinking` without `display`, five betas fewer on Opus 5.5 and four on Sonnet 5, and the session-title request sent to the run's own model (capture 2026-10-25).
   - With OTel logs on, `OTEL_LOG_RAW_API_BODIES=file:<dir>` records full request and response bodies without a proxy [env].
 - **Pinning:**
   - Each SDK release bundles one Claude Code build, Claude Code can be installed at a given version, and `DISABLE_AUTOUPDATER=1` stops updates [loop][setup][env].
@@ -68,15 +69,15 @@ Claude Code changes quickly, and server-side feature flags change its behaviour 
   - `stop_reason` reports `end_turn`, `max_tokens` or `refusal` [loop].
   - There's no wall-clock limit other than abort or SIGTERM [ts][headless].
 - **(f) Max output tokens:**
-  - The cap is set per model (64k default on Opus 4.6), with 32,000 for model IDs Claude Code doesn't recognise. `CLAUDE_CODE_MAX_OUTPUT_TOKENS` overrides it [env][cl].
-  - A cut-off at `max_tokens` isn't terminal: Claude Code continues automatically. How many times it continues is unverified [cl].
+  - The cap is set per model (64k default on Opus 4.6), with 32,000 for model IDs Claude Code doesn't recognise. `CLAUDE_CODE_MAX_OUTPUT_TOKENS` overrides it [env][cl]. The capture of 2026-10-25 read 128,000 on Opus 5.5 and 64,000 on Sonnet 5 and Fable 5.1 (A6 below).
+  - A cut-off at `max_tokens` isn't terminal: Claude Code continues automatically [cl], up to 3 rounds in a row (capture 2026-10-25; B3 below).
 - **(g) Retries:**
   - 10 retries (up to 15) with exponential backoff, on 5xx, 529, timeouts and throttling 429s.
   - It honours `Retry-After` (with its own backoff as a minimum) and `x-should-retry`.
   - It never re-sends a request after a text block or tool call has completed.
   - When a request is too long for the context window, it retries with a smaller `max_tokens`, then compacts [errors][cl][gw].
 - **(h) Prompt caching:**
-  - `cache_control` goes on system blocks and message entries. The order is system prompt with tools, then project context, then conversation [gw][cache].
+  - `cache_control` goes on system blocks and message entries. The order is system prompt with tools, then project context, then conversation [gw][cache]. The capture of 2026-10-25 found three breakpoints: one on each of two system blocks and one on the last block of the last message, none on a tool (A5 below).
   - A custom prompt can be split into a static and a dynamic block, each with its own cache breakpoint, on the direct API only [sysprompt].
   - The cache lasts 5 minutes with an API key; 1 hour is optional [cache].
   - The default Claude Code prompt includes the working directory, platform and git state unless `excludeDynamicSections` is set [sysprompt].
@@ -84,7 +85,7 @@ Claude Code changes quickly, and server-side feature flags change its behaviour 
   - Claude Code "clears older tool outputs first, then summarizes" [how]. It also sends the API's `context_management` beta field [gw].
   - Auto-compaction runs at the model's context limit (about 967K on 1M-token models) and can be tuned or turned off [model][env].
   - After compacting, it re-reads up to five files and re-injects skill bodies [ctx].
-  - What triggers the clearing of tool outputs is unverified.
+  - What triggers the clearing of tool outputs is unverified. With flags and auto-compaction off, a headless run cleared nothing (capture 2026-10-25; E1 below).
 - **(j) Thinking:**
   - Adaptive thinking is the default, with effort from `low` to `max`, or a fixed `MAX_THINKING_TOKENS` budget. Thinking can't be turned off on Opus 5.5 or Fable [ts][env].
   - Thinking from earlier turns is sent back, under the API's preserved-thinking check [gw][sysprompt].
@@ -176,9 +177,9 @@ The docs are at code.claude.com (fetched 2026-09-25), plus the [changelog](https
 
 - The loop ends on a response that has no `tool_use` blocks ([agent-loop](https://code.claude.com/docs/en/agent-sdk/agent-loop#turns-and-messages)). **confirmed**
 - Result subtypes are `success`, `error_max_turns`, `error_max_budget_usd`, `error_during_execution` and `error_max_structured_output_retries`. `result` is set only on `success`. **confirmed**
-- `stop_reason` is the last response's value: `end_turn`, `max_tokens`, `refusal` or `tool_deferred`, and `null` after a crash. **confirmed**
+- `stop_reason` is the last response's value: `end_turn`, `max_tokens`, `refusal` or `tool_deferred`, and `null` after a crash. **confirmed** After an API error it's `stop_sequence`, the synthetic error message's, not the last response's: so on the capture's cap error, whose last response ended `max_tokens`, and on every error from the mock (capture 2026-10-25). **confirmed**
 - `terminal_reason` says why the loop ended: `completed`, `max_turns`, `prompt_too_long`, `rapid_refill_breaker`, `api_error`, `malformed_tool_use_exhausted`, `budget_exhausted`, `structured_output_retry_exhausted`, and others. `success` with `is_error:true` means the last API call failed ([SDKResultMessage](https://code.claude.com/docs/en/agent-sdk/typescript#sdkresultmessage)). **confirmed**
-- An empty or thinking-only `end_turn` has no documented retry or nudge. CL 2.1.251 fixed sessions getting stuck after a thinking-only turn. **needs capture**
+- An empty or thinking-only `end_turn` has no documented retry or nudge. CL 2.1.251 fixed sessions getting stuck after a thinking-only turn. **likely**: a near-empty reply, one zero-width space with `end_turn` and no thinking, got no nudge or retry, and the run ended `success`, `is_error` false, `num_turns` 1, with that as its result (capture 2026-10-25). A strictly empty or thinking-only one didn't occur.
 
 ### B2 Structured output
 
@@ -193,11 +194,15 @@ The docs are at code.claude.com (fetched 2026-09-25), plus the [changelog](https
 ### B3 max_tokens
 
 - It started in CL 2.1.0: "automatically continue when response is cut off due to output token limit". CL 2.1.269 fixed the cache after an auto-resume, and CL 2.1.271 added the "picking the thought back up" status. **confirmed**
-- Claude Code re-queries with a hidden user message: "Output token limit hit. Resume directly — no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces." **likely** (the text comes from a user's wire capture)
-- It does this at most 3 times. An Anthropic maintainer confirmed "3 recovery rounds" on 2.1.233, and said the cut-off thinking is stored empty ([#85983](https://github.com/anthropics/claude-code/issues/85983)). **confirmed**
-- No sign was found that `max_tokens` is raised for the retry. **likely**
-- When the rounds run out, the turn fails with `API Error: Claude's response exceeded the N output token maximum. To configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable.` ([#69434](https://github.com/anthropics/claude-code/issues/69434)). **likely**
-- A `tool_use` cut mid-arguments seems to be treated as an unparseable call rather than executed. That path sends a hidden "Your tool call was malformed and could not be parsed. Please retry." once (reverse-read of 2.1.158, [#64589](https://github.com/anthropics/claude-code/issues/64589)). CL 2.1.251 drops the broken output from the retry. CL 2.1.281 fixed endless alternation between the two paths, which ignored `--max-turns`. **needs capture**
+- Claude Code re-queries with a hidden user message: "Output token limit hit. Resume directly — no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces." **confirmed** (capture 2026-10-25: those 185 bytes as one text block, stored as a meta entry of the transcript; earlier, a user's wire capture)
+- It does this at most 3 times. An Anthropic maintainer confirmed "3 recovery rounds" on 2.1.233, and said the cut-off thinking is stored empty ([#85983](https://github.com/anthropics/claude-code/issues/85983)). **confirmed** The capture of 2026-10-25 can't tell that apart: under `display: updates` the transcript stores every thinking block empty.
+- The capture of 2026-10-25 shows two paths, chosen by what the cut response holds. **confirmed**
+  - One that holds text is sent back whole, thinking and its signature included, and the resume follows as a new user message.
+  - One of thinking alone is dropped, and the resume is appended as one more text block of the previous user message, whose last text block gains a newline. That request repeats the message count, and the cache reads up to the last breakpoint an earlier request placed ahead of the message the resume joins: the tools and system alone, 3,308 tokens on Opus 5.5, when that message is the task, and more when it's a later one, 3,736 tokens when it held the first tool results and 4,198 when it held an earlier resume.
+  - The 3 rounds count cuts in a row: a response that isn't cut resets the count, and one run made 5 resumes in all. No new `role: system` message is added after a resume.
+- `max_tokens` isn't raised for the retry: 300 on all 11 requests under `CLAUDE_CODE_MAX_OUTPUT_TOKENS=300` (capture 2026-10-25). **confirmed** at that cap; the default cap wasn't run.
+- When the rounds run out, the turn fails with `API Error: Claude's response exceeded the N output token maximum. To configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable.` ([#69434](https://github.com/anthropics/claude-code/issues/69434)). **confirmed** (capture 2026-10-25, with N = 300, on the fourth cut in a row: subtype `success`, `is_error` true, `terminal_reason` `api_error`, from a synthetic message with model `<synthetic>` and error `max_output_tokens`)
+- A `tool_use` cut mid-arguments seems to be treated as an unparseable call rather than executed. That path sends a hidden "Your tool call was malformed and could not be parsed. Please retry." once (reverse-read of 2.1.158, [#64589](https://github.com/anthropics/claude-code/issues/64589)). CL 2.1.251 drops the broken output from the retry. CL 2.1.281 fixed endless alternation between the two paths, which ignored `--max-turns`. **needs capture**: the capture of 2026-10-25 cut no response inside a `tool_use`, and no malformed-call text appears in it.
 
 ### B4/B5 Empty responses and refusals
 
@@ -206,14 +211,15 @@ The docs are at code.claude.com (fetched 2026-09-25), plus the [changelog](https
   - After partial text with no tool calls, `-p` and SDK runs prompt Claude to continue, up to 3 times (CL 2.1.246, [errors](https://code.claude.com/docs/en/errors#the-response-above-may-be-incomplete)). **confirmed**
 - Refusals come back as `stop_reason:"refusal"` with `stop_details`, from Fable 5.x, Opus 5.5 and Opus 5.
 - If the flagged category has a fallback (biology goes to Opus 5, cybersecurity to Opus 4.8), Claude Code re-runs the request on that model. The session then stays on it, because `switchModelsOnFlag` is on by default ([model-config](https://code.claude.com/docs/en/model-config#automatic-model-fallback)). **confirmed**
+- With flags off, Opus 5.5 and Fable 5.1 send `fallbacks: [{model: claude-opus-5}]`, with the betas `server-side-fallback-2026-06-01` and `fallback-credit-2026-06-01`, on every request to the first-party API. Sonnet 5, Sonnet 5.5 and Haiku 5.5 send none of them. Under a base URL there are no `fallbacks` and no `server-side-fallback-2026-06-01`, where Opus 5.5 keeps `fallback-credit-2026-06-01` (capture 2026-10-25). **confirmed** Whether it fires on a refusal wasn't seen.
 - Otherwise the turn ends with `API Error: <model> can't help with this…`. That message carries `stop_reason:"refusal"` and `stop_details` (TS SDK 0.3.162), and so does the result. There is no retry on the same model. **confirmed**
-- The result's `subtype` and `is_error` for a refusal: **needs capture**.
+- The result's `subtype` and `is_error` for a refusal: **needs capture**. The capture of 2026-10-25 couldn't induce a refusal.
 
 ### B6/B7 Limits
 
 - `maxTurns`, `--max-turns` and `CLAUDE_CODE_MAX_TURNS` count tool-use round trips, with no default. **confirmed**
 - At the limit, the last turn's tools have run and the next model call is skipped. The run ends `error_max_turns`; the SDK raises "Reached maximum number of turns" and the CLI exits non-zero ([agent-loop](https://code.claude.com/docs/en/agent-sdk/agent-loop#turns-and-budget), [cli-reference](https://code.claude.com/docs/en/cli-reference)). **confirmed**
-- Whether the hidden recovery calls count as turns: **needs capture**.
+- The hidden recovery calls count in `num_turns`: in the capture of 2026-10-25 it was 4 for a run of 4 requests with no tool call, and 7 for one of 7 with resumes among them. **likely** Retries don't count: runs of 3 and 11 attempts on 529s gave 1. Nor does it always match the requests: a run of 9 counted 10, and one of its responses held two `tool_use` blocks. Whether the recovery calls count against `--max-turns`: **needs capture**.
 - `maxBudgetUsd` is a client-side cost estimate that includes subagents, checked after each response. The response that crosses the cap is still made and counted, then the run ends `error_max_budget_usd`. There is no default, and 0 is rejected ([cost-tracking](https://code.claude.com/docs/en/agent-sdk/cost-tracking)). **confirmed**
 - There is no wall-clock cap. There is no token budget unless you set `taskBudget` (alpha, sent as `output_config.task_budget`). **confirmed**
 
@@ -225,53 +231,59 @@ There is no loop or stuck detection. An Anthropic maintainer wrote on 17 Aug 202
 
 - The API's max output is 128K for Fable 5.1, Opus 5.5 and Sonnet 5, and 64K for Haiku 4.5 ([models](https://platform.claude.com/docs/en/models/overview)). **confirmed**
 - Model IDs Claude Code doesn't recognize get 32,000. **confirmed**
-- `CLAUDE_CODE_MAX_OUTPUT_TOKENS` sets the cap for most requests. Values above the model's limit are lowered to it. Raising it shrinks the window before auto-compaction ([env-vars](https://code.claude.com/docs/en/env-vars)). **confirmed**
+- `CLAUDE_CODE_MAX_OUTPUT_TOKENS` sets the cap for most requests. Values above the model's limit are lowered to it. Raising it shrinks the window before auto-compaction ([env-vars](https://code.claude.com/docs/en/env-vars)). **confirmed** It caps the session-title side request too (capture 2026-10-25).
 - Per-model defaults aren't documented. The evidence:
 
-| Model                                    | Default `max_tokens` | Source                                                                                   |
-| ---------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------- |
-| Opus 4.6                                 | 64K                  | CL 2.1.77                                                                                |
-| Opus 4.7, Opus 4.8                       | 64K                  | reverse-read                                                                             |
-| Sonnet 4.6                               | 32K                  | reverse-read                                                                             |
-| Opus 5                                   | 64,000               | a user's wire capture ([#93596](https://github.com/anthropics/claude-code/issues/93596)) |
-| Opus 5.5, Sonnet 5, Fable 5.1, Haiku 4.5 | unknown              | **needs capture**                                                                        |
+| Model                 | Default `max_tokens` | Source                                                                                                                                                                                                        |
+| --------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Opus 4.6              | 64K                  | CL 2.1.77                                                                                                                                                                                                     |
+| Opus 4.7, Opus 4.8    | 64K                  | reverse-read                                                                                                                                                                                                  |
+| Sonnet 4.6            | 32K                  | reverse-read                                                                                                                                                                                                  |
+| Opus 5                | 64,000               | a user's wire capture ([#93596](https://github.com/anthropics/claude-code/issues/93596))                                                                                                                      |
+| Opus 5.5              | 128,000              | capture 2026-10-25, at the first-party API and under a base URL                                                                                                                                               |
+| Sonnet 5, Fable 5.1   | 64,000               | capture 2026-10-25                                                                                                                                                                                            |
+| Sonnet 5.5, Haiku 5.5 | 32,000               | capture 2026-10-25; **likely** the value for an ID 2.1.281 doesn't recognise, since the model line of its first `role: system` message names the bare ID, and no `fallbacks` or per-turn-control beta is sent |
+| Haiku 4.5             | unknown              | **needs capture**: the capture sent it only the session-title request, at 32,000                                                                                                                              |
 
 ### A7/A8 Thinking and sampling
 
-- Claude Code sends `thinking:{"type":"adaptive"}` to 4.6-and-later models, and effort as `output_config.effort` ([gateway guide](https://code.claude.com/docs/en/llm-gateway-protocol#feature-pass-through)). **confirmed**
-- Default effort is `medium` on Opus 5.5 and `high` on Fable 5.1 and Sonnet 5 ([model-config](https://code.claude.com/docs/en/model-config#adjust-effort-level)). **confirmed**
+- Claude Code sends `thinking:{"type":"adaptive"}` to 4.6-and-later models, and effort as `output_config.effort` ([gateway guide](https://code.claude.com/docs/en/llm-gateway-protocol#feature-pass-through)). **confirmed** The capture of 2026-10-25: `{type: adaptive, display: updates}` on all five models at the first-party API, `{type: adaptive}` under a base URL, and no budget.
+- Default effort is `medium` on Opus 5.5 and `high` on Fable 5.1 and Sonnet 5 ([model-config](https://code.claude.com/docs/en/model-config#adjust-effort-level)). **confirmed** The capture of 2026-10-25: `output_config.effort` is `medium` on Opus 5.5 and `high` on Sonnet 5, Sonnet 5.5, Haiku 5.5 and Fable 5.1. Opus 5.5 and Fable 5.1, which carry the `per-turn-control-2026-07-01` beta, repeat it as `output_config` on the first `role: system` message.
 - Haiku 4.5 takes no effort setting and uses fixed-budget thinking. **confirmed** The budget is probably max_tokens − 1. **likely**
 - Earlier thinking is sent back each turn: "reasoning is normally kept in the conversation history". After more than an hour idle, Claude Code sends `clear_thinking_20251015` with `keep:1` ([postmortem](https://www.anthropic.com/engineering/april-23-postmortem)). **confirmed**
-- Outside that case, `context_management` appears to hold only `clear_thinking` ([#44521](https://github.com/anthropics/claude-code/issues/44521)). **likely**
-- There are no temperature, top_p or top_k options. Temperature defaults to 1 (CL 2.1.31). Whether the field is sent: **needs capture**.
+- Outside that case, `context_management` holds only `clear_thinking` ([#44521](https://github.com/anthropics/claude-code/issues/44521)). **confirmed** (capture 2026-10-25: `edits: [{type: clear_thinking_20251015, keep: all}]` on every main request from the first, on all five models and both URLs; none on the session-title request)
+- There are no temperature, top_p or top_k options. Temperature defaults to 1 (CL 2.1.31). The field isn't sent on any main request; only the session-title request at the first-party API sends `temperature: 1` (capture 2026-10-25). **confirmed**
 
 ### A9 Parallel flag
 
-- No evidence was found that `disable_parallel_tool_use` is set; it isn't exposed or documented ([#64237](https://github.com/anthropics/claude-code/issues/64237)). **likely**
+- No evidence was found that `disable_parallel_tool_use` is set; it isn't exposed or documented ([#64237](https://github.com/anthropics/claude-code/issues/64237)). **confirmed**: no request in the capture of 2026-10-25 sends it.
 - Read-only tools, including MCP tools with `readOnlyHint`, run concurrently, up to 10 at once. Other tools run one at a time. A failed call no longer cancels the others in its batch (CL 2.1.161).
-- `tool_choice` is presumably left at auto. **needs capture**
+- `tool_choice` isn't sent, so the API's `auto` applies (capture 2026-10-25). **confirmed**
 
 ### D1–D3 Provider errors
 
-- Retries default to 10 (`CLAUDE_CODE_MAX_RETRIES`, capped at 15), with exponential backoff. Each attempt gets its own `API_TIMEOUT_MS`, which defaults to 600,000. **confirmed**
-- The backoff formula is 500 ms × 2^(n−1), capped at 32 s, plus 0–25% jitter (reverse-read of 2.1.220, [#81330](https://github.com/anthropics/claude-code/issues/81330)). **likely**
+- Retries default to 10 (`CLAUDE_CODE_MAX_RETRIES`, capped at 15), with exponential backoff. Each attempt gets its own `API_TIMEOUT_MS`, which defaults to 600,000. **confirmed** The capture of 2026-10-25 reports `max_retries` 10, and Sonnet 5 made 11 attempts on repeated 529s.
+- The backoff formula is 500 ms × 2^(n−1), capped at 32 s, plus 0–25% jitter (reverse-read of 2.1.220, [#81330](https://github.com/anthropics/claude-code/issues/81330)). **confirmed** (capture 2026-10-25: Sonnet 5's ten waits on 529 were 557, 1107, 2358, 4238, 8960, 16232, 37658, 33037, 38170 and 33052 ms, so the cap applies to the base and the jitter goes on top; Opus 5.5's were 587 and 1061 ms, and one on a 500 was 569 ms. All 13 were 1.4% to 19.3% over the base, never under it, which fits the 25% bound without pinning it.)
 - `CLAUDE_CODE_RETRY_WATCHDOG=1` retries 429 and 529 indefinitely and other transient errors up to 300 times, waiting at most 5 minutes between attempts. **confirmed**
 - These are retried: 5xx, 529, timeouts and dropped connections before any output, stalled streams (one extra attempt), throttling 429s (not spend-limit ones), and 400s where input plus `max_tokens` exceeds the window. **confirmed**
 - These are not retried: TLS certificate failures, organization policy denials, and failures after a completed block (Claude Code keeps the output and continues). **confirmed**
-- With API-key auth on Opus, Fable or Mythos models, Claude Code stops retrying repeated 529s early unless `FALLBACK_FOR_ALL_PRIMARY_MODELS` is set ([errors](https://code.claude.com/docs/en/errors#automatic-retries)). **confirmed**
-- `retry-after` (integer seconds) is honoured as a minimum wait, and the backoff also applies as a minimum (CL 2.1.97). A value over 60 s ends the retries at once, outside watchdog mode. `x-should-retry: true|false` is honoured ([response headers](https://code.claude.com/docs/en/llm-gateway-protocol#response-headers)). **confirmed**
-- On the direct API there is a 180 s deadline for the first response byte, plus stream idle watchdogs ([network-config](https://code.claude.com/docs/en/network-config#streaming-idle-watchdogs)). Each retry emits a `system/api_retry` event with `retry_delay_ms`. **confirmed**
-- If input plus `max_tokens` exceeds the window, Claude Code retries with a smaller `max_tokens`, or compacts if that can't fit. "Prompt is too long" triggers an automatic compaction and a retry. If compaction can't help, the turn ends ([errors](https://code.claude.com/docs/en/errors#prompt-is-too-long)). **confirmed**
+- With API-key auth on Opus, Fable or Mythos models, Claude Code stops retrying repeated 529s early unless `FALLBACK_FOR_ALL_PRIMARY_MODELS` is set ([errors](https://code.claude.com/docs/en/errors#automatic-retries)). **confirmed** In the capture of 2026-10-25, under a base URL and so with no `fallbacks` in the body, Opus 5.5 stopped at the third 529, after retries 1 and 2, with `API Error: Repeated 529 Overloaded errors.`, while Sonnet 5 ran all 10 retries and ended with `API Error: 529 Overloaded.`
+- `retry-after` (integer seconds) is honoured as a minimum wait, and the backoff also applies as a minimum (CL 2.1.97). A value over 60 s ends the retries at once, outside watchdog mode. `x-should-retry: true|false` is honoured ([response headers](https://code.claude.com/docs/en/llm-gateway-protocol#response-headers)). **confirmed** The capture of 2026-10-25: a request that met a 429 with `retry-after: 7` went again after a `retry_delay_ms` of 7000; one with `retry-after: 61` ended the run in 23 ms with no retry; and a 500 with `x-should-retry: false` ended it with no retry, where the same 500 without the header was retried.
+- On the direct API there is a 180 s deadline for the first response byte, plus stream idle watchdogs ([network-config](https://code.claude.com/docs/en/network-config#streaming-idle-watchdogs)). Each retry emits a `system/api_retry` event with `retry_delay_ms`. **confirmed** In the capture of 2026-10-25 its fields are `attempt`, `max_retries`, `retry_delay_ms`, `error_status` and `error`, and each delay is waited: Sonnet 5's ten sum to 175,369 ms of a 175,605 ms run.
+- If input plus `max_tokens` exceeds the window, Claude Code retries with a smaller `max_tokens`, or compacts if that can't fit. "Prompt is too long" triggers an automatic compaction and a retry. If compaction can't help, the turn ends ([errors](https://code.claude.com/docs/en/errors#prompt-is-too-long)). **confirmed** With auto-compaction off, the capture of 2026-10-25 sent the request again at once after a 400 `prompt is too long`: `max_tokens` unchanged, `fallback-credit-2026-06-01` dropped from the betas, no compaction and no `api_retry` event. The mock answered that with a 200, so what follows a second one is unread.
+- A provider error that ends the run gives subtype `success`, `is_error` true, `terminal_reason` `api_error` and `api_error_status`, from a synthetic message with model `<synthetic>`, and costs 0 (capture 2026-10-25). **confirmed**
+- The session-title request retries on terms of its own and emits no `api_retry`, and its failures never reach the SDK's messages or the result. In the capture of 2026-10-25 it was sent once on a 529, in runs of 1.7 s and 175.6 s, and twice on a plain 500 within the first second. Each other error it met came in a run too short to show a retry. **likely**
 
 ### E1 Clearing old tool outputs
 
 - The docs say it "clears older tool outputs first, then summarizes the conversation if needed" ([how-claude-code-works](https://code.claude.com/docs/en/how-claude-code-works#when-context-fills-up)). **confirmed**
-- It's client-side. `/cost` counts a cache miss as expected "when Claude Code has itself just rewritten the conversation … by clearing old tool results" ([costs](https://code.claude.com/docs/en/costs)). `context_management` is sent, but user captures show only `clear_thinking` and `applied_edits: []`, so the API's `clear_tool_uses` isn't used. **likely**
+- It's client-side. `/cost` counts a cache miss as expected "when Claude Code has itself just rewritten the conversation … by clearing old tool results" ([costs](https://code.claude.com/docs/en/costs)). `context_management` is sent, but user captures show only `clear_thinking` and `applied_edits: []`, so the API's `clear_tool_uses` isn't used. **likely** The capture of 2026-10-25 agrees: every request held only `clear_thinking_20251015` at `keep: all`, and every response carried `context_management: null`.
 - Reported details, not confirmed ([#42542](https://github.com/anthropics/claude-code/issues/42542), [#86075](https://github.com/anthropics/claude-code/issues/86075)): **unverified**
   - Cleared results are replaced with the placeholder `[Old tool result content cleared]`.
   - One trigger is an idle gap. Another is a count-based rule that removes results through the API's `cache_edits`. Both take their thresholds from remote flags.
   - A separate per-message budget swaps large text results for `<persisted-output>` references.
-- Whether it runs in headless SDK runs by default, what triggers it, and how many results it keeps: **needs capture**. There is no documented switch for it.
+  - None of these appears in the capture of 2026-10-25, with flags off: no placeholder, `cache_edits`, `clear_tool_uses` or `<persisted-output>` in any request. Absent there, not refuted.
+- In a headless SDK run with flags and auto-compaction off, it doesn't run: 40 read results of about 21 KB, 41 tool results in all, stayed whole in every request, up to 845K input tokens over 4 minutes (capture 2026-10-25). **confirmed** for that configuration. What triggers it with flags on or after an idle gap, and how many results it keeps: **needs capture**. There is no documented switch for it.
 
 ### E2 Summarisation (auto-compact)
 
@@ -297,6 +309,8 @@ There is no loop or stuck detection. An Anthropic maintainer wrote on 17 Aug 202
 
 For all of these, set `CLAUDE_CODE_ENABLE_TELEMETRY=1 OTEL_LOGS_EXPORTER=console OTEL_LOG_RAW_API_BODIES=file:<dir>`. That writes one untruncated request body per attempt, tagged with `query_source`; earlier thinking is redacted, so look for its presence, not its content ([monitoring](https://code.claude.com/docs/en/monitoring-usage#api-request-body-event)). Add `--output-format stream-json --verbose`. Don't capture through an `ANTHROPIC_BASE_URL` proxy: it turns off tool search, streaming of tool-call arguments, and the first-byte deadline.
 
+Run on 2026-10-25, Claude Code 2.1.281 through Python SDK 0.2.159: checks 1, 2 and 8; 4 for a near-empty reply; and 7 without an idle gap or a spilled result. No cut in check 2 fell inside a `tool_use`, so 3 is open, and 5, 6 and 9 weren't run.
+
 1. **Baseline request for each model.** Record `max_tokens`, `thinking`, effort, `temperature`, `tool_choice`, `context_management.edits`, `strict` and `defer_loading` on tools, and the beta headers. Also look for the attribution block and the `# Environment` system message (#93596). MCP tools are deferred behind `ToolSearch` by default; `ENABLE_TOOL_SEARCH=false` loads them up front.
 2. **Output cap.** Run with `CLAUDE_CODE_MAX_OUTPUT_TOKENS=300`. Record the hidden message text and the number of rounds, whether partial text or `tool_use` is kept, whether rounds count against `--max-turns`, and the final error.
 3. **Cut-off tool call.** Make an MCP call with large arguments under that same cap, and record what the model receives next.
@@ -313,31 +327,52 @@ The docs were read on 2026-09-25 and cover up to 2.1.282. Python SDK 0.2.159 bun
 
 **Sources.** MCP = code.claude.com/docs/en/mcp · SDKMCP = …/agent-sdk/mcp · TSRCH = …/agent-sdk/tool-search · SP = …/agent-sdk/modifying-system-prompts · FEAT = …/agent-sdk/claude-code-features · CT = …/agent-sdk/custom-tools · LOOP = …/agent-sdk/agent-loop · ENV = …/env-vars · CLI = …/cli-reference · TR = …/tools-reference · GW = …/llm-gateway-protocol · PC = …/prompt-caching · SK = …/skills · MON = …/monitoring-usage · HK = …/hooks · CL = …/changelog · PY = github.com/anthropics/claude-agent-sdk-python @5889056 · API-TS = platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool · API-MSG = …/build-with-claude/mid-conversation-system-messages · PB = github.com/Piebald-AI/claude-code-system-prompts (third-party text extraction, tracks 2.1.281) · LIVE = observed in an unpinned Claude Code session during the research.
 
+### The request as captured
+
+The capture of 2026-10-25 ran Claude Code 2.1.281 through Python SDK 0.2.159 in the reference configuration, with tool search off, flags off, auto-compaction off, an API key, and three tools from an in-process SDK server named `lab`. The owner's recording is read in place and stays out of the repository. What it shows of each request, beside the rows below:
+
+- **Fields.** A main request sends `model`, `messages`, `system`, `tools`, `betas`, `max_tokens`, `thinking`, `context_management`, `fallbacks` (Opus 5.5 and Fable 5.1, at the first-party API), `output_config`, `diagnostics` (at the first-party API) and `stream: true`, in that order. It sends no `temperature`, `top_p`, `top_k`, `tool_choice`, `stop_sequences` or `disable_parallel_tool_use`. `metadata` was removed before the reading, so the capture says nothing of it.
+- **Betas,** a field of the logged body; the log holds no headers, so how they travel isn't read. Opus 5.5 and Fable 5.1 send the same 15: `claude-code-20250219`, `interleaved-thinking-2025-05-14`, `thinking-token-count-2026-05-13`, `context-management-2025-06-27`, `prompt-caching-scope-2026-01-05`, `mid-conversation-system-2026-04-07`, `per-turn-control-2026-07-01`, `mid-conversation-tool-changes-2026-07-01`, `mid-conversation-system-clear-at-2026-08-21`, `effort-2025-11-24`, `server-side-fallback-2026-06-01`, `fallback-credit-2026-06-01`, `thinking-binding-controls-2026-08-01`, `thinking-display-updates-2026-08-18` and `cache-diagnosis-2026-04-07`. Sonnet 5.5 and Haiku 5.5 send 12, without per-turn control and the two fallback betas, and Haiku 5.5 puts `claude-code-20250219` sixth. Sonnet 5 sends 11, also without `mid-conversation-tool-changes-2026-07-01`. None is a tool-search beta.
+- **`diagnostics`:** `{previous_message_id: null}` on a session's first request, then the id of the response before it, resume rounds included; at the first-party API only.
+- **`max_tokens`, `thinking`, effort and `context_management`:** see A6 and A7/A8 below.
+- **`system`:** two blocks on every main request, the 62-byte identity line and the prompt, each with a breakpoint (A1, A5).
+- **`tools`:** name, description and schema alone, with no `strict`, `defer_loading` or `cache_control`, each schema's keys in the order the server gave them.
+- **Messages.** The task goes as a plain string, and a `role: system` message follows it and each turn's results (A1). Each `tool_use` goes back with its input's keys in the model's order and without the response's `caller` field. Earlier thinking goes back as block 0 of its message, with its signature, and is never dropped from a response that's kept; a cut response of thinking alone is dropped whole (B3).
+- **The session-title side request.** Each session sends one more request, with `query_source` `generate_session_title`. It holds one user message of one text block, `output_config.format` a JSON schema whose one required property is the string `title`, an empty `tools`, `stream: true`, and as `system` the identity line and a 3,073-byte prompt with no breakpoint. It sends no `context_management`, `diagnostics` or `fallbacks`.
+  - At the first-party API it goes to `claude-haiku-4-5-20251001`, with `max_tokens` 32,000, `thinking: {type: disabled}`, `temperature: 1`, no effort, and 6 betas with `structured-outputs-2025-12-15` among them.
+  - Under a base URL it goes to the run's own model, with that model's `max_tokens` and effort and no `temperature`; on Opus 5.5 with no `thinking` key at all.
+  - Its retries are in D1–D3 below.
+- **The result.** `num_turns` matched the main requests in most runs, resume rounds included, counted no retries, and gave 10 for a run of 9 (B6). A provider error ends the run as subtype `success` with `is_error` true (D1–D3).
+
 ### A1 System prompt and injected context
 
 A custom string replaces the whole prompt. It goes as one block, or as two blocks when it contains the `__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__` line (direct API only, 2.1.275+). **confirmed** (SP, CLI)
 
-| Still reaches the request                                                                                                                                                                            | Switch                                                                                             | Tag                                                     |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| Attribution block `x-anthropic-billing-header: cc_version=…; cc_entrypoint=…; cch=…`, sent as the first system block. api.anthropic.com strips it before the model if it arrives unchanged and first | `CLAUDE_CODE_ATTRIBUTION_HEADER=0`                                                                 | confirmed (GW, ENV)                                     |
-| An identity line before the custom prompt: "You are a Claude agent, built on Anthropic's Claude Agent SDK." Seen through a proxy with TS SDK 0.2.16 (claude-agent-sdk-typescript #237, March 2026)   | none documented                                                                                    | needs capture                                           |
-| Environment block (cwd, OS, shell, git-repo flag, memory paths)                                                                                                                                      | none needed: preset only, `--exclude-dynamic-system-prompt-sections` is ignored for custom prompts | confirmed (SP, CLI)                                     |
-| CLAUDE.md and rules, delivered as a user message                                                                                                                                                     | `settingSources: []`, `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`                                           | confirmed (SP, FEAT)                                    |
-| Auto memory (read whatever `settingSources` says)                                                                                                                                                    | `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`                                                                | confirmed (FEAT)                                        |
-| Git status snapshot                                                                                                                                                                                  | `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1`, or run in a non-git cwd                                  | switch confirmed; where it lands needs capture          |
-| A `<system-reminder>` carrying context entries (CLAUDE.md, date and similar). "Turn-start notices" cover new tools, MCP changes, date and todos (CL 2.1.281)                                         | none documented                                                                                    | needs capture (PB `system-reminder-session-context.md`) |
-| Skill listing                                                                                                                                                                                        | `skills: []`, `--disable-slash-commands`, `CLAUDE_CODE_DISABLE_BUNDLED_SKILLS=1`                   | likely                                                  |
-| MCP server instructions; deferred-tool list                                                                                                                                                          | none: the server supplies the first, tool search needs the second                                  | confirmed                                               |
-| Todo/task reminders                                                                                                                                                                                  | Task tools are off by default on Opus 4.8 and later and are removed by `tools`                     | likely                                                  |
-| Managed policy (settings, hooks, CLAUDE.md)                                                                                                                                                          | can't be disabled from the SDK                                                                     | confirmed (FEAT)                                        |
+| Still reaches the request                                                                                                                                                                            | Switch                                                                                                                                                                                                                                                              | Tag                                                                                                                                                             |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Attribution block `x-anthropic-billing-header: cc_version=…; cc_entrypoint=…; cch=…`, sent as the first system block. api.anthropic.com strips it before the model if it arrives unchanged and first | `CLAUDE_CODE_ATTRIBUTION_HEADER=0`                                                                                                                                                                                                                                  | confirmed (GW, ENV); absent from every body under `=0` (capture 2026-10-25), and the run without it wasn't made                                                 |
+| An identity line before the custom prompt: "You are a Claude agent, built on Anthropic's Claude Agent SDK." Seen through a proxy with TS SDK 0.2.16 (claude-agent-sdk-typescript #237, March 2026)   | none documented                                                                                                                                                                                                                                                     | confirmed (capture 2026-10-25: 62 bytes, the first system block of every main and side request, on every model and both URLs)                                   |
+| Environment block (cwd, OS, shell, git-repo flag, memory paths)                                                                                                                                      | none found: with a custom prompt it arrives in the first `role: system` message, with the model's identity, a token count and the date, and with no memory paths while auto memory is off. `--exclude-dynamic-system-prompt-sections` is ignored for custom prompts | confirmed (capture 2026-10-25), where SP and CLI read as preset only                                                                                            |
+| CLAUDE.md and rules, delivered as a user message                                                                                                                                                     | `settingSources: []`, `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`                                                                                                                                                                                                            | confirmed (SP, FEAT)                                                                                                                                            |
+| Auto memory (read whatever `settingSources` says)                                                                                                                                                    | `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`                                                                                                                                                                                                                                 | confirmed (FEAT)                                                                                                                                                |
+| Git status snapshot                                                                                                                                                                                  | `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1`, or run in a non-git cwd                                                                                                                                                                                                   | switch confirmed; where it lands needs capture                                                                                                                  |
+| A `<system-reminder>` carrying context entries (CLAUDE.md, date and similar). "Turn-start notices" cover new tools, MCP changes, date and todos (CL 2.1.281)                                         | none documented                                                                                                                                                                                                                                                     | confirmed (capture 2026-10-25): sent as `role: system` messages; Sonnet 5 wraps each section in `<system-reminder>` tags, the other four models send plain text |
+| Skill listing                                                                                                                                                                                        | `skills: []`, `--disable-slash-commands`, `CLAUDE_CODE_DISABLE_BUNDLED_SKILLS=1`                                                                                                                                                                                    | likely                                                                                                                                                          |
+| MCP server instructions; deferred-tool list                                                                                                                                                          | none: the server supplies the first, tool search needs the second                                                                                                                                                                                                   | confirmed                                                                                                                                                       |
+| Todo/task reminders                                                                                                                                                                                  | Task tools are off by default on Opus 4.8 and later and are removed by `tools`                                                                                                                                                                                      | likely                                                                                                                                                          |
+| Managed policy (settings, hooks, CLAUDE.md)                                                                                                                                                          | can't be disabled from the SDK                                                                                                                                                                                                                                      | confirmed (FEAT)                                                                                                                                                |
 
 How reminders are carried depends on the model:
 
-- On Opus 4.8/5/5.5, Fable and Mythos, harness reminders are mid-conversation `role:"system"` messages. Sonnet 5 stopped using them in 2.1.201 (CL, API-MSG).
+- On Opus 4.8/5/5.5, Fable and Mythos, harness reminders are mid-conversation `role:"system"` messages. Sonnet 5 stopped using them in 2.1.201 (CL, API-MSG), which the capture of 2026-10-25 below doesn't bear out.
 - Otherwise they are `<system-reminder>` text in user turns, sometimes appended after tool_result content (claude-code #79649).
 - `verbatim_prompts` doesn't remove this context. It only delays the turn-start context until after the first tool call (PY `types.py`).
+- The capture of 2026-10-25 found `role: system` messages on all five models it ran, Sonnet 5 included, and none of this context in a user turn. Sonnet 5 wraps each section in `<system-reminder>` tags inside the message; Opus 5.5, Fable 5.1, Sonnet 5.5 and Haiku 5.5 send plain text.
+  - One follows the task: an `# Environment` section, the model's identity, a token count and the date, 401 bytes on Opus 5.5 and 552 on Sonnet 5.
+  - One follows each turn's tool results: a token count, `<total_tokens>N tokens left</total_tokens>`, 49 bytes on Opus 5.5 and 86 on Sonnet 5. Twice in the long run it also carried a nudge to keep the user updated. So a turn adds three messages, where lablet's adds two.
+  - None follows a resume message. Each is a plain string once it's no longer the last message, and a one-block list while it carries the breakpoint.
 
-Tag: **likely**.
+Tag: **likely**, and **confirmed** for the five models the capture ran.
 
 ### A2 Tool definitions and tool search
 
@@ -389,7 +424,11 @@ Tag: **needs capture**.
   - The static part is "cached globally" (CL 2.1.275).
   - The 2.1.110 capture showed system blocks marked `{"type":"ephemeral","ttl":"1h","scope":"global"}` with beta `prompt-caching-scope-2026-01-05`, and messages marked `{"ttl":"1h"}` (#49139).
   - Deferred tools can't carry `cache_control` (API-TS).
-  - Still unknown: how many breakpoints (the API allows 4), whether tools get one, and whether it marks the last message or the last two. **needs capture**
+  - The capture of 2026-10-25 settles the count: three of the API's four, on Opus 5.5 and Sonnet 5 alike. **confirmed**
+    - One on each system block: the 62-byte identity line and the prompt.
+    - None on a tool.
+    - One on the last block of the last message, never the last two. It moves on each request, and the message it leaves goes back from a one-block list to a plain string with the same text, which the cache reads as the same prefix.
+  - Every marker in the capture is `{"type":"ephemeral"}`, with no `ttl` or `scope`, though `prompt-caching-scope-2026-01-05` is among the betas, and every write is in the 5-minute tier. That's under the capture's `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` with an API key, so the 2.1.110 reading is absent there, not refuted. The session-title request carries no marker.
 - **TTL:** 5 minutes for API-key and cloud-provider auth. 1 hour for the main conversation on a subscription within plan usage.
   - Overrides: `CLAUDE_CODE_PROMPT_CACHE_TTL` and `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` (`5m` or `1h`, 2.1.242+), `ENABLE_PROMPT_CACHING_1H`, `FORCE_PROMPT_CACHING_5M` (PC). **confirmed**
 - **What keeps the prefix identical across runs:**
@@ -398,7 +437,7 @@ Tag: **needs capture**.
   - Deferred tools sit outside the cached prefix.
   - Per-run content (date, git snapshot, deferred list, reminders) is in `messages`.
   - Cache entries are per model. Changing effort invalidates the cache on most models, and fast mode adds a header that is part of the cache key (PC).
-  - **confirmed**; that two runs actually share the system and tools cache still **needs capture**.
+  - **confirmed**, and two runs share the system and tools cache (capture 2026-10-25). On Opus 5.5 at the first-party API the tools and system are 3,308 tokens, and the first requests of five runs read them, each with a different task, after gaps of a few seconds to about 5.5 minutes from the last Opus 5.5 response before each. A run identical to the one before it read the whole of its first request, 3,954 tokens, and wrote none. One run came about 40 minutes after the last such response, read nothing and wrote 3,612 tokens: the capture's one piece of evidence on the cache's lifetime, under its pinned `CLAUDE_CODE_PROMPT_CACHE_TTL=5m`. Sonnet 5 read nothing Opus 5.5 had written.
 
 ### C5 Output size limits
 
@@ -552,6 +591,8 @@ asyncio.run(main())
 
 ### Capture checks
 
+Run on 2026-10-25: checks 1 with the attribution pin on only, 3 and 8; 2 with tool search off throughout; and 9's betas from the body log alone, with no headers and with `metadata` removed before the reading. Checks 4 to 7 weren't run.
+
 1. `system`: block count, the attribution block with and without `=0`, the SDK identity line, and `cache_control` (ttl, scope) on each block.
 2. `tools`: whether ToolSearch is present with `tools=[]` versus `["ToolSearch"]`; whether MCP definitions carry `defer_loading` on every request or appear only after discovery; any breakpoint on tools.
 3. First user turn: date, git status, the context reminder, deferred-list wording and the MCP instructions block. Check whether reminders are `role:"system"` messages on Opus 5.5 and `<system-reminder>` text on Sonnet 5.
@@ -580,3 +621,9 @@ A second pass on 2026-09-25 checked the matrix's claims against the primary sour
 - **MCP timeouts (F1–F5).** The per-request timer for HTTP and SSE servers takes the largest of 60 s, the tool timeout and `MCP_TIMEOUT`. An unset `MCP_TOOL_TIMEOUT`'s 28-hour default doesn't enter that comparison. A call with no response or progress also stops after 30 minutes (stdio) or 5 minutes (network servers).
 - **Skills (G1).** The 1,536-character cap applies to each skill's `description` and `when_to_use` combined, not to each separately. That the listing goes in a reminder comes from a third-party extraction and an unpinned session, so it's likely, not documented.
 - **Output cap (A6).** The 64,000 figure for Opus 5 comes from a user's capture through a proxy, on versions 2.1.237 and 2.1.268 rather than the pinned 2.1.281.
+
+The capture of 2026-10-25 contradicted three claims, and the sections above now say what it showed:
+
+- **Environment block (A1).** It isn't preset only: with a custom prompt it arrives in the first `role: system` message, with the date.
+- **Reminders on Sonnet 5 (A1).** It still gets `role: system` messages, with `<system-reminder>` tags inside them, and no reminder reaches a user turn.
+- **`stop_reason` (B1).** After an API error the result carries the synthetic error message's `stop_sequence`, not the last response's value.
