@@ -4,7 +4,6 @@
 use std::time::Duration;
 
 use lablet_model::{ContentBlock, ProviderErrorKind};
-use serde_json::json;
 use wiremock::{MockServer, ResponseTemplate};
 
 use crate::harness;
@@ -48,27 +47,33 @@ async fn a_200_as_long_as_the_bound_is_read_whole() {
     );
 }
 
+/// A 200 past the bound held an answer the model finished and was billed
+/// for, and the same request would bring one past the bound again, so what
+/// was read of it is dropped and the run stops rather than ask again.
 #[tokio::test]
-async fn a_200_longer_than_the_bound_is_malformed_and_nothing_of_it_is_read() {
+async fn a_200_longer_than_the_bound_drops_what_was_read_and_is_fatal() {
     let error = answered(message_of(BOUND + 1)).await.unwrap_err();
 
-    assert_eq!(error.kind, ProviderErrorKind::Malformed);
+    assert_eq!(error.kind, ProviderErrorKind::Fatal);
     assert_eq!(
         error.message(),
-        "the response is longer than 1,048,576 bytes"
+        "the response is longer than 1,048,576 bytes; the answer was complete, so the run stops \
+         rather than ask for it again"
     );
 }
 
 /// A failure's body past the bound can't be read as the envelope, so it's
 /// classified by its status and its headers alone, and nothing of it is
-/// quoted, though the run captures content.
+/// quoted, though the run captures content; the request id the headers
+/// carry is shown, as it is beside an envelope that was read.
 #[tokio::test]
 async fn a_failure_longer_than_the_bound_is_classified_by_status_and_never_quoted() {
     let long = format!("<html>{}</html>", "x".repeat(BOUND));
     let error = answered(
         ResponseTemplate::new(502)
             .set_body_string(long.clone())
-            .insert_header("retry-after", "3"),
+            .insert_header("retry-after", "3")
+            .insert_header("request-id", "req_011CSHoEeqs5C35K2UUqR7Fy"),
     )
     .await
     .unwrap_err();
@@ -76,16 +81,17 @@ async fn a_failure_longer_than_the_bound_is_classified_by_status_and_never_quote
     assert_eq!(error.retry_after, Some(Duration::from_secs(3)));
     assert_eq!(
         error.message(),
-        "HTTP 502 with a body longer than 1,048,576 bytes, which was cut there and isn't quoted"
+        "HTTP 502 with a body longer than 1,048,576 bytes, which was cut there and isn't quoted \
+         (request-id req_011CSHoEeqs5C35K2UUqR7Fy)"
     );
 
-    let envelope = json!({
-        "type": "error",
-        "error": { "type": "invalid_request_error", "message": format!("prompt is too long: {long}") }
-    });
-    let error = answered(ResponseTemplate::new(400).set_body_json(envelope))
-        .await
-        .unwrap_err();
+    let error = answered(harness::envelope(
+        400,
+        "invalid_request_error",
+        &format!("prompt is too long: {long}"),
+    ))
+    .await
+    .unwrap_err();
     assert_eq!(
         error.kind,
         ProviderErrorKind::Fatal,

@@ -138,6 +138,7 @@ fn a_system_prompt_of_whitespace_alone_is_refused_and_no_run_starts() {
         ] {
             let run = lab.run(args);
             assert_eq!(run.code, Some(1), "{run:?}");
+            assert!(run.stdout.is_empty(), "{run:?}");
             assert_eq!(run.stderr, refusal, "{args:?}");
         }
     }

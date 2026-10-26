@@ -1325,12 +1325,24 @@ const PRINTS_COPY: &str = "
     finish: end_turn
 ";
 
+/// The refusal of the `env` entry `COPY` whose value holds the key, in the
+/// config below.
+const HOLDS_THE_KEY: &str = "config: tools.builtin.env.COPY (line 14) is refused: its value \
+                             holds the one `model.api_key` has, and no process inherits an own \
+                             credential; to give bash the key knowingly, list COPY under \
+                             `tools.builtin.credentials`";
+
+/// What a refusal of an `env` entry ends with where no set variable gave
+/// the whole value, which the entry's text may then hold.
+const ROTATE: &str = "; rotate it if this was one";
+
 /// An `env` entry whose filled value holds a credential's value is refused
 /// by `check` and by `run` alike, naming the field whose value it holds and
 /// nothing of the entry, whether another variable gave it, whole or within
-/// a text, or the file wrote it out, whole or split by a `${VAR}`; one whose
-/// value no credential holds reaches `bash`, and a value under the cut's
-/// floor isn't matched.
+/// a text, or the file wrote it out, whole or split by a `${VAR}`, with the
+/// advice to rotate it where no set variable gave the whole value; one
+/// whose value no credential holds reaches `bash`, and a value under the
+/// cut's floor isn't matched.
 #[test]
 fn an_env_entry_whose_value_holds_a_credential_s_value_is_refused_by_check_and_by_run() {
     let lab = Lab::new("check-env-value");
@@ -1366,19 +1378,19 @@ fn an_env_entry_whose_value_holds_a_credential_s_value_is_refused_by_check_and_b
     };
     let check: &[&str] = &["check"];
     let run: &[&str] = &["run", "--prompt", "Hi."];
-    let own = "config: tools.builtin.env.COPY (line 14) is refused: its value holds the one \
-               `model.api_key` has, and no process inherits an own credential; to give bash the \
-               key knowingly, list COPY under `tools.builtin.credentials`";
 
-    for entry in [
-        format!("${{{other}}}"),
-        format!("x${{{other}}}y"),
-        key.to_owned(),
-        "sk-test-01234567${LABLET_TEST_UNSET:-}89abcdef".to_owned(),
+    for (entry, rotate) in [
+        (format!("${{{other}}}"), ""),
+        (format!("x${{{other}}}y"), ROTATE),
+        (key.to_owned(), ROTATE),
+        (
+            "sk-test-01234567${LABLET_TEST_UNSET:-}89abcdef".to_owned(),
+            ROTATE,
+        ),
     ] {
         let text = config(KEY, &entry, "");
-        refused(&with(check, &text), own);
-        refused(&with(run, &text), own);
+        refused(&with(check, &text), &format!("{HOLDS_THE_KEY}{rotate}"));
+        refused(&with(run, &text), &format!("{HOLDS_THE_KEY}{rotate}"));
     }
     let credentials = format!("    credentials:\n      GH: ${{{github}}}\n");
     let given = format!(
@@ -1390,7 +1402,11 @@ fn an_env_entry_whose_value_holds_a_credential_s_value_is_refused_by_check_and_b
     refused(&with(check, &text), &given);
     refused(&with(run, &text), &given);
     // A token written out, whole or split by a `${VAR}` or by defaults,
-    // came from no variable, so the fix names none.
+    // came from no variable, so the fix names none and says to rotate it.
+    let written_out = format!(
+        "config: tools.builtin.env.COPY (line 14) is refused: its value holds the one \
+         `tools.builtin.credentials.GH` has (line 16); list COPY there instead{ROTATE}"
+    );
     for entry in [
         token.to_owned(),
         "ghp-0123456789${LABLET_TEST_UNSET:-}abcdef".to_owned(),
@@ -1398,11 +1414,7 @@ fn an_env_entry_whose_value_holds_a_credential_s_value_is_refused_by_check_and_b
     ] {
         let text = config(KEY, &entry, &credentials);
         for subcommand in [check, run] {
-            refused(
-                &with(subcommand, &text),
-                "config: tools.builtin.env.COPY (line 14) is refused: its value holds the one \
-                 `tools.builtin.credentials.GH` has (line 16); list COPY there instead",
-            );
+            refused(&with(subcommand, &text), &written_out);
         }
     }
     assert!(!lab.at("transcript.json").exists(), "a run started");

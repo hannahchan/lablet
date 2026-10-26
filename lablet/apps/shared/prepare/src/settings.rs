@@ -253,10 +253,12 @@ fn request(model: &config::Model, resolved: &ResolvedModel) -> Result<RequestPar
 /// Holds `model.base_url` to what a provider can be reached at. The value
 /// may come from a variable, and the refusal is shown from the config as
 /// it's written, so it says nothing of what the variable holds. The literal
-/// `http://` or `https://` and the refused whitespace also keep the
-/// config's reader and the URL parser agreed on where the authority
-/// starts, which the check of their readings leans on: the parser takes a
-/// scheme with no `//` or with a third `/`, and drops a tab or a newline.
+/// `http://` or `https://`, a host straight after it and the refused
+/// whitespace also keep the config's reader and the URL parser agreed on
+/// where the authority starts, which the check of their readings leans on:
+/// the parser takes a scheme with no `//` or with a third `/`, skips a `/`
+/// or a `\` after `://` where the config's reader ends the authority, and
+/// drops a tab or a newline.
 fn base_url(model: &config::Model) -> Result<(), Refusal> {
     let Some(url) = &model.base_url else {
         return Ok(());
@@ -264,7 +266,8 @@ fn base_url(model: &config::Model) -> Result<(), Refusal> {
     let host = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"));
-    let names_a_host = host.is_some_and(|rest| !rest.is_empty() && !rest.starts_with('/'));
+    let names_a_host =
+        host.is_some_and(|rest| !rest.is_empty() && !rest.starts_with(config::AUTHORITY_ENDS));
     if names_a_host && !url.contains(char::is_whitespace) {
         Ok(())
     } else {

@@ -33,10 +33,11 @@ fn a_message_up_to_the_bound_is_kept_whole_and_one_over_it_is_cut_to_it() {
         bounded("x".repeat(ERROR_MESSAGE_MAX_BYTES + 1)),
         "x".repeat(ERROR_MESSAGE_MAX_BYTES)
     );
-    assert_eq!(
-        bounded("x".repeat(1_000_000)).len(),
-        ERROR_MESSAGE_MAX_BYTES
-    );
+    let cut = bounded("x".repeat(1_000_000));
+    assert_eq!(cut.len(), ERROR_MESSAGE_MAX_BYTES);
+    // The span status holds the message until it's exported, so the cut
+    // gives back what it left out.
+    assert!(cut.capacity() < 1_000_000, "{}", cut.capacity());
 }
 
 /// The bound counts bytes, and a character that would straddle it is left

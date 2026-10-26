@@ -124,7 +124,10 @@ pub(crate) fn longer_than(status: StatusCode, headers: &HeaderMap, bound: usize)
     if status.is_redirection() {
         return redirected(status, &format!("; it came with {cut}"));
     }
-    let message = format!("HTTP {} with {cut}", status.as_u16());
+    let mut message = format!("HTTP {} with {cut}", status.as_u16());
+    if let Some(id) = sent_request_id(headers) {
+        let _ = write!(message, " (request-id {id})");
+    }
     classified(status, headers, None, message, false)
 }
 
@@ -278,10 +281,14 @@ fn should_not_retry(headers: &HeaderMap) -> bool {
 
 /// The request's id, from the header first and the envelope second.
 fn request_id<'a>(headers: &'a HeaderMap, envelope: &'a ErrorEnvelope) -> Option<&'a str> {
+    sent_request_id(headers).or(envelope.request_id.as_deref())
+}
+
+/// The `request-id` header, when it's there and visible ASCII.
+fn sent_request_id(headers: &HeaderMap) -> Option<&str> {
     headers
         .get("request-id")
         .and_then(|value| value.to_str().ok())
-        .or(envelope.request_id.as_deref())
 }
 
 /// `count` with a comma every three digits.

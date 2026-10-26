@@ -415,15 +415,25 @@ impl<'a, S: Serializer> Serializer for Masking<'a, S> {
         // A URL's user information the fill didn't give was set in code,
         // and is written as a secret set in code is: a filled one is
         // written back as the file wrote it before it gets here.
-        if is_url(&self.at.path)
-            && let Some(information) = crate::url::user_information(value)
-        {
-            let masked = value.replacen(
-                &format!("{information}@"),
-                &format!("{}@", Secret::MARKER),
-                1,
-            );
-            return self.inner.serialize_str(&masked);
+        if is_url(&self.at.path) {
+            // An `@` past the authority may end a user or password, as a
+            // `\` or a `/` in one puts it there, and where that ends can't
+            // be told, whatever user information a reading finds before it,
+            // so nothing after the scheme is written.
+            if crate::url::holds_an_unread_at(value) {
+                let scheme = crate::url::before_authority(value);
+                return self
+                    .inner
+                    .serialize_str(&format!("{scheme}{}", Secret::MARKER));
+            }
+            if let Some(information) = crate::url::user_information(value) {
+                let masked = value.replacen(
+                    &format!("{information}@"),
+                    &format!("{}@", Secret::MARKER),
+                    1,
+                );
+                return self.inner.serialize_str(&masked);
+            }
         }
         self.inner.serialize_str(value)
     }

@@ -42,7 +42,7 @@ fn user_information_range(url: &str) -> Option<Range<usize>> {
 /// crate, which the Anthropic adapter sends through, reads it as a `/` in
 /// an `http` or `https` URL: read as anything else here, a user holding
 /// one would be user information to the check and a host to the adapter.
-const AUTHORITY_ENDS: [char; 4] = ['/', '\\', '?', '#'];
+pub const AUTHORITY_ENDS: [char; 4] = ['/', '\\', '?', '#'];
 
 /// Where in `url` its authority is, as [`user_information`] reads it.
 fn authority_range(url: &str) -> Range<usize> {
@@ -57,6 +57,12 @@ fn authority_range(url: &str) -> Range<usize> {
         .find(AUTHORITY_ENDS)
         .unwrap_or(after_scheme.len());
     start..start + end
+}
+
+/// What of `url` comes before its authority, as [`user_information`]
+/// reads it: the scheme and its `://`, or nothing.
+pub(crate) fn before_authority(url: &str) -> &str {
+    &url[..authority_range(url).start]
 }
 
 /// Whether `url` holds an unencoded `@` past its authority, which no

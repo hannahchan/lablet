@@ -485,6 +485,54 @@ fn a_setting_the_provider_applies_is_taken_stated_or_not() {
     }
 }
 
+/// A base URL names its host straight after `http://` or `https://`. The
+/// config's reader ends the authority at a `/`, `\`, `?` or `#`, so one
+/// there would leave it no host, where the URL parser skips a `/` or a `\`
+/// and sends to the host after it: the two readings would part on where a
+/// request goes.
+#[test]
+fn a_base_url_names_its_host_straight_after_its_scheme() {
+    let base_url = |url: &str| {
+        of(&format!(
+            "model: {{ base_url: '{url}' }}\nprompt: {{ system: Hi. }}"
+        ))
+    };
+    for url in [
+        "https://\\gw.example/v1",
+        "http://\\\\gw.example",
+        "https:///gw.example",
+        "https://?gw.example",
+        "https://#gw.example",
+        "https://",
+        "gw.example",
+        "ftp://gw.example",
+        "https://gw .example",
+    ] {
+        match base_url(url) {
+            Err(ConfigError::Invalid { key, reason, .. }) => {
+                assert_eq!(key, "model.base_url", "{url}");
+                assert_eq!(
+                    reason,
+                    "a URL begins `http://` or `https://` and names a host, as \
+                     `https://gateway.example` does",
+                    "{url}"
+                );
+            }
+            other => panic!("{url}: {other:?}"),
+        }
+    }
+    for url in [
+        "https://gw.example",
+        "http://127.0.0.1:9/v1",
+        "https://gw.example:8443/v1",
+        "https://[::1]:8080/v1",
+        "https://bücher.example/v1",
+    ] {
+        let settings = base_url(url);
+        assert!(settings.is_ok(), "{url}: {settings:?}");
+    }
+}
+
 #[test]
 fn a_fake_model_needs_its_script() {
     assert_eq!(

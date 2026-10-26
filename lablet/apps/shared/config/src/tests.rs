@@ -881,6 +881,42 @@ fn a_url_s_user_information_set_in_code_serialises_as_the_marker() {
     assert_eq!(config.digest(), plain.digest());
 }
 
+/// A URL set in code whose user or password holds a `\`, or another
+/// character that ends an authority, has an `@` past the authority, and
+/// where its credentials end can't be told, whether or not a reading finds
+/// user information before it: it serialises as its scheme and the marker,
+/// or as the marker alone without a scheme, with nothing of the rest.
+#[test]
+fn a_url_set_in_code_with_an_at_past_its_authority_serialises_as_the_marker() {
+    let mut config = Config::default();
+    config.model.base_url = Some("https://CORP\\jdoe:pw-0123456789abcdef@gw.example/v1".to_owned());
+    config.telemetry.otlp.endpoint = Some("u/x:pw-0123456789abcdef@127.0.0.1:4317".to_owned());
+
+    let written = serde_json::to_string(&config.resolved()).unwrap();
+
+    assert!(
+        !written.contains("pw-0123") && !written.contains("jdoe"),
+        "{written}"
+    );
+    let resolved = serde_json::to_value(config.resolved()).unwrap();
+    assert_eq!(resolved["model"]["base_url"], json!("https://[secret]"));
+    assert_eq!(resolved["telemetry"]["otlp"]["endpoint"], json!("[secret]"));
+    for url in [
+        "https://jdoe:p@ss/w-0123456789abcdef@gw.example",
+        "https://jdoe:p@ss\\w-0123456789abcdef@gw.example",
+    ] {
+        config.model.base_url = Some(url.to_owned());
+
+        let resolved = serde_json::to_value(config.resolved()).unwrap();
+
+        assert_eq!(
+            resolved["model"]["base_url"],
+            json!("https://[secret]"),
+            "{url}"
+        );
+    }
+}
+
 /// A value written as one `${VAR}` whole that comes out empty isn't
 /// stated, whatever the setting takes: a number, a duration and a list's
 /// item are left out as an optional setting is, and the setting keeps its

@@ -20,8 +20,8 @@ use std::fmt::{self, Write as _};
 use std::path::{Path, PathBuf};
 
 use lablet_config::{
-    Config, ConfigError, Context, Format, KeyPath, McpServer, Place, Places, Provider, Refusal,
-    ResolvedConfig, Secret, Tools, TranscriptFormat, Unreadable, WrittenInformation,
+    Config, ConfigError, Context, Fill, Format, KeyPath, McpServer, Place, Places, Provider,
+    Refusal, ResolvedConfig, Secret, Tools, TranscriptFormat, Unreadable, WrittenInformation,
     holds_an_unread_at, host_and_port, is_credential, outside_user_information, unreadable,
     user_information, writes_an_unread_at, written_information,
 };
@@ -472,17 +472,19 @@ pub enum Ready {
 /// order a build meets them: a setting a rule refuses; a credential written
 /// out, or with a default that isn't empty, a header value among them, or a
 /// URL's user information written out, or that a variable gave it whole; a
-/// key the provider needs that isn't set; a `tools.builtin.env` entry that
-/// names a credential's variable, one whose value holds a credential's, or
-/// one `bash` inherits already; a `credentials` entry `env` sets too;
+/// key the provider needs that isn't set; a `credentials` entry `env` sets
+/// too; a `tools.builtin.env` entry that names a credential's variable or
+/// one `bash` inherits already, then one whose value holds a credential's;
+/// a credential's variable written in a setting other than its field;
 /// `bash` with no environment handed in; what this lablet has no adapter
-/// for; a relative path in a config that no directory was given for; a file
-/// the config names that can't be read; a system prompt of whitespace
-/// alone, inline or in its file; what building the provider's
-/// target refuses, a key a header can't carry, a base URL with a query or a
-/// fragment, or an HTTP client that can't be made; and a base URL in which
-/// the target finds a user or password where the check finds none, or none
-/// where it finds one, or another host or port.
+/// for; a relative path in a config that no directory was given for; a
+/// system prompt's file that can't be read; a system prompt of whitespace
+/// alone, inline or in its file; what building the provider's target
+/// refuses, a key a header can't carry, a base URL with a query or a
+/// fragment, or an HTTP client that can't be made; a base URL in which the
+/// target finds a user or password where the check finds none, or none
+/// where it finds one, or another host or port; and the fake provider's
+/// script, when it can't be read.
 pub fn prepare(config: &Config, base: Base) -> Result<Settled, BuildError> {
     let refused = |refusal| BuildError::Config(config.refused(refusal));
     let settings = Settings::of(config).map_err(refused)?;
@@ -500,8 +502,17 @@ pub fn prepare(config: &Config, base: Base) -> Result<Settled, BuildError> {
 
     let system = match &settings.system {
         System::Text(text) => text.clone(),
-        System::File(file) => std::fs::read_to_string(file)
-            .map_err(|error| refused(Refusal::invalid("prompt.system_file", error.to_string())))?,
+        System::File(file) => {
+            let mut text = std::fs::read_to_string(file).map_err(|error| {
+                refused(Refusal::invalid("prompt.system_file", error.to_string()))
+            })?;
+            // An editor may write a byte order mark first, which the API
+            // would receive as text, and which `trim` keeps.
+            if text.starts_with('\u{feff}') {
+                text.drain(..'\u{feff}'.len_utf8());
+            }
+            text
+        }
     };
     // An empty prompt is a run with none, which no provider is sent; one of
     // whitespace alone would be sent, as a system block that says nothing.
@@ -749,10 +760,10 @@ fn target_refused(config: &Config, error: TargetError) -> BuildError {
 /// the secrets cut it; were the URL parser to read it as a host and a
 /// path, the key would go to that host with the password in the path, cut
 /// nowhere. The readers agree on every character that ends an authority,
-/// and on where one starts since `settings` holds the URL to a literal
-/// `http://` or `https://` and no whitespace, but for a `\` straight after
-/// the `://`, which the parser skips as it does a `/`: this refuses that,
-/// and whatever a later change of either reader would part them on.
+/// and on where one starts, since `settings` holds the URL to a literal
+/// `http://` or `https://` with its host straight after and no whitespace,
+/// so nothing reaches this today; it holds if either reader changes. Its
+/// fix names the way the two part where a host doesn't follow `://`.
 fn base_url_read_alike(config: &Config, target: &Target) -> Result<(), BuildError> {
     match config.model.base_url.as_deref() {
         Some(base_url) if !read_alike(base_url, target) => Err(refusal_unshown(
@@ -1362,7 +1373,7 @@ fn env_is_no_credential(
             ));
         }
     }
-    for name in config.tools.builtin.env.keys() {
+    for (name, value) in &config.tools.builtin.env {
         let key = env.key(name);
         let Some(fill) = config.filled().at(&key) else {
             continue;
@@ -1384,15 +1395,14 @@ fn env_is_no_credential(
                 ));
             }
             if let Some(entry) = variables.given_entry(variable) {
-                return Err(refusal_unshown(
-                    config,
-                    &key,
-                    format!(
-                        "`{variable}` is given under `credentials`{}; list {name} there instead, \
-                         as {name}: ${{{variable}}}",
-                        at(config.place_at(entry))
-                    ),
-                ));
+                let mut reason = format!(
+                    "`{variable}` is given under `credentials`{}; list {name} there instead",
+                    at(config.place_at(entry))
+                );
+                if gave_the_whole_value(fill, value) == Some(variable) {
+                    let _ = write!(reason, ", as {name}: ${{{variable}}}");
+                }
+                return Err(refusal_unshown(config, &key, reason));
             }
             let inherited =
                 base.is_some_and(|base| base.iter().any(|(set, _)| set.to_str() == Some(variable)));
@@ -1418,22 +1428,22 @@ fn env_is_no_credential(
 /// name. The refusal names the field whose value it holds, and the entry by
 /// its key and line, and shows nothing of the entry's text: a `${VAR}` or a
 /// default can split a value written out so that no test of the text finds
-/// it, and the user has the file.
+/// it, and the user has the file. Where no set variable gave the whole
+/// value, the text may hold the credential, so the refusal says to rotate
+/// it.
 fn env_holds_no_credential(config: &Config, derived: &Derived) -> Result<(), BuildError> {
     let env = KeyPath::of("tools.builtin.env");
     for (name, value) in &config.tools.builtin.env {
         let key = env.key(name);
-        // The fix names a variable only where a set one gave the whole
-        // value: a value written out, in the text or in a default, or split
-        // around a `${VAR}`, came from no variable, and the `${VAR}` a fix
-        // named would have given nothing of it.
         let variable = config
             .filled()
             .at(&key)
-            .filter(|fill| fill.is_one_variable() && fill.default().is_none_or(str::is_empty))
-            .and_then(|fill| fill.variables.first())
-            .filter(|variable| variable.set)
-            .map(|variable| variable.name.as_str());
+            .and_then(|fill| gave_the_whole_value(fill, value));
+        let rotate = if variable.is_some() {
+            ""
+        } else {
+            "; rotate it if this was one"
+        };
         let holds = |credential: &&Credential| credential.holds(value);
         if let Some(own) = derived.own.iter().find(holds) {
             let field = &own.field;
@@ -1448,7 +1458,7 @@ fn env_holds_no_credential(config: &Config, derived: &Derived) -> Result<(), Bui
                 format!(
                     "its value holds the one `{field}` has, and no process inherits an own \
                      credential; to give bash {what} knowingly, list {name} under \
-                     `tools.builtin.credentials`"
+                     `tools.builtin.credentials`{rotate}"
                 ),
             ));
         }
@@ -1458,8 +1468,11 @@ fn env_holds_no_credential(config: &Config, derived: &Derived) -> Result<(), Bui
                 given.field,
                 at(given.place)
             );
-            if let Some(variable) = variable {
-                let _ = write!(reason, ", as {name}: ${{{variable}}}");
+            match variable {
+                Some(variable) => {
+                    let _ = write!(reason, ", as {name}: ${{{variable}}}");
+                }
+                None => reason.push_str(rotate),
             }
             return Err(refusal_unshown(config, &key, reason));
         }
@@ -1467,10 +1480,22 @@ fn env_holds_no_credential(config: &Config, derived: &Derived) -> Result<(), Bui
     Ok(())
 }
 
+/// The one set variable that gave `value`, the filled value of the `env`
+/// entry `fill` records, whole, which is the one a fix may name. A value
+/// written out, in the text or in a default, or split around a `${VAR}`,
+/// came from no variable, and the `${VAR}` a fix named would give nothing
+/// of it; so did a `${VAR:-default}` that came out as its default's text.
+fn gave_the_whole_value<'f>(fill: &'f Fill, value: &str) -> Option<&'f str> {
+    let variable = fill.variables.first().filter(|variable| variable.set)?;
+    (fill.is_one_variable() && fill.default() != Some(value)).then_some(variable.name.as_str())
+}
+
 /// Q6: an own or given `${VAR}` fills no setting but its own field, a URL's
 /// user information or a `credentials` entry, since what it fills anywhere
 /// else reaches the transcript, telemetry and the digest as it is.
-/// `tools.builtin.env` has its own refusals, which name its fix.
+/// `tools.builtin.env` has its own refusals, which name its fix. The
+/// refusal names the setting by its key and line and shows nothing of its
+/// text, since a default written beside the variable may be a credential.
 fn credential_variables_fill_their_fields(
     config: &Config,
     variables: &Variables,
@@ -1506,13 +1531,14 @@ fn credential_variables_fill_their_fields(
             } else {
                 continue;
             };
-            return Err(BuildError::Config(config.refused(Refusal::Invalid {
-                key: key.clone(),
-                reason: format!(
+            return Err(refusal_unshown(
+                config,
+                key,
+                format!(
                     "{fills}, and a credential's variable fills no other setting; use another \
                      variable here"
                 ),
-            })));
+            ));
         }
     }
     Ok(())

@@ -191,12 +191,14 @@ impl Target {
         self.authorization.is_some()
     }
 
-    /// Whether a URL whose authority is `host_and_port`, a host and an
-    /// optional port with no user information, reaches the host and port
-    /// each request goes to. The text is read as the base URL was, so a
-    /// host's case, an international name and an address's spelling are
-    /// compared as the parser writes them, and a caller that read the base
-    /// URL another way can tell whether it read the same host.
+    /// Whether `host_and_port`, read as the authority of a URL of the base
+    /// URL's scheme, names the host and port each request goes to. Only the
+    /// host and the port the parser reads from it are compared; the rest of
+    /// it, user information or a path among it, is ignored. The text is read
+    /// as the base URL was, so a host's case, an international name and an
+    /// address's spelling are compared as the parser writes them, and a
+    /// caller that read the base URL another way can tell whether it read
+    /// the same host.
     #[must_use]
     pub fn sends_to(&self, host_and_port: &str) -> bool {
         Url::parse(&format!("{}://{host_and_port}", self.url.scheme())).is_ok_and(|url| {

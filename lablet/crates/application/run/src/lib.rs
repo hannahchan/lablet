@@ -44,6 +44,9 @@ pub const ERROR_MESSAGE_MAX_BYTES: usize = 2_048;
 /// boundary the bound allows.
 pub(crate) fn bounded(mut message: String) -> String {
     message.truncate(message.floor_char_boundary(ERROR_MESSAGE_MAX_BYTES));
+    // The span status holds the message until it's exported, and truncating
+    // keeps the capacity of a message as long as a server's body.
+    message.shrink_to_fit();
     message
 }
 
