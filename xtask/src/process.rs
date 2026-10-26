@@ -137,6 +137,23 @@ pub fn command_in(directory: &Path, program: &str, args: &[&str]) -> Result<Comm
     command_running(directory, program, args, runs(program, args).as_deref())
 }
 
+/// [`command_in`], started under `environment` and nothing else of this
+/// process's but `PATH`, which is the pinned tools' as for every command
+/// here: for a program that must see no token the shell holds.
+pub fn command_under(
+    directory: &Path,
+    program: &str,
+    args: &[&str],
+    environment: &[(OsString, OsString)],
+) -> Result<Command, Error> {
+    let mut command = command_in(directory, program, args)?;
+    command
+        .env_clear()
+        .envs(environment.iter().map(|(name, value)| (name, value)))
+        .env("PATH", &tools().path);
+    Ok(command)
+}
+
 /// The binary `program` ends up running, which is `program` itself for all
 /// but cargo.
 fn runs(program: &str, args: &[&str]) -> Option<String> {
@@ -774,6 +791,35 @@ mod tests {
         assert_eq!(
             chain(&stream(missing, &[], &[], &[]).unwrap_err()),
             could_not
+        );
+    }
+
+    /// `env` is pinned by nothing, so it runs from PATH, and prints the
+    /// environment it was started with, which only a child can show.
+    #[test]
+    fn a_command_under_an_environment_starts_with_that_and_the_tools_path_alone() {
+        let dir = TempDir::new("under");
+        let environment = [("XTASK_UNDER_PROBE", "given"), ("HOME", "/nowhere")]
+            .map(|(name, value)| (OsString::from(name), OsString::from(value)));
+        let output = command_under(dir.path(), "env", &[], &environment)
+            .unwrap()
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let printed = String::from_utf8(output.stdout).unwrap();
+        let set: BTreeSet<(&str, &str)> = printed
+            .lines()
+            .map(|line| line.split_once('=').unwrap())
+            .collect();
+        let path = tools().path.to_str().unwrap();
+        assert_eq!(
+            set,
+            [
+                ("HOME", "/nowhere"),
+                ("PATH", path),
+                ("XTASK_UNDER_PROBE", "given")
+            ]
+            .into()
         );
     }
 

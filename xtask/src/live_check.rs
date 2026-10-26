@@ -1,19 +1,22 @@
 //! `cargo xtask weaver live-check`: what lablet emits, checked against the
 //! registry by `weaver registry live-check` over the wire. Weaver listens on
-//! two free ports, lablet runs the `init` starter, the two-turn example and
-//! the retry example against it with content captured, weaver is stopped
-//! through its admin endpoint, and its report is read back. A violation
-//! fails the step, and so does a report that saw less than the runs emit: an
-//! idle listener reports nothing wrong. With `--config <file> --prompt
-//! <text>`, one run of that config against its real provider is checked the
-//! same way, under the key its `api_key` names, which must be set: the
-//! binary is built with the key's variable taken off cargo's environment, so
-//! no build script runs with the key, and run under an allowlist of the
-//! variables a process needs beside it, so none of the shell's other tokens
-//! reaches the run or the model's commands. The build itself runs under the
-//! rest of the shell.
+//! two free ports, under an allowlist of the variables it needs and nothing
+//! else of the shell, lablet runs the `init` starter, the two-turn example
+//! and the retry example against it with content captured, weaver is
+//! stopped through its admin endpoint, and its report is read back. A
+//! violation fails the step, and so does a report that saw less than the
+//! runs emit: an idle listener reports nothing wrong. With `--config <file>
+//! --prompt <text>`, one run of that config against its real provider is
+//! checked the same way, under the key the parsed config's `model.api_key`
+//! names, which must be set: the binary is built under an allowlist of the
+//! variables cargo needs, the key's left out, so a build script or a proc
+//! macro sees that allowlist alone, and run under an allowlist of the
+//! variables a process needs, the key's and every variable the config
+//! names, so none of the shell's other tokens reaches the run or the
+//! model's commands. Weaver waits longer for a sample there, since a run
+//! exports nothing while an attempt waits on the provider.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fmt::{self, Write as _};
 use std::io::{PipeWriter, Read as _, Write as _};
@@ -25,6 +28,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::error::{Error, Verb};
 use crate::gates::{CheckResult, Failure, LOCKED, weaver_diagnostic_args};
@@ -81,9 +85,15 @@ struct Emitted {
 }
 
 /// Weaver stops on its own after this long without a sample: a backstop for
-/// a listener that outlives this process. The runs take seconds, and lablet
-/// is built before weaver starts, so a cold build never eats into it.
+/// a listener that outlives this process. The fake runs take seconds, and
+/// lablet is built before weaver starts, so a cold build never eats into it.
 const INACTIVITY_SECONDS: &str = "120";
+
+/// [`INACTIVITY_SECONDS`] for the real-key run, which exports nothing while
+/// an attempt waits on the provider: above the ten minutes
+/// `run.provider_timeout` gives an attempt by default, so weaver doesn't
+/// stop in the middle of a slow attempt and fail the step at `/stop`.
+const REAL_INACTIVITY_SECONDS: &str = "900";
 
 const READY_WITHIN: Duration = Duration::from_secs(60);
 const STOP_WITHIN: Duration = Duration::from_secs(30);
@@ -92,24 +102,11 @@ const POLL: Duration = Duration::from_millis(250);
 /// For one request to the admin endpoint, which answers at once.
 const ADMIN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// What the real-key run is handed beside the key's variable, each when
-/// it's set here: what a process needs to find programs, its home and a
-/// temporary directory, and to read text. The config's `bash` inherits the
-/// run's environment less lablet's own key, so a token of the shell's
-/// handed on would reach the model's commands; here xtask is the framework
-/// that hands in less.
-const HANDED_TO_A_REAL_RUN: &[&str] = &[
-    "PATH",
-    "HOME",
-    "TMPDIR",
-    "CARGO_HOME",
-    "RUSTUP_HOME",
-    "LANG",
-    // The owner's say over what lablet logs.
-    "RUST_LOG",
-    // The proxy a laptop's network needs, in the names reqwest reads, and
-    // the trust roots a Linux host names; each is the owner's own network
-    // setting rather than a credential, and an unset one passes nothing.
+/// The proxy a laptop's network needs, in the names reqwest reads, and the
+/// trust roots a Linux host names, handed on beside each allowlist below:
+/// each is the owner's own network setting rather than a credential, and
+/// an unset one passes nothing.
+const NETWORK: &[&str] = &[
     "HTTP_PROXY",
     "HTTPS_PROXY",
     "ALL_PROXY",
@@ -122,26 +119,95 @@ const HANDED_TO_A_REAL_RUN: &[&str] = &[
     "SSL_CERT_DIR",
 ];
 
+/// What weaver is started with beside [`NETWORK`], each when it's set here,
+/// in both modes: what a process needs to find programs, its home and a
+/// temporary directory, and to read text. Weaver is a third party's program
+/// that runs for the whole step, and the network names are there because it
+/// resolves a registry, which it may fetch.
+const HANDED_TO_WEAVER: &[&str] = &["PATH", "HOME", "TMPDIR", "LANG"];
+
+/// What the real-key build is run under beside [`NETWORK`], each when it's
+/// set here: what cargo and rustup need to find the toolchain, the target
+/// directory and the flags the owner builds with. Every build script and
+/// proc macro runs under it, so a token of the shell's would reach code no
+/// one here wrote.
+const HANDED_TO_A_BUILD: &[&str] = &[
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "RUSTUP_TOOLCHAIN",
+    "RUSTFLAGS",
+    "RUSTC_WRAPPER",
+    "CARGO_TARGET_DIR",
+    "CARGO_BUILD_JOBS",
+    "CARGO_INCREMENTAL",
+    "CARGO_NET_OFFLINE",
+    "LANG",
+    "TERM",
+];
+
+/// What the real-key run is handed beside [`NETWORK`], the key's variable
+/// and every variable the config names, each when it's set here: what a
+/// process needs to find programs, its home and a temporary directory, and
+/// to read text. The config's `bash` inherits the run's environment less
+/// lablet's own key, so a token of the shell's handed on would reach the
+/// model's commands; here xtask is the framework that hands in less.
+const HANDED_TO_A_REAL_RUN: &[&str] = &[
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "LANG",
+    // The owner's say over what lablet logs.
+    "RUST_LOG",
+];
+
+/// The keys under `prompt:` the config's fill leaves as written, so a
+/// `${VAR}` there names no variable the run reads.
+const UNFILLED_PROMPTS: [&str; 2] = ["system", "system_file"];
+
 /// What `cargo build` is asked to print, so the binary it built is read off
 /// its output wherever the target directory is: one JSON message a line,
 /// with the diagnostics still rendered on standard error.
 const MESSAGE_FORMAT: &str = "--message-format=json-render-diagnostics";
 
+/// The environment this process runs in, by a variable's name: what each
+/// allowlist reads from, so the tests hand in one of their own.
+type Shell<'a> = &'a dyn Fn(&str) -> Option<OsString>;
+
+/// The environment cargo runs under.
+#[derive(Debug, Clone, Copy)]
+enum Under<'a> {
+    /// This process's, less the OpenTelemetry and context variables: the
+    /// fake runs', where nothing holds a key.
+    Shell,
+    /// These variables and nothing else: the real-key build's.
+    Only(&'a [(OsString, OsString)]),
+}
+
 /// What the check runs outside this process, so the tests run neither
 /// weaver nor cargo.
 trait Programs {
-    /// Starts weaver with `args` in the repository root, both streams to
+    /// Starts weaver with `args` in the repository root, with
+    /// `environment` and nothing else as its environment, both streams to
     /// `output`.
-    fn spawn_weaver(&mut self, args: &[&str], output: PipeWriter) -> Result<Child, Error>;
+    fn spawn_weaver(
+        &mut self,
+        args: &[&str],
+        environment: &[(OsString, OsString)],
+        output: PipeWriter,
+    ) -> Result<Child, Error>;
 
-    /// Runs cargo with `args` in `directory` to its end, with each variable
-    /// `withheld` names taken off its environment: a build, or lablet
-    /// through `cargo run`.
+    /// Runs cargo with `args` in `directory` to its end, under
+    /// `environment`: a build, or lablet through `cargo run`.
     fn cargo(
         &mut self,
         directory: &Path,
         args: &[&str],
-        withheld: &[&str],
+        environment: Under<'_>,
     ) -> Result<Output, Error>;
 
     /// Runs the built `binary` with `args` in `directory` to its end, with
@@ -165,13 +231,33 @@ trait Programs {
     }
 }
 
-struct Real;
+/// Weaver and cargo, by the names they're run under, so a test can run a
+/// program in their place that prints the environment each was given.
+struct Real {
+    weaver: &'static str,
+    cargo: &'static str,
+}
+
+impl Real {
+    /// The programs the step runs.
+    const fn programs() -> Self {
+        Self {
+            weaver: "weaver",
+            cargo: "cargo",
+        }
+    }
+}
 
 impl Programs for Real {
-    fn spawn_weaver(&mut self, args: &[&str], output: PipeWriter) -> Result<Child, Error> {
-        let invocation = process::invocation("weaver", args);
+    fn spawn_weaver(
+        &mut self,
+        args: &[&str],
+        environment: &[(OsString, OsString)],
+        output: PipeWriter,
+    ) -> Result<Child, Error> {
+        let invocation = process::invocation(self.weaver, args);
         let not_started = invocation.not_started();
-        let mut command = process::command("weaver", args)?;
+        let mut command = process::command_under(&repo_root(), self.weaver, args, environment)?;
         command
             .stdin(Stdio::null())
             .stdout(output.try_clone().map_err(&not_started)?)
@@ -183,19 +269,24 @@ impl Programs for Real {
         &mut self,
         directory: &Path,
         args: &[&str],
-        withheld: &[&str],
+        environment: Under<'_>,
     ) -> Result<Output, Error> {
-        let mut command = process::command_in(directory, "cargo", args)?;
-        without_the_opentelemetry_environment(
-            &mut command,
-            std::env::vars_os().map(|(name, _)| name),
-        );
-        for name in withheld {
-            command.env_remove(name);
-        }
+        let mut command = match environment {
+            Under::Shell => {
+                let mut command = process::command_in(directory, self.cargo, args)?;
+                without_the_opentelemetry_environment(
+                    &mut command,
+                    std::env::vars_os().map(|(name, _)| name),
+                );
+                command
+            }
+            Under::Only(environment) => {
+                process::command_under(directory, self.cargo, args, environment)?
+            }
+        };
         command
             .output()
-            .map_err(Invocation::new(directory, "cargo", args).not_started())
+            .map_err(Invocation::new(directory, self.cargo, args).not_started())
     }
 
     fn built(
@@ -215,45 +306,63 @@ impl Programs for Real {
     }
 }
 
+/// This process's environment, for the allowlists to read from.
+fn this_shell(name: &str) -> Option<OsString> {
+    std::env::var_os(name)
+}
+
 /// Runs the check against the working tree; see the module doc.
 pub fn check() -> CheckResult {
-    check_with(&repo_root(), &mut Real)
+    check_with(&repo_root(), &mut Real::programs(), &this_shell)
 }
 
 /// Runs the check for one run of `config` with `prompt`: a real provider,
-/// reached with the key the config's `api_key` names, so the mode refuses
-/// before anything is built when the config names no variable or the
-/// variable isn't set. The run is made in the config's own directory, where
-/// its relative paths start, with the same overrides as the fake runs, and
-/// its report is judged as one run's.
+/// reached with the key the config's `model.api_key` names, so the mode
+/// refuses before anything is built when the config names no variable there
+/// or the variable isn't set. The run is made in the config's own
+/// directory, where its relative paths start, with the same overrides as
+/// the fake runs, and its report is judged as one run's.
 pub fn check_against(config: &Path, prompt: &str) -> CheckResult {
-    check_against_with(&repo_root(), &mut Real, config, prompt)
+    check_against_with(
+        &repo_root(),
+        &mut Real::programs(),
+        config,
+        prompt,
+        &this_shell,
+    )
 }
 
 /// [`check`] for the repository at `root`, running programs through
-/// `programs`.
-fn check_with(root: &Path, programs: &mut dyn Programs) -> CheckResult {
+/// `programs`, with `shell` as this process's environment.
+fn check_with(root: &Path, programs: &mut dyn Programs, shell: Shell<'_>) -> CheckResult {
+    let listening = Listening {
+        inactivity: INACTIVITY_SECONDS,
+        environment: handed_to_weaver(shell, None),
+    };
     judged(
         root,
         programs,
+        &listening,
         |programs| build_lablet(root, programs),
         |programs, scratch, grpc, ()| run_configs(root, programs, scratch, grpc),
     )
 }
 
 /// [`check_against`] for the repository at `root`, running programs through
-/// `programs`.
+/// `programs`, with `shell` as this process's environment.
 fn check_against_with(
     root: &Path,
     programs: &mut dyn Programs,
     config: &Path,
     prompt: &str,
+    shell: Shell<'_>,
 ) -> CheckResult {
     // Against the directory xtask runs in: the alias is in both roots.
     let config = std::fs::canonicalize(config).map_err(Error::file(Verb::Read, config))?;
     let text = std::fs::read_to_string(&config).map_err(Error::file(Verb::Read, &config))?;
-    let variable = key_variable(&text)?;
-    is_set(&variable)?;
+    let tree = parsed(&config, &text)?;
+    let variable = key_variable(&tree)?;
+    is_set(&variable, shell)?;
     let (Some(directory), Some(file)) = (config.parent(), config.file_name()) else {
         return Err(Error::Missing {
             what: format!("{} is not a file in a directory", config.display()),
@@ -262,11 +371,17 @@ fn check_against_with(
         .into());
     };
     let file = file.to_string_lossy();
-    let environment = handed_to_a_real_run(&variable);
+    let environment = handed_to_a_real_run(&variable, &named_variables(&tree), shell);
+    let build = handed_to_a_build(&variable, shell);
+    let listening = Listening {
+        inactivity: REAL_INACTIVITY_SECONDS,
+        environment: handed_to_weaver(shell, Some(variable.as_str())),
+    };
     judged(
         root,
         programs,
-        |programs| built_without(root, programs, &variable),
+        &listening,
+        |programs| built_under(root, programs, &build),
         |programs, _, grpc, binary| {
             let endpoint = format!("http://127.0.0.1:{grpc}");
             let args = run_args(&file, prompt, &endpoint);
@@ -284,70 +399,171 @@ fn check_against_with(
     )
 }
 
-/// The environment of the real-key run: each variable of
-/// [`HANDED_TO_A_REAL_RUN`] that's set here, and the key's, `variable`,
-/// whose value is passed on and never looked at.
-fn handed_to_a_real_run(variable: &str) -> Vec<(OsString, OsString)> {
-    let mut names: Vec<&str> = HANDED_TO_A_REAL_RUN.to_vec();
-    if !names.contains(&variable) {
-        names.push(variable);
-    }
+/// Each of `names` that `shell` sets, with its value, once each and in
+/// order. The value is passed on and never looked at.
+fn set_in<'a>(
+    shell: Shell<'_>,
+    names: impl IntoIterator<Item = &'a str>,
+) -> Vec<(OsString, OsString)> {
+    let mut seen = BTreeSet::new();
     names
         .into_iter()
-        .filter_map(|name| std::env::var_os(name).map(|value| (OsString::from(name), value)))
+        .filter(|name| seen.insert(*name))
+        .filter_map(|name| shell(name).map(|value| (OsString::from(name), value)))
         .collect()
 }
 
-/// Matches the one line of a config's text that fills `api_key` from a
-/// variable, `api_key: ${NAME}` or `api_key: ${NAME:-default}`, quoted or
-/// not, and captures the name. A comment is cut first, so the line is one
-/// the config reads.
-fn key_fill() -> regex::Regex {
-    const PATTERN: &str =
-        r#"(?:^|[\s{,])["']?api_key["']?\s*:\s*["']?\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}"#;
-    #[expect(
-        clippy::unwrap_used,
-        reason = "the pattern is a literal, and the tests compile it"
-    )]
-    regex::Regex::new(PATTERN).unwrap()
+/// Weaver's environment: each variable of [`HANDED_TO_WEAVER`] and
+/// [`NETWORK`] that `shell` sets, less the key's, `withheld`, whatever it's
+/// named.
+fn handed_to_weaver(shell: Shell<'_>, withheld: Option<&str>) -> Vec<(OsString, OsString)> {
+    let listed = HANDED_TO_WEAVER.iter().chain(NETWORK).copied();
+    set_in(shell, listed.filter(|name| Some(*name) != withheld))
 }
 
-/// The name of the variable `text`, a config's, fills `api_key` from, or
-/// the refusal when it names none: a key written as a literal, or no key at
-/// all, is no key this mode may run with, since it runs a real provider.
-fn key_variable(text: &str) -> Result<String, Failure> {
-    let fill = key_fill();
-    let read: String = text
-        .lines()
-        // A `#` after a space, or at a line's start, begins a comment.
-        .map(|line| {
-            line.split_once(" #")
-                .map_or(line, |(read, _)| read)
-                .trim_start()
+/// The real-key build's environment: each variable of
+/// [`HANDED_TO_A_BUILD`] and [`NETWORK`] that `shell` sets, less the key's,
+/// `variable`, whatever it's named.
+fn handed_to_a_build(variable: &str, shell: Shell<'_>) -> Vec<(OsString, OsString)> {
+    let listed = HANDED_TO_A_BUILD.iter().chain(NETWORK).copied();
+    set_in(shell, listed.filter(|name| *name != variable))
+}
+
+/// The real-key run's environment: each variable of
+/// [`HANDED_TO_A_REAL_RUN`] and [`NETWORK`], of `named`, the variables the
+/// config names, and the key's, `variable`, that `shell` sets. A variable
+/// the config fills that the run wasn't handed would read as unset: refused,
+/// or its default taken.
+fn handed_to_a_real_run(
+    variable: &str,
+    named: &BTreeSet<String>,
+    shell: Shell<'_>,
+) -> Vec<(OsString, OsString)> {
+    let listed = HANDED_TO_A_REAL_RUN
+        .iter()
+        .chain(NETWORK)
+        .copied()
+        .chain(named.iter().map(String::as_str))
+        .chain([variable]);
+    set_in(shell, listed)
+}
+
+/// The config at `path`, whose text is `text`, as a tree: JSON for a
+/// `.json` file and YAML otherwise, as lablet reads it, booleans as YAML
+/// 1.2 spells them. A text of nothing reads as null.
+fn parsed(path: &Path, text: &str) -> Result<Value, Error> {
+    if path
+        .extension()
+        .is_some_and(|extension| extension == "json")
+    {
+        return serde_json::from_str(text).map_err(Error::parse(path));
+    }
+    // A snippet draws the lines around a syntax error, and a key or a token
+    // written as a literal beside it would be printed with them.
+    let options = serde_saphyr::options! { strict_booleans: true, with_snippet: false };
+    serde_saphyr::from_str_with_options(text, options)
+        .map_err(|error| Error::parse(path)(Box::new(error)))
+}
+
+/// The name of the variable the config, `tree`, fills `model.api_key`
+/// from, or the refusal when it names none: a key written as a literal, a
+/// text with more than a variable in it, or no key at all, is no key this
+/// mode may run with, since it runs a real provider.
+fn key_variable(tree: &Value) -> Result<String, Failure> {
+    tree.get("model")
+        .and_then(|model| model.get("api_key"))
+        .and_then(Value::as_str)
+        .and_then(|text| match references(text).as_slice() {
+            [(whole, name)] if *whole == text => Some((*name).to_owned()),
+            _ => None,
         })
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .fold(String::new(), |mut read, line| {
-            read.push_str(line);
-            read.push('\n');
-            read
-        });
-    let name = fill
-        .captures(&read)
-        .and_then(|captures| captures.get(1))
-        .map(|name| name.as_str().to_owned());
-    name.ok_or_else(|| {
-        Failure::Verdict(
-            "the config's api_key names no variable; this mode runs a real provider and needs \
-             api_key: ${VAR}"
-                .to_owned(),
-        )
-    })
+        .ok_or_else(|| {
+            Failure::Verdict(
+                "the config's api_key names no variable; this mode runs a real provider and \
+                 needs api_key: ${VAR}"
+                    .to_owned(),
+            )
+        })
 }
 
-/// Whether the variable `name` is set in this process's environment, which
-/// the run inherits, read as presence alone: the value is never read.
-fn is_set(name: &str) -> Result<(), Failure> {
-    if std::env::var_os(name).is_some() {
+/// Every variable the config, `tree`, names in a text its fill reads:
+/// each text but the prompts', which the fill leaves as written.
+fn named_variables(tree: &Value) -> BTreeSet<String> {
+    fn walk(value: &Value, named: &mut BTreeSet<String>) {
+        match value {
+            Value::String(text) => {
+                named.extend(
+                    references(text)
+                        .into_iter()
+                        .map(|(_, name)| name.to_owned()),
+                );
+            }
+            Value::Array(items) => items.iter().for_each(|item| walk(item, named)),
+            Value::Object(entries) => entries.values().for_each(|item| walk(item, named)),
+            Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        }
+    }
+    let mut named = BTreeSet::new();
+    let Value::Object(sections) = tree else {
+        walk(tree, &mut named);
+        return named;
+    };
+    for (section, value) in sections {
+        match (section.as_str(), value) {
+            ("prompt", Value::Object(prompt)) => prompt
+                .iter()
+                .filter(|(key, _)| !UNFILLED_PROMPTS.contains(&key.as_str()))
+                .for_each(|(_, value)| walk(value, &mut named)),
+            _ => walk(value, &mut named),
+        }
+    }
+    named
+}
+
+/// Each `${NAME}` and `${NAME:-default}` of `text`, whole and by its name,
+/// in order, as the config's fill reads them: `$${` is the text `${` and
+/// names nothing, and a `${` that begins no name is passed over.
+fn references(text: &str) -> Vec<(&str, &str)> {
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('$') {
+        let after = &rest[at + 1..];
+        if let Some(beyond) = after.strip_prefix("${") {
+            rest = beyond;
+        } else if let Some(reference) = after.strip_prefix('{')
+            && let Some((inside, beyond)) = reference.split_once('}')
+            && let Some(name) = name_of(inside)
+        {
+            found.push((&rest[at..rest.len() - beyond.len()], name));
+            rest = beyond;
+        } else {
+            rest = after;
+        }
+    }
+    found
+}
+
+/// The variable's name in what's between `${` and `}`, when it's a
+/// reference: a name, and a default after `:-` or none.
+fn name_of(inside: &str) -> Option<&str> {
+    let name = inside.split_once(":-").map_or(inside, |(name, _)| name);
+    is_name(name).then_some(name)
+}
+
+/// Whether `name` is the name of an environment variable: ASCII letters,
+/// digits and `_`, beginning with no digit.
+fn is_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+/// Whether the variable `name` is set in `shell`, read as presence alone:
+/// the value is never read.
+fn is_set(name: &str, shell: Shell<'_>) -> Result<(), Failure> {
+    if shell(name).is_some() {
         Ok(())
     } else {
         Err(Failure::Verdict(format!(
@@ -356,12 +572,20 @@ fn is_set(name: &str) -> Result<(), Failure> {
     }
 }
 
-/// Builds lablet as `build` does, starts weaver, makes the runs `runs`
-/// makes against it with what the build handed back, under the run
-/// directory, stops weaver and judges its report.
+/// How weaver listens: how long it waits for a sample before it stops on
+/// its own, and the environment it's started with.
+struct Listening {
+    inactivity: &'static str,
+    environment: Vec<(OsString, OsString)>,
+}
+
+/// Builds lablet as `build` does, starts weaver as `listening` says, makes
+/// the runs `runs` makes against it with what the build handed back, under
+/// the run directory, stops weaver and judges its report.
 fn judged<Built>(
     root: &Path,
     programs: &mut dyn Programs,
+    listening: &Listening,
     build: impl FnOnce(&mut dyn Programs) -> Result<Built, Error>,
     runs: impl FnOnce(&mut dyn Programs, &Scratch, u16, Built) -> Result<Emitted, Failure>,
 ) -> CheckResult {
@@ -376,7 +600,7 @@ fn judged<Built>(
     }
     let scratch = Scratch::new(&output)?;
     let made = build(programs)?;
-    let mut listener = Listener::start(root, programs)?;
+    let mut listener = Listener::start(root, programs, listening)?;
     let runs = runs(programs, &scratch, listener.ports.grpc, made)?;
     listener.stop(programs.stop_within())?;
     if !report.is_file() {
@@ -398,35 +622,41 @@ fn judged<Built>(
 /// `cargo build` of the binary first, so each run starts at once and
 /// weaver's inactivity timeout stays a backstop rather than a build budget.
 fn build_lablet(root: &Path, programs: &mut dyn Programs) -> Result<(), Error> {
-    built_with(root, programs, &["build", LOCKED, "--bin", "lablet"], &[]).map(drop)
+    built_with(
+        root,
+        programs,
+        &["build", LOCKED, "--bin", "lablet"],
+        Under::Shell,
+    )
+    .map(drop)
 }
 
-/// [`build_lablet`] with the variable `withheld` taken off cargo's
-/// environment, so no build script runs with the key, and the path of the
-/// binary it built, read off cargo's messages.
-fn built_without(
+/// [`build_lablet`] under `environment` and nothing else, so no build
+/// script or proc macro runs with the key or another token of the shell's,
+/// and the path of the binary it built, read off cargo's messages.
+fn built_under(
     root: &Path,
     programs: &mut dyn Programs,
-    withheld: &str,
+    environment: &[(OsString, OsString)],
 ) -> Result<PathBuf, Error> {
     let args = ["build", LOCKED, "--bin", "lablet", MESSAGE_FORMAT];
-    let output = built_with(root, programs, &args, &[withheld])?;
+    let output = built_with(root, programs, &args, Under::Only(environment))?;
     executable(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| Error::Missing {
         what: "cargo's messages name no lablet binary it built".to_owned(),
         remedy: "Run `cargo build --bin lablet` in lablet/ and read its output".to_owned(),
     })
 }
 
-/// `cargo` with `args` in the workspace, `withheld` taken off its
-/// environment, which must exit 0.
+/// `cargo` with `args` in the workspace, under `environment`, which must
+/// exit 0.
 fn built_with(
     root: &Path,
     programs: &mut dyn Programs,
     args: &[&str],
-    withheld: &[&str],
+    environment: Under<'_>,
 ) -> Result<Output, Error> {
     let workspace = root.join("lablet");
-    let output = programs.cargo(&workspace, args, withheld)?;
+    let output = programs.cargo(&workspace, args, environment)?;
     if output.status.success() {
         Ok(output)
     } else {
@@ -568,7 +798,7 @@ fn lablet(
         args,
     ]
     .concat();
-    let output = programs.cargo(directory, &cargo, &[])?;
+    let output = programs.cargo(directory, &cargo, Under::Shell)?;
     told(&output, &Invocation::new(directory, "cargo", &cargo))
 }
 
@@ -681,25 +911,38 @@ impl Listener {
     /// Weaver started and serving. A start that exits before it serves, as
     /// one does when a port was taken between the pick and its bind, is tried
     /// once more on fresh ports.
-    fn start(root: &Path, programs: &mut dyn Programs) -> Result<Self, Error> {
-        match Self::started(root, programs) {
-            Err(Error::Failed { .. }) => Self::started(root, programs),
+    fn start(
+        root: &Path,
+        programs: &mut dyn Programs,
+        listening: &Listening,
+    ) -> Result<Self, Error> {
+        match Self::started(root, programs, listening) {
+            Err(Error::Failed { .. }) => Self::started(root, programs, listening),
             started => started,
         }
     }
 
-    fn started(root: &Path, programs: &mut dyn Programs) -> Result<Self, Error> {
-        let mut listener = Self::spawn(root, programs, Ports::free()?)?;
+    fn started(
+        root: &Path,
+        programs: &mut dyn Programs,
+        listening: &Listening,
+    ) -> Result<Self, Error> {
+        let mut listener = Self::spawn(root, programs, Ports::free()?, listening)?;
         listener.ready(programs.ready_within())?;
         Ok(listener)
     }
 
-    fn spawn(root: &Path, programs: &mut dyn Programs, ports: Ports) -> Result<Self, Error> {
-        let args = weaver_args(ports);
+    fn spawn(
+        root: &Path,
+        programs: &mut dyn Programs,
+        ports: Ports,
+        listening: &Listening,
+    ) -> Result<Self, Error> {
+        let args = weaver_args(ports, listening.inactivity);
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         let command = Invocation::new(root, "weaver", &args);
         let (mut reader, writer) = std::io::pipe().map_err(command.not_started())?;
-        let child = programs.spawn_weaver(&args, writer)?;
+        let child = programs.spawn_weaver(&args, &listening.environment, writer)?;
         let log = Arc::new(Mutex::new(Vec::new()));
         let collected = Arc::clone(&log);
         // Read as it comes: a weaver that wrote more than a pipe holds would
@@ -814,7 +1057,8 @@ impl Drop for Listener {
 
 /// Never `--v2`: in that mode the index leaves out every attribute a
 /// dependency defines, and every `gen_ai.*` sample reads as undeclared.
-fn weaver_args(ports: Ports) -> Vec<String> {
+/// Weaver stops on its own after `inactivity` seconds without a sample.
+fn weaver_args(ports: Ports, inactivity: &str) -> Vec<String> {
     let mut args: Vec<String> = [
         "registry",
         "live-check",
@@ -828,7 +1072,7 @@ fn weaver_args(ports: Ports) -> Vec<String> {
         "--output",
         OUTPUT,
         "--inactivity-timeout",
-        INACTIVITY_SECONDS,
+        inactivity,
     ]
     .map(str::to_owned)
     .to_vec();
@@ -1097,6 +1341,70 @@ mod tests {
     /// A variable no shell sets, for the presence check's refusal.
     const MADE_UP: &str = "LABLET_LIVE_CHECK_TEST_MADE_UP_KEY";
 
+    /// The key's variable in [`SHELL`].
+    const KEY: &str = "LABLET_LIVE_CHECK_TEST_KEY";
+
+    /// A shell as the owner's might be: what each allowlist names, the key,
+    /// two of the variables [`real_config`] names, one it names in its
+    /// prompt alone, a token of the shell's own, and the OpenTelemetry and
+    /// context variables.
+    const SHELL: &[(&str, &str)] = &[
+        ("PATH", "/usr/bin:/bin"),
+        ("HOME", "/home/owner"),
+        ("TMPDIR", "/tmp/owner"),
+        ("LANG", "en_GB.UTF-8"),
+        ("TERM", "xterm-256color"),
+        ("CARGO_HOME", "/home/owner/.cargo"),
+        ("RUSTUP_HOME", "/home/owner/.rustup"),
+        ("RUSTFLAGS", "-C target-cpu=native"),
+        ("RUST_LOG", "lablet=debug"),
+        ("HTTPS_PROXY", "http://proxy.internal:3128"),
+        ("SSL_CERT_FILE", "/etc/ssl/cert.pem"),
+        (KEY, "not-a-key"),
+        ("GW_USER", "gateway-user"),
+        ("OTLP_TOKEN", "otlp-token"),
+        ("PROMPT_ONLY", "named in a prompt alone"),
+        ("SHELL_TOKEN", "a token of the shell's own"),
+        ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://elsewhere:4317"),
+        (
+            "TRACEPARENT",
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        ),
+    ];
+
+    /// A shell that sets `set` and nothing else.
+    fn shell_of(set: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + use<> {
+        let set: BTreeMap<String, OsString> = set
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), OsString::from(value)))
+            .collect();
+        move |name| set.get(name).cloned()
+    }
+
+    /// The names of `environment`, in order.
+    fn names_of(environment: &[(OsString, OsString)]) -> Vec<String> {
+        environment
+            .iter()
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// The variable a config whose text is `text` fills `model.api_key`
+    /// from, read as the mode reads a YAML file, or the refusal.
+    fn named(text: &str) -> Result<String, String> {
+        let tree = parsed(Path::new("lablet.yaml"), text).unwrap();
+        key_variable(&tree).map_err(Failure::into_verdict)
+    }
+
+    /// The refusal of a config that names no key's variable.
+    fn no_variable() -> Result<String, String> {
+        Err(
+            "the config's api_key names no variable; this mode runs a real provider and needs \
+             api_key: ${VAR}"
+                .to_owned(),
+        )
+    }
+
     const fn runs(runs: usize) -> Emitted {
         Emitted {
             runs,
@@ -1118,10 +1426,13 @@ mod tests {
 
     #[test]
     fn weaver_listens_on_the_given_ports_without_v2_under_the_live_check_config() {
-        let args = weaver_args(Ports {
-            grpc: 40001,
-            admin: 40002,
-        });
+        let args = weaver_args(
+            Ports {
+                grpc: 40001,
+                admin: 40002,
+            },
+            "77",
+        );
         assert_eq!(args[..3], ["registry", "live-check", "--quiet"]);
         assert!(!args.iter().any(|arg| arg.starts_with("--v2")), "{args:?}");
         let after = |flag: &str| {
@@ -1135,7 +1446,7 @@ mod tests {
         assert_eq!(after("--output"), Some(OUTPUT));
         assert_eq!(after("--otlp-grpc-port"), Some("40001"));
         assert_eq!(after("--admin-port"), Some("40002"));
-        assert_eq!(after("--inactivity-timeout"), Some(INACTIVITY_SECONDS));
+        assert_eq!(after("--inactivity-timeout"), Some("77"));
         assert_eq!(args[args.len() - 4..], weaver_diagnostic_args());
 
         // Local paths, never git URLs weaver would clone on every run.
@@ -1450,13 +1761,8 @@ mod tests {
     }
 
     #[test]
-    fn the_key_variable_is_read_off_the_one_api_key_line_of_the_text() {
-        let named = |text: &str| key_variable(text).map_err(Failure::into_verdict);
-        let refused = Err(
-            "the config's api_key names no variable; this mode runs a real provider \
-                           and needs api_key: ${VAR}"
-                .to_owned(),
-        );
+    fn the_key_variable_is_read_off_model_api_key_in_the_parsed_config() {
+        let refused = no_variable();
         let key = Ok("ANTHROPIC_API_KEY".to_owned());
         // The starter as `init` writes it, comments and all.
         let starter = std::fs::read_to_string(
@@ -1483,27 +1789,147 @@ mod tests {
             ("model:\n  name: m\n", &refused),
             ("model:\n  api_key: sk-ant-literal\n", &refused),
             ("model:\n  api_key: 'prefix${KEY}'\n", &refused),
+            ("model:\n  api_key: '${KEY} '\n", &refused),
+            ("model:\n  api_key: ${KEY}${OTHER}\n", &refused),
             ("model:\n  api_key: ${1KEY}\n", &refused),
             ("model:\n  api_key: $${KEY}\n", &refused),
+            ("model:\n  api_key: 5\n", &refused),
             ("model:\n  # api_key: ${KEY}\n", &refused),
             ("#api_key: ${KEY}\nmodel:\n  name: m\n", &refused),
-            ("# api_key: ${KEY}\nmodel:\n  name: m\n", &refused),
             ("model:\n  name: m # api_key: ${KEY}\n", &refused),
             ("model:\n  other_api_key: ${KEY}\n", &refused),
+            ("api_key: ${KEY}\n", &refused),
+            ("model: [api_key]\n", &refused),
+            ("- model\n", &refused),
+            ("just text\n", &refused),
+            ("# nothing but a comment\n", &refused),
             ("", &refused),
         ] {
             assert_eq!(named(text), *expected, "{text:?}");
         }
+
+        // A `.json` file is read as JSON, as lablet reads one.
+        let tree = parsed(
+            Path::new("lablet.json"),
+            "{\n\t\"model\": {\"api_key\": \"${ANTHROPIC_API_KEY}\"}\n}\n",
+        )
+        .unwrap();
+        assert_eq!(key_variable(&tree).map_err(Failure::into_verdict), key);
+        // A key written twice, which YAML refuses, is read as JSON reads it,
+        // the last one standing. lablet's own reader refuses it, so a run of
+        // that file fails there.
+        let twice =
+            "{\"model\": {\"api_key\": \"${FIRST}\", \"api_key\": \"${ANTHROPIC_API_KEY}\"}}\n";
+        parsed(Path::new("lablet.yaml"), twice).unwrap_err();
+        let tree = parsed(Path::new("lablet.json"), twice).unwrap();
+        assert_eq!(key_variable(&tree).map_err(Failure::into_verdict), key);
+    }
+
+    /// Each config writes another `api_key` ahead of the model's, where a
+    /// search of the text would find it first: in a header, a credential, a
+    /// prompt, or a comment a tab leads.
+    #[test]
+    fn an_api_key_outside_the_model_section_is_never_taken_for_the_key() {
+        let model = "model:\n  provider: anthropic\n  api_key: ${MODEL_KEY}\n";
+        for before in [
+            "telemetry:\n  otlp:\n    headers:\n      api_key: ${OTLP_TOKEN}\n",
+            "tools:\n  mcp:\n    - name: s\n      url: https://mcp.example/\n      headers:\n        \
+             api_key: ${MCP_KEY}\n",
+            "tools:\n  builtin:\n    credentials:\n      api_key: ${GH_TOKEN}\n",
+            "prompt:\n  system: 'api_key: ${PROMPT_KEY}'\n",
+            "run:\n  max_turns: 3\t# api_key: ${COMMENT_KEY}\n",
+        ] {
+            let text = format!("{before}{model}");
+            assert_eq!(named(&text), Ok("MODEL_KEY".to_owned()), "{text:?}");
+            assert_eq!(named(before), no_variable(), "{before:?}");
+        }
+        let tabbed = "model:\n  provider: anthropic\t# api_key: ${COMMENT_KEY}\n  api_key: \
+                      ${MODEL_KEY}\n";
+        assert_eq!(named(tabbed), Ok("MODEL_KEY".to_owned()));
+    }
+
+    #[test]
+    fn a_config_that_does_not_parse_is_told_with_its_path_and_its_cause() {
+        for (file, text) in [
+            ("lablet.yaml", "model: [unclosed\n"),
+            ("lablet.json", "{\"model\": \n"),
+        ] {
+            let path = Path::new(file);
+            let error = parsed(path, text).unwrap_err();
+            assert!(
+                matches!(&error, Error::Parse { path: at, .. } if at == path),
+                "{error:?}"
+            );
+            let told = chain(&error);
+            assert!(
+                told.starts_with(&format!("could not parse {file}: ")),
+                "{told}"
+            );
+        }
+        // A `.json` file's cause is JSON's own, a position and nothing of
+        // the text.
+        let text = "{\"model\": \n";
+        let cause = serde_json::from_str::<Value>(text).unwrap_err();
+        assert_eq!(
+            chain(&parsed(Path::new("lablet.json"), text).unwrap_err()),
+            format!("could not parse lablet.json: {cause}")
+        );
+
+        // A literal key beside a syntax error is never told, nor is any
+        // other line of the text.
+        let text = "model:\n  provider: anthropic\n  api_key: sk-ant-api03-LITERAL\n  base_url: \
+                    [unclosed\n";
+        let told = chain(&parsed(Path::new("lablet.yaml"), text).unwrap_err());
+        assert!(told.starts_with("could not parse lablet.yaml: "), "{told}");
+        assert!(!told.contains("LITERAL"), "{told}");
+        for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+            assert!(!told.contains(line), "{line:?} in {told}");
+        }
+    }
+
+    /// The fill's grammar, `substitute.rs` in `lablet-config`: an escape
+    /// names nothing, nor does a `${` that begins no name, and the prompts
+    /// are never filled.
+    #[test]
+    fn every_variable_the_config_fills_is_named_and_none_from_a_prompt_or_an_escape() {
+        let text = "model:\n  provider: anthropic\n  api_key: ${KEY}\n  base_url: \
+                    https://${GW_USER}:${GW_PASS}@gateway.example/v1\nprompt:\n  system: \
+                    'Mind ${PROMPT_ONLY}'\n  system_file: ${PROMPT_FILE}\ntelemetry:\n  otlp:\n    \
+                    headers: { authorization: 'Bearer ${OTLP_TOKEN}' }\n    endpoint: \
+                    '${OTLP_ENDPOINT:-http://localhost:4317}'\ntools:\n  builtin:\n    credentials: \
+                    { GH: '${GH_TOKEN}' }\n    env: { COST: '$${NOT_A_FILL}', BAD: '${1BAD} \
+                    ${}' }\n  mcp:\n    - name: s\n      command: [server, '--token=${MCP_TOKEN}']\n";
+        let tree = parsed(Path::new("lablet.yaml"), text).unwrap();
+        let named: Vec<String> = named_variables(&tree).into_iter().collect();
+        assert_eq!(
+            named,
+            [
+                "GH_TOKEN",
+                "GW_PASS",
+                "GW_USER",
+                "KEY",
+                "MCP_TOKEN",
+                "OTLP_ENDPOINT",
+                "OTLP_TOKEN"
+            ]
+        );
+        assert!(named_variables(&parsed(Path::new("l.yaml"), "").unwrap()).is_empty());
+        assert_eq!(
+            references("${A}x${B:-${C}}$${D}$E"),
+            [("${A}", "A"), ("${B:-${C}", "B")]
+        );
     }
 
     #[test]
     fn the_presence_check_reads_whether_the_variable_is_set_and_never_its_value() {
-        // Set in every process cargo starts a test in.
-        is_set("PATH").unwrap();
+        let shell = shell_of(&[(KEY, "")]);
+        is_set(KEY, &shell).unwrap();
         assert_eq!(
-            is_set(MADE_UP).unwrap_err().into_verdict(),
+            is_set(MADE_UP, &shell).unwrap_err().into_verdict(),
             format!("{MADE_UP} is not set in this shell; export it and run again")
         );
+        // Set in every process cargo starts a test in.
+        is_set("PATH", &this_shell).unwrap();
     }
 
     #[test]
@@ -1550,7 +1976,7 @@ mod tests {
         // `handed_to_a_real_run`, not from here.
         assert!(command.get_envs().all(|(name, _)| name != MADE_UP));
         assert_eq!(
-            is_set(MADE_UP).unwrap_err().into_verdict(),
+            is_set(MADE_UP, &this_shell).unwrap_err().into_verdict(),
             format!("{MADE_UP} is not set in this shell; export it and run again")
         );
     }
@@ -1615,9 +2041,13 @@ mod tests {
         run_exits: i32,
         spawned: Vec<u32>,
         grpc: Option<String>,
+        /// Each weaver started: its arguments and the names of its whole
+        /// environment.
+        weavers: Vec<(Vec<String>, Vec<String>)>,
         ran: Vec<(PathBuf, Vec<String>, bool)>,
-        /// What each cargo command was run without, in the order of `ran`.
-        withheld: Vec<Vec<String>>,
+        /// What each cargo command was run under, in the order of `ran`:
+        /// `None` for the shell, else the names of its whole environment.
+        environments: Vec<Option<Vec<String>>>,
         /// Each built binary run: its directory, the binary, its arguments
         /// and the names of its whole environment.
         built: Vec<(PathBuf, PathBuf, Vec<String>, Vec<String>)>,
@@ -1646,17 +2076,27 @@ mod tests {
                 run_exits,
                 spawned: Vec::new(),
                 grpc: None,
+                weavers: Vec::new(),
                 ran: Vec::new(),
-                withheld: Vec::new(),
+                environments: Vec::new(),
                 built: Vec::new(),
             }
         }
     }
 
     impl Programs for Fake {
-        fn spawn_weaver(&mut self, args: &[&str], output: PipeWriter) -> Result<Child, Error> {
+        fn spawn_weaver(
+            &mut self,
+            args: &[&str],
+            environment: &[(OsString, OsString)],
+            output: PipeWriter,
+        ) -> Result<Child, Error> {
             let after = |flag: &str| args[args.iter().position(|arg| *arg == flag).unwrap() + 1];
             self.grpc = Some(after("--otlp-grpc-port").to_owned());
+            self.weavers.push((
+                args.iter().map(|arg| (*arg).to_owned()).collect(),
+                names_of(environment),
+            ));
             let report = self.root.join(after("--output")).join(REPORT);
             let mut command = Command::new(std::env::current_exe().unwrap());
             command
@@ -1682,12 +2122,14 @@ mod tests {
             &mut self,
             directory: &Path,
             args: &[&str],
-            withheld: &[&str],
+            environment: Under<'_>,
         ) -> Result<Output, Error> {
             let config_there = directory.join("lablet.yaml").is_file();
             let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-            self.withheld
-                .push(withheld.iter().map(|name| (*name).to_owned()).collect());
+            self.environments.push(match environment {
+                Under::Shell => None,
+                Under::Only(environment) => Some(names_of(environment)),
+            });
             if args.iter().any(|arg| arg == MESSAGE_FORMAT) {
                 let binary = self.root.join("lablet/target/debug/lablet");
                 let messages = format!(
@@ -1733,10 +2175,7 @@ mod tests {
                 directory.to_path_buf(),
                 binary.to_path_buf(),
                 args.iter().map(|arg| (*arg).to_owned()).collect(),
-                environment
-                    .iter()
-                    .map(|(name, _)| name.to_string_lossy().into_owned())
-                    .collect(),
+                names_of(environment),
             ));
             Ok(Output {
                 status: ExitStatus::from_raw(self.run_exits << 8),
@@ -1768,7 +2207,7 @@ mod tests {
         let root = TempDir::new("live-check");
         let mut fake = Fake::new(&root, "serves", 0);
 
-        let result = check_with(root.path(), &mut fake);
+        let result = check_with(root.path(), &mut fake, &shell_of(SHELL));
 
         assert_eq!(
             result.unwrap(),
@@ -1859,15 +2298,49 @@ mod tests {
         );
     }
 
+    /// Cargo runs under the shell in this mode, where nothing holds a key,
+    /// and weaver under its allowlist, waiting for the fake runs' samples.
+    #[test]
+    fn the_fake_runs_build_under_the_shell_and_weaver_starts_under_its_allowlist() {
+        let root = TempDir::new("live-check-environments");
+        let mut fake = Fake::new(&root, "serves", 0);
+
+        check_with(root.path(), &mut fake, &shell_of(SHELL)).unwrap();
+
+        assert_eq!(fake.environments, [None, None, None, None, None]);
+        let [(args, environment)] = &fake.weavers[..] else {
+            panic!("{:?}", fake.weavers);
+        };
+        let after = args.iter().position(|arg| arg == "--inactivity-timeout");
+        assert_eq!(after.map(|at| args[at + 1].as_str()), Some("120"));
+        assert_eq!(
+            *environment,
+            [
+                "PATH",
+                "HOME",
+                "TMPDIR",
+                "LANG",
+                "HTTPS_PROXY",
+                "SSL_CERT_FILE"
+            ]
+        );
+    }
+
     /// A config as a person writes one for a real provider, in a directory
     /// of its own with a comment, a quoted fill and a default, named by a
-    /// relative path. `PATH` stands in for the key's variable: the mode reads
-    /// that it's set and nothing else.
+    /// relative path: a gateway's user and password in its URL, a header
+    /// filled from a token, a variable with a default, and one more named
+    /// in its prompt, which the fill never reads.
     fn real_config(root: &TempDir) -> PathBuf {
         root.write(
             "examples/real/lablet.yaml",
-            "# The key is read from the variable api_key names.\nmodel:\n  provider: anthropic\n  \
-             api_key: '${PATH:-}' # never written here\n",
+            &format!(
+                "# The key is read from the variable api_key names.\nmodel:\n  provider: \
+                 anthropic\n  api_key: '${{{KEY}:-}}' # never written here\n  base_url: \
+                 https://${{GW_USER}}:${{GW_PASS}}@gateway.example/v1\nprompt:\n  system: Mind \
+                 ${{PROMPT_ONLY}}.\ntelemetry:\n  otlp:\n    headers: {{ authorization: 'Bearer \
+                 ${{OTLP_TOKEN}}' }}\n    endpoint: '${{OTLP_ENDPOINT:-http://localhost:4317}}'\n"
+            ),
         );
         root.write("examples/real/work/notes.md", "notes\n");
         root.path().join("examples/real/lablet.yaml")
@@ -1880,7 +2353,13 @@ mod tests {
         let mut fake = Fake::new(&root, "serves", 0);
         fake.fixture = root.path().join("passing.json");
 
-        let result = check_against_with(root.path(), &mut fake, &config, "Say hello.");
+        let result = check_against_with(
+            root.path(),
+            &mut fake,
+            &config,
+            "Say hello.",
+            &shell_of(SHELL),
+        );
 
         assert_eq!(
             result.unwrap(),
@@ -1933,53 +2412,115 @@ mod tests {
                 false
             )]
         );
+        let [(_, binary, args, _)] = &fake.built[..] else {
+            panic!("{:?}", fake.built);
+        };
         assert_eq!(
-            fake.withheld,
-            [["PATH".to_owned()]],
-            "built without the key"
+            (binary, args),
+            (&root.path().join("lablet/target/debug/lablet"), &run)
         );
-        // The run's environment is the few variables a process needs that
-        // are set here, the key's among them, and nothing else of the shell.
-        let handed: Vec<String> = HANDED_TO_A_REAL_RUN
-            .iter()
-            .filter(|name| std::env::var_os(name).is_some())
-            .map(|name| (*name).to_owned())
-            .collect();
-        assert!(handed.contains(&"PATH".to_owned()), "{handed:?}");
+        assert_eq!(fake.built[0].0, directory);
+    }
+
+    /// The build, weaver and the run each get their own allowlist of what
+    /// [`SHELL`] sets, and nothing else of it: the key reaches the run
+    /// alone, and so does every variable the config fills.
+    #[test]
+    fn the_real_key_mode_hands_the_build_weaver_and_the_run_each_its_allowlist_alone() {
+        let root = TempDir::new("live-check-real-environments");
+        let config = real_config(&root);
+        let mut fake = Fake::new(&root, "serves", 0);
+        fake.fixture = root.path().join("passing.json");
+
+        check_against_with(
+            root.path(),
+            &mut fake,
+            &config,
+            "Say hello.",
+            &shell_of(SHELL),
+        )
+        .unwrap();
+
+        let build = [
+            "PATH",
+            "HOME",
+            "TMPDIR",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+            "RUSTFLAGS",
+            "LANG",
+            "TERM",
+            "HTTPS_PROXY",
+            "SSL_CERT_FILE",
+        ]
+        .map(str::to_owned);
+        assert_eq!(fake.environments, [Some(build.to_vec())]);
+        let [(args, weaver)] = &fake.weavers[..] else {
+            panic!("{:?}", fake.weavers);
+        };
         assert_eq!(
-            fake.built,
-            [(
-                directory,
-                root.path().join("lablet/target/debug/lablet"),
-                run,
-                handed
-            )]
+            *weaver,
+            [
+                "PATH",
+                "HOME",
+                "TMPDIR",
+                "LANG",
+                "HTTPS_PROXY",
+                "SSL_CERT_FILE"
+            ]
+        );
+        let after = args.iter().position(|arg| arg == "--inactivity-timeout");
+        assert_eq!(after.map(|at| args[at + 1].as_str()), Some("900"));
+        // The gateway's user and the header's token are handed on beside the
+        // key; the password and the endpoint aren't set, and the prompt's
+        // variable is never filled.
+        let [(_, _, _, run)] = &fake.built[..] else {
+            panic!("{:?}", fake.built);
+        };
+        assert_eq!(
+            *run,
+            [
+                "PATH",
+                "HOME",
+                "TMPDIR",
+                "CARGO_HOME",
+                "RUSTUP_HOME",
+                "LANG",
+                "RUST_LOG",
+                "HTTPS_PROXY",
+                "SSL_CERT_FILE",
+                "GW_USER",
+                KEY,
+                "OTLP_TOKEN"
+            ]
         );
     }
 
     #[test]
-    fn the_real_key_run_is_handed_the_key_and_the_few_variables_a_process_needs() {
-        let handed = |variable: &str| -> Vec<String> {
-            handed_to_a_real_run(variable)
-                .into_iter()
-                .map(|(name, _)| name.to_string_lossy().into_owned())
-                .collect()
-        };
-        let set: Vec<String> = HANDED_TO_A_REAL_RUN
-            .iter()
-            .filter(|name| std::env::var_os(name).is_some())
-            .map(|name| (*name).to_owned())
-            .collect();
-
+    fn the_real_key_run_is_handed_the_key_every_variable_the_config_names_and_the_allowlist() {
+        let named: BTreeSet<String> = ["GW_USER", "OTLP_TOKEN", KEY].map(str::to_owned).into();
+        let handed =
+            |shell: &[(&str, &str)]| names_of(&handed_to_a_real_run(KEY, &named, &shell_of(shell)));
+        let allowlist = [("PATH", "/bin"), ("HOME", "/home/owner"), ("NO_PROXY", "*")];
+        let named_and_set = [("GW_USER", "u"), ("OTLP_TOKEN", "t"), (KEY, "k")];
         assert_eq!(
-            handed("PATH"),
-            set,
-            "a key named in the list isn't handed twice"
+            handed(&[&allowlist[..], &named_and_set[..], &[("SHELL_TOKEN", "s")]].concat()),
+            ["PATH", "HOME", "NO_PROXY", "GW_USER", KEY, "OTLP_TOKEN"],
+            "each named variable set is handed on, the key once"
         );
         assert_eq!(
-            handed(MADE_UP),
-            set,
-            "an unset key's variable is handed nothing"
+            handed(&[&allowlist[..], &[(KEY, "k")]].concat()),
+            ["PATH", "HOME", "NO_PROXY", KEY],
+            "a named variable that isn't set is handed nothing"
+        );
+        assert_eq!(
+            names_of(&handed_to_a_real_run(
+                "PATH",
+                &BTreeSet::new(),
+                &shell_of(&allowlist)
+            )),
+            ["PATH", "HOME", "NO_PROXY"],
+            "a key named in the list isn't handed twice"
         );
         assert_eq!(
             HANDED_TO_A_REAL_RUN,
@@ -1990,7 +2531,12 @@ mod tests {
                 "CARGO_HOME",
                 "RUSTUP_HOME",
                 "LANG",
-                "RUST_LOG",
+                "RUST_LOG"
+            ]
+        );
+        assert_eq!(
+            NETWORK,
+            [
                 "HTTP_PROXY",
                 "HTTPS_PROXY",
                 "ALL_PROXY",
@@ -2003,6 +2549,107 @@ mod tests {
                 "SSL_CERT_DIR"
             ]
         );
+    }
+
+    #[test]
+    fn the_build_and_weaver_are_handed_their_allowlists_and_never_the_key() {
+        let every: Vec<(&str, &str)> = HANDED_TO_A_BUILD
+            .iter()
+            .chain(HANDED_TO_WEAVER)
+            .chain(NETWORK)
+            .map(|name| (*name, "set"))
+            .chain([("OTEL_TRACES_EXPORTER", "none"), ("SHELL_TOKEN", "s")])
+            .collect();
+        let shell = shell_of(&every);
+        let build = names_of(&handed_to_a_build(KEY, &shell));
+        let listed: Vec<&str> = HANDED_TO_A_BUILD.iter().chain(NETWORK).copied().collect();
+        assert_eq!(build, listed);
+        let weaver = names_of(&handed_to_weaver(&shell, None));
+        let listed: Vec<&str> = HANDED_TO_WEAVER.iter().chain(NETWORK).copied().collect();
+        assert_eq!(weaver, listed);
+        // A key whose variable an allowlist names is kept off both.
+        assert!(!names_of(&handed_to_a_build("HOME", &shell)).contains(&"HOME".to_owned()));
+        assert!(!names_of(&handed_to_weaver(&shell, Some("HOME"))).contains(&"HOME".to_owned()));
+        assert_eq!(
+            HANDED_TO_A_BUILD,
+            [
+                "PATH",
+                "HOME",
+                "TMPDIR",
+                "CARGO_HOME",
+                "RUSTUP_HOME",
+                "RUSTUP_TOOLCHAIN",
+                "RUSTFLAGS",
+                "RUSTC_WRAPPER",
+                "CARGO_TARGET_DIR",
+                "CARGO_BUILD_JOBS",
+                "CARGO_INCREMENTAL",
+                "CARGO_NET_OFFLINE",
+                "LANG",
+                "TERM"
+            ]
+        );
+        assert_eq!(HANDED_TO_WEAVER, ["PATH", "HOME", "TMPDIR", "LANG"]);
+    }
+
+    /// `env` is pinned by nothing, so it runs from PATH, and prints the
+    /// environment it was started with, which only a child can show: run in
+    /// weaver's place and in cargo's for the real-key build, it shows what
+    /// each is started under.
+    #[test]
+    fn weaver_and_the_real_key_build_start_under_what_they_are_handed_and_nothing_of_the_shell() {
+        let dir = TempDir::new("live-check-real-programs");
+        let environment = [("XTASK_HANDED_PROBE", "given"), ("HOME", "/nowhere")]
+            .map(|(name, value)| (OsString::from(name), OsString::from(value)));
+        // What this process holds beyond what's handed on, the shell's
+        // tokens among them, none of which may reach either program.
+        let inherited: Vec<OsString> = std::env::vars_os()
+            .map(|(name, _)| name)
+            .filter(|name| name != "PATH" && environment.iter().all(|(given, _)| given != name))
+            .collect();
+        assert!(!inherited.is_empty());
+        let names = |printed: &[u8]| -> BTreeMap<String, String> {
+            String::from_utf8_lossy(printed)
+                .lines()
+                .filter_map(|line| line.split_once('='))
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .collect()
+        };
+        let mut real = Real {
+            weaver: "env",
+            cargo: "env",
+        };
+
+        let (mut reader, writer) = std::io::pipe().unwrap();
+        let mut weaver = real.spawn_weaver(&[], &environment, writer).unwrap();
+        let mut printed = Vec::new();
+        reader.read_to_end(&mut printed).unwrap();
+        assert!(weaver.wait().unwrap().success());
+        let build = real
+            .cargo(dir.path(), &[], Under::Only(&environment))
+            .unwrap();
+        // Its stderr alone: its stdout is an environment.
+        assert!(
+            build.status.success(),
+            "{}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        for (program, printed) in [("weaver", names(&printed)), ("cargo", names(&build.stdout))] {
+            assert_eq!(
+                printed.keys().map(String::as_str).collect::<Vec<_>>(),
+                ["HOME", "PATH", "XTASK_HANDED_PROBE"],
+                "{program}"
+            );
+            assert_eq!(printed["HOME"], "/nowhere", "{program}");
+            assert_eq!(printed["XTASK_HANDED_PROBE"], "given", "{program}");
+            for name in &inherited {
+                assert!(
+                    !printed.contains_key(&*name.to_string_lossy()),
+                    "{program} was handed {name:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -2039,31 +2686,39 @@ mod tests {
             "examples/unset/lablet.yaml",
             &format!("model:\n  provider: anthropic\n  api_key: ${{{MADE_UP}}}\n"),
         );
+        root.write("examples/list/lablet.yaml", "- model\n");
+        root.write("examples/broken/lablet.yaml", "model: [unclosed\n");
         let mut fake = Fake::new(&root, "serves", 0);
+        let shell = shell_of(SHELL);
         for (config, refusal) in [
-            (
-                "examples/literal/lablet.yaml",
-                "the config's api_key names no variable; this mode runs a real provider and \
-                 needs api_key: ${VAR}"
-                    .to_owned(),
-            ),
+            ("examples/literal/lablet.yaml", no_variable().unwrap_err()),
+            ("examples/list/lablet.yaml", no_variable().unwrap_err()),
             (
                 "examples/unset/lablet.yaml",
                 format!("{MADE_UP} is not set in this shell; export it and run again"),
             ),
         ] {
             let config = root.path().join(config);
-            let verdict = check_against_with(root.path(), &mut fake, &config, "Say hello.")
+            let verdict = check_against_with(root.path(), &mut fake, &config, "Say hello.", &shell)
                 .unwrap_err()
                 .into_verdict();
             assert_eq!(verdict, refusal);
         }
+        let broken =
+            std::fs::canonicalize(root.path().join("examples/broken/lablet.yaml")).unwrap();
+        let error = check_against_with(root.path(), &mut fake, &broken, "Say hello.", &shell)
+            .unwrap_err()
+            .into_error();
+        assert!(
+            matches!(&error, Error::Parse { path, .. } if *path == broken),
+            "{error:?}"
+        );
         assert!(fake.ran.is_empty(), "{:?}", fake.ran);
         assert!(fake.spawned.is_empty());
 
         // A config that isn't there is told as such, not as keyless.
         let missing = root.path().join("examples/missing/lablet.yaml");
-        let error = check_against_with(root.path(), &mut fake, &missing, "Say hello.")
+        let error = check_against_with(root.path(), &mut fake, &missing, "Say hello.", &shell)
             .unwrap_err()
             .into_error();
         assert!(
@@ -2077,7 +2732,9 @@ mod tests {
         let root = TempDir::new("live-check-exits");
         let mut fake = Fake::new(&root, "exits", 0);
 
-        let error = check_with(root.path(), &mut fake).unwrap_err().into_error();
+        let error = check_with(root.path(), &mut fake, &shell_of(SHELL))
+            .unwrap_err()
+            .into_error();
 
         let Error::Failed { command, stderr } = &error else {
             panic!("{error:?}");
@@ -2113,7 +2770,9 @@ mod tests {
         let root = TempDir::new("live-check-hangs");
         let mut fake = Fake::new(&root, "hangs", 0);
 
-        let error = check_with(root.path(), &mut fake).unwrap_err().into_error();
+        let error = check_with(root.path(), &mut fake, &shell_of(SHELL))
+            .unwrap_err()
+            .into_error();
 
         let Error::Stalled { expected, .. } = &error else {
             panic!("{error:?}");
@@ -2133,7 +2792,9 @@ mod tests {
         let root = TempDir::new("live-check-never-stops");
         let mut fake = Fake::new(&root, "never-stops", 0);
 
-        let error = check_with(root.path(), &mut fake).unwrap_err().into_error();
+        let error = check_with(root.path(), &mut fake, &shell_of(SHELL))
+            .unwrap_err()
+            .into_error();
 
         let Error::Stalled {
             expected, output, ..
@@ -2152,7 +2813,7 @@ mod tests {
         let root = TempDir::new("live-check-run-fails");
         let mut fake = Fake::new(&root, "serves", 2);
 
-        let verdict = check_with(root.path(), &mut fake)
+        let verdict = check_with(root.path(), &mut fake, &shell_of(SHELL))
             .unwrap_err()
             .into_verdict();
 

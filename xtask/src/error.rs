@@ -141,6 +141,10 @@ pub enum Malformed {
     /// It isn't JSON, or not JSON of the shape expected.
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    /// It isn't YAML, or not YAML of the shape expected. Boxed to keep the
+    /// enum small, as clippy holds it to.
+    #[error(transparent)]
+    Yaml(#[from] Box<serde_saphyr::Error>),
     /// It parses, but lacks what must be there.
     #[error("it has no {0}")]
     Lacks(&'static str),
