@@ -78,17 +78,10 @@ pub(crate) fn classify(
     sent: Sent,
 ) -> ProviderError {
     if status.is_redirection() {
-        return ProviderError::new(
-            ProviderErrorKind::Fatal,
-            format!(
-                "HTTP {} from the endpoint: the base URL redirects; set model.base_url to the \
-                 address it redirects to",
-                status.as_u16()
-            ),
-        );
+        return redirected(status, "");
     }
     let envelope: Option<ErrorEnvelope> = serde_json::from_slice(body).ok();
-    let mut message = if let Some(envelope) = &envelope {
+    let message = if let Some(envelope) = &envelope {
         let mut message = format!(
             "HTTP {} {}: {}",
             status.as_u16(),
@@ -111,15 +104,62 @@ pub(crate) fn classify(
         }
         message
     };
-    let (mut kind, hint) = kind_of(status, envelope.as_ref(), headers);
+    classified(
+        status,
+        headers,
+        envelope.as_ref(),
+        message,
+        sent.temperature,
+    )
+}
+
+/// A response that isn't a success whose body is longer than `bound` bytes,
+/// which was cut there unread: classified by its status and headers alone,
+/// since part of a body can't be read as the envelope, and never quoted.
+pub(crate) fn longer_than(status: StatusCode, headers: &HeaderMap, bound: usize) -> ProviderError {
+    let cut = format!(
+        "a body longer than {} bytes, which was cut there and isn't quoted",
+        grouped(bound)
+    );
+    if status.is_redirection() {
+        return redirected(status, &format!("; it came with {cut}"));
+    }
+    let message = format!("HTTP {} with {cut}", status.as_u16());
+    classified(status, headers, None, message, false)
+}
+
+/// A 3xx, which the client never follows, with `more` said after it.
+fn redirected(status: StatusCode, more: &str) -> ProviderError {
+    ProviderError::new(
+        ProviderErrorKind::Fatal,
+        format!(
+            "HTTP {} from the endpoint: the base URL redirects; set model.base_url to the \
+             address it redirects to{more}",
+            status.as_u16()
+        ),
+    )
+}
+
+/// The failure of a response that isn't a success, from its `message`:
+/// the kind the table gives its status and `envelope`, made fatal where the
+/// server said not to retry, with the settings a 400's text names when the
+/// request carried what they name, and the hint of a retryable one.
+fn classified(
+    status: StatusCode,
+    headers: &HeaderMap,
+    envelope: Option<&ErrorEnvelope>,
+    mut message: String,
+    sent_temperature: bool,
+) -> ProviderError {
+    let (mut kind, hint) = kind_of(status, envelope, headers);
     if kind == ProviderErrorKind::Retryable && should_not_retry(headers) {
         message.push_str("; the server said not to retry");
         kind = ProviderErrorKind::Fatal;
     }
     if status == StatusCode::BAD_REQUEST
         && kind == ProviderErrorKind::Fatal
-        && let Some(envelope) = &envelope
-        && let Some(named) = settings_named(&envelope.error.message, sent.temperature)
+        && let Some(envelope) = envelope
+        && let Some(named) = settings_named(&envelope.error.message, sent_temperature)
     {
         message.push_str(&named);
     }
@@ -245,7 +285,7 @@ fn request_id<'a>(headers: &'a HeaderMap, envelope: &'a ErrorEnvelope) -> Option
 }
 
 /// `count` with a comma every three digits.
-fn grouped(count: usize) -> String {
+pub(crate) fn grouped(count: usize) -> String {
     let digits = count.to_string();
     let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {

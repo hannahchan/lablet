@@ -59,8 +59,9 @@ pub use tools::{
     Builtin, BuiltinTool, McpLifetime, McpNames, McpResult, McpServer, OutputCut, Tools,
 };
 pub use url::{
-    Unreadable, WrittenInformation, holds_an_unread_at, outside_user_information, unreadable,
-    user_information, without_user_information, writes_an_unread_at, written_information,
+    Unreadable, WrittenInformation, holds_an_unread_at, host_and_port, outside_user_information,
+    unreadable, user_information, without_user_information, writes_an_unread_at,
+    written_information,
 };
 
 /// The format a config's text is in.

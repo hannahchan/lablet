@@ -9,14 +9,26 @@ use super::substitute::{self, Fill};
 /// its authority, when it has one. A short reading of RFC 3986 rather than
 /// a URL crate: the authority runs from after the scheme's `://`, or from
 /// the start of a value without a scheme, which the gRPC exporter gives
-/// one, to the first `/`, `?` or `#`, and the user information is what's
-/// before the last `@` in it. A `://` ends a scheme only when no `/`, `?`,
-/// `#` or `@` comes before it. User information that holds an unencoded
-/// `/`, `?` or `#` isn't found, as a URL parser doesn't find it, so a
-/// refusal of an endpoint that holds an `@` shows no value at all.
+/// one, to the first `/`, `\`, `?` or `#`, and the user information is
+/// what's before the last `@` in it. A `://` ends a scheme only when none
+/// of those and no `@` comes before it. User information that holds an
+/// unencoded `/`, `\`, `?` or `#` isn't found, as a URL parser doesn't
+/// find it, so a refusal of an endpoint that holds an `@` shows no value
+/// at all.
 #[must_use]
 pub fn user_information(url: &str) -> Option<&str> {
     user_information_range(url).map(|range| &url[range])
+}
+
+/// The host and the port of `url`, as [`user_information`] reads its
+/// authority: what follows the user information's `@`, or the whole
+/// authority when it has none.
+#[must_use]
+pub fn host_and_port(url: &str) -> &str {
+    let authority = &url[authority_range(url)];
+    authority
+        .rfind('@')
+        .map_or(authority, |at| &authority[at + 1..])
 }
 
 /// Where in `url` [`user_information`] is.
@@ -26,23 +38,31 @@ fn user_information_range(url: &str) -> Option<Range<usize>> {
     Some(authority.start..authority.start + at)
 }
 
+/// The characters an authority ends at. The `\` is one because the url
+/// crate, which the Anthropic adapter sends through, reads it as a `/` in
+/// an `http` or `https` URL: read as anything else here, a user holding
+/// one would be user information to the check and a host to the adapter.
+const AUTHORITY_ENDS: [char; 4] = ['/', '\\', '?', '#'];
+
 /// Where in `url` its authority is, as [`user_information`] reads it.
 fn authority_range(url: &str) -> Range<usize> {
     let start = match url.split_once("://") {
-        Some((scheme, _)) if !scheme.contains(['/', '?', '#', '@']) => scheme.len() + "://".len(),
+        Some((scheme, _)) if !scheme.contains(AUTHORITY_ENDS) && !scheme.contains('@') => {
+            scheme.len() + "://".len()
+        }
         _ => 0,
     };
     let after_scheme = &url[start..];
     let end = after_scheme
-        .find(['/', '?', '#'])
+        .find(AUTHORITY_ENDS)
         .unwrap_or(after_scheme.len());
     start..start + end
 }
 
 /// Whether `url` holds an unencoded `@` past its authority, which no
 /// reading of it takes as user information: a user or password holding a
-/// `/`, `?` or `#` puts its `@` there, where nothing finds it to cut or
-/// leave unshown, as does an `@` in a path.
+/// `/`, `\`, `?` or `#` puts its `@` there, where nothing finds it to cut
+/// or leave unshown, as does an `@` in a path.
 #[must_use]
 pub fn holds_an_unread_at(url: &str) -> bool {
     url[authority_range(url).end..].contains('@')
@@ -78,8 +98,8 @@ pub enum WrittenInformation {
 }
 
 /// A character no written URL holds, standing for a `${VAR}`: it holds no
-/// `@`, `:` or `/`, which would move where user information ends, and no
-/// `?` or `#`, which would end a scheme.
+/// `@`, `:`, `/` or `\`, which would move where user information ends, and
+/// no `?` or `#`, which would end a scheme.
 const VARIABLE: &str = "\u{0}";
 
 /// What `written`, a URL as the config wrote it, writes of user
@@ -102,8 +122,8 @@ pub fn written_information(written: &str) -> WrittenInformation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unreadable {
     /// A variable the written user information holds gave an unencoded
-    /// `@`, `/`, `?` or `#`, which would end the user information or the
-    /// authority where the text didn't.
+    /// `@`, `/`, `\`, `?` or `#`, which would end the user information or
+    /// the authority where the text didn't.
     UserInformation(String),
     /// A variable elsewhere in the URL gave an `@`, which may be a user or
     /// password the URL can't read, since what's before it is then read as
@@ -114,7 +134,8 @@ pub enum Unreadable {
 /// The first variable, in the order the text names them, that gave the URL
 /// `fill` records what it can't read as written: a variable written in its
 /// user information, the span before the written `@`, whose value holds an
-/// unencoded `@`, `/`, `?` or `#`, or any other whose value holds an `@`.
+/// unencoded `@`, `/`, `\`, `?` or `#`, or any other whose value holds an
+/// `@`.
 /// Only what each value held of those is read, from the record: no value
 /// is kept to read.
 #[must_use]

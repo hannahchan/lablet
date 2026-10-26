@@ -106,6 +106,44 @@ fn a_blank_prompt_from_any_source_is_a_config_error_and_no_run_starts() {
     assert!(!lab.telemetry().exists(), "a run started");
 }
 
+/// A system prompt of whitespace alone, inline or in its file, is refused
+/// by `check` and by `run` alike, and no run starts.
+#[test]
+fn a_system_prompt_of_whitespace_alone_is_refused_and_no_run_starts() {
+    let lab = Lab::new("prompt-system-blank");
+    let file = lab.write("system.md", "\n");
+    let says = "would be sent as a system prompt that says nothing";
+    for (prompt, refusal) in [
+        (
+            json!({ "system": " \n" }),
+            format!(
+                "config: prompt.system (line 1): \" \\n\" is refused: it holds only whitespace, \
+                 which {says}; write a prompt, or state `prompt.system` empty for none\n"
+            ),
+        ),
+        (
+            json!({ "system": null, "system_file": file }),
+            format!(
+                "config: prompt.system_file (line 1): {:?} is refused: the file holds only \
+                 whitespace, which {says}; write a prompt in the file, or leave it empty for \
+                 none\n",
+                file.display().to_string()
+            ),
+        ),
+    ] {
+        lab.write_config(ENDS, json!({ "prompt": prompt }));
+        for args in [
+            &["check", "--config", CONFIG][..],
+            &["run", "--config", CONFIG, "--prompt", PROMPT],
+        ] {
+            let run = lab.run(args);
+            assert_eq!(run.code, Some(1), "{run:?}");
+            assert_eq!(run.stderr, refusal, "{args:?}");
+        }
+    }
+    assert!(!lab.telemetry().exists(), "a run started");
+}
+
 #[test]
 fn a_prompt_file_that_isnt_there_is_a_config_error() {
     let lab = Lab::new("prompt-missing");

@@ -216,7 +216,8 @@ fn file_target(config: &Config) -> Option<FileTarget> {
 /// from `config` as the file wrote it: a header by its key alone, since
 /// every header value is a secret, and the endpoint as the config writes
 /// it, or no value when it holds an `@`. User information is a secret, and
-/// where it ends can't be told when it holds an unencoded `/`, `?` or `#`.
+/// where it ends can't be told when it holds an unencoded `/`, `\`, `?` or
+/// `#`.
 /// A refusal of an endpoint a variable filled names the variable and shows
 /// nothing of what it holds; one that isn't a URL names each variable the
 /// endpoint holds, since any of them may be what broke it, but the one that

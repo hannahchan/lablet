@@ -408,8 +408,8 @@ async fn a_url_that_holds_an_at_past_its_authority_is_refused_by_a_library_build
             script.display()
         )
     };
-    let fix = "percent-encode a `/`, `?`, `#` or `@` in a user or password, or write an `@` in a \
-               path as %40";
+    let fix = "percent-encode a `/`, `?`, `#`, `\\` or `@` in a user or password, or write an `@` \
+               in a path as %40";
     for (key, text, line) in [
         ("model.base_url", &gateway as &dyn Fn(&str) -> String, 1),
         ("telemetry.otlp.endpoint", &collector, 3),
@@ -507,8 +507,8 @@ async fn a_url_set_in_code_that_holds_an_at_past_its_authority_is_refused_unshow
         let short = key.rsplit('.').next().unwrap();
         let expected = format!(
             "{key} is refused: it holds an `@` a URL can't read as a user or password, and isn't \
-             shown; percent-encode a `/`, `?`, `#` or `@` in a user or password, or write an `@` \
-             in a path as %40"
+             shown; percent-encode a `/`, `?`, `#`, `\\` or `@` in a user or password, or write \
+             an `@` in a path as %40"
         );
         for written in [
             String::new(),

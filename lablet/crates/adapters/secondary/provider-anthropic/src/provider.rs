@@ -1,6 +1,7 @@
 //! The `ModelProvider` over the API: one request for each attempt.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use lablet_model::{Endpoint, ModelRef, ProviderErrorKind, ProviderResponse};
 use lablet_run::{ModelProvider, ProviderError, ProviderRequest};
@@ -20,6 +21,11 @@ const API_VERSION: &str = "2023-06-01";
 
 /// The product and nothing of the person.
 const USER_AGENT_VALUE: &str = concat!("lablet/", env!("CARGO_PKG_VERSION"));
+
+/// The most of a response's body that's read, in bytes. A body is read
+/// whole before it's parsed, and whatever answers at the base URL can send
+/// one without end, so no server can make a run hold more than this.
+const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 /// A model provider over the Anthropic Messages API. See the crate's
 /// documentation for what it sends and how a failure is read.
@@ -124,14 +130,37 @@ impl ModelProvider for AnthropicProvider {
             .map_err(|error| error::transport(&error, deadline))?;
         let status = response.status();
         let headers = response.headers().clone();
-        let body = response
-            .bytes()
-            .await
-            .map_err(|error| error::transport(&error, deadline))?;
+        let Some(body) = bounded(response, deadline).await? else {
+            return Err(if status.is_success() {
+                response::longer_than(MAX_BODY_BYTES)
+            } else {
+                error::longer_than(status, &headers, MAX_BODY_BYTES)
+            });
+        };
         if status.is_success() {
             response::parse(&body)
         } else {
             Err(error::classify(status, &headers, &body, sent))
         }
     }
+}
+
+/// The body of `response`, or `None` once it's longer than
+/// [`MAX_BODY_BYTES`], where the read stops and what was read is dropped.
+async fn bounded(
+    mut response: reqwest::Response,
+    deadline: Duration,
+) -> Result<Option<Vec<u8>>, ProviderError> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| error::transport(&error, deadline))?
+    {
+        if body.len() + chunk.len() > MAX_BODY_BYTES {
+            return Ok(None);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(Some(body))
 }

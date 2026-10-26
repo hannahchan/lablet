@@ -1035,8 +1035,8 @@ fn an_endpoint_whose_variable_gives_an_at_it_cannot_read_is_refused_by_check_uns
     refused(
         &parts,
         "config: telemetry.otlp.endpoint (line 8) is refused: its user or password \
-         `LABLET_TEST_PW` holds `/`, `?`, `#` or `@`, which a URL can't read, and isn't shown; \
-         percent-encode it",
+         `LABLET_TEST_PW` holds `/`, `?`, `#`, `\\` or `@`, which a URL can't read, and isn't \
+         shown; percent-encode it",
     );
     for run in [&whole, &parts] {
         assert!(!run.stderr.contains("telemetry:"), "{run:?}");
@@ -1075,8 +1075,8 @@ fn a_url_that_holds_an_at_past_its_authority_is_refused_by_check_unshown() {
     let lab = Lab::new("check-url-at-past-authority");
     lab.write("script.yaml", ENDS);
     let check = |key: &str, url: &str, env: &[(&str, &str)]| check_url(&lab, key, url, env);
-    let fix = "percent-encode a `/`, `?`, `#` or `@` in a user or password, or write an `@` in a \
-               path as %40";
+    let fix = "percent-encode a `/`, `?`, `#`, `\\` or `@` in a user or password, or write an `@` \
+               in a path as %40";
     for (key, line) in [("model.base_url", 4), ("telemetry.otlp.endpoint", 8)] {
         let written = format!(
             "config: {key} (line {line}) is refused: its text holds an `@` a URL can't read as a \
@@ -1273,18 +1273,18 @@ fn an_env_entry_that_names_a_credential_is_refused_by_check_and_by_run() {
 
     let same_name = config(&format!("{github}: ${{{github}}}"));
     let r40 = format!(
-        "config: tools.builtin.env.{github} (line 12): \"${{{github}}}\" is refused: bash inherits \
-         `{github}` as set already, uncut; remove the line, or move it under \
-         `tools.builtin.credentials` to have it cut"
+        "config: tools.builtin.env.{github} (line 12) is refused: bash inherits `{github}` as set \
+         already, uncut; remove the line, or move it under `tools.builtin.credentials` to have it \
+         cut"
     );
     refused(&with(check, &same_name), &r40);
     refused(&with(run, &same_name), &r40);
 
     let from_the_key = config(&format!("T: ${{{KEY}}}"));
     let r38 = format!(
-        "config: tools.builtin.env.T (line 12): \"${{{KEY}}}\" is refused: `{KEY}` fills \
-         `model.api_key`, and no process inherits an own credential; to give bash the key \
-         knowingly, list T under `tools.builtin.credentials`"
+        "config: tools.builtin.env.T (line 12) is refused: `{KEY}` fills `model.api_key`, and no \
+         process inherits an own credential; to give bash the key knowingly, list T under \
+         `tools.builtin.credentials`"
     );
     refused(&with(check, &from_the_key), &r38);
     refused(&with(run, &from_the_key), &r38);
@@ -1327,9 +1327,10 @@ const PRINTS_COPY: &str = "
 
 /// An `env` entry whose filled value holds a credential's value is refused
 /// by `check` and by `run` alike, naming the field whose value it holds and
-/// nothing of the value, whether another variable gave it, whole or within
-/// a text, or the file wrote it out; one whose value no credential holds
-/// reaches `bash`, and a value under the cut's floor isn't matched.
+/// nothing of the entry, whether another variable gave it, whole or within
+/// a text, or the file wrote it out, whole or split by a `${VAR}`; one whose
+/// value no credential holds reaches `bash`, and a value under the cut's
+/// floor isn't matched.
 #[test]
 fn an_env_entry_whose_value_holds_a_credential_s_value_is_refused_by_check_and_by_run() {
     let lab = Lab::new("check-env-value");
@@ -1365,37 +1366,45 @@ fn an_env_entry_whose_value_holds_a_credential_s_value_is_refused_by_check_and_b
     };
     let check: &[&str] = &["check"];
     let run: &[&str] = &["run", "--prompt", "Hi."];
-    let own = |shown: &str| {
-        format!(
-            "config: tools.builtin.env.COPY (line 14){shown} is refused: its value holds the one \
-             `model.api_key` has, and no process inherits an own credential; to give bash the key \
-             knowingly, list COPY under `tools.builtin.credentials`"
-        )
-    };
+    let own = "config: tools.builtin.env.COPY (line 14) is refused: its value holds the one \
+               `model.api_key` has, and no process inherits an own credential; to give bash the \
+               key knowingly, list COPY under `tools.builtin.credentials`";
 
-    for (entry, shown) in [
-        (format!("${{{other}}}"), format!(": \"${{{other}}}\"")),
-        (format!("x${{{other}}}y"), format!(": \"x${{{other}}}y\"")),
-        (key.to_owned(), String::new()),
+    for entry in [
+        format!("${{{other}}}"),
+        format!("x${{{other}}}y"),
+        key.to_owned(),
+        "sk-test-01234567${LABLET_TEST_UNSET:-}89abcdef".to_owned(),
     ] {
         let text = config(KEY, &entry, "");
-        refused(&with(check, &text), &own(&shown));
-        refused(&with(run, &text), &own(&shown));
+        refused(&with(check, &text), own);
+        refused(&with(run, &text), own);
     }
     let credentials = format!("    credentials:\n      GH: ${{{github}}}\n");
     let given = format!(
-        "config: tools.builtin.env.COPY (line 14): \"${{{gh_copy}}}\" is refused: its value holds \
-         the one `tools.builtin.credentials.GH` has (line 16); list COPY there instead, as COPY: \
+        "config: tools.builtin.env.COPY (line 14) is refused: its value holds the one \
+         `tools.builtin.credentials.GH` has (line 16); list COPY there instead, as COPY: \
          ${{{gh_copy}}}"
     );
     let text = config(KEY, &format!("${{{gh_copy}}}"), &credentials);
     refused(&with(check, &text), &given);
     refused(&with(run, &text), &given);
-    refused(
-        &with(check, &config(KEY, token, &credentials)),
-        "config: tools.builtin.env.COPY (line 14) is refused: its value holds the one \
-         `tools.builtin.credentials.GH` has (line 16); list COPY there instead",
-    );
+    // A token written out, whole or split by a `${VAR}` or by defaults,
+    // came from no variable, so the fix names none.
+    for entry in [
+        token.to_owned(),
+        "ghp-0123456789${LABLET_TEST_UNSET:-}abcdef".to_owned(),
+        "${LABLET_TEST_UNSET:-ghp-0123456789}${LABLET_TEST_UNSET_TOO:-abcdef}".to_owned(),
+    ] {
+        let text = config(KEY, &entry, &credentials);
+        for subcommand in [check, run] {
+            refused(
+                &with(subcommand, &text),
+                "config: tools.builtin.env.COPY (line 14) is refused: its value holds the one \
+                 `tools.builtin.credentials.GH` has (line 16); list COPY there instead",
+            );
+        }
+    }
     assert!(!lab.at("transcript.json").exists(), "a run started");
 
     let text = config(KEY, &format!("${{{benign}}}"), "");
@@ -1461,14 +1470,13 @@ fn an_env_entry_whose_value_holds_a_line_of_the_client_key_s_file_is_refused() {
         command.env(pem, LINE);
         ran(command, "")
     };
-    let refusal = format!(
-        "config: tools.builtin.env.COPY (line 17): \"${{{pem}}}\" is refused: its value holds the \
-         one `telemetry.otlp.tls.client_key` has, and no process inherits an own credential; to \
-         give bash the value knowingly, list COPY under `tools.builtin.credentials`"
-    );
+    let refusal = "config: tools.builtin.env.COPY (line 17) is refused: its value holds the one \
+                   `telemetry.otlp.tls.client_key` has, and no process inherits an own \
+                   credential; to give bash the value knowingly, list COPY under \
+                   `tools.builtin.credentials`";
 
-    refused(&with(&["check"], &config("env")), &refusal);
-    refused(&with(&["run", "--prompt", "Hi."], &config("env")), &refusal);
+    refused(&with(&["check"], &config("env")), refusal);
+    refused(&with(&["run", "--prompt", "Hi."], &config("env")), refusal);
     assert!(!lab.at("transcript.json").exists(), "a run started");
 
     let given = with(&["check"], &config("credentials"));

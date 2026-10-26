@@ -101,3 +101,43 @@ async fn the_model_is_reached_through_the_messages_api_with_its_reasoning_replay
     assert!(target.cache());
     assert!(!Target::new(MODEL, Key(KEY), None, false).unwrap().cache());
 }
+
+/// What a caller that read the base URL itself compares its reading with:
+/// whether the target carries a user or a password, and whether a host and
+/// port it read is where the target sends, compared as the parser writes
+/// them.
+#[tokio::test]
+async fn a_target_says_whether_it_carries_credentials_and_where_it_sends() {
+    for (base_url, carries) in [
+        ("https://u:p@gw.example/anthropic", true),
+        ("https://u@gw.example", true),
+        ("https://:p@gw.example", true),
+        ("https://:@gw.example", false),
+        ("https://@gw.example", false),
+        ("https://gw.example", false),
+    ] {
+        assert_eq!(
+            target_at(base_url).carries_credentials(),
+            carries,
+            "{base_url}"
+        );
+    }
+
+    let target = target_at("https://u:p@GW.Example:8443/anthropic");
+    for host_and_port in ["gw.example:8443", "GW.EXAMPLE:8443"] {
+        assert!(target.sends_to(host_and_port), "{host_and_port}");
+    }
+    for host_and_port in [
+        "gw.example",
+        "gw.example:443",
+        "other.example:8443",
+        "",
+        "u:p@",
+    ] {
+        assert!(!target.sends_to(host_and_port), "{host_and_port}");
+    }
+    assert!(target_at("https://gw.example").sends_to("gw.example:443"));
+    assert!(target_at("http://127.1:9").sends_to("127.0.0.1:9"));
+    assert!(target_at("https://[::1]:8443").sends_to("[0:0::1]:8443"));
+    assert!(target_at("https://bücher.example").sends_to("BÜCHER.example"));
+}

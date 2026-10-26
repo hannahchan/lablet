@@ -22,8 +22,8 @@ use std::path::{Path, PathBuf};
 use lablet_config::{
     Config, ConfigError, Context, Format, KeyPath, McpServer, Place, Places, Provider, Refusal,
     ResolvedConfig, Secret, Tools, TranscriptFormat, Unreadable, WrittenInformation,
-    holds_an_unread_at, is_credential, outside_user_information, unreadable, user_information,
-    writes_an_unread_at, written_information,
+    holds_an_unread_at, host_and_port, is_credential, outside_user_information, unreadable,
+    user_information, writes_an_unread_at, written_information,
 };
 use lablet_model::{RunOutcome, StopReason, ToolSpec};
 use lablet_provider_anthropic::{Key, Target, TargetError};
@@ -477,9 +477,12 @@ pub enum Ready {
 /// one `bash` inherits already; a `credentials` entry `env` sets too;
 /// `bash` with no environment handed in; what this lablet has no adapter
 /// for; a relative path in a config that no directory was given for; a file
-/// the config names that can't be read; and what building the provider's
+/// the config names that can't be read; a system prompt of whitespace
+/// alone, inline or in its file; what building the provider's
 /// target refuses, a key a header can't carry, a base URL with a query or a
-/// fragment, or an HTTP client that can't be made.
+/// fragment, or an HTTP client that can't be made; and a base URL in which
+/// the target finds a user or password where the check finds none, or none
+/// where it finds one, or another host or port.
 pub fn prepare(config: &Config, base: Base) -> Result<Settled, BuildError> {
     let refused = |refusal| BuildError::Config(config.refused(refusal));
     let settings = Settings::of(config).map_err(refused)?;
@@ -500,20 +503,48 @@ pub fn prepare(config: &Config, base: Base) -> Result<Settled, BuildError> {
         System::File(file) => std::fs::read_to_string(file)
             .map_err(|error| refused(Refusal::invalid("prompt.system_file", error.to_string())))?,
     };
+    // An empty prompt is a run with none, which no provider is sent; one of
+    // whitespace alone would be sent, as a system block that says nothing.
+    if !system.is_empty() && system.trim().is_empty() {
+        // Each fix names the setting rather than writing it, since a config
+        // may be YAML or JSON; an empty file is a run with none, as an
+        // empty `prompt.system` is.
+        let (key, holds, fix) = match settings.system {
+            System::Text(_) => (
+                "prompt.system",
+                "it holds",
+                "write a prompt, or state `prompt.system` empty for none",
+            ),
+            System::File(_) => (
+                "prompt.system_file",
+                "the file holds",
+                "write a prompt in the file, or leave it empty for none",
+            ),
+        };
+        return Err(refused(Refusal::invalid(
+            key,
+            format!(
+                "{holds} only whitespace, which would be sent as a system prompt that says \
+                 nothing; {fix}"
+            ),
+        )));
+    }
     let provider = match &settings.provider {
         // The target is made here, its HTTP client with it, so a check
         // refuses what making them refuses; making the client loads the
         // platform's trust roots and opens no connection. The key is the one
         // `key_is_set` held to being set.
-        Selected::Anthropic => Ready::Anthropic(
-            Target::new(
+        Selected::Anthropic => {
+            let target = Target::new(
                 &config.model.name,
                 Key(key.map_or("", Secret::expose_secret)),
                 config.model.base_url.as_deref(),
                 config.model.cache.unwrap_or(true),
             )
-            .map_err(|error| target_refused(config, error))?,
-        ),
+            .map_err(|error| target_refused(config, error))?;
+            base_url_read_alike(config, &target)?;
+            Ready::Anthropic(target)
+        }
         Selected::Openai => Ready::Openai,
         Selected::Fake { script } => {
             // The script is read where it is and named as the config writes
@@ -713,6 +744,39 @@ fn target_refused(config: &Config, error: TargetError) -> BuildError {
     }
 }
 
+/// Holds the config's reading of `model.base_url` to the target's. The
+/// rules above judge the user information the config's reader finds, and
+/// the secrets cut it; were the URL parser to read it as a host and a
+/// path, the key would go to that host with the password in the path, cut
+/// nowhere. The readers agree on every character that ends an authority,
+/// and on where one starts since `settings` holds the URL to a literal
+/// `http://` or `https://` and no whitespace, but for a `\` straight after
+/// the `://`, which the parser skips as it does a `/`: this refuses that,
+/// and whatever a later change of either reader would part them on.
+fn base_url_read_alike(config: &Config, target: &Target) -> Result<(), BuildError> {
+    match config.model.base_url.as_deref() {
+        Some(base_url) if !read_alike(base_url, target) => Err(refusal_unshown(
+            config,
+            &KeyPath::of("model.base_url"),
+            format!(
+                "the URL isn't read as it's written, and isn't shown; write its host straight \
+                 after `://`, and {UNREAD_AT_FIX}"
+            ),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Whether the config reads `base_url` as `target` does: a user or a
+/// password where the target carries credentials and none where it carries
+/// none, and the host and port the target sends to. A user and a password
+/// that are both empty are none, as the URL parser drops them.
+fn read_alike(base_url: &str, target: &Target) -> bool {
+    let holds =
+        user_information(base_url).is_some_and(|information| !matches!(information, "" | ":"));
+    holds == target.carries_credentials() && target.sends_to(host_and_port(base_url))
+}
+
 /// The refusal of the setting at `key` that shows nothing of its value.
 fn refusal_unshown(config: &Config, key: &KeyPath, reason: String) -> BuildError {
     BuildError::Config(ConfigError::Refused {
@@ -871,8 +935,8 @@ fn urls_hold_their_credentials_as_variables(config: &Config) -> Result<(), Build
                 Some((fill, _)) => unread_at_filled(fill.names()),
             },
             Some(Unreadable::UserInformation(variable)) => format!(
-                "its user or password `{variable}` holds `/`, `?`, `#` or `@`, which a URL can't \
-                 read, and isn't shown; percent-encode it"
+                "its user or password `{variable}` holds `/`, `?`, `#`, `\\` or `@`, which a URL \
+                 can't read, and isn't shown; percent-encode it"
             ),
             Some(Unreadable::At(variable)) => format!(
                 "`{variable}` holds an `@`, which may be a user or password a URL can't read, and \
@@ -885,8 +949,8 @@ fn urls_hold_their_credentials_as_variables(config: &Config) -> Result<(), Build
 }
 
 /// How a URL is written so each `@` it holds is read where a URL reads it.
-const UNREAD_AT_FIX: &str = "percent-encode a `/`, `?`, `#` or `@` in a user or password, or \
-                             write an `@` in a path as %40";
+const UNREAD_AT_FIX: &str = "percent-encode a `/`, `?`, `#`, `\\` or `@` in a user or password, \
+                             or write an `@` in a path as %40";
 
 /// The reason a filled URL that holds an `@` past its authority is refused,
 /// naming each of its variables, `names`, in order.
@@ -1276,7 +1340,9 @@ fn key_is_set(config: &Config) -> Result<Option<&Secret>, BuildError> {
 /// from an own or given variable is refused, since the environment gives
 /// nothing knowingly, and so is one that names its own variable, which
 /// `bash` inherits already. A name both `env` and `credentials` set is
-/// refused too.
+/// refused too. Each refusal names the entry by its key and line and shows
+/// nothing of its text: what's written beside the `${VAR}`, or in its
+/// default, may be the credential itself.
 fn env_is_no_credential(
     config: &Config,
     variables: &Variables,
@@ -1301,7 +1367,6 @@ fn env_is_no_credential(
         let Some(fill) = config.filled().at(&key) else {
             continue;
         };
-        let shown = || Some(format!("{:?}", fill.written));
         for variable in fill.names() {
             if let Some(field) = variables.own_field(variable) {
                 let what = if *field == KeyPath::of("model.api_key") {
@@ -1309,10 +1374,9 @@ fn env_is_no_credential(
                 } else {
                     "the value"
                 };
-                return Err(refusal(
+                return Err(refusal_unshown(
                     config,
                     &key,
-                    shown(),
                     format!(
                         "`{variable}` fills `{field}`, and no process inherits an own credential; \
                          to give bash {what} knowingly, list {name} under `tools.builtin.credentials`"
@@ -1320,10 +1384,9 @@ fn env_is_no_credential(
                 ));
             }
             if let Some(entry) = variables.given_entry(variable) {
-                return Err(refusal(
+                return Err(refusal_unshown(
                     config,
                     &key,
-                    shown(),
                     format!(
                         "`{variable}` is given under `credentials`{}; list {name} there instead, \
                          as {name}: ${{{variable}}}",
@@ -1334,10 +1397,9 @@ fn env_is_no_credential(
             let inherited =
                 base.is_some_and(|base| base.iter().any(|(set, _)| set.to_str() == Some(variable)));
             if variable == name && fill.is_one_variable() && inherited {
-                return Err(refusal(
+                return Err(refusal_unshown(
                     config,
                     &key,
-                    shown(),
                     format!(
                         "bash inherits `{name}` as set already, uncut; remove the line, or move it \
                          under `tools.builtin.credentials` to have it cut"
@@ -1353,22 +1415,25 @@ fn env_is_no_credential(
 /// whose filled value holds an own or given value, as the drop by value and
 /// the cut match one, is refused, since the drop took that value out of
 /// what a command starts from and the entry would put it back under another
-/// name. The refusal names the field whose value it holds and never the
-/// value, so an entry written out is refused with nothing of it shown, and
-/// one whose `${VAR}` has a default is shown only when the written text
-/// holds no credential, by the same test, so a default that holds one
-/// percent-encoded isn't shown either.
+/// name. The refusal names the field whose value it holds, and the entry by
+/// its key and line, and shows nothing of the entry's text: a `${VAR}` or a
+/// default can split a value written out so that no test of the text finds
+/// it, and the user has the file.
 fn env_holds_no_credential(config: &Config, derived: &Derived) -> Result<(), BuildError> {
     let env = KeyPath::of("tools.builtin.env");
     for (name, value) in &config.tools.builtin.env {
         let key = env.key(name);
-        let fill = config.filled().at(&key);
-        let credentials = || derived.own.iter().chain(&derived.given);
-        let shown = fill
-            .map(|fill| &fill.written)
-            .filter(|written| !credentials().any(|credential| credential.holds(written)))
-            .map(|written| format!("{written:?}"));
-        let variable = fill.and_then(|fill| fill.names().next());
+        // The fix names a variable only where a set one gave the whole
+        // value: a value written out, in the text or in a default, or split
+        // around a `${VAR}`, came from no variable, and the `${VAR}` a fix
+        // named would have given nothing of it.
+        let variable = config
+            .filled()
+            .at(&key)
+            .filter(|fill| fill.is_one_variable() && fill.default().is_none_or(str::is_empty))
+            .and_then(|fill| fill.variables.first())
+            .filter(|variable| variable.set)
+            .map(|variable| variable.name.as_str());
         let holds = |credential: &&Credential| credential.holds(value);
         if let Some(own) = derived.own.iter().find(holds) {
             let field = &own.field;
@@ -1377,15 +1442,15 @@ fn env_holds_no_credential(config: &Config, derived: &Derived) -> Result<(), Bui
             } else {
                 "the value"
             };
-            let reason = format!(
-                "its value holds the one `{field}` has, and no process inherits an own \
-                 credential; to give bash {what} knowingly, list {name} under \
-                 `tools.builtin.credentials`"
-            );
-            return Err(match shown {
-                Some(shown) => refusal(config, &key, Some(shown), reason),
-                None => refusal_unshown(config, &key, reason),
-            });
+            return Err(refusal_unshown(
+                config,
+                &key,
+                format!(
+                    "its value holds the one `{field}` has, and no process inherits an own \
+                     credential; to give bash {what} knowingly, list {name} under \
+                     `tools.builtin.credentials`"
+                ),
+            ));
         }
         if let Some(given) = derived.given.iter().find(holds) {
             let mut reason = format!(
@@ -1393,15 +1458,10 @@ fn env_holds_no_credential(config: &Config, derived: &Derived) -> Result<(), Bui
                 given.field,
                 at(given.place)
             );
-            // A value the written text holds came from no variable, so none
-            // is the fix.
-            if let Some(variable) = variable.filter(|_| shown.is_some()) {
+            if let Some(variable) = variable {
                 let _ = write!(reason, ", as {name}: ${{{variable}}}");
             }
-            return Err(match shown {
-                Some(shown) => refusal(config, &key, Some(shown), reason),
-                None => refusal_unshown(config, &key, reason),
-            });
+            return Err(refusal_unshown(config, &key, reason));
         }
     }
     Ok(())

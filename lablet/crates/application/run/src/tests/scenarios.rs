@@ -1890,6 +1890,30 @@ async fn a_provider_error_s_message_is_bounded_only_after_the_run_s_secrets_are_
         expected,
         "the exception record"
     );
+    // No span, record or document holds the message as the provider wrote
+    // it, nor any of it past the bound.
+    let uncut = format!("{before}{SHORTEST}");
+    let emitted: Vec<String> = run
+        .spans()
+        .iter()
+        .map(|span| format!("{span:?}"))
+        .chain(run.records().iter().map(|record| format!("{record:?}")))
+        .chain([format!("{:?}", run.finished)])
+        .collect();
+    assert!(
+        emitted
+            .iter()
+            .filter(|emitted| emitted.contains(&expected))
+            .count()
+            >= 3,
+        "the sweep reads the span, the record and the outcome the message reached"
+    );
+    for (index, emitted) in emitted.iter().enumerate() {
+        assert!(
+            !emitted.contains(&uncut) && !emitted.contains("was rejected"),
+            "the message reached the {index}th of what the run made whole"
+        );
+    }
 }
 
 /// A failure the loop tries again reaches no outcome, and its record and

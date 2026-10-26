@@ -284,7 +284,7 @@ fn a_tool_s_credential_written_out_or_beside_its_variable_is_refused_without_bei
 /// R38, R39 and R40: `tools.builtin.env` gives nothing knowingly, so an
 /// entry filled from an own or given variable is refused with the fix, a
 /// name both lists set is refused, and an entry that names its own variable
-/// is refused where `bash` inherits it already.
+/// is refused where `bash` inherits it already, each by its key and line.
 #[test]
 fn an_env_entry_that_names_a_credential_or_its_own_variable_is_refused() {
     let scratch = lablet_test_support::Scratch::new("prepare-env");
@@ -311,9 +311,9 @@ fn an_env_entry_that_names_a_credential_or_its_own_variable_is_refused() {
     );
     assert_eq!(
         refused(&key_config, base(&["PATH"])),
-        "tools.builtin.env.T (line 7): \"${ANTHROPIC_API_KEY}\" is refused: `ANTHROPIC_API_KEY` \
-         fills `model.api_key`, and no process inherits an own credential; to give bash the key \
-         knowingly, list T under `tools.builtin.credentials`"
+        "tools.builtin.env.T (line 7) is refused: `ANTHROPIC_API_KEY` fills `model.api_key`, and \
+         no process inherits an own credential; to give bash the key knowingly, list T under \
+         `tools.builtin.credentials`"
     );
 
     let header_config = filled(
@@ -326,7 +326,7 @@ fn an_env_entry_that_names_a_credential_or_its_own_variable_is_refused() {
     );
     assert_eq!(
         refused(&header_config, base(&["PATH"])),
-        "tools.builtin.env.T (line 7): \"Bearer ${OTLP_TOKEN}\" is refused: `OTLP_TOKEN` fills \
+        "tools.builtin.env.T (line 7) is refused: `OTLP_TOKEN` fills \
          `telemetry.otlp.headers.Authorization`, and no process inherits an own credential; to \
          give bash the value knowingly, list T under `tools.builtin.credentials`"
     );
@@ -336,8 +336,8 @@ fn an_env_entry_that_names_a_credential_or_its_own_variable_is_refused() {
     );
     assert_eq!(
         refused(&given, base(&["PATH"])),
-        "tools.builtin.env.T (line 7): \"${GITHUB_TOKEN}\" is refused: `GITHUB_TOKEN` is given \
-         under `credentials` (line 8); list T there instead, as T: ${GITHUB_TOKEN}"
+        "tools.builtin.env.T (line 7) is refused: `GITHUB_TOKEN` is given under `credentials` \
+         (line 8); list T there instead, as T: ${GITHUB_TOKEN}"
     );
 
     let both = with(
@@ -352,9 +352,9 @@ fn an_env_entry_that_names_a_credential_or_its_own_variable_is_refused() {
     let same = with("    enabled: [bash]\n    env: { GITHUB_TOKEN: '${GITHUB_TOKEN}' }\n");
     assert_eq!(
         refused(&same, base(&["PATH", "GITHUB_TOKEN"])),
-        "tools.builtin.env.GITHUB_TOKEN (line 7): \"${GITHUB_TOKEN}\" is refused: bash inherits \
-         `GITHUB_TOKEN` as set already, uncut; remove the line, or move it under \
-         `tools.builtin.credentials` to have it cut"
+        "tools.builtin.env.GITHUB_TOKEN (line 7) is refused: bash inherits `GITHUB_TOKEN` as set \
+         already, uncut; remove the line, or move it under `tools.builtin.credentials` to have it \
+         cut"
     );
     passes(&same, base(&["PATH"]));
     let port = with("    enabled: [bash]\n    env: { PORT: '${PORT}' }\n");
@@ -416,43 +416,40 @@ fn with_env_value(
 }
 
 /// An `env` entry whose filled value holds an own value is refused by the
-/// field whose value it holds, with nothing of the value shown: whether
+/// field whose value it holds, with nothing of the entry shown: whether
 /// another variable gave it, whole, within a text, percent-encoded or as a
-/// default, or the file wrote it out, and for the key, a header's value and
-/// a URL's user information alike.
+/// default, or the file wrote it out, whole or split, and for the key, a
+/// header's value and a URL's user information alike.
 #[test]
 fn an_env_entry_whose_value_holds_an_own_value_is_refused_by_the_field() {
     let scratch = lablet_test_support::Scratch::new("prepare-env-own-value");
     let with = |env: &str, more: &str| with_env_value(&scratch, "ANTHROPIC_API_KEY", env, more);
-    let own = |shown: &str| {
-        format!(
-            "tools.builtin.env.COPY (line 7){shown} is refused: its value holds the one \
-             `model.api_key` has, and no process inherits an own credential; to give bash the \
-             key knowingly, list COPY under `tools.builtin.credentials`"
-        )
-    };
+    let own = "tools.builtin.env.COPY (line 7) is refused: its value holds the one \
+               `model.api_key` has, and no process inherits an own credential; to give bash the \
+               key knowingly, list COPY under `tools.builtin.credentials`";
 
-    assert_eq!(
-        refused(&with("'${OTHER}'", ""), base(&["PATH"])),
-        own(": \"${OTHER}\"")
-    );
-    assert_eq!(
-        refused(&with("'x${OTHER}y'", ""), base(&["PATH"])),
-        own(": \"x${OTHER}y\"")
-    );
-    assert_eq!(
-        refused(&with("'${ESCAPED}'", ""), base(&["PATH"])),
-        own(": \"${ESCAPED}\"")
-    );
+    for entry in ["'${OTHER}'", "'x${OTHER}y'", "'${ESCAPED}'"] {
+        assert_eq!(refused(&with(entry, ""), base(&["PATH"])), own, "{entry}");
+    }
     let literal = refused(&with(&format!("'{KEY}'"), ""), base(&["PATH"]));
-    assert_eq!(literal, own(""));
+    assert_eq!(literal, own);
     assert!(!literal.contains(KEY));
+    // A `${VAR}` or two defaults that split the key leave it in no piece
+    // of the written text, which is shown no more than the whole.
+    for split in [
+        "'sk-ant-0123456789${E_UNSET:-}abcdef0123456789'",
+        "'${E_UNSET:-sk-ant-0123456789}${F_UNSET:-abcdef0123456789}'",
+    ] {
+        let refusal = refused(&with(split, ""), base(&["PATH"]));
+        assert_eq!(refusal, own, "{split}");
+        assert!(!refusal.contains("0123456789"), "{refusal}");
+    }
     // A default that holds the key is written text, and isn't shown either.
     let default = refused(
         &with(&format!("'${{NOT_SET:-{KEY}}}'"), ""),
         base(&["PATH"]),
     );
-    assert_eq!(default, own(""));
+    assert_eq!(default, own);
     assert!(!default.contains(KEY));
     // A default that holds the key percent-encoded holds it as surely, and
     // the written text shows it as it does the key.
@@ -460,7 +457,7 @@ fn an_env_entry_whose_value_holds_an_own_value_is_refused_by_the_field() {
         &with(&format!("'${{NOT_SET:-{ESCAPED_KEY}}}'"), ""),
         base(&["PATH"]),
     );
-    assert_eq!(encoded_default, own(""));
+    assert_eq!(encoded_default, own);
     assert!(!encoded_default.contains(ESCAPED_KEY));
 
     let header = refused(
@@ -472,9 +469,9 @@ fn an_env_entry_whose_value_holds_an_own_value_is_refused_by_the_field() {
     );
     assert_eq!(
         header,
-        "tools.builtin.env.COPY (line 7): \"Bearer ${HEADER_COPY}\" is refused: its value holds \
-         the one `telemetry.otlp.headers.Authorization` has, and no process inherits an own \
-         credential; to give bash the value knowingly, list COPY under `tools.builtin.credentials`"
+        "tools.builtin.env.COPY (line 7) is refused: its value holds the one \
+         `telemetry.otlp.headers.Authorization` has, and no process inherits an own credential; to \
+         give bash the value knowingly, list COPY under `tools.builtin.credentials`"
     );
     assert!(!header.contains(OTLP_TOKEN));
     let url = refused(
@@ -486,7 +483,7 @@ fn an_env_entry_whose_value_holds_an_own_value_is_refused_by_the_field() {
     );
     assert_eq!(
         url,
-        "tools.builtin.env.COPY (line 7): \"${PASS_COPY}\" is refused: its value holds the one \
+        "tools.builtin.env.COPY (line 7) is refused: its value holds the one \
          `telemetry.otlp.endpoint` has, and no process inherits an own credential; to give bash \
          the value knowingly, list COPY under `tools.builtin.credentials`"
     );
@@ -494,8 +491,8 @@ fn an_env_entry_whose_value_holds_an_own_value_is_refused_by_the_field() {
 }
 
 /// An `env` entry whose filled value holds a given value is refused by the
-/// `credentials` entry whose value it holds and its line, with the fix
-/// where a variable gave it and nothing shown where the file wrote it out.
+/// `credentials` entry whose value it holds and its line, with nothing of
+/// the entry shown, and with the fix where one set variable gave it whole.
 /// A value no credential holds passes, and one under the cut's floor isn't
 /// matched.
 #[test]
@@ -503,15 +500,19 @@ fn an_env_entry_whose_value_holds_a_given_value_is_refused_and_one_holding_none_
     let scratch = lablet_test_support::Scratch::new("prepare-env-given-value");
     let credentials = "    credentials: { GH: '${GITHUB_TOKEN}' }\n";
 
-    let given = refused(
-        &with_env_value(&scratch, "ANTHROPIC_API_KEY", "'${GH_COPY}'", credentials),
-        base(&["PATH"]),
-    );
-    assert_eq!(
-        given,
-        "tools.builtin.env.COPY (line 7): \"${GH_COPY}\" is refused: its value holds the one \
-         `tools.builtin.credentials.GH` has (line 8); list COPY there instead, as COPY: ${GH_COPY}"
-    );
+    for entry in ["'${GH_COPY}'", "'${GH_COPY:-}'"] {
+        let given = refused(
+            &with_env_value(&scratch, "ANTHROPIC_API_KEY", entry, credentials),
+            base(&["PATH"]),
+        );
+        assert_eq!(
+            given,
+            "tools.builtin.env.COPY (line 7) is refused: its value holds the one \
+             `tools.builtin.credentials.GH` has (line 8); list COPY there instead, as COPY: \
+             ${GH_COPY}",
+            "{entry}"
+        );
+    }
     let literal = refused(
         &with_env_value(
             &scratch,
@@ -539,6 +540,18 @@ fn an_env_entry_whose_value_holds_a_given_value_is_refused_and_one_holding_none_
         base(&["PATH"]),
     );
     assert_eq!(default, literal);
+    // A `${VAR}` or two defaults that split the token gave none of it, so
+    // the fix names none of them.
+    for split in [
+        "'ghp_0123456789${E_UNSET:-}abcdef'",
+        "'${E_UNSET:-ghp_0123456789}${F_UNSET:-abcdef}'",
+    ] {
+        let refusal = refused(
+            &with_env_value(&scratch, "ANTHROPIC_API_KEY", split, credentials),
+            base(&["PATH"]),
+        );
+        assert_eq!(refusal, literal, "{split}");
+    }
 
     passes(
         &with_env_value(&scratch, "ANTHROPIC_API_KEY", "'${SOMETHING_ELSE}'", ""),
@@ -547,6 +560,69 @@ fn an_env_entry_whose_value_holds_a_given_value_is_refused_and_one_holding_none_
     passes(
         &with_env_value(&scratch, "SHORT", "'${SHORT_COPY}'", ""),
         base(&["PATH"]),
+    );
+}
+
+/// R38 and R40 show nothing of the entry they refuse: what's written
+/// beside the `${VAR}` it names, or in its default, may be the credential
+/// itself, whether the variable is own, given or one `bash` inherits.
+#[test]
+fn an_env_entry_refused_by_the_variable_it_names_shows_nothing_of_its_text() {
+    let scratch = lablet_test_support::Scratch::new("prepare-env-variable-unshown");
+    let with = |env: &str, more: &str| with_env_value(&scratch, "ANTHROPIC_API_KEY", env, more);
+    let unshown = |refusal: String| {
+        assert!(!refusal.contains("0123456789"), "{refusal}");
+        refusal
+    };
+
+    for entry in [
+        format!("'${{ANTHROPIC_API_KEY:-{KEY}}}'"),
+        format!("'${{ANTHROPIC_API_KEY}}{KEY}'"),
+        "'sk-ant-0123456789${ANTHROPIC_API_KEY:-}abcdef0123456789'".to_owned(),
+    ] {
+        assert_eq!(
+            unshown(refused(&with(&entry, ""), base(&["PATH"]))),
+            "tools.builtin.env.COPY (line 7) is refused: `ANTHROPIC_API_KEY` fills \
+             `model.api_key`, and no process inherits an own credential; to give bash the key \
+             knowingly, list COPY under `tools.builtin.credentials`",
+            "{entry}"
+        );
+    }
+    assert_eq!(
+        unshown(refused(
+            &with(
+                &format!("'${{GITHUB_TOKEN:-{TOKEN}}}'"),
+                "    credentials: { GH: '${GITHUB_TOKEN}' }\n"
+            ),
+            base(&["PATH"])
+        )),
+        "tools.builtin.env.COPY (line 7) is refused: `GITHUB_TOKEN` is given under `credentials` \
+         (line 8); list COPY there instead, as COPY: ${GITHUB_TOKEN}"
+    );
+    assert_eq!(
+        unshown(refused(
+            &with(
+                &format!("'Bearer ${{OTLP_TOKEN:-{OTLP_TOKEN}}}'"),
+                "telemetry: { otlp: { headers: { Authorization: 'Bearer ${OTLP_TOKEN}' } } }\n"
+            ),
+            base(&["PATH"])
+        )),
+        "tools.builtin.env.COPY (line 7) is refused: `OTLP_TOKEN` fills \
+         `telemetry.otlp.headers.Authorization`, and no process inherits an own credential; to \
+         give bash the value knowingly, list COPY under `tools.builtin.credentials`"
+    );
+    let inherited = fake(
+        &scratch,
+        &format!(
+            "    enabled: [bash]\n    env: {{ GITHUB_TOKEN: '${{GITHUB_TOKEN:-{TOKEN}}}' }}\n"
+        ),
+        &[("GITHUB_TOKEN", TOKEN)],
+    );
+    assert_eq!(
+        unshown(refused(&inherited, base(&["PATH", "GITHUB_TOKEN"]))),
+        "tools.builtin.env.GITHUB_TOKEN (line 7) is refused: bash inherits `GITHUB_TOKEN` as set \
+         already, uncut; remove the line, or move it under `tools.builtin.credentials` to have it \
+         cut"
     );
 }
 
@@ -1030,8 +1106,8 @@ fn a_credential_s_variable_written_outside_its_fields_is_refused() {
 }
 
 /// A URL whose written user information is `${VAR}`s, filled with a user
-/// or password holding an unencoded `/`, `?`, `#` or `@`, doesn't read as
-/// the text wrote it, so nothing would be own, cut or left out of what
+/// or password holding an unencoded `/`, `\`, `?`, `#` or `@`, doesn't read
+/// as the text wrote it, so nothing would be own, cut or left out of what
 /// `check` shows: it's refused unshown, by its key, naming the variable.
 #[test]
 fn a_url_whose_filled_user_information_does_not_parse_is_refused_unshown() {
@@ -1043,7 +1119,7 @@ fn a_url_whose_filled_user_information_does_not_parse_is_refused_unshown() {
         let expected = |variable: &str| {
             format!(
                 "{key} (line {line}) is refused: its user or password `{variable}` holds `/`, \
-                 `?`, `#` or `@`, which a URL can't read, and isn't shown; percent-encode it"
+                 `?`, `#`, `\\` or `@`, which a URL can't read, and isn't shown; percent-encode it"
             )
         };
         for (user, password, variable) in [
@@ -1051,7 +1127,9 @@ fn a_url_whose_filled_user_information_does_not_parse_is_refused_unshown() {
             ("gwuser", "pa?ss-gwsecretpassword", "P"),
             ("gwuser", "pa#ss-gwsecretpassword", "P"),
             ("gwuser", "pa@ss-gwsecretpassword", "P"),
+            ("gwuser", "pa\\ss-gwsecretpassword", "P"),
             ("gw@user/x", "gwsecretpassword1234567", "U"),
+            ("CORP\\gwuser", "gwsecretpassword1234567", "U"),
         ] {
             let held = [("U", user), ("P", password), ("K", KEY)];
             let refusal = refused(
@@ -1239,7 +1317,7 @@ fn a_url_variable_that_gives_an_at_the_text_did_not_write_is_refused_unshown() {
                 ],
                 format!(
                     "{key} (line {line}) is refused: its user or password `PW` holds `/`, `?`, \
-                     `#` or `@`, which a URL can't read, and isn't shown; percent-encode it"
+                     `#`, `\\` or `@`, which a URL can't read, and isn't shown; percent-encode it"
                 ),
             ),
             (
@@ -1354,8 +1432,8 @@ fn a_user_information_variable_written_again_elsewhere_in_its_url_is_refused() {
 #[test]
 fn a_url_that_holds_an_at_past_its_authority_is_refused_unshown() {
     const SECRET: &str = "pa/ss-abcdefghijk";
-    let fix = "percent-encode a `/`, `?`, `#` or `@` in a user or password, or write an `@` in a \
-               path as %40";
+    let fix = "percent-encode a `/`, `?`, `#`, `\\` or `@` in a user or password, or write an `@` \
+               in a path as %40";
     for (key, line) in [
         ("model.base_url", 1),
         ("telemetry.otlp.endpoint", 3),
@@ -1441,4 +1519,204 @@ fn a_url_that_holds_an_at_past_its_authority_is_refused_unshown() {
             Err(error) => panic!("{key}: {error}"),
         }
     }
+}
+
+/// The target `prepare` builds for `config`, an `anthropic` one.
+fn target_of(config: &Config) -> Target {
+    let wiring = prepare(config, None)
+        .unwrap()
+        .finish(Telemetry::default())
+        .unwrap()
+        .wiring()
+        .unwrap();
+    match wiring.provider {
+        Ready::Anthropic(target) => target,
+        Ready::Openai | Ready::Fake(_) => panic!("the config selects anthropic"),
+    }
+}
+
+/// The url crate reads a `\` in an `https` authority as a `/`, so a
+/// gateway's user given as `CORP\jdoe` would have made `corp` the host the
+/// key went to, with the password in the path. The check reads the `\` as
+/// the adapter does: a variable that gives one to the user information is
+/// refused by its name and nothing it holds, as a URL set in code that
+/// holds one is, and `%5C` reaches the gateway as a user. Both left empty,
+/// the user and the password are none to the check and to the target.
+#[test]
+fn a_gateway_user_holding_a_backslash_is_refused_where_the_adapter_would_read_a_host() {
+    let gateway = |url: &str, held: &[(&str, &str)]| {
+        let mut held = held.to_vec();
+        held.push(("K", KEY));
+        filled(
+            &format!(
+                "model: {{ api_key: '${{K}}', base_url: '{url}' }}\nprompt: {{ system: Hi. }}"
+            ),
+            &held,
+        )
+    };
+    let url = "https://${GW_USER}:${GW_PASS}@gateway.corp.example/anthropic";
+
+    let refusal = refused(
+        &gateway(url, &[("GW_USER", "CORP\\jdoe"), ("GW_PASS", PASSWORD)]),
+        None,
+    );
+    assert_eq!(
+        refusal,
+        "model.base_url (line 1) is refused: its user or password `GW_USER` holds `/`, `?`, `#`, \
+         `\\` or `@`, which a URL can't read, and isn't shown; percent-encode it"
+    );
+    assert!(
+        !refusal.contains("jdoe") && !refusal.contains(PASSWORD),
+        "{refusal}"
+    );
+
+    let mut in_code = Config::default();
+    in_code.prompt.system = Some("Hi.".to_owned());
+    in_code.model.api_key = Some(Secret::new(KEY));
+    in_code.model.base_url = Some(format!(
+        "https://CORP\\jdoe:{PASSWORD}@gateway.corp.example/anthropic"
+    ));
+    let refusal = refused(&in_code, None);
+    assert_eq!(
+        refusal,
+        "model.base_url is refused: it holds an `@` a URL can't read as a user or password, and \
+         isn't shown; percent-encode a `/`, `?`, `#`, `\\` or `@` in a user or password, or write \
+         an `@` in a path as %40"
+    );
+    assert!(!refusal.contains(PASSWORD), "{refusal}");
+
+    let encoded = target_of(&gateway(
+        url,
+        &[("GW_USER", "CORP%5Cjdoe"), ("GW_PASS", PASSWORD)],
+    ));
+    assert_eq!(encoded.endpoint().host, "gateway.corp.example");
+    assert!(encoded.carries_credentials());
+    let empty = target_of(&gateway(
+        "https://${GW_USER:-}:${GW_PASS:-}@gateway.corp.example/anthropic",
+        &[],
+    ));
+    assert_eq!(empty.endpoint().host, "gateway.corp.example");
+    assert!(!empty.carries_credentials());
+}
+
+/// The belt behind the reader: were the config's reading of
+/// `model.base_url` and the target's to part, on whether it holds a user
+/// or a password or on the host and port a request goes to, the check
+/// refuses the URL rather than send through a target it misread. The two
+/// read alike once a `\` ends the authority, which the last case holds,
+/// but where a `\` follows `://`: the config's reader finds an empty
+/// authority there, and the parser skips it as it does a `/` and sends to
+/// the host after it. That is the one parting `prepare` meets, so the rest
+/// are made here with the target of another URL; the parser's own
+/// spellings of a host, a port and an empty user and password part nothing.
+#[test]
+fn the_config_s_reading_of_the_base_url_and_the_target_s_are_held_alike() {
+    for url in ["https://\\gw.example/v1", "http://\\\\gw.example"] {
+        let fix = "the URL isn't read as it's written, and isn't shown; write its host straight \
+                   after `://`, and percent-encode a `/`, `?`, `#`, `\\` or `@` in a user or \
+                   password, or write an `@` in a path as %40";
+        let written = filled(
+            &format!(
+                "model: {{ api_key: '${{K}}', base_url: '{url}' }}\nprompt: {{ system: Hi. }}"
+            ),
+            &[("K", KEY)],
+        );
+        assert_eq!(
+            refused(&written, None),
+            format!("model.base_url (line 1) is refused: {fix}"),
+            "{url}"
+        );
+        let mut in_code = Config::default();
+        in_code.prompt.system = Some("Hi.".to_owned());
+        in_code.model.api_key = Some(Secret::new(KEY));
+        in_code.model.base_url = Some(url.to_owned());
+        assert_eq!(
+            refused(&in_code, None),
+            format!("model.base_url is refused: {fix}"),
+            "{url}"
+        );
+    }
+
+    let target = |url: &str| Target::new("m", Key(KEY), Some(url), true).unwrap();
+    for (read, sent) in [
+        ("https://u:p@gw.example/v1", "https://gw.example/v1"),
+        ("https://gw.example/v1", "https://u:p@gw.example/v1"),
+        ("https://u:p@gw.example/v1", "https://u:p@other.example/v1"),
+        (
+            "https://u:p@gw.example:8443/v1",
+            "https://u:p@gw.example/v1",
+        ),
+    ] {
+        assert!(!read_alike(read, &target(sent)), "{read} read as {sent}");
+    }
+    for url in [
+        "https://u:p@gw.example/v1",
+        "https://u:p@GW.Example:8443/v1",
+        "https://u:p@[::1]:8443/v1",
+        "http://127.1:9/v1",
+        "https://bücher.example/v1",
+        "https://u@gw.example",
+        "https://:p@gw.example",
+        "https://:@gw.example/v1",
+        "https://@gw.example/v1",
+        "https://CORP%5Cjdoe:pw@gw.example/v1",
+        "https://CORP\\jdoe:pw@gw.example/v1",
+    ] {
+        assert!(read_alike(url, &target(url)), "{url}");
+    }
+}
+
+/// A system prompt of whitespace alone would go to the provider as a
+/// system block that says nothing, where an empty one is a run with no
+/// system prompt. So one that holds only whitespace is refused where the
+/// config states it, inline or in the file it names, and an empty one
+/// passes, as does a prompt with whitespace around it.
+#[test]
+fn a_system_prompt_of_whitespace_alone_is_refused_inline_and_in_its_file() {
+    let scratch = lablet_test_support::Scratch::new("prepare-blank-system");
+    let script = scratch.write(
+        "script.yaml",
+        "- response: { content: [{ text: Done. }], finish: end_turn }\n",
+    );
+    let config = |prompt: &str| {
+        filled(
+            &format!(
+                "model: {{ provider: fake, script: '{}' }}\nprompt: {prompt}",
+                script.display()
+            ),
+            &[],
+        )
+    };
+    for blank in ["' '", "\"\\n\\t\""] {
+        assert_eq!(
+            refused(&config(&format!("{{ system: {blank} }}")), None),
+            format!(
+                "prompt.system (line 2): {:?} is refused: it holds only whitespace, which would \
+                 be sent as a system prompt that says nothing; write a prompt, or state \
+                 `prompt.system` empty for none",
+                if blank == "' '" { " " } else { "\n\t" }
+            )
+        );
+    }
+    let file = scratch.write("system.md", "\n");
+    assert_eq!(
+        refused(
+            &config(&format!("{{ system_file: '{}' }}", file.display())),
+            None
+        ),
+        format!(
+            "prompt.system_file (line 2): {:?} is refused: the file holds only whitespace, which \
+             would be sent as a system prompt that says nothing; write a prompt in the file, or \
+             leave it empty for none",
+            file.display().to_string()
+        )
+    );
+
+    passes(&config("{ system: '' }"), None);
+    passes(&config("{ system: ' Hi. ' }"), None);
+    let empty = scratch.write("empty.md", "");
+    passes(
+        &config(&format!("{{ system_file: '{}' }}", empty.display())),
+        None,
+    );
 }

@@ -106,3 +106,57 @@ fn an_at_past_the_authority_is_one_no_reading_takes_as_user_information() {
         assert!(!writes_an_unread_at(written), "{written}");
     }
 }
+
+/// The url crate ends an `http` or `https` authority at a `\` as at a `/`,
+/// so a user or password holding one is read as a host and a path there:
+/// the `@` after it is one no reading takes as user information, written
+/// out, in a default or after a scheme, and `%5C` is read. A `\` past the
+/// authority is a path's.
+#[test]
+fn a_backslash_ends_the_authority_as_the_url_crate_reads_it() {
+    for url in [
+        "https://CORP\\jdoe:pw@gateway.corp.example/anthropic",
+        "https://jdoe:pa\\ss@gateway.corp.example",
+        "jdoe:pa\\ss@h:4317",
+    ] {
+        assert_eq!(user_information(url), None, "{url}");
+        assert!(holds_an_unread_at(url), "{url}");
+    }
+    assert!(writes_an_unread_at("https://${U}:${P:-pa\\ss}@h"));
+    assert_eq!(
+        user_information("h:4317\\p://u@q"),
+        None,
+        "a `\\` ends no scheme"
+    );
+
+    let encoded = "https://CORP%5Cjdoe:pw@gateway.corp.example/anthropic";
+    assert_eq!(user_information(encoded), Some("CORP%5Cjdoe:pw"));
+    assert!(!holds_an_unread_at(encoded));
+    for url in [
+        "https://gateway.corp.example/anthropic\\v1",
+        "https://u:p@gateway.corp.example/a\\b",
+    ] {
+        assert!(!holds_an_unread_at(url), "{url}");
+    }
+    assert_eq!(
+        user_information("https://u:p@gateway.corp.example/a\\b"),
+        Some("u:p")
+    );
+}
+
+/// What follows a URL's user information in its authority is its host and
+/// port, as the same reading finds them.
+#[test]
+fn the_host_and_port_of_a_url_follow_its_user_information() {
+    for (url, expected) in [
+        ("https://u:p@gw.example:8443/v1", "gw.example:8443"),
+        ("https://u:p@ss@gw.example/v1", "gw.example"),
+        ("https://gw.example?q=a@b", "gw.example"),
+        ("https://[::1]:8443", "[::1]:8443"),
+        ("u:p@h:4317", "h:4317"),
+        ("https://CORP\\jdoe:pw@gw.example", "CORP"),
+        ("${BASE}/v1", "${BASE}"),
+    ] {
+        assert_eq!(host_and_port(url), expected, "{url}");
+    }
+}

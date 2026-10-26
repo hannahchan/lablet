@@ -473,35 +473,43 @@ fn a_filled_endpoint_that_does_not_parse_is_refused_naming_the_variable_and_not_
 }
 
 /// C20: an endpoint that isn't one variable whole, filled into what the
-/// exporter doesn't accept, as a password holding a backslash makes it, is
-/// refused naming each variable it holds, in order, since any of them may
-/// be what broke it, and never what one holds.
+/// exporter doesn't accept, as a host holding a space makes it, is refused
+/// naming each variable it holds, in order, since any of them may be what
+/// broke it, and never what one holds. A password holding a backslash,
+/// which a URL parser reads as the authority's end, is refused before, by
+/// its variable's name.
 #[test]
 fn a_filled_endpoint_of_several_variables_that_does_not_parse_names_each() {
     let lab = Lab::new("otlp-env-bad-endpoint-parts");
-    lab.write_config(
-        ENDS,
-        json!({ "telemetry": { "otlp": { "endpoint": "http://${LABLET_TEST_U}:${LABLET_TEST_P}@127.0.0.1:9" } } }),
-    );
     let check = ["check", "--config", CONFIG];
     let run = ["run", "--config", CONFIG, "--prompt", PROMPT];
 
-    for args in [&check[..], &run[..]] {
-        let said = refused_before_a_run(
-            &lab,
-            args,
-            &[
-                ("LABLET_TEST_U", "user-abcdefghijk"),
-                ("LABLET_TEST_P", "pa\\ss-abcdefghijk"),
-            ],
-        );
-
-        assert_eq!(
-            said,
+    for (endpoint, held, expected) in [
+        (
+            "http://${LABLET_TEST_U}@${LABLET_TEST_H}:9",
+            ("LABLET_TEST_H", "not a host"),
             "config: telemetry.otlp.endpoint (line 1): its value is refused: filled from \
-             `LABLET_TEST_U` and `LABLET_TEST_P`, it isn't a URL the exporter accepts\n"
+             `LABLET_TEST_U` and `LABLET_TEST_H`, it isn't a URL the exporter accepts\n",
+        ),
+        (
+            "http://${LABLET_TEST_U}:${LABLET_TEST_P}@127.0.0.1:9",
+            ("LABLET_TEST_P", "pa\\ss-abcdefghijk"),
+            "config: telemetry.otlp.endpoint (line 1) is refused: its user or password \
+             `LABLET_TEST_P` holds `/`, `?`, `#`, `\\` or `@`, which a URL can't read, and isn't \
+             shown; percent-encode it\n",
+        ),
+    ] {
+        lab.write_config(
+            ENDS,
+            json!({ "telemetry": { "otlp": { "endpoint": endpoint } } }),
         );
-        assert!(!said.contains("abcdefghijk"), "{said}");
+        for args in [&check[..], &run[..]] {
+            let said =
+                refused_before_a_run(&lab, args, &[("LABLET_TEST_U", "user-abcdefghijk"), held]);
+
+            assert_eq!(said, expected, "{endpoint}");
+            assert!(!said.contains("abcdefghijk"), "{said}");
+        }
     }
 }
 

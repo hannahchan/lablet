@@ -193,9 +193,9 @@ async fn a_refused_endpoint_that_holds_an_at_is_shown_with_no_value() {
                        ${VAR}, and what it holds isn't shown; write \
                        https://${GW_USER}:${GW_PASS}@gw/v1, and rotate it if this was one";
     let unread = "telemetry.otlp.endpoint (line 1) is refused: its text holds an `@` a URL can't \
-                  read as a user or password, and isn't shown; percent-encode a `/`, `?`, `#` or \
-                  `@` in a user or password, or write an `@` in a path as %40; rotate it if this \
-                  was one";
+                  read as a user or password, and isn't shown; percent-encode a `/`, `?`, `#`, \
+                  `\\` or `@` in a user or password, or write an `@` in a path as %40; rotate it \
+                  if this was one";
     for (endpoint, expected) in [
         (format!("http://user:{PASSWORD}@[not a host"), written_out),
         (format!("user:{PASSWORD}@[not a host"), written_out),

@@ -55,9 +55,9 @@ pub struct Fill {
     /// config keeps as a set is told, since the set holds its items in its
     /// own order and not the file's. No form shows it.
     pub(crate) filled: String,
-    /// For each of `variables`, in order, which of `@`, `/`, `?` and `#`
-    /// what it gave the text holds, which a URL's check reads in place of
-    /// the value the record doesn't keep: empty for one that gave its
+    /// For each of `variables`, in order, which of `@`, `/`, `\`, `?` and
+    /// `#` what it gave the text holds, which a URL's check reads in place
+    /// of the value the record doesn't keep: empty for one that gave its
     /// default or nothing.
     pub(crate) delimiters: Vec<String>,
     /// Whether the text came out unstated: one reference whole that came
@@ -501,7 +501,7 @@ fn replaced(
                     set,
                 });
                 delimiters.push(
-                    ['@', '/', '?', '#']
+                    ['@', '/', '\\', '?', '#']
                         .into_iter()
                         .filter(|delimiter| gave.contains(*delimiter))
                         .collect(),

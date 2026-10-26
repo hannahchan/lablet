@@ -129,6 +129,15 @@ fn required<'v>(block: &'v serde_json::Value, field: &str) -> Result<&'v str, Pr
     })
 }
 
+/// The failure of a 200 whose body is longer than `bound` bytes, which was
+/// cut there unread.
+pub(crate) fn longer_than(bound: usize) -> ProviderError {
+    malformed(format!(
+        "the response is longer than {} bytes",
+        crate::error::grouped(bound)
+    ))
+}
+
 fn malformed(message: impl Into<String>) -> ProviderError {
     ProviderError::new(ProviderErrorKind::Malformed, message)
 }

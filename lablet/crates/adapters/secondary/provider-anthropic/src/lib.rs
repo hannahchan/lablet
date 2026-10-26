@@ -1,7 +1,8 @@
 //! Secondary adapter: a `ModelProvider` over the Anthropic Messages API.
 //!
 //! One attempt is one `POST {base_url}/v1/messages`, sent without `stream`,
-//! read as one JSON document and mapped to the domain. `thinking` and
+//! read as one JSON document of at most 1 MiB and mapped to the domain; a
+//! longer body is cut there, and is neither parsed nor quoted. `thinking` and
 //! `redacted_thinking` blocks are kept as the strings they came as and sent
 //! back unchanged; a `tool_use` input, and a block of a kind the domain has
 //! no name for, are `serde_json::Value`s, which serialise with sorted keys

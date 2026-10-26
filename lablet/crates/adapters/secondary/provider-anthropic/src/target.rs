@@ -183,6 +183,28 @@ impl Target {
         self.cache
     }
 
+    /// Whether the base URL held a user or a password, which each request
+    /// carries as an `Authorization: Basic` header. A user and a password
+    /// that are both empty are none, as the URL parser drops them.
+    #[must_use]
+    pub const fn carries_credentials(&self) -> bool {
+        self.authorization.is_some()
+    }
+
+    /// Whether a URL whose authority is `host_and_port`, a host and an
+    /// optional port with no user information, reaches the host and port
+    /// each request goes to. The text is read as the base URL was, so a
+    /// host's case, an international name and an address's spelling are
+    /// compared as the parser writes them, and a caller that read the base
+    /// URL another way can tell whether it read the same host.
+    #[must_use]
+    pub fn sends_to(&self, host_and_port: &str) -> bool {
+        Url::parse(&format!("{}://{host_and_port}", self.url.scheme())).is_ok_and(|url| {
+            url.host_str() == self.url.host_str()
+                && url.port_or_known_default() == self.url.port_or_known_default()
+        })
+    }
+
     pub(crate) const fn messages_url(&self) -> &Url {
         &self.url
     }

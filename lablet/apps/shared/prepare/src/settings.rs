@@ -252,7 +252,11 @@ fn request(model: &config::Model, resolved: &ResolvedModel) -> Result<RequestPar
 
 /// Holds `model.base_url` to what a provider can be reached at. The value
 /// may come from a variable, and the refusal is shown from the config as
-/// it's written, so it says nothing of what the variable holds.
+/// it's written, so it says nothing of what the variable holds. The literal
+/// `http://` or `https://` and the refused whitespace also keep the
+/// config's reader and the URL parser agreed on where the authority
+/// starts, which the check of their readings leans on: the parser takes a
+/// scheme with no `//` or with a third `/`, and drops a tab or a newline.
 fn base_url(model: &config::Model) -> Result<(), Refusal> {
     let Some(url) = &model.base_url else {
         return Ok(());

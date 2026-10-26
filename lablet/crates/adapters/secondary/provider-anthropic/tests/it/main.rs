@@ -4,6 +4,8 @@
 //! through the loop where what the loop does with it is.
 
 #[cfg(test)]
+mod bound;
+#[cfg(test)]
 mod cache;
 #[cfg(test)]
 mod context;

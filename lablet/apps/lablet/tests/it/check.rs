@@ -543,7 +543,7 @@ async fn bash_with_no_process_environment_handed_in_is_refused() {
 
 /// An `env` entry whose filled value holds a credential's value is refused
 /// by the check and the build alike, by the field whose value it holds, and
-/// the value is nowhere in the error.
+/// nothing of the entry is in the error.
 #[tokio::test]
 async fn an_env_entry_whose_value_holds_a_credential_s_value_is_refused_by_the_check() {
     let scratch = Lab::new("check-env-value");
@@ -560,18 +560,16 @@ async fn an_env_entry_whose_value_holds_a_credential_s_value_is_refused_by_the_c
 
     assert_eq!(
         error.to_string(),
-        format!(
-            "tools.builtin.env.COPY (line 1): \"${{{other}}}\" is refused: its value holds the \
-             one `model.api_key` has, and no process inherits an own credential; to give bash the \
-             key knowingly, list COPY under `tools.builtin.credentials`"
-        )
+        "tools.builtin.env.COPY (line 1) is refused: its value holds the one `model.api_key` has, \
+         and no process inherits an own credential; to give bash the key knowingly, list COPY \
+         under `tools.builtin.credentials`"
     );
     assert!(
-        matches!(error, BuildError::Config(ConfigError::Invalid { .. })),
+        matches!(error, BuildError::Config(ConfigError::Refused { .. })),
         "{error:?}"
     );
     for shown in [error.to_string(), format!("{error:?}")] {
-        assert!(!shown.contains(KEY), "{shown}");
+        assert!(!shown.contains(KEY) && !shown.contains(other), "{shown}");
     }
 }
 

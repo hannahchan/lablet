@@ -270,6 +270,16 @@ struct Opened {
     began: Began,
 }
 
+/// A failed attempt as the loop goes on from it, once the error's message
+/// is made fit to show: what the retry policy and the stop read, and the
+/// message cut and bounded, so the message as the adapter wrote it goes no
+/// further.
+struct Failure {
+    kind: ProviderErrorKind,
+    retry_after: Option<Duration>,
+    message: String,
+}
+
 /// A provider call that answered, with how long the attempt that did took
 /// and the span it answered in.
 struct Answered {
@@ -684,7 +694,7 @@ impl RunService {
                     return Err(Stopped::just(StopReason::Cancelled));
                 }
             };
-            let next = self.attempt_failed(running, run, opened, latency, &error, conversation);
+            let next = self.attempt_failed(running, run, opened, latency, error, conversation);
 
             // A wait the run was cancelled during is over then: a retry is a
             // provider call, which a cancelled run never makes.
@@ -717,24 +727,31 @@ impl RunService {
         run: &mut Run,
         opened: Opened,
         latency: Duration,
-        error: &ProviderError,
+        error: ProviderError,
         conversation: &mut Option<Conversation>,
     ) -> Result<Duration, Stopped> {
         let mut opened = opened;
         let (turn, attempt) = (opened.turn, opened.attempt);
-        run.failed_attempt(opened.began.offset, latency, error.usage);
-        let message = bounded(self.secrets.redacted(error.message()));
+        let usage = error.usage;
+        let failure = Failure {
+            kind: error.kind,
+            retry_after: error.retry_after,
+            message: bounded(self.secrets.redacted(error.message())),
+        };
+        // The error ends at the cut, so nothing after it can reach the
+        // message as the adapter wrote it.
+        drop(error);
+        run.failed_attempt(opened.began.offset, latency, usage);
         let next = self.after_failure(
             run,
             running,
-            error,
-            &message,
+            &failure,
             running.run_id.salt(turn, attempt),
             attempt,
         );
 
-        opened.chat.error_type = Some(error.kind.into());
-        if let Some(usage) = &error.usage {
+        opened.chat.error_type = Some(failure.kind.into());
+        if let Some(usage) = &usage {
             spent(&mut opened.chat, usage);
         }
         let end = running.ended(&opened.began, latency);
@@ -749,8 +766,8 @@ impl RunService {
         .add_to(&mut opened.span, end);
         let exception = GenAiClientOperationException {
             join: running.join.clone(),
-            exception_message: message.clone(),
-            exception_type: error.kind.into(),
+            exception_message: failure.message.clone(),
+            exception_type: failure.kind.into(),
             gen_ai_provider_name: running.asked.provider_name.clone(),
             gen_ai_request_model: running.asked.model.clone(),
             lablet_attempt: i64::from(attempt),
@@ -759,7 +776,13 @@ impl RunService {
         self.logger
             .emit(exception.record(end, opened.span.span_context()));
         let exchange = conversation.as_mut().map(Conversation::unanswered);
-        self.end_chat(running, opened, Status::error(message), exchange, end);
+        self.end_chat(
+            running,
+            opened,
+            Status::error(failure.message),
+            exchange,
+            end,
+        );
         next
     }
 
@@ -860,8 +883,8 @@ impl RunService {
     }
 
     /// What follows a failed attempt: the wait before the next one, or why
-    /// there won't be one. `message` is the error's, made fit to show, and
-    /// is what a stop on this failure carries to the outcome.
+    /// there won't be one. The failure's message is what a stop on it
+    /// carries to the outcome.
     ///
     /// A failure another attempt could answer is held to point A before the
     /// retry policy is asked. The attempt may have used up the run's time or
@@ -872,19 +895,18 @@ impl RunService {
         &self,
         run: &Run,
         running: &Running,
-        error: &ProviderError,
-        message: &str,
+        failure: &Failure,
         salt: u64,
         attempt: u32,
     ) -> Result<Duration, Stopped> {
-        if error.kind.is_retryable()
+        if failure.kind.is_retryable()
             && let Err(stopped) = self.admit(run, running)
         {
             return Err(stopped);
         }
         match self
             .retry
-            .next(attempt, error.kind, error.retry_after, salt)
+            .next(attempt, failure.kind, failure.retry_after, salt)
         {
             Some(wait) if self.stop.allows_wait(self.elapsed(running), wait) => Ok(wait),
             // A wait that would carry the run past its own timeout isn't
@@ -892,8 +914,8 @@ impl RunService {
             // it's known to reach.
             Some(_) => Err(Stopped::just(StopReason::Timeout)),
             None => Err(Stopped::with(
-                stop_reason_for(error.kind),
-                message.to_owned(),
+                stop_reason_for(failure.kind),
+                failure.message.clone(),
             )),
         }
     }

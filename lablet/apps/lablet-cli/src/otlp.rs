@@ -258,6 +258,10 @@ fn at_signal(endpoint: &str, transport: Transport, signal: Signal) -> String {
 }
 
 /// Whether `endpoint` has a scheme: a `://` before any `/`, `?` or `#`.
+/// The config's reader of user information ends a scheme at a `\` too;
+/// here it's left out, since the exporter's `http::Uri` refuses a `\` in a
+/// scheme or an authority, the one place the two readings differ, so the
+/// endpoint is refused whichever way this reads it.
 fn has_scheme(endpoint: &str) -> bool {
     endpoint
         .split_once("://")
